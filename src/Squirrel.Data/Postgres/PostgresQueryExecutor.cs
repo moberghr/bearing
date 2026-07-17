@@ -1,5 +1,7 @@
+using System.Data.Common;
 using System.Diagnostics;
 using Npgsql;
+using Npgsql.Schema;
 using Squirrel.Core.Data;
 
 namespace Squirrel.Data.Postgres;
@@ -22,9 +24,10 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
             await using var reader = await cmd.ExecuteReaderAsync(ct);
 
             // One QueryResult per statement's result set — NextResult walks a multi-statement batch.
+            // withBaseTables: capture column origin (schema/table/column) for FK-nav + inline edit.
             do
             {
-                results.Add(await ReadResultSetAsync(reader, options, sw, ct));
+                results.Add(await ReadResultSetAsync(reader, options, sw, ct, withBaseTables: true));
             }
             while (await reader.NextResultAsync(ct));
 
@@ -91,7 +94,7 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
     }
 
     private static async Task<QueryResult> ReadResultSetAsync(
-        NpgsqlDataReader reader, QueryOptions options, Stopwatch sw, CancellationToken ct)
+        NpgsqlDataReader reader, QueryOptions options, Stopwatch sw, CancellationToken ct, bool withBaseTables = false)
     {
         // A non-row-returning statement (INSERT/UPDATE/DDL) still reports affected rows.
         if (reader.FieldCount == 0)
@@ -100,7 +103,7 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
                 RowCount: reader.RecordsAffected, sw.Elapsed,
                 Message: DescribeNonQuery(reader.RecordsAffected), Error: null, Truncated: false);
 
-        var columns = ReadColumns(reader);
+        var columns = ReadColumns(reader, withBaseTables);
         var rows = new List<object?[]>();
         var truncated = false;
 
@@ -149,11 +152,22 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
             yield return new ResultBatch(columns, batch);
     }
 
-    private static IReadOnlyList<ColumnDescriptor> ReadColumns(NpgsqlDataReader reader)
+    private static IReadOnlyList<ColumnDescriptor> ReadColumns(NpgsqlDataReader reader, bool withBaseTables = false)
     {
+        // Column origin (table OID + attribute number) comes free from the wire RowDescription — no
+        // catalog round-trip. Captured for raw queries; skipped for the wrapped paging query, whose
+        // columns are the subquery's (no table origin) anyway.
+        var schema = withBaseTables ? reader.GetColumnSchema() : null;
+
         var cols = new ColumnDescriptor[reader.FieldCount];
         for (var i = 0; i < reader.FieldCount; i++)
-            cols[i] = new ColumnDescriptor(reader.GetName(i), reader.GetDataTypeName(i), reader.GetFieldType(i));
+        {
+            var npg = schema?[i] as NpgsqlDbColumn;
+            cols[i] = new ColumnDescriptor(
+                reader.GetName(i), reader.GetDataTypeName(i), reader.GetFieldType(i),
+                BaseTableOid: npg?.TableOID ?? 0,
+                BaseColumnAttNum: (short)(npg?.ColumnAttributeNumber ?? 0));
+        }
         return cols;
     }
 

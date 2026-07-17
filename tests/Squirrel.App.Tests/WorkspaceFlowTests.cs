@@ -126,6 +126,43 @@ public class WorkspaceFlowTests : IDisposable
         await vm.DisposeSessionsAsync();
     }
 
+    [SkippableFact]
+    public async Task Foreign_key_cell_navigates_to_referenced_row()
+    {
+        Skip.IfNot(await Reachable(), "No PostgreSQL reachable for integration test.");
+
+        var dir = Path.Combine(_root, "fkproj");
+        var vm = NewVm();
+        await vm.InitializeAsync(dir);
+        await vm.SeedDemoConnectionAsync(Host, Port, Db, User, Password);
+        await WaitForSnapshot(vm); // FK detection needs the schema snapshot loaded
+
+        // film.language_id is a foreign key into language; film.title is not.
+        await vm.ExecuteAsync("select film_id, title, language_id from film order by film_id;");
+        var rs = vm.SelectedTab!.LastResult!;
+        var names = rs.Columns.Select(c => c.Name).ToList();
+        var langCol = names.IndexOf("language_id");
+        Assert.True(langCol >= 0);
+        Assert.Contains(langCol, rs.ForeignKeyColumns);
+        Assert.DoesNotContain(names.IndexOf("title"), rs.ForeignKeyColumns);
+
+        // Navigating the FK cell swaps the displayed result in place (no new tab) for the referenced row.
+        var tabsBefore = vm.Tabs.Count;
+        await vm.NavigateForeignKeyAsync(rs, langCol, rs.Rows[0]);
+        Assert.Equal(tabsBefore, vm.Tabs.Count);   // navigation is inline, not a new tab
+        Assert.True(vm.SelectedTab!.CanGoBack);     // the film result is stacked behind
+        var navResult = vm.SelectedTab.LastResult!;
+        Assert.True(navResult.Success, vm.StatusText);
+        Assert.Equal(1, navResult.RowCount);        // language_id is a PK in language → exactly one row
+
+        // Back discards the navigated result and restores the original film result set instance.
+        vm.SelectedTab.GoBack();
+        Assert.False(vm.SelectedTab.CanGoBack);
+        Assert.Same(rs, vm.SelectedTab.LastResult);
+
+        await vm.DisposeSessionsAsync();
+    }
+
     [Fact]
     public async Task Rename_scratch_and_saved_script()
     {

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -516,10 +517,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // "load more"/"count" run against the original sql. Multi-statement runs are capped
             // per set at PageSize and shown truncated (no paging — see the pageable gate below).
             var results = await session.Executor.ExecuteAsync(sql, new QueryOptions { MaxRows = PageSize }, ct);
-            var pageable = results.Count == 1 && results[0].Success && results[0].Columns.Count > 0;
-            tab.Results = results
-                .Select(r => new ResultSetViewModel(r, sql, pageable))
-                .ToList();
+            tab.SetFreshResults(BuildResultSets(results, sql, session.Snapshot));
             LogExecution(info, sql, results);
             StatusText = DescribeResults(results);
         }
@@ -594,6 +592,91 @@ public sealed partial class MainWindowViewModel : ObservableObject
         StatusText = "Not connected.";
         return null;
     }
+
+    // ---- FK navigation -----------------------------------------------------------------------
+
+    /// <summary>Wrap raw query results into pageable/FK-aware view models (shared by run + navigation).</summary>
+    private static List<ResultSetViewModel> BuildResultSets(
+        IReadOnlyList<QueryResult> results, string sql, ISchemaSnapshot? snapshot)
+    {
+        var pageable = results.Count == 1 && results[0].Success && results[0].Columns.Count > 0;
+        return results
+            .Select(r => new ResultSetViewModel(r, sql, pageable)
+            {
+                ForeignKeyColumns = DetectForeignKeyColumns(snapshot, r.Columns),
+            })
+            .ToList();
+    }
+
+    /// <summary>Result-column indices that are foreign keys (structural, value-independent).</summary>
+    private static IReadOnlyCollection<int> DetectForeignKeyColumns(
+        ISchemaSnapshot? snapshot, IReadOnlyList<ColumnDescriptor> columns)
+    {
+        if (snapshot is null || columns.Count == 0) return Array.Empty<int>();
+        var fks = new List<int>();
+        for (var i = 0; i < columns.Count; i++)
+            if (ForeignKeyResolver.Resolve(snapshot, columns, i) is not null) fks.Add(i);
+        return fks;
+    }
+
+    /// <summary>Navigate a foreign-key cell in place: run the lookup on the current tab's connection
+    /// and swap the displayed result for the referenced row, stacking the previous result so Back can
+    /// return to it. The query is never surfaced in the editor.</summary>
+    public async Task NavigateForeignKeyAsync(ResultSetViewModel rs, int columnIndex, object?[] row)
+    {
+        if (IsBusy) return;
+        if (columnIndex < 0 || columnIndex >= row.Length) return;
+        if (row[columnIndex] is null) { StatusText = "Empty key — nothing to navigate to."; return; }
+        if (SelectedTab is not { } tab) return;
+        if (SnapshotForSelectedTab() is not { } snapshot) { StatusText = "Schema not loaded yet."; return; }
+        if (ForeignKeyResolver.Resolve(snapshot, rs.Columns, columnIndex) is not { } target)
+        { StatusText = "Not a foreign key."; return; }
+        if (ResolveLiveSession() is not { } session) return;
+
+        var sql = BuildForeignKeySelect(target, row);
+        IsBusy = true;
+        _executionCts = new CancellationTokenSource();
+        var ct = _executionCts.Token;
+        try
+        {
+            StatusText = "Opening referenced row…";
+            var results = await session.Executor.ExecuteAsync(sql, new QueryOptions { MaxRows = PageSize }, ct);
+            tab.PushResults(BuildResultSets(results, sql, session.Snapshot));
+            StatusText = DescribeResults(results);
+        }
+        catch (OperationCanceledException) { StatusText = "Navigation cancelled."; }
+        catch (Exception ex) { StatusText = $"Navigation failed: {ex.Message}"; }
+        finally { _executionCts.Dispose(); _executionCts = null; IsBusy = false; }
+    }
+
+    /// <summary>`select * from ref where refcol = &lt;value&gt; [and …]` with all key parts from the row.</summary>
+    private static string BuildForeignKeySelect(ForeignKeyTarget t, object?[] row)
+    {
+        var preds = new List<string>(t.RefColumns.Count);
+        for (var i = 0; i < t.RefColumns.Count; i++)
+        {
+            var value = row[t.SourceColumnIndices[i]];
+            preds.Add(value is null
+                ? $"{QuoteIdent(t.RefColumns[i])} is null"
+                : $"{QuoteIdent(t.RefColumns[i])} = {SqlLiteral(value)}");
+        }
+        return $"select * from {QuoteIdent(t.RefSchema)}.{QuoteIdent(t.RefTable)}\nwhere {string.Join("\n  and ", preds)};";
+    }
+
+    private static string QuoteIdent(string ident) => "\"" + ident.Replace("\"", "\"\"") + "\"";
+
+    /// <summary>Format a key value as a SQL literal. Values come from the DB (not user text); strings
+    /// and other types are single-quoted (with '' escaping) and left to Postgres to cast.</summary>
+    private static string SqlLiteral(object value) => value switch
+    {
+        bool b => b ? "true" : "false",
+        byte or sbyte or short or ushort or int or uint or long or ulong
+            => Convert.ToString(value, CultureInfo.InvariantCulture)!,
+        float f => f.ToString("R", CultureInfo.InvariantCulture),
+        double d => d.ToString("R", CultureInfo.InvariantCulture),
+        decimal m => m.ToString(CultureInfo.InvariantCulture),
+        _ => "'" + value.ToString()!.Replace("'", "''") + "'",
+    };
 
     /// <summary>Schema for the selected tab's connection (drives completion); null when not yet loaded.</summary>
     public ISchemaSnapshot? SnapshotForSelectedTab()

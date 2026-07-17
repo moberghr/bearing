@@ -47,14 +47,45 @@ public sealed partial class EditorTabViewModel : ObservableObject
         _savedText = savedText;
         IsModified = Text != _savedText;
     }
-    /// <summary>Result sets from the last execution — one per statement in a multi-statement run.
-    /// Each holds its own mutable row buffer so paging can append without a rebuild.</summary>
+    /// <summary>Result sets currently displayed — one per statement in a multi-statement run.
+    /// Each holds its own mutable row buffer so paging can append without a rebuild. FK navigation
+    /// swaps this for the referenced result (previous frame stashed on <see cref="_resultHistory"/>).</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(LastResult))]
     private IReadOnlyList<ResultSetViewModel> _results = Array.Empty<ResultSetViewModel>();
 
     /// <summary>Convenience: the first result set (or null), for single-statement callers.</summary>
     public ResultSetViewModel? LastResult => Results.Count > 0 ? Results[0] : null;
+
+    /// <summary>Frames displayed before the current one — grows on FK navigation, shrinks on Back.</summary>
+    private readonly Stack<IReadOnlyList<ResultSetViewModel>> _resultHistory = new();
+
+    /// <summary>True when FK navigation has stacked earlier results that Back can return to.</summary>
+    public bool CanGoBack => _resultHistory.Count > 0;
+
+    /// <summary>Show the results of a fresh run — clears any FK-navigation history.</summary>
+    public void SetFreshResults(IReadOnlyList<ResultSetViewModel> results)
+    {
+        _resultHistory.Clear();
+        Results = results;
+        OnPropertyChanged(nameof(CanGoBack));
+    }
+
+    /// <summary>Stash the current results and display the FK-navigated ones on top.</summary>
+    public void PushResults(IReadOnlyList<ResultSetViewModel> results)
+    {
+        _resultHistory.Push(Results);
+        Results = results;
+        OnPropertyChanged(nameof(CanGoBack));
+    }
+
+    /// <summary>Discard the current (navigated) results and restore the previous frame.</summary>
+    public void GoBack()
+    {
+        if (_resultHistory.Count == 0) return;
+        Results = _resultHistory.Pop();
+        OnPropertyChanged(nameof(CanGoBack));
+    }
 
     [ObservableProperty] private string _header = "";
 

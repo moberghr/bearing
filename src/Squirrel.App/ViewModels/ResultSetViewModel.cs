@@ -52,6 +52,10 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// <summary>The exact SELECT that produced this set (for paging/count); null unless pageable.</summary>
     public string? SourceSql { get; }
 
+    /// <summary>Column indices that are foreign keys (rendered clickable → navigate to the referenced row).
+    /// Computed by the shell from the schema snapshot; empty when the connection has no snapshot yet.</summary>
+    public IReadOnlyCollection<int> ForeignKeyColumns { get; init; } = System.Array.Empty<int>();
+
     /// <summary>Last page came back full — more rows likely exist beyond what's loaded.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(FooterText))]

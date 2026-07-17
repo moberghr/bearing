@@ -36,6 +36,17 @@ public partial class MainWindow : Window
         // Paging footer buttons call back into the shell VM (Vm is resolved lazily at click time).
         ResultsView.LoadMore = rs => Vm?.LoadMoreAsync(rs) ?? Task.CompletedTask;
         ResultsView.CountTotal = rs => Vm?.CountTotalAsync(rs) ?? Task.CompletedTask;
+        ResultsView.NavigateForeignKey = async (rs, col, row) =>
+        {
+            if (Vm is null) return;
+            await Vm.NavigateForeignKeyAsync(rs, col, row); // runs inline, stacks the prior result
+            RebuildResults(Vm.SelectedTab);
+        };
+        ResultsView.GoBack = () =>
+        {
+            Vm?.SelectedTab?.GoBack();
+            RebuildResults(Vm?.SelectedTab);
+        };
 
         // Translucent selection so syntax-highlighted glyphs stay readable through it — the opaque
         // default paints solid blue over the colored text.
@@ -93,7 +104,7 @@ public partial class MainWindow : Window
         if (tab is not null)
             Editor.CaretOffset = System.Math.Clamp(tab.CaretOffset, 0, Editor.Text.Length);
         _loadingEditor = false;
-        RebuildResults(tab?.Results);
+        RebuildResults(tab);
         UpdateStatementHighlight();
     }
 
@@ -138,9 +149,9 @@ public partial class MainWindow : Window
 
     private void OnNewTabClick(object? sender, RoutedEventArgs e) => Vm?.NewTab();
 
-    private void OnCloseTabClick(object? sender, RoutedEventArgs e)
+    private void OnCloseTabPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (sender is Button { CommandParameter: EditorTabViewModel tab }) Vm?.CloseTab(tab);
+        if (sender is Control { DataContext: EditorTabViewModel tab }) { Vm?.CloseTab(tab); e.Handled = true; }
     }
 
     private async void OnTabHeaderDoubleTapped(object? sender, TappedEventArgs e)
@@ -311,7 +322,7 @@ public partial class MainWindow : Window
             ? Squirrel.Sql.StatementSplitter.StatementAt(Editor.Text, Editor.CaretOffset)?.Text ?? Editor.Text
             : selected;
         await Vm.ExecuteAsync(sql);
-        RebuildResults(Vm.SelectedTab?.Results);
+        RebuildResults(Vm.SelectedTab);
     }
 
     private async void OnOpenClick(object? sender, RoutedEventArgs e) => await OpenAsync();
@@ -370,7 +381,10 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Render the run's result sets: one grid for a single set, sub-tabs for several.</summary>
-    internal void RebuildResults(System.Collections.Generic.IReadOnlyList<ResultSetViewModel>? results)
-        => ResultsView.Results = results;
+    /// <summary>Render the given tab's current result frame, plus the back-bar state (FK-nav history).</summary>
+    internal void RebuildResults(EditorTabViewModel? tab)
+    {
+        ResultsView.CanGoBack = tab?.CanGoBack ?? false;
+        ResultsView.Results = tab?.Results; // assignment triggers the rebuild (reads CanGoBack)
+    }
 }

@@ -3,10 +3,13 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Templates;
 using Avalonia.Data;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Squirrel.App.ViewModels;
+using Path = Avalonia.Controls.Shapes.Path;
 
 namespace Squirrel.App.Controls;
 
@@ -33,17 +36,78 @@ public sealed class ResultView : UserControl
     /// <summary>Invoked when the user requests the total count of a pageable result set.</summary>
     public Func<ResultSetViewModel, Task>? CountTotal { get; set; }
 
+    /// <summary>Invoked when a foreign-key cell is clicked: (result set, column index, row values).</summary>
+    public Func<ResultSetViewModel, int, object?[], Task>? NavigateForeignKey { get; set; }
+
+    /// <summary>Whether the back bar is shown (FK navigation has a previous result to return to).</summary>
+    public bool CanGoBack { get; set; }
+
+    /// <summary>Invoked when the back bar's button is clicked.</summary>
+    public Action? GoBack { get; set; }
+
+    private static readonly IBrush LinkBrush = new SolidColorBrush(Color.FromRgb(0x4D, 0x9B, 0xFF));
+
     private void Rebuild()
     {
+        var body = BuildBody();
+        Content = CanGoBack ? WithBackBar(body) : body;
+    }
+
+    private Control? BuildBody()
+    {
         var results = _results;
-        if (results is null || results.Count == 0) { Content = null; return; }
-        if (results.Count == 1) { Content = BuildResultSet(results[0]); return; }
+        if (results is null || results.Count == 0) return null;
+        if (results.Count == 1) return BuildResultSet(results[0]);
 
         var tabs = new TabControl();
         for (var i = 0; i < results.Count; i++)
             tabs.Items.Add(new TabItem { Header = TabHeader(i, results[i]), Content = BuildResultSet(results[i]) });
         tabs.SelectedIndex = 0;
-        Content = tabs;
+        return tabs;
+    }
+
+    /// <summary>Prepend a slim "Back" bar (returns to the pre-navigation result) above the body.</summary>
+    private Control WithBackBar(Control? body)
+    {
+        var arrow = new Path
+        {
+            Data = Geometry.Parse("M5,1 L1,5 L5,9 M1,5 L10,5"),
+            Stroke = LinkBrush,
+            StrokeThickness = 1.4,
+            StrokeLineCap = PenLineCap.Round,
+            StrokeJoin = PenLineJoin.Round,
+            Stretch = Stretch.None,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var caption = new TextBlock { Text = "Back", Foreground = LinkBrush, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        var inner = new StackPanel { Orientation = Orientation.Horizontal };
+        inner.Children.Add(arrow);
+        inner.Children.Add(caption);
+
+        var back = new Button
+        {
+            Content = inner,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(6, 2),
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        back.Click += (_, _) => GoBack?.Invoke();
+
+        var bar = new Border
+        {
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0x33, 0x88, 0x88, 0x88)),
+            Padding = new Thickness(2),
+            Child = back,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        DockPanel.SetDock(bar, Dock.Top);
+
+        var panel = new DockPanel();
+        panel.Children.Add(bar);
+        if (body is not null) panel.Children.Add(body);
+        return panel;
     }
 
     private static string TabHeader(int index, ResultSetViewModel result)
@@ -65,7 +129,7 @@ public sealed class ResultView : UserControl
         return result.IsPageable ? WithFooter(grid, result) : grid;
     }
 
-    private static DataGrid BuildGrid(ResultSetViewModel result)
+    private DataGrid BuildGrid(ResultSetViewModel result)
     {
         var grid = new DataGrid
         {
@@ -78,14 +142,69 @@ public sealed class ResultView : UserControl
         };
         grid.LoadingRow += (_, e) => e.Row.Header = (e.Row.Index + 1).ToString();
         for (var i = 0; i < result.Columns.Count; i++)
-            grid.Columns.Add(new DataGridTextColumn
-            {
-                Header = result.Columns[i].Name,
-                Binding = new Binding($"[{i}]"),
-            });
+            grid.Columns.Add(result.ForeignKeyColumns.Contains(i)
+                ? ForeignKeyColumn(result, i)
+                : new DataGridTextColumn { Header = result.Columns[i].Name, Binding = new Binding($"[{i}]") });
         grid.ItemsSource = result.Rows; // ObservableCollection → paged rows append without a rebuild
         return grid;
     }
+
+    /// <summary>A foreign-key column: the value shows as plain text with a clickable jump-icon on the
+    /// right that navigates to the referenced row.</summary>
+    private DataGridColumn ForeignKeyColumn(ResultSetViewModel result, int index)
+        => new DataGridTemplateColumn
+        {
+            Header = result.Columns[index].Name,
+            CellTemplate = new FuncDataTemplate<object?[]>((row, _) =>
+            {
+                if (row is null) return new TextBlock();
+                var hasValue = row.Length > index && row[index] is not null;
+
+                var value = new TextBlock
+                {
+                    Text = row.Length > index ? row[index]?.ToString() ?? "" : "",
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Margin = new Thickness(4, 0, 4, 0),
+                };
+
+                // A drawn "↗" (vector Path, not a font glyph — symbol glyphs render clipped in the
+                // app font). Wrapped in a transparent Border so the whole 16×16 box is the hit target.
+                var arrow = new Path
+                {
+                    Data = Geometry.Parse("M1,9 L9,1 M4,1 L9,1 L9,6"),
+                    Stroke = LinkBrush,
+                    StrokeThickness = 1.4,
+                    StrokeLineCap = PenLineCap.Round,
+                    StrokeJoin = PenLineJoin.Round,
+                    Stretch = Stretch.None,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                var jump = new Border
+                {
+                    Child = arrow,
+                    Background = Brushes.Transparent,
+                    Width = 16,
+                    Height = 16,
+                    Margin = new Thickness(2, 0, 4, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Cursor = new Cursor(StandardCursorType.Hand),
+                    IsVisible = hasValue,
+                };
+                ToolTip.SetTip(jump, "Open referenced row");
+                jump.PointerPressed += async (_, _) =>
+                {
+                    if (hasValue && NavigateForeignKey is { } nav) await nav(result, index, row);
+                };
+
+                var cell = new DockPanel();
+                DockPanel.SetDock(jump, Dock.Right);
+                cell.Children.Add(jump);
+                cell.Children.Add(value);
+                return cell;
+            }),
+        };
 
     /// <summary>Wrap a grid in a DockPanel with a bottom footer: loaded-row text + Load more / Count.</summary>
     private Control WithFooter(Control grid, ResultSetViewModel result)

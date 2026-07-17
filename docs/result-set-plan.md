@@ -119,7 +119,51 @@ Gotchas: `SourceSql` must be a single SELECT for wrapping to work — that's gua
 Tests: `ExecutePageAsync`/`CountAsync` already covered in `PostgresExecutorTests`. Add an App-level test if
 paging state moves into a VM method (drive `ExecuteAsync` then `LoadMoreAsync` against pagila).
 
-## Phase 2 — FK-click navigation
+## Phase 2 — FK-click navigation  (DONE 2026-07-17)
+
+Behavior: FK columns show the value as plain text with a clickable **↗ jump-icon** aligned right.
+Clicking it navigates **inline**: the lookup (`select * from <ref> where <refcol> = <value>`) runs on the
+current tab's connection and its result **replaces the displayed table in place** — no new editor tab,
+the query is never surfaced. The previous result is stashed on a per-tab history stack; a slim **Back**
+bar (shown while history is non-empty) pops back to it. Navigation chains (the referenced result is
+itself pageable + FK-aware), so Back can unwind multiple levels. Icon hidden when the cell is null.
+
+Wiring: `EditorTabViewModel` owns the history (`SetFreshResults`/`PushResults`/`GoBack`/`CanGoBack`);
+`NavigateForeignKeyAsync` runs the lookup and `PushResults`; `ResultView` renders the Back bar and
+raises `GoBack`; `MainWindow.RebuildResults(tab)` pushes both the frame and the back-state.
+
+UI gotcha (verified live): the app font renders symbol glyphs (`↗` U+2197, `✕` U+2715) **clipped** —
+so the FK jump-icon and the tab close-✕ are drawn as vector `Path` geometry, not font glyphs. Use
+`Path` for any future icon rather than a Unicode symbol in a TextBlock/Button.
+
+Key deviation from the notes below — **column origin is (table OID + attnum), not base names.**
+`NpgsqlDbColumn.GetColumnSchema()` leaves `BaseTableName`/`BaseColumnName` **null**, but `TableOID` +
+`ColumnAttributeNumber` come free from the wire RowDescription (no catalog round-trip). So:
+
+- **`ColumnDescriptor`** (`QueryResult.cs`) gained `uint BaseTableOid` + `short BaseColumnAttNum`
+  (both 0 for expression/aliased columns) and a `HasBaseColumn` helper. Populated in
+  `PostgresQueryExecutor.ReadColumns(reader, withBaseTables)` — `withBaseTables:true` only for the raw
+  `ExecuteAsync` path, skipped for `ExecutePageAsync` (wrapped subquery has no origin).
+- **`ForeignKeyResolver`** (`src/Squirrel.Core/Schema/ForeignKeyResolver.cs`, pure/unit-tested) — given
+  the snapshot + result columns + clicked index, returns a `ForeignKeyTarget(RefSchema, RefTable,
+  RefColumns, SourceColumnIndices)` or null. Only the *referencing* side navigates; composite FKs
+  require every key part present in the result row (else not navigable).
+- **`MainWindowViewModel`**: `DetectForeignKeyColumns(snapshot, columns)` fills
+  `ResultSetViewModel.ForeignKeyColumns` at run time; `NavigateForeignKeyAsync(rs, colIndex, row)`
+  resolves the target, builds the SELECT (`BuildForeignKeySelect` + `SqlLiteral`/`QuoteIdent`), opens a
+  new tab (inherits connection), and runs it.
+- **`ResultView`**: FK columns become `DataGridTemplateColumn` link cells; `NavigateForeignKey` callback
+  wired in `MainWindow` (also refreshes the editor after the new tab runs).
+
+**Tradeoff / not-done**: values are **inlined as SQL literals** (numbers bare; everything else single-
+quoted with `''` escaping), NOT parameterized — chosen so the new tab shows a readable, editable query.
+Values originate from the DB, but exotic types (arrays, some temporals) may need manual tweaking.
+**Not visually QA'd** — verify the link affordance, click → new tab, and cursor live.
+
+Tests: `ForeignKeyResolverTests` (Sql, 4 cases), `PostgresExecutorColumnTests.Raw_query_columns_carry_
+base_table_origin` (Data), `WorkspaceFlowTests.Foreign_key_cell_navigates_to_referenced_row` (App, live).
+
+### Original design notes (superseded by the OID approach above)
 
 Goal: clicking a cell in a foreign-key column opens the referenced row.
 
