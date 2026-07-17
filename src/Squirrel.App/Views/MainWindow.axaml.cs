@@ -4,7 +4,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Interactivity;
@@ -369,49 +368,5 @@ public partial class MainWindow : Window
 
     /// <summary>Render the run's result sets: one grid for a single set, sub-tabs for several.</summary>
     internal void RebuildResults(IReadOnlyList<QueryResult>? results)
-    {
-        if (results is null || results.Count == 0) { ResultsHost.Content = null; return; }
-        if (results.Count == 1) { ResultsHost.Content = BuildResultView(results[0]); return; }
-
-        var tabs = new TabControl();
-        for (var i = 0; i < results.Count; i++)
-            tabs.Items.Add(new TabItem { Header = ResultTabHeader(i, results[i]), Content = BuildResultView(results[i]) });
-        tabs.SelectedIndex = 0;
-        ResultsHost.Content = tabs;
-    }
-
-    private static string ResultTabHeader(int index, QueryResult result)
-    {
-        if (!result.Success) return $"Result {index + 1} · error";
-        if (result.Columns.Count == 0) return $"Result {index + 1} · {result.Message}";
-        return $"Result {index + 1} ({result.RowCount})";
-    }
-
-    private static Control BuildResultView(QueryResult result)
-    {
-        if (!result.Success)
-            return new TextBlock { Text = $"Error: {result.Error?.Message}", Margin = new Thickness(8), TextWrapping = TextWrapping.Wrap };
-
-        if (result.Columns.Count == 0)
-            return new TextBlock { Text = result.Message ?? "Statement executed.", Margin = new Thickness(8) };
-
-        var grid = new DataGrid
-        {
-            AutoGenerateColumns = false,
-            IsReadOnly = true,
-            CanUserResizeColumns = true,
-            CanUserReorderColumns = true,
-            GridLinesVisibility = DataGridGridLinesVisibility.All,
-            HeadersVisibility = DataGridHeadersVisibility.All, // row-number gutter + column headers
-        };
-        grid.LoadingRow += (_, e) => e.Row.Header = (e.Row.GetIndex() + 1).ToString();
-        for (var i = 0; i < result.Columns.Count; i++)
-            grid.Columns.Add(new DataGridTextColumn
-            {
-                Header = result.Columns[i].Name,
-                Binding = new Binding($"[{i}]"),
-            });
-        grid.ItemsSource = result.Rows;
-        return grid;
-    }
+        => ResultsView.Results = results;
 }
