@@ -70,6 +70,24 @@ public class QueryLogTests : IDisposable
     }
 
     [Fact]
+    public async Task Search_matches_partial_words_and_tolerates_punctuation()
+    {
+        var path = Path.Combine(_dir, "fts.sqlite");
+        await using var log = new SqliteQueryLog(path);
+        log.Append(Entry("select * from film join film_actor using (film_id)"));
+        await SearchUntil(log, new QueryLogQuery(), expected: 1);
+
+        // Partial token ("fil" → film / film_actor / film_id).
+        Assert.Single(await log.SearchAsync(new QueryLogQuery { Text = "fil" }, CancellationToken.None));
+        // Punctuation-heavy input must not throw and still matches on its tokens.
+        Assert.Single(await log.SearchAsync(new QueryLogQuery { Text = "select * from film" }, CancellationToken.None));
+        // Multiple tokens are AND-ed.
+        Assert.Single(await log.SearchAsync(new QueryLogQuery { Text = "film actor" }, CancellationToken.None));
+        // A token that isn't present yields nothing.
+        Assert.Empty(await log.SearchAsync(new QueryLogQuery { Text = "customer" }, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Log_survives_reopen_so_history_is_persistent()
     {
         var path = Path.Combine(_dir, "persist.sqlite");

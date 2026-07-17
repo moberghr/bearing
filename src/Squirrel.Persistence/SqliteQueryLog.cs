@@ -83,6 +83,21 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Turn free-text into a robust FTS5 query: each alphanumeric token becomes a prefix term
+    /// (implicit AND). This matches partial words ("fil" → films) and ignores punctuation like
+    /// '*'/';' that would otherwise be phrase-parsed and match nothing. Null = no text filter.
+    /// </summary>
+    private static string? BuildFtsMatch(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var terms = System.Text.RegularExpressions.Regex
+            .Matches(text, "[A-Za-z0-9_]+")
+            .Select(m => m.Value + "*")
+            .ToList();
+        return terms.Count == 0 ? null : string.Join(" ", terms);
+    }
+
     private void Insert(QueryLogEntry e)
     {
         using var cmd = _writeConnection.CreateCommand();
@@ -111,9 +126,10 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         using var cmd = conn.CreateCommand();
 
         var where = new List<string>();
-        if (!string.IsNullOrWhiteSpace(query.Text))
+        var match = BuildFtsMatch(query.Text);
+        if (match is not null)
         {
-            cmd.Parameters.AddWithValue("$match", "\"" + query.Text.Replace("\"", "\"\"") + "\"");
+            cmd.Parameters.AddWithValue("$match", match);
             where.Add("q.id IN (SELECT rowid FROM query_log_fts WHERE query_log_fts MATCH $match)");
         }
         if (!string.IsNullOrWhiteSpace(query.ConnectionName))

@@ -68,10 +68,40 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty] private QueryResult? _lastResult;
     [ObservableProperty] private ISchemaSnapshot? _currentSnapshot;
 
+    /// <summary>Absolute path of the script backing the editor, or null for an unsaved scratch buffer.</summary>
+    [ObservableProperty] private string? _currentScriptPath;
+
+    [ObservableProperty] private string _title = "Squirrel";
+
     public string? ProjectDirectory => _project?.Directory;
+    public string? ScriptsDirectory => _project?.ScriptsDirectory;
 
     /// <summary>Attach the secret store once it has been resolved off the UI thread.</summary>
     public void AttachSecretStore(ISecretStore secretStore) => _secretStore = secretStore;
+
+    /// <summary>Load a script file into the editor and make it the current buffer.</summary>
+    public async Task<string> LoadScriptAsync(string absolutePath)
+    {
+        var text = await File.ReadAllTextAsync(absolutePath, CancellationToken.None);
+        Sql = text;
+        CurrentScriptPath = absolutePath;
+        UpdateTitle();
+        StatusText = $"Opened {Path.GetFileName(absolutePath)}.";
+        return text;
+    }
+
+    /// <summary>Save editor text to a script file and make it the current buffer.</summary>
+    public async Task SaveScriptAsync(string absolutePath, string text)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(absolutePath)!);
+        await File.WriteAllTextAsync(absolutePath, text, CancellationToken.None);
+        CurrentScriptPath = absolutePath;
+        UpdateTitle();
+        StatusText = $"Saved {Path.GetFileName(absolutePath)}.";
+    }
+
+    private void UpdateTitle()
+        => Title = CurrentScriptPath is null ? "Squirrel" : $"Squirrel — {Path.GetFileName(CurrentScriptPath)}";
 
     /// <summary>Open (or create) the project directory and restore the last session.</summary>
     public async Task InitializeAsync(string projectDirectory)
@@ -81,8 +111,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
             _project = await OpenOrCreate(projectDirectory);
 
             var session = await _sessionStore.LoadAsync(projectDirectory, CancellationToken.None);
-            var scratch = session?.OpenEditors.FirstOrDefault(e => e.ScratchText is not null);
-            if (scratch?.ScratchText is { } text) Sql = text;
+            var editor = session?.OpenEditors.FirstOrDefault();
+            if (editor is not null)
+            {
+                var absScript = editor.ScriptPath is { } rel ? Path.Combine(_project.Directory, rel) : null;
+                if (absScript is not null && File.Exists(absScript))
+                    await LoadScriptAsync(absScript);           // shared script is authoritative
+                else if (editor.ScratchText is { } text)
+                    Sql = text;                                 // unsaved scratch buffer
+            }
 
             // Restore connection fields (+ password from keychain) from the active/first connection.
             var conn = _project.Manifest.Connections.FirstOrDefault(c => c.Id == session?.ActiveConnectionId)
@@ -114,7 +151,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
         LastOpenedUtc = DateTime.UtcNow.ToString("o"),
         OpenEditors =
         {
-            new OpenEditor { ScratchText = editorText, CaretOffset = caretOffset, ConnectionId = _activeConnectionId },
+            new OpenEditor
+            {
+                ScriptPath = CurrentScriptPath is not null && _project is not null
+                    ? Path.GetRelativePath(_project.Directory, CurrentScriptPath)
+                    : null,
+                ScratchText = editorText,
+                CaretOffset = caretOffset,
+                ConnectionId = _activeConnectionId,
+            },
         },
     };
 

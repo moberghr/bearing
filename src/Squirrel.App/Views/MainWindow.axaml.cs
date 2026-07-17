@@ -1,8 +1,10 @@
 using System.ComponentModel;
+using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Platform.Storage;
 using AvaloniaEdit.TextMate;
 using Squirrel.App.Completion;
 using Squirrel.App.ViewModels;
@@ -80,7 +82,73 @@ public partial class MainWindow : Window
             e.Handled = true;
             _completion.TriggerExplicit();
         }
+        else if (e.Key == Key.S && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            e.Handled = true;
+            await SaveAsync();
+        }
+        else if (e.Key == Key.O && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            e.Handled = true;
+            await OpenAsync();
+        }
     }
+
+    private async void OnOpenClick(object? sender, RoutedEventArgs e) => await OpenAsync();
+    private async void OnSaveClick(object? sender, RoutedEventArgs e) => await SaveAsync();
+
+    private void OnHistoryClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is null) return;
+        var history = new HistoryWindow(
+            (text, ct) => Vm.SearchHistoryAsync(text, ct),
+            sql => Editor.Text = sql);
+        history.Show(this);
+    }
+
+    private async Task OpenAsync()
+    {
+        if (Vm is null) return;
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Open SQL script",
+            AllowMultiple = false,
+            FileTypeFilter = new[] { SqlFileType },
+            SuggestedStartLocation = await StartFolder(),
+        });
+        if (files.Count > 0 && files[0].TryGetLocalPath() is { } path)
+            await Vm.LoadScriptAsync(path);
+    }
+
+    private async Task SaveAsync()
+    {
+        if (Vm is null) return;
+
+        if (Vm.CurrentScriptPath is { } existing)
+        {
+            await Vm.SaveScriptAsync(existing, Editor.Text);
+            return;
+        }
+
+        var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Save SQL script",
+            DefaultExtension = "sql",
+            SuggestedFileName = "query.sql",
+            FileTypeChoices = new[] { SqlFileType },
+            SuggestedStartLocation = await StartFolder(),
+        });
+        if (file?.TryGetLocalPath() is { } path)
+            await Vm.SaveScriptAsync(path, Editor.Text);
+    }
+
+    private async Task<IStorageFolder?> StartFolder()
+        => Vm?.ScriptsDirectory is { } dir ? await StorageProvider.TryGetFolderFromPathAsync(dir) : null;
+
+    private static readonly FilePickerFileType SqlFileType = new("SQL scripts")
+    {
+        Patterns = new[] { "*.sql" },
+    };
 
     private async System.Threading.Tasks.Task RunAsync()
     {
