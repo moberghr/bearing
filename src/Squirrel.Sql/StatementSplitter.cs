@@ -27,25 +27,38 @@ public static class StatementSplitter
         var spans = new List<StatementSpan>();
         if (string.IsNullOrEmpty(sql)) return spans;
 
-        var start = 0;
+        // First on-channel token index of each statement (statements are delimited by SEMI).
+        var starts = new List<int>();
+        int? firstStart = null;
         foreach (var t in PgParsing.LexAll(sql))
         {
-            if (t.Type != PostgreSQLLexer.SEMI) continue;
-            var end = t.StopIndex + 1; // include the semicolon in the statement it terminates
-            spans.Add(new StatementSpan(start, end, sql[start..end]));
-            start = end;
+            if (t.Channel != TokenConstants.DefaultChannel || t.Type == TokenConstants.EOF) continue;
+            firstStart ??= t.StartIndex;
+            if (t.Type == PostgreSQLLexer.SEMI)
+            {
+                starts.Add(firstStart.Value);
+                firstStart = null;
+            }
         }
+        if (firstStart is not null) starts.Add(firstStart.Value); // trailing statement, no ';'
+        if (starts.Count == 0) return spans;                       // only whitespace/comments
 
-        if (start < sql.Length)
-            spans.Add(new StatementSpan(start, sql.Length, sql[start..]));
-
+        // Tile the buffer: statement i owns from its own start (0 for the first, so leading
+        // whitespace stays with it) up to the next statement's first token. The ';' and any blank
+        // lines after it therefore belong to the statement they follow, not the next one.
+        for (var i = 0; i < starts.Count; i++)
+        {
+            var start = i == 0 ? 0 : starts[i];
+            var end = i == starts.Count - 1 ? sql.Length : starts[i + 1];
+            spans.Add(new StatementSpan(start, end, sql[start..end]));
+        }
         return spans;
     }
 
     /// <summary>
-    /// The statement the caret sits in. A caret exactly on an interior boundary belongs to the
-    /// following statement; if the chosen segment is blank (e.g. trailing whitespace after the
-    /// last <c>;</c>), falls back to the nearest non-blank statement. Null when nothing runnable.
+    /// The statement the caret sits in. The caret belongs to a statement through its terminating
+    /// <c>;</c> and any trailing blank lines, only switching to the next statement once it reaches
+    /// that statement's first character. Null when the buffer has nothing runnable.
     /// </summary>
     public static StatementSpan? StatementAt(string sql, int caret)
     {
@@ -53,23 +66,14 @@ public static class StatementSplitter
         if (spans.Count == 0) return null;
         caret = Math.Clamp(caret, 0, sql.Length);
 
-        var idx = -1;
         for (var i = 0; i < spans.Count; i++)
         {
-            var last = i == spans.Count - 1;
-            if (caret >= spans[i].Start && (last ? caret <= spans[i].End : caret < spans[i].End))
-            {
-                idx = i;
-                break;
-            }
+            // TrimmedEnd sits just past the statement's last real char (its ';'); everything up to
+            // it — and the whitespace gap after — stays with statement i.
+            if (caret <= spans[i].TrimmedEnd) return spans[i];
+            if (i == spans.Count - 1) return spans[i];       // trailing whitespace at EOF
+            if (caret < spans[i + 1].Start) return spans[i]; // in the gap before the next statement
         }
-        if (idx < 0) idx = spans.Count - 1;
-
-        if (!string.IsNullOrWhiteSpace(spans[idx].Text)) return spans[idx];
-        for (var i = idx - 1; i >= 0; i--)
-            if (!string.IsNullOrWhiteSpace(spans[i].Text)) return spans[i];
-        for (var i = idx + 1; i < spans.Count; i++)
-            if (!string.IsNullOrWhiteSpace(spans[i].Text)) return spans[i];
-        return null;
+        return spans[^1];
     }
 }

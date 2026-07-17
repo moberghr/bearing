@@ -1,3 +1,4 @@
+using System;
 using Squirrel.Sql;
 using Xunit;
 
@@ -15,9 +16,10 @@ public class StatementSplitterTests
         var spans = StatementSplitter.Split("select 1; select 2; select 3");
 
         Assert.Equal(3, spans.Count);
-        Assert.Equal("select 1;", spans[0].Text);
-        Assert.Equal(" select 2;", spans[1].Text);
-        Assert.Equal(" select 3", spans[2].Text);
+        // Each statement owns the whitespace after its ';' (up to the next statement's first token).
+        Assert.Equal("select 1; ", spans[0].Text);
+        Assert.Equal("select 2; ", spans[1].Text);
+        Assert.Equal("select 3", spans[2].Text);
     }
 
     [Fact]
@@ -52,14 +54,40 @@ public class StatementSplitterTests
     }
 
     [Fact]
-    public void StatementAt_treats_boundary_as_the_following_statement()
+    public void StatementAt_right_after_semicolon_stays_on_the_statement_it_terminates()
     {
-        const string sql = "select 1;select 2";
-        var caret = sql.IndexOf(';') + 1; // right after the semicolon
+        // Caret just past the ';', still on that line — belongs to the query it terminated.
+        const string sql = "select 1;\nselect 2";
+        var caret = sql.IndexOf(';') + 1;
 
         var stmt = StatementSplitter.StatementAt(sql, caret);
 
-        Assert.Equal("select 2", stmt!.Text);
+        Assert.Contains("select 1", stmt!.Text);
+        Assert.DoesNotContain("select 2", stmt.Text);
+    }
+
+    [Fact]
+    public void StatementAt_on_blank_line_between_statements_selects_the_previous()
+    {
+        const string sql = "select 1;\n\nselect 2;";
+        var caret = sql.IndexOf("\n\n") + 1; // the blank line between the two statements
+
+        var stmt = StatementSplitter.StatementAt(sql, caret);
+
+        Assert.Contains("select 1", stmt!.Text);
+        Assert.DoesNotContain("select 2", stmt.Text);
+    }
+
+    [Fact]
+    public void StatementAt_switches_to_next_statement_at_its_first_character()
+    {
+        const string sql = "select 1;\n\nselect 2;";
+        var caret = sql.LastIndexOf("select 2", StringComparison.Ordinal); // first char of statement 2
+
+        var stmt = StatementSplitter.StatementAt(sql, caret);
+
+        Assert.Contains("select 2", stmt!.Text);
+        Assert.DoesNotContain("select 1", stmt.Text);
     }
 
     [Fact]
