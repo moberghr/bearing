@@ -34,6 +34,10 @@ public partial class MainWindow : Window
         _completion = new CompletionController(Editor, new CompletionEngine(), () => Vm?.SnapshotForSelectedTab());
         Editor.TextArea.LeftMargins.Add(_statementHighlight); // its own column, right of the line numbers
 
+        // Translucent selection so syntax-highlighted glyphs stay readable through it — the opaque
+        // default paints solid blue over the colored text.
+        Editor.TextArea.SelectionBrush = new SolidColorBrush(Color.FromArgb(0x40, 0x3B, 0x82, 0xF6));
+
         Editor.TextChanged += (_, _) =>
         {
             if (!_loadingEditor && Vm?.SelectedTab is { } tab) tab.Text = Editor.Text;

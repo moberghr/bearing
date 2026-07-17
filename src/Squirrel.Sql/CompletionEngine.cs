@@ -33,25 +33,37 @@ public sealed partial class CompletionEngine : ICompletionEngine
         var intents = candidates.Rules.Keys.Select(PgCompletionRules.Classify).ToHashSet();
 
         var suggestions = new List<Suggestion>();
+        var qualifier = AliasQualifierBefore(sql, caretOffset);
 
-        if (intents.Contains(CompletionIntent.TablePosition))
+        if (qualifier is not null)
         {
-            suggestions.AddRange(TableSuggestions(schema, sources));
-            if (sources.Count > 0)
-                suggestions.AddRange(JoinSuggestions(schema, sources));
+            // After "alias." only that alias's columns (and FK-equality predicates joining it to an
+            // in-scope table) make sense — never tables/joins/keywords, regardless of how c3 classifies
+            // the caret in the surrounding (often broken) SQL.
+            suggestions.AddRange(FkPredicateSuggestions(schema, sources, qualifier));
+            suggestions.AddRange(ColumnSuggestions(schema, sources, qualifier));
         }
-
-        if (intents.Contains(CompletionIntent.ColumnPosition))
-            suggestions.AddRange(ColumnSuggestions(schema, sources, AliasQualifierBefore(sql, caretOffset)));
-
-        foreach (var tokenType in candidates.Tokens.Keys)
+        else
         {
-            var kw = KeywordText(parsed.Parser.Vocabulary, tokenType);
-            if (kw is not null)
-                suggestions.Add(new Suggestion
-                {
-                    DisplayText = kw, ReplacementText = kw, Kind = SuggestionKind.Keyword, Priority = 1,
-                });
+            if (intents.Contains(CompletionIntent.TablePosition))
+            {
+                suggestions.AddRange(TableSuggestions(schema, sources));
+                if (sources.Count > 0)
+                    suggestions.AddRange(JoinSuggestions(schema, sources));
+            }
+
+            if (intents.Contains(CompletionIntent.ColumnPosition))
+                suggestions.AddRange(ColumnSuggestions(schema, sources, qualifier: null));
+
+            foreach (var tokenType in candidates.Tokens.Keys)
+            {
+                var kw = KeywordText(parsed.Parser.Vocabulary, tokenType);
+                if (kw is not null)
+                    suggestions.Add(new Suggestion
+                    {
+                        DisplayText = kw, ReplacementText = kw, Kind = SuggestionKind.Keyword, Priority = 1,
+                    });
+            }
         }
 
         var ranked = suggestions
@@ -145,6 +157,56 @@ public sealed partial class CompletionEngine : ICompletionEngine
                     Kind = SuggestionKind.Join,
                     Priority = 20,
                     Description = $"FK {fk.Name}: {other.Schema}.{other.Name} ⋈ {srcAlias}",
+                };
+            }
+        }
+    }
+
+    // ---- FK-equality predicates after "alias." (e.g. in a WHERE) -----------------------------
+
+    /// <summary>
+    /// When the caret is at <c>alias.</c> and that alias's table has a foreign key to (or from)
+    /// another in-scope source, offer the join equality — e.g. <c>country_id = c.country_id</c> —
+    /// so a correlated WHERE/ON predicate completes in one keystroke.
+    /// </summary>
+    private static IEnumerable<Suggestion> FkPredicateSuggestions(
+        ISchemaSnapshot schema, IReadOnlyList<TableRef> sources, string qualifier)
+    {
+        var owner = sources.FirstOrDefault(s =>
+            string.Equals(s.EffectiveName, qualifier, StringComparison.OrdinalIgnoreCase));
+        if (owner?.Resolved is null) yield break;
+        var ownerOid = owner.Resolved.Oid;
+
+        foreach (var other in sources)
+        {
+            if (other.Resolved is null || ReferenceEquals(other, owner)) continue;
+            if (string.Equals(other.EffectiveName, qualifier, StringComparison.OrdinalIgnoreCase)) continue;
+            var otherOid = other.Resolved.Oid;
+
+            foreach (var fk in schema.ForeignKeysTouching(ownerOid))
+            {
+                IReadOnlyList<short> ownerCols, otherCols;
+                if (fk.ParentOid == ownerOid && fk.ReferencedOid == otherOid)
+                    (ownerCols, otherCols) = (fk.ParentAttNums, fk.ReferencedAttNums);
+                else if (fk.ReferencedOid == ownerOid && fk.ParentOid == otherOid)
+                    (ownerCols, otherCols) = (fk.ReferencedAttNums, fk.ParentAttNums);
+                else continue;
+
+                var preds = new List<string>();
+                for (var i = 0; i < Math.Min(ownerCols.Count, otherCols.Count); i++)
+                    preds.Add($"{ColumnName(schema, ownerOid, ownerCols[i])} = {other.EffectiveName}.{ColumnName(schema, otherOid, otherCols[i])}");
+                if (preds.Count == 0) continue;
+                var predicate = string.Join(" and ", preds);
+
+                yield return new Suggestion
+                {
+                    DisplayText = predicate,
+                    FilterText = ColumnName(schema, ownerOid, ownerCols[0]),
+                    DetailText = $"fk → {other.EffectiveName}",
+                    ReplacementText = predicate,
+                    Kind = SuggestionKind.Join,
+                    Priority = 30,
+                    Description = $"FK {fk.Name}: {owner.EffectiveName} ⋈ {other.EffectiveName}",
                 };
             }
         }

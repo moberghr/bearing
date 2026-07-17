@@ -39,6 +39,27 @@ public class JoinCompletionTests
     }
 
     [Fact]
+    public void Alias_dot_inside_lateral_subquery_offers_inner_columns_and_fk_predicate()
+    {
+        // Mirrors: outer `from users u`, inner (still-open) `join lateral (… from orders o where o.`
+        var sql = "select * from users u\n join lateral (\n select count(*)\n from orders o\n where o.";
+        var result = Engine.Complete(sql, sql.Length, Schema);
+
+        // The inner alias resolves to orders' columns (the reported "no columns for o." case).
+        var cols = result.Suggestions.Where(s => s.Kind == SuggestionKind.Column).Select(s => s.DisplayText).ToList();
+        Assert.Contains("id", cols);
+        Assert.Contains("user_id", cols);
+
+        // Instead of a bogus join clause, a ready-made FK equality against the in-scope outer alias.
+        Assert.Contains(result.Suggestions,
+            s => s.Kind == SuggestionKind.Join && s.ReplacementText == "user_id = u.id");
+
+        // No table/keyword noise after "alias.".
+        Assert.DoesNotContain(result.Suggestions, s => s.Kind == SuggestionKind.Table);
+        Assert.DoesNotContain(result.Suggestions, s => s.Kind == SuggestionKind.Keyword);
+    }
+
+    [Fact]
     public void Alias_dot_restricts_columns_to_that_source()
     {
         var result = Engine.Complete("select u. from users u", caretOffset: 9, Schema);
