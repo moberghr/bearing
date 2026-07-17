@@ -72,10 +72,13 @@ internal sealed class FakeMetadata : IMetadataReader
 
 internal sealed class FakeExecutor : IQueryExecutor
 {
-    public Task<QueryResult> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
-        => Task.FromResult(new QueryResult(
-            System.Array.Empty<ColumnDescriptor>(), System.Array.Empty<object?[]>(),
-            0, System.TimeSpan.Zero, null, null, false));
+    public Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<QueryResult>>(new[]
+        {
+            new QueryResult(
+                System.Array.Empty<ColumnDescriptor>(), System.Array.Empty<object?[]>(),
+                0, System.TimeSpan.Zero, null, null, false),
+        });
 
     public async IAsyncEnumerable<ResultBatch> StreamAsync(string sql, QueryOptions options,
         [EnumeratorCancellation] CancellationToken ct)

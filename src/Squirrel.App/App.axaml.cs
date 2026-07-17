@@ -1,4 +1,6 @@
+using System;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -29,14 +31,23 @@ public partial class App : Application
             var vm = new MainWindowViewModel(providers, projectStore, sessionStore, queryLog, recentProjects);
             var window = new MainWindow { DataContext = vm };
 
-            // Synchronous save — no async/await, so nothing to deadlock on during close.
-            // Live connections are torn down fire-and-forget: never block the UI thread here.
-            window.Closing += (_, _) =>
+            // Persist the session on every exit path, exactly once. A window close fires Closing on
+            // the UI thread; a killed process (Ctrl+C in the terminal, IDE stop) shuts the runtime
+            // down and runs ProcessExit instead. Save is synchronous (no deadlock) and best-effort;
+            // the live editor's text is already mirrored into the tab, so the off-UI-thread
+            // ProcessExit path skips FlushActiveEditor (which would touch controls off-thread).
+            var saved = 0;
+            void SaveSession(bool fromUiThread)
             {
-                window.FlushActiveEditor();
+                if (Interlocked.Exchange(ref saved, 1) != 0) return;
+                if (fromUiThread) window.FlushActiveEditor();
                 vm.SaveWorkspace();
                 _ = vm.DisposeSessionsAsync();
-            };
+            }
+
+            window.Closing += (_, _) => SaveSession(fromUiThread: true);
+            desktop.ShutdownRequested += (_, _) => SaveSession(fromUiThread: true);
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => SaveSession(fromUiThread: false);
 
             desktop.MainWindow = window;
 

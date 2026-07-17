@@ -36,7 +36,14 @@ public interface IMetadataReader
 
 public interface IQueryExecutor
 {
-    Task<QueryResult> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct);
+    /// <summary>
+    /// Runs the SQL — which may contain several statements separated by <c>;</c> — and returns one
+    /// <see cref="QueryResult"/> per result set (SELECTs and RETURNING clauses produce grids;
+    /// INSERT/UPDATE/DDL produce a rows-affected message). Always at least one element; a failure
+    /// is returned as a single error result rather than thrown.
+    /// </summary>
+    Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct);
+
     IAsyncEnumerable<ResultBatch> StreamAsync(string sql, QueryOptions options, CancellationToken ct);
 }
 

@@ -116,6 +116,38 @@ public class WorkspaceFlowTests : IDisposable
         Assert.DoesNotContain(vm.Scripts, s => s.Name == "daily.sql");
     }
 
+    [Fact]
+    public async Task Unsaved_script_edits_survive_reload_and_stay_marked_dirty()
+    {
+        var dir = Path.Combine(_root, "dirtyproj");
+        var vm = NewVm();
+        await vm.InitializeAsync(dir);
+
+        // Save a script, then edit its buffer without saving.
+        var path = Path.Combine(vm.ScriptsDirectory!, "report.sql");
+        await vm.SaveSelectedScriptAsync(path, "select 1;");
+        var tab = vm.SelectedTab!;
+        Assert.False(tab.IsDirty);
+
+        tab.Text = "select 1; -- WIP";
+        Assert.True(tab.IsDirty);
+
+        // Persist the session and reload into a fresh VM (mimics project switch / app restart).
+        vm.SaveWorkspace();
+        var vm2 = NewVm();
+        await vm2.InitializeAsync(dir);
+
+        var restored = Assert.Single(vm2.Tabs, t => t.Header == "report.sql");
+        Assert.Equal("select 1; -- WIP", restored.Text);                 // unsaved edits preserved
+        Assert.True(restored.IsDirty);                                   // still marked modified
+        Assert.Equal("select 1;", await File.ReadAllTextAsync(path));    // disk untouched
+
+        // Saving writes disk and clears the marker.
+        await vm2.SaveSelectedScriptAsync(path, restored.Text);
+        Assert.False(restored.IsDirty);
+        Assert.Equal("select 1; -- WIP", await File.ReadAllTextAsync(path));
+    }
+
     private static async Task<Core.Schema.ISchemaSnapshot?> WaitForSnapshot(MainWindowViewModel vm)
     {
         for (var i = 0; i < 50; i++)

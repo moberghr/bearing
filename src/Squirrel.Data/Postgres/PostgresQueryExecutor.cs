@@ -11,54 +11,64 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
 
     public PostgresQueryExecutor(NpgsqlConnectionFactory factory) => _factory = factory;
 
-    public async Task<QueryResult> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
+    public async Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
+        var results = new List<QueryResult>();
         try
         {
             await using var conn = await _factory.DataSource.OpenConnectionAsync(ct);
             await using var cmd = new NpgsqlCommand(sql, conn);
             await using var reader = await cmd.ExecuteReaderAsync(ct);
 
-            // A non-row-returning statement (INSERT/UPDATE/DDL) still reports affected rows.
-            if (reader.FieldCount == 0)
+            // One QueryResult per statement's result set — NextResult walks a multi-statement batch.
+            do
             {
-                sw.Stop();
-                return new QueryResult(
-                    Array.Empty<ColumnDescriptor>(), Array.Empty<object?[]>(),
-                    RowCount: reader.RecordsAffected, sw.Elapsed,
-                    Message: DescribeNonQuery(reader.RecordsAffected), Error: null, Truncated: false);
+                results.Add(await ReadResultSetAsync(reader, options, sw, ct));
             }
+            while (await reader.NextResultAsync(ct));
 
-            var columns = ReadColumns(reader);
-            var rows = new List<object?[]>();
-            var truncated = false;
-
-            while (await reader.ReadAsync(ct))
-            {
-                if (options.MaxRows is { } max && rows.Count >= max) { truncated = true; break; }
-
-                var row = new object?[reader.FieldCount];
-                for (var i = 0; i < reader.FieldCount; i++)
-                    row[i] = await reader.IsDBNullAsync(i, ct) ? null : reader.GetValue(i);
-                rows.Add(row);
-            }
-
-            sw.Stop();
-            return new QueryResult(columns, rows, rows.Count, sw.Elapsed,
-                Message: null, Error: null, Truncated: truncated);
+            return results;
         }
         catch (PostgresException pg)
         {
             sw.Stop();
             var pos = pg.Position > 0 ? pg.Position : (int?)null;
-            return Failure(sw.Elapsed, new QueryError(pg.MessageText, pg.SqlState, pos));
+            return new[] { Failure(sw.Elapsed, new QueryError(pg.MessageText, pg.SqlState, pos)) };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             sw.Stop();
-            return Failure(sw.Elapsed, new QueryError(ex.Message, null, null));
+            return new[] { Failure(sw.Elapsed, new QueryError(ex.Message, null, null)) };
         }
+    }
+
+    private static async Task<QueryResult> ReadResultSetAsync(
+        NpgsqlDataReader reader, QueryOptions options, Stopwatch sw, CancellationToken ct)
+    {
+        // A non-row-returning statement (INSERT/UPDATE/DDL) still reports affected rows.
+        if (reader.FieldCount == 0)
+            return new QueryResult(
+                Array.Empty<ColumnDescriptor>(), Array.Empty<object?[]>(),
+                RowCount: reader.RecordsAffected, sw.Elapsed,
+                Message: DescribeNonQuery(reader.RecordsAffected), Error: null, Truncated: false);
+
+        var columns = ReadColumns(reader);
+        var rows = new List<object?[]>();
+        var truncated = false;
+
+        while (await reader.ReadAsync(ct))
+        {
+            if (options.MaxRows is { } max && rows.Count >= max) { truncated = true; break; }
+
+            var row = new object?[reader.FieldCount];
+            for (var i = 0; i < reader.FieldCount; i++)
+                row[i] = await reader.IsDBNullAsync(i, ct) ? null : reader.GetValue(i);
+            rows.Add(row);
+        }
+
+        return new QueryResult(columns, rows, rows.Count, sw.Elapsed,
+            Message: null, Error: null, Truncated: truncated);
     }
 
     public async IAsyncEnumerable<ResultBatch> StreamAsync(

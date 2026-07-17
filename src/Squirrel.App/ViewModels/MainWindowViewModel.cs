@@ -241,9 +241,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
             EditorTabViewModel tab;
             if (abs is not null && File.Exists(abs))
             {
-                var text = await File.ReadAllTextAsync(abs, CancellationToken.None);
-                tab = NewTab(text, abs);
-                tab.CaretOffset = Math.Clamp(e.CaretOffset, 0, text.Length);
+                // Restore the last editor buffer (which may hold unsaved edits), keeping the on-disk
+                // content as the clean baseline so an unsaved script comes back marked modified.
+                var disk = await File.ReadAllTextAsync(abs, CancellationToken.None);
+                var buffer = e.ScratchText ?? disk;
+                tab = NewTab(buffer, abs);
+                tab.MarkSaved(disk);
+                tab.CaretOffset = Math.Clamp(e.CaretOffset, 0, buffer.Length);
             }
             else
             {
@@ -295,6 +299,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         var tab = SelectedTab ?? NewTab();
         tab.Text = text;
         tab.ScriptPath = absolutePath;
+        tab.MarkSaved(text);
         RefreshScripts();
         UpdateTitle();
         StatusText = $"Opened {Path.GetFileName(absolutePath)}.";
@@ -307,6 +312,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         var tab = SelectedTab ?? NewTab(text);
         tab.Text = text;
         tab.ScriptPath = absolutePath;
+        tab.MarkSaved(text);
         RefreshScripts();
         UpdateTitle();
         StatusText = $"Saved {Path.GetFileName(absolutePath)}.";
@@ -503,13 +509,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
             _ = _sessions.EnsureSchemaAsync(session, CancellationToken.None); // warm completion, don't block Run
 
             StatusText = "Running…";
-            var result = await session.Executor.ExecuteAsync(sql, new QueryOptions(), ct);
-            tab.LastResult = result;
-            LogExecution(info, sql, result);
-            StatusText = result.Success
-                ? $"{result.RowCount} row(s) in {result.Duration.TotalMilliseconds:0} ms"
-                  + (result.Truncated ? " (truncated)" : "")
-                : $"Error{(result.Error?.SqlState is { } s ? $" [{s}]" : "")}: {result.Error?.Message}";
+            var results = await session.Executor.ExecuteAsync(sql, new QueryOptions(), ct);
+            tab.LastResults = results;
+            LogExecution(info, sql, results);
+            StatusText = DescribeResults(results);
         }
         catch (OperationCanceledException)
         {
@@ -541,17 +544,38 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public Task<IReadOnlyList<QueryLogEntry>> SearchHistoryAsync(string? text, CancellationToken ct)
         => _queryLog.SearchAsync(new QueryLogQuery { Text = text }, ct);
 
-    private void LogExecution(ConnectionInfo info, string sql, QueryResult result) => _queryLog.Append(new QueryLogEntry
+    /// <summary>One-line status for a run: the single set's shape, or an N-set summary.</summary>
+    private static string DescribeResults(IReadOnlyList<QueryResult> results)
+    {
+        var firstError = results.FirstOrDefault(r => !r.Success);
+        if (firstError is not null)
+            return $"Error{(firstError.Error?.SqlState is { } s ? $" [{s}]" : "")}: {firstError.Error?.Message}";
+
+        if (results.Count == 1)
+        {
+            var r = results[0];
+            return $"{r.RowCount} row(s) in {r.Duration.TotalMilliseconds:0} ms"
+                   + (r.Truncated ? " (truncated)" : "");
+        }
+
+        var totalRows = results.Sum(r => r.RowCount);
+        var elapsed = results[^1].Duration.TotalMilliseconds;
+        var truncated = results.Any(r => r.Truncated) ? " (truncated)" : "";
+        return $"{results.Count} result sets · {totalRows} row(s) in {elapsed:0} ms{truncated}";
+    }
+
+    // History logs one entry per submitted run; a multi-statement run aggregates its sets.
+    private void LogExecution(ConnectionInfo info, string sql, IReadOnlyList<QueryResult> results) => _queryLog.Append(new QueryLogEntry
     {
         ExecutedAt = DateTimeOffset.UtcNow,
         ProviderId = info.ProviderId,
         ConnectionName = info.Name,
         Database = info.Database,
         SqlText = sql,
-        Duration = result.Duration,
-        RowCount = result.RowCount,
-        Success = result.Success,
-        ErrorMessage = result.Error?.Message,
+        Duration = results[^1].Duration,
+        RowCount = results.Sum(r => r.RowCount),
+        Success = results.All(r => r.Success),
+        ErrorMessage = results.FirstOrDefault(r => !r.Success)?.Error?.Message,
     });
 
     // ---- Session persistence (synchronous; safe on the close path) ---------------------------

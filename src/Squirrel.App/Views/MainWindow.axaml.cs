@@ -2,9 +2,11 @@ using System.ComponentModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Data;
 using Avalonia.Input;
+using Avalonia.Media;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using AvaloniaEdit.TextMate;
@@ -84,7 +86,7 @@ public partial class MainWindow : Window
         if (tab is not null)
             Editor.CaretOffset = System.Math.Clamp(tab.CaretOffset, 0, Editor.Text.Length);
         _loadingEditor = false;
-        RebuildResultsGrid(tab?.LastResult);
+        RebuildResults(tab?.LastResults);
         UpdateStatementHighlight();
     }
 
@@ -302,7 +304,7 @@ public partial class MainWindow : Window
             ? Squirrel.Sql.StatementSplitter.StatementAt(Editor.Text, Editor.CaretOffset)?.Text ?? Editor.Text
             : selected;
         await Vm.ExecuteAsync(sql);
-        RebuildResultsGrid(Vm.SelectedTab?.LastResult);
+        RebuildResults(Vm.SelectedTab?.LastResults);
     }
 
     private async void OnOpenClick(object? sender, RoutedEventArgs e) => await OpenAsync();
@@ -361,22 +363,49 @@ public partial class MainWindow : Window
         }
     }
 
-    internal void RebuildResultsGrid(QueryResult? result)
+    /// <summary>Render the run's result sets: one grid for a single set, sub-tabs for several.</summary>
+    internal void RebuildResults(IReadOnlyList<QueryResult>? results)
     {
-        ResultsGrid.Columns.Clear();
-        if (result is null || !result.Success)
-        {
-            ResultsGrid.ItemsSource = null;
-            return;
-        }
+        if (results is null || results.Count == 0) { ResultsHost.Content = null; return; }
+        if (results.Count == 1) { ResultsHost.Content = BuildResultView(results[0]); return; }
 
+        var tabs = new TabControl();
+        for (var i = 0; i < results.Count; i++)
+            tabs.Items.Add(new TabItem { Header = ResultTabHeader(i, results[i]), Content = BuildResultView(results[i]) });
+        tabs.SelectedIndex = 0;
+        ResultsHost.Content = tabs;
+    }
+
+    private static string ResultTabHeader(int index, QueryResult result)
+    {
+        if (!result.Success) return $"Result {index + 1} · error";
+        if (result.Columns.Count == 0) return $"Result {index + 1} · {result.Message}";
+        return $"Result {index + 1} ({result.RowCount})";
+    }
+
+    private static Control BuildResultView(QueryResult result)
+    {
+        if (!result.Success)
+            return new TextBlock { Text = $"Error: {result.Error?.Message}", Margin = new Thickness(8), TextWrapping = TextWrapping.Wrap };
+
+        if (result.Columns.Count == 0)
+            return new TextBlock { Text = result.Message ?? "Statement executed.", Margin = new Thickness(8) };
+
+        var grid = new DataGrid
+        {
+            AutoGenerateColumns = false,
+            IsReadOnly = true,
+            CanUserResizeColumns = true,
+            CanUserReorderColumns = true,
+            GridLinesVisibility = DataGridGridLinesVisibility.All,
+        };
         for (var i = 0; i < result.Columns.Count; i++)
-            ResultsGrid.Columns.Add(new DataGridTextColumn
+            grid.Columns.Add(new DataGridTextColumn
             {
                 Header = result.Columns[i].Name,
                 Binding = new Binding($"[{i}]"),
             });
-
-        ResultsGrid.ItemsSource = result.Rows;
+        grid.ItemsSource = result.Rows;
+        return grid;
     }
 }

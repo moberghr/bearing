@@ -43,15 +43,35 @@ public class PostgresExecutorTests
         Skip.IfNot(await Reachable(factory), "No PostgreSQL reachable for integration test.");
 
         var executor = provider.CreateQueryExecutor(factory);
-        var result = await executor.ExecuteAsync(
+        var results = await executor.ExecuteAsync(
             "select film_id, title from film order by film_id limit 5",
             new QueryOptions(), CancellationToken.None);
 
+        var result = Assert.Single(results);
         Assert.True(result.Success, result.Error?.Message);
         Assert.Equal(5, result.RowCount);
         Assert.Equal(new[] { "film_id", "title" }, result.Columns.Select(c => c.Name));
         Assert.Equal(1, Convert.ToInt32(result.Rows[0][0]));
         Assert.IsType<string>(result.Rows[0][1]);
+    }
+
+    [SkippableFact]
+    public async Task Multi_statement_run_returns_a_result_set_per_statement()
+    {
+        var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
+        await using var factory = provider.CreateConnectionFactory(Info(), Password);
+        Skip.IfNot(await Reachable(factory), "No PostgreSQL reachable for integration test.");
+
+        var executor = provider.CreateQueryExecutor(factory);
+        var results = await executor.ExecuteAsync(
+            "select film_id from film order by film_id limit 3; select 42 as answer",
+            new QueryOptions(), CancellationToken.None);
+
+        Assert.Equal(2, results.Count);
+        Assert.Equal(3, results[0].RowCount);
+        Assert.Equal("film_id", results[0].Columns[0].Name);
+        Assert.Equal("answer", results[1].Columns[0].Name);
+        Assert.Equal(42, Convert.ToInt32(results[1].Rows[0][0]));
     }
 
     [SkippableFact]
@@ -62,8 +82,8 @@ public class PostgresExecutorTests
         Skip.IfNot(await Reachable(factory), "No PostgreSQL reachable for integration test.");
 
         var executor = provider.CreateQueryExecutor(factory);
-        var result = await executor.ExecuteAsync(
-            "select * from no_such_table_here", new QueryOptions(), CancellationToken.None);
+        var result = Assert.Single(await executor.ExecuteAsync(
+            "select * from no_such_table_here", new QueryOptions(), CancellationToken.None));
 
         Assert.False(result.Success);
         Assert.NotNull(result.Error);
