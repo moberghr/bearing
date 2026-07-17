@@ -38,16 +38,44 @@ the executable plan for the result-set work plus a few loose ends from the same 
   - Both strip a trailing `;`. offset/limit are ints → injection-safe. Tested vs pagila (1000 films).
 - **Row-number gutter**: `BuildResultView` in `src/Squirrel.App/Views/MainWindow.axaml.cs` sets
   `HeadersVisibility=All` and `LoadingRow += (_,e)=> e.Row.Header = index+1`.
-- **Results UI shape** (`MainWindow.axaml.cs`): `RebuildResults(IReadOnlyList<QueryResult>?)` renders one
-  `DataGrid` for a single result set or a `TabControl` of "Result n (rows)" tabs for several.
-  `BuildResultView(QueryResult)` builds a grid (or a `TextBlock` for non-query/error). The host is
-  `<ContentControl x:Name="ResultsHost">` in `MainWindow.axaml`. Rows are `object?[]`, columns bound by
-  `[i]` indexer. `EditorTabViewModel.LastResults` (IReadOnlyList<QueryResult>) holds the run's result sets;
-  `LastResult` is a convenience for the first.
+- **Results UI shape**: result rendering was extracted into a self-contained `ResultView` control
+  (`src/Squirrel.App/Controls/ResultView.cs`), hosted as `<controls:ResultView x:Name="ResultsView">` in
+  `MainWindow.axaml`. `MainWindow.RebuildResults(...)` is now a one-liner: `ResultsView.Results = ...`.
+  Rows are `object?[]`, columns bound by `[i]` indexer.
+
+## Phase 1 — Paging UI  (DONE 2026-07-17)
+
+Built on the **ResultSet VM** shape (chosen with the user — the clean end state; Phases 2–3 slot in):
+
+- **`ResultSetViewModel`** (`src/Squirrel.App/ViewModels/ResultSetViewModel.cs`) — one per result set,
+  wraps a `QueryResult` first page + `Rows` as an `ObservableCollection<object?[]>` (grows on load-more),
+  `IsPageable`, `SourceSql`, `HasMore`, `TotalCount`, `Loaded`, `CanCount`, `FooterText`, `AppendPage(...)`.
+  Also carries `Success`/`Message`/`Error`/`Columns` so it renders the non-grid cases too.
+- **`EditorTabViewModel.Results`** (IReadOnlyList<ResultSetViewModel>) replaced the old raw
+  `LastResults`; `LastResult` now returns the first `ResultSetViewModel`.
+- **`MainWindowViewModel`**: `ExecuteAsync` runs the first page with `QueryOptions{MaxRows=PageSize}`
+  (`const int PageSize = 100`), then `pageable = results.Count==1 && [0].Success && [0].Columns.Count>0`;
+  builds one VM per set (only the single pageable set gets `SourceSql`). New `LoadMoreAsync(rs)` /
+  `CountTotalAsync(rs)` resolve the selected tab's already-live session via `_sessions.TryGet` and reuse
+  the `_executionCts`/IsBusy pattern.
+- **`ResultView`**: pageable single-set grids get a bottom footer (`FooterText` + `[Load more]` bound to
+  `HasMore` + `[Count]` bound to `CanCount`). Grid `ItemsSource` binds to `rs.Rows` → append with no
+  rebuild. `MainWindow` wires `ResultsView.LoadMore`/`CountTotal` to the VM methods at construction.
+- **Test**: `WorkspaceFlowTests.Single_select_pages_and_counts` drives ExecuteAsync → LoadMore → Count
+  against pagila.film (1000 rows); asserts 100 → 200 loaded, total 1000, multi-statement not pageable.
+
+**Tradeoff / gotcha**: the whole run is now capped at `PageSize` (100), so a *multi-statement* run's grids
+show ≤100 rows each with no load-more (previously 10 000). Truncation still surfaces in the status line.
+**Not visually QA'd** (no headless GUI) — verify the footer, Load more append, and Count live.
+
+### Prior foundation (kept)
 
 ---
 
-## Phase 1 — Paging UI  (NEXT)
+## Phase 1 — Paging UI  (SUPERSEDED — see the DONE section above for what shipped)
+
+The original design notes below are kept for context; the actual implementation used a per-result-set
+`ResultSetViewModel` (see above) rather than a bare `PagedResultState`.
 
 Goal: default show 100 rows; footer under the grid with row count, `[Load more]` (append), `[Count]`.
 

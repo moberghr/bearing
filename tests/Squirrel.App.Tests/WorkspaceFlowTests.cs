@@ -90,6 +90,42 @@ public class WorkspaceFlowTests : IDisposable
         await vm.DisposeSessionsAsync();
     }
 
+    [SkippableFact]
+    public async Task Single_select_pages_and_counts()
+    {
+        Skip.IfNot(await Reachable(), "No PostgreSQL reachable for integration test.");
+
+        var dir = Path.Combine(_root, "pageproj");
+        var vm = NewVm();
+        await vm.InitializeAsync(dir);
+        await vm.SeedDemoConnectionAsync(Host, Port, Db, User, Password);
+
+        // First page: a single row-returning SELECT is pageable and capped at PageSize.
+        await vm.ExecuteAsync("select * from film order by film_id;");
+        var rs = vm.SelectedTab!.LastResult!;
+        Assert.True(rs.Success, vm.StatusText);
+        Assert.True(rs.IsPageable);
+        Assert.Equal(MainWindowViewModel.PageSize, rs.Loaded);
+        Assert.True(rs.HasMore);                       // pagila.film has 1000 rows
+        Assert.Null(rs.TotalCount);
+
+        // Load more appends the next page in place.
+        await vm.LoadMoreAsync(rs);
+        Assert.Equal(MainWindowViewModel.PageSize * 2, rs.Loaded);
+        Assert.True(rs.HasMore);
+
+        // Count fills in the total and retires the [Count] affordance.
+        await vm.CountTotalAsync(rs);
+        Assert.Equal(1000, rs.TotalCount);
+        Assert.False(rs.CanCount);
+
+        // A multi-statement run is not pageable.
+        await vm.ExecuteAsync("select 1; select 2;");
+        Assert.All(vm.SelectedTab!.Results, r => Assert.False(r.IsPageable));
+
+        await vm.DisposeSessionsAsync();
+    }
+
     [Fact]
     public async Task Rename_scratch_and_saved_script()
     {

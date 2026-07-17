@@ -485,6 +485,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     // ---- Execution ---------------------------------------------------------------------------
 
+    /// <summary>Default page size: first page and each "load more" fetch this many rows.</summary>
+    public const int PageSize = 100;
+
     /// <summary>Execute SQL for the selected tab against that tab's connection; record it in the log.</summary>
     public async Task ExecuteAsync(string sql)
     {
@@ -509,8 +512,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
             _ = _sessions.EnsureSchemaAsync(session, CancellationToken.None); // warm completion, don't block Run
 
             StatusText = "Running…";
-            var results = await session.Executor.ExecuteAsync(sql, new QueryOptions(), ct);
-            tab.LastResults = results;
+            // Fetch only the first page; a single row-returning statement is then pageable and
+            // "load more"/"count" run against the original sql. Multi-statement runs are capped
+            // per set at PageSize and shown truncated (no paging — see the pageable gate below).
+            var results = await session.Executor.ExecuteAsync(sql, new QueryOptions { MaxRows = PageSize }, ct);
+            var pageable = results.Count == 1 && results[0].Success && results[0].Columns.Count > 0;
+            tab.Results = results
+                .Select(r => new ResultSetViewModel(r, sql, pageable))
+                .ToList();
             LogExecution(info, sql, results);
             StatusText = DescribeResults(results);
         }
@@ -535,6 +544,55 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         try { _executionCts?.Cancel(); }
         catch (ObjectDisposedException) { /* completed between the null-check and Cancel */ }
+    }
+
+    /// <summary>Append the next page to a pageable result set (infinite-scroll "load more").</summary>
+    public async Task LoadMoreAsync(ResultSetViewModel rs)
+    {
+        if (IsBusy || !rs.IsPageable || rs.SourceSql is null || !rs.HasMore) return;
+        if (ResolveLiveSession() is not { } session) return;
+
+        IsBusy = true;
+        _executionCts = new CancellationTokenSource();
+        var ct = _executionCts.Token;
+        try
+        {
+            var page = await session.Executor.ExecutePageAsync(rs.SourceSql, rs.Loaded, PageSize, ct);
+            rs.AppendPage(page.Rows, page.RowCount == PageSize);
+            StatusText = $"Loaded {rs.Loaded} row(s)"
+                         + (rs.TotalCount is { } t ? $" of {t}." : (rs.HasMore ? " (more available)." : "."));
+        }
+        catch (OperationCanceledException) { StatusText = "Load cancelled."; }
+        catch (Exception ex) { StatusText = $"Load more failed: {ex.Message}"; }
+        finally { _executionCts.Dispose(); _executionCts = null; IsBusy = false; }
+    }
+
+    /// <summary>Fill in the total row count for a pageable result set (the [Count] action).</summary>
+    public async Task CountTotalAsync(ResultSetViewModel rs)
+    {
+        if (IsBusy || !rs.IsPageable || rs.SourceSql is null) return;
+        if (ResolveLiveSession() is not { } session) return;
+
+        IsBusy = true;
+        _executionCts = new CancellationTokenSource();
+        var ct = _executionCts.Token;
+        try
+        {
+            rs.TotalCount = await session.Executor.CountAsync(rs.SourceSql, ct);
+            StatusText = rs.TotalCount is { } t ? $"Total: {t} row(s)." : "Count unavailable for this query.";
+        }
+        catch (OperationCanceledException) { StatusText = "Count cancelled."; }
+        catch (Exception ex) { StatusText = $"Count failed: {ex.Message}"; }
+        finally { _executionCts.Dispose(); _executionCts = null; IsBusy = false; }
+    }
+
+    /// <summary>The already-connected session for the selected tab (paging runs post-execute, so
+    /// the connection is live). Null — with a status set — if the tab lost its connection.</summary>
+    private ConnectionSession? ResolveLiveSession()
+    {
+        if (SelectedTab?.ConnectionId is { } id && _sessions.TryGet(id) is { } session) return session;
+        StatusText = "Not connected.";
+        return null;
     }
 
     /// <summary>Schema for the selected tab's connection (drives completion); null when not yet loaded.</summary>

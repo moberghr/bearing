@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
-using Squirrel.Core.Data;
 
 namespace Squirrel.App.ViewModels;
 
@@ -48,13 +47,14 @@ public sealed partial class EditorTabViewModel : ObservableObject
         _savedText = savedText;
         IsModified = Text != _savedText;
     }
-    /// <summary>Result sets from the last execution — one per statement in a multi-statement run.</summary>
+    /// <summary>Result sets from the last execution — one per statement in a multi-statement run.
+    /// Each holds its own mutable row buffer so paging can append without a rebuild.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(LastResult))]
-    private IReadOnlyList<QueryResult> _lastResults = Array.Empty<QueryResult>();
+    private IReadOnlyList<ResultSetViewModel> _results = Array.Empty<ResultSetViewModel>();
 
     /// <summary>Convenience: the first result set (or null), for single-statement callers.</summary>
-    public QueryResult? LastResult => LastResults.Count > 0 ? LastResults[0] : null;
+    public ResultSetViewModel? LastResult => Results.Count > 0 ? Results[0] : null;
 
     [ObservableProperty] private string _header = "";
 

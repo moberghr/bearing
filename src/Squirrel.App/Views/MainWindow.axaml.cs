@@ -33,6 +33,10 @@ public partial class MainWindow : Window
         _completion = new CompletionController(Editor, new CompletionEngine(), () => Vm?.SnapshotForSelectedTab());
         Editor.TextArea.LeftMargins.Add(_statementHighlight); // its own column, right of the line numbers
 
+        // Paging footer buttons call back into the shell VM (Vm is resolved lazily at click time).
+        ResultsView.LoadMore = rs => Vm?.LoadMoreAsync(rs) ?? Task.CompletedTask;
+        ResultsView.CountTotal = rs => Vm?.CountTotalAsync(rs) ?? Task.CompletedTask;
+
         // Translucent selection so syntax-highlighted glyphs stay readable through it — the opaque
         // default paints solid blue over the colored text.
         Editor.TextArea.SelectionBrush = new SolidColorBrush(Color.FromArgb(0x40, 0x3B, 0x82, 0xF6));
@@ -89,7 +93,7 @@ public partial class MainWindow : Window
         if (tab is not null)
             Editor.CaretOffset = System.Math.Clamp(tab.CaretOffset, 0, Editor.Text.Length);
         _loadingEditor = false;
-        RebuildResults(tab?.LastResults);
+        RebuildResults(tab?.Results);
         UpdateStatementHighlight();
     }
 
@@ -307,7 +311,7 @@ public partial class MainWindow : Window
             ? Squirrel.Sql.StatementSplitter.StatementAt(Editor.Text, Editor.CaretOffset)?.Text ?? Editor.Text
             : selected;
         await Vm.ExecuteAsync(sql);
-        RebuildResults(Vm.SelectedTab?.LastResults);
+        RebuildResults(Vm.SelectedTab?.Results);
     }
 
     private async void OnOpenClick(object? sender, RoutedEventArgs e) => await OpenAsync();
@@ -367,6 +371,6 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Render the run's result sets: one grid for a single set, sub-tabs for several.</summary>
-    internal void RebuildResults(IReadOnlyList<QueryResult>? results)
+    internal void RebuildResults(System.Collections.Generic.IReadOnlyList<ResultSetViewModel>? results)
         => ResultsView.Results = results;
 }
