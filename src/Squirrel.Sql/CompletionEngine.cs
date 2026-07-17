@@ -1,4 +1,5 @@
-using Antlr4.Runtime;
+using System.Text.RegularExpressions;
+using Antlr4.Runtime.Tree;
 using Antlr4CodeCompletion.Core.CodeCompletion;
 using Squirrel.Core.Completion;
 using Squirrel.Core.Schema;
@@ -7,14 +8,9 @@ namespace Squirrel.Sql;
 
 /// <summary>
 /// Schema-aware SQL completion built on ANTLR + antlr4-c3. Pure and synchronous: given the SQL
-/// text, a caret offset, and a schema snapshot, it returns ranked suggestions. No I/O, no UI —
-/// the app layer runs it off the UI thread and feeds the result to the editor's completion window.
-///
-/// M1 scope: caret→token-index resolution, c3 candidate collection, intent classification via
-/// <see cref="PgCompletionRules"/>, keyword suggestions, and flat (non-alias-aware) table/column
-/// suggestions. Alias resolution and FK smart-joins arrive in later milestones.
+/// text, caret offset, and a schema snapshot, returns ranked suggestions and the span they replace.
 /// </summary>
-public sealed class CompletionEngine : ICompletionEngine
+public sealed partial class CompletionEngine : ICompletionEngine
 {
     public CompletionResult Complete(string sql, int caretOffset, ISchemaSnapshot schema)
     {
@@ -22,40 +18,39 @@ public sealed class CompletionEngine : ICompletionEngine
 
         var parsed = PgParsing.Create(sql);
         parsed.Tokens.Fill();
-
         var caret = ResolveCaret(parsed.Tokens, caretOffset);
 
         // Prime the parser over the statement so c3 has a walkable token stream, then rewind.
-        try { parsed.Parser.root(); } catch { /* partial SQL: recovery is expected */ }
+        try { parsed.Parser.root(); } catch { /* partial SQL */ }
         parsed.Parser.Reset();
+
+        // FROM/JOIN scope is extracted resiliently (token-isolated), independent of select-list garbage.
+        var sources = FromClauseExtractor.Extract(sql, schema);
 
         var core = new CodeCompletionCore(parsed.Parser, PgCompletionRules.PreferredRules.ToHashSet(),
             PgCompletionRules.IgnoredTokens.ToHashSet());
         var candidates = core.CollectCandidates(caret.TokenIndex, context: null);
+        var intents = candidates.Rules.Keys.Select(PgCompletionRules.Classify).ToHashSet();
 
         var suggestions = new List<Suggestion>();
-        var intents = new HashSet<CompletionIntent>();
-
-        foreach (var ruleId in candidates.Rules.Keys)
-            intents.Add(PgCompletionRules.Classify(ruleId));
 
         if (intents.Contains(CompletionIntent.TablePosition))
-            suggestions.AddRange(TableSuggestions(schema));
+        {
+            suggestions.AddRange(TableSuggestions(schema, sources));
+            if (sources.Count > 0)
+                suggestions.AddRange(JoinSuggestions(schema, sources));
+        }
 
         if (intents.Contains(CompletionIntent.ColumnPosition))
-            suggestions.AddRange(ColumnSuggestions(schema));
+            suggestions.AddRange(ColumnSuggestions(schema, sources, AliasQualifierBefore(sql, caretOffset)));
 
-        // Keyword candidates (token types with a quoted literal name in the grammar).
         foreach (var tokenType in candidates.Tokens.Keys)
         {
             var kw = KeywordText(parsed.Parser.Vocabulary, tokenType);
             if (kw is not null)
                 suggestions.Add(new Suggestion
                 {
-                    DisplayText = kw,
-                    ReplacementText = kw,
-                    Kind = SuggestionKind.Keyword,
-                    Priority = 1,
+                    DisplayText = kw, ReplacementText = kw, Kind = SuggestionKind.Keyword, Priority = 1,
                 });
         }
 
@@ -80,84 +75,178 @@ public sealed class CompletionEngine : ICompletionEngine
         var core = new CodeCompletionCore(parsed.Parser, PgCompletionRules.PreferredRules.ToHashSet(),
             PgCompletionRules.IgnoredTokens.ToHashSet());
         var candidates = core.CollectCandidates(caret.TokenIndex, context: null);
-
-        var intents = new HashSet<CompletionIntent>();
-        foreach (var ruleId in candidates.Rules.Keys)
-            intents.Add(PgCompletionRules.Classify(ruleId));
-        return intents;
+        return candidates.Rules.Keys.Select(PgCompletionRules.Classify).ToHashSet();
     }
 
-    private static IEnumerable<Suggestion> TableSuggestions(ISchemaSnapshot schema)
-        => schema.Tables.Select(t => new Suggestion
+    // ---- Table suggestions (auto-aliased, like the prototype) --------------------------------
+
+    private static IEnumerable<Suggestion> TableSuggestions(ISchemaSnapshot schema, IReadOnlyList<TableRef> sources)
+    {
+        var existing = ExistingAliases(sources);
+        foreach (var t in schema.Tables)
         {
-            DisplayText = t.Name,
-            DetailText = t.Schema,
-            ReplacementText = t.Name,
-            Kind = t.Kind == PgRelKind.View ? SuggestionKind.View : SuggestionKind.Table,
-            Priority = 10,
-            Description = $"{t.Kind}: {t.Schema}.{t.Name}",
-        });
-
-    private static IEnumerable<Suggestion> ColumnSuggestions(ISchemaSnapshot schema)
-        => schema.Tables
-            .SelectMany(t => schema.ColumnsOf(t.Oid).Select(c => (t, c)))
-            .Select(x => new Suggestion
+            var alias = AliasResolver.Determine(t, existing);
+            yield return new Suggestion
             {
-                DisplayText = x.c.Name,
-                DetailText = $"{x.t.Name}",
-                ReplacementText = x.c.Name,
-                Kind = SuggestionKind.Column,
-                Priority = 8,
-                Description = $"{x.t.Schema}.{x.t.Name}.{x.c.Name} : {x.c.DataType}",
-            });
+                DisplayText = t.Name,
+                FilterText = t.Name,
+                DetailText = t.Schema,
+                ReplacementText = $"{t.Name} {alias}",
+                Kind = t.Kind == PgRelKind.View ? SuggestionKind.View : SuggestionKind.Table,
+                Priority = 10,
+                Description = $"{t.Kind}: {t.Schema}.{t.Name}",
+            };
+        }
+    }
 
-    /// <summary>A displayable keyword for a token type, or null for non-keyword tokens.</summary>
-    private static string? KeywordText(IVocabulary vocab, int tokenType)
+    // ---- FK-driven smart joins (bidirectional) -----------------------------------------------
+
+    private static IEnumerable<Suggestion> JoinSuggestions(ISchemaSnapshot schema, IReadOnlyList<TableRef> sources)
+    {
+        var existing = ExistingAliases(sources);
+
+        foreach (var src in sources)
+        {
+            if (src.Resolved is null) continue;
+            var srcOid = src.Resolved.Oid;
+            var srcAlias = src.EffectiveName;
+
+            foreach (var fk in schema.ForeignKeysTouching(srcOid))
+            {
+                uint otherOid;
+                IReadOnlyList<short> srcCols, otherCols;
+
+                if (fk.ParentOid == srcOid)
+                {
+                    otherOid = fk.ReferencedOid; srcCols = fk.ParentAttNums; otherCols = fk.ReferencedAttNums;
+                }
+                else if (fk.ReferencedOid == srcOid)
+                {
+                    otherOid = fk.ParentOid; srcCols = fk.ReferencedAttNums; otherCols = fk.ParentAttNums;
+                }
+                else continue;
+
+                var other = schema.Tables.FirstOrDefault(t => t.Oid == otherOid);
+                if (other is null) continue;
+
+                var alias = AliasResolver.Determine(other, existing);
+                var preds = new List<string>();
+                for (var i = 0; i < Math.Min(srcCols.Count, otherCols.Count); i++)
+                    preds.Add($"{alias}.{ColumnName(schema, otherOid, otherCols[i])} = {srcAlias}.{ColumnName(schema, srcOid, srcCols[i])}");
+                var predicate = string.Join(" and ", preds);
+
+                yield return new Suggestion
+                {
+                    DisplayText = other.Name,
+                    FilterText = other.Name,
+                    DetailText = $"join → {srcAlias}",
+                    TrailingText = predicate,
+                    ReplacementText = $"{other.Name} {alias} on {predicate}",
+                    Kind = SuggestionKind.Join,
+                    Priority = 20,
+                    Description = $"FK {fk.Name}: {other.Schema}.{other.Name} ⋈ {srcAlias}",
+                };
+            }
+        }
+    }
+
+    // ---- Column suggestions (alias-aware) ----------------------------------------------------
+
+    private static IEnumerable<Suggestion> ColumnSuggestions(
+        ISchemaSnapshot schema, IReadOnlyList<TableRef> sources, string? qualifier)
+    {
+        if (qualifier is not null)
+        {
+            var owner = sources.FirstOrDefault(s =>
+                string.Equals(s.EffectiveName, qualifier, StringComparison.OrdinalIgnoreCase));
+            if (owner?.Resolved is null) yield break;
+            foreach (var c in schema.ColumnsOf(owner.Resolved.Oid))
+                yield return ColumnSuggestion(c, owner.EffectiveName, qualified: false);
+            yield break;
+        }
+
+        var resolved = sources.Where(s => s.Resolved is not null).ToList();
+        if (resolved.Count > 0)
+        {
+            foreach (var src in resolved)
+                foreach (var c in schema.ColumnsOf(src.Resolved!.Oid))
+                    yield return ColumnSuggestion(c, src.EffectiveName, qualified: false);
+            yield break;
+        }
+
+        // No FROM yet: offer every column (M3 fallback).
+        foreach (var t in schema.Tables)
+            foreach (var c in schema.ColumnsOf(t.Oid))
+                yield return ColumnSuggestion(c, t.Name, qualified: false);
+    }
+
+    private static Suggestion ColumnSuggestion(PgColumn c, string owner, bool qualified) => new()
+    {
+        DisplayText = c.Name,
+        FilterText = c.Name,
+        DetailText = owner,
+        ReplacementText = qualified ? $"{owner}.{c.Name}" : c.Name,
+        Kind = SuggestionKind.Column,
+        Priority = c.IsPrimaryKey ? 9 : 8,
+        Description = $"{owner}.{c.Name} : {c.DataType}",
+    };
+
+    private static string ColumnName(ISchemaSnapshot schema, uint tableOid, short attNum)
+        => schema.ColumnsOf(tableOid).FirstOrDefault(c => c.AttNum == attNum)?.Name ?? $"col{attNum}";
+
+    private static List<string> ExistingAliases(IReadOnlyList<TableRef> sources)
+        => sources.Select(s => s.EffectiveName).Where(a => !string.IsNullOrEmpty(a)).ToList();
+
+    // ---- Caret + token helpers ---------------------------------------------------------------
+
+    /// <summary>If the caret sits just after "&lt;identifier&gt;.", returns that identifier (the alias).</summary>
+    private static string? AliasQualifierBefore(string sql, int caret)
+    {
+        var prefix = sql[..caret];
+        var m = AliasDotRegex().Match(prefix);
+        return m.Success ? m.Groups[1].Value : null;
+    }
+
+    [GeneratedRegex(@"([A-Za-z_][A-Za-z0-9_$]*)\s*\.\s*[A-Za-z0-9_$]*$")]
+    private static partial Regex AliasDotRegex();
+
+    private static string? KeywordText(Antlr4.Runtime.IVocabulary vocab, int tokenType)
     {
         var literal = vocab.GetLiteralName(tokenType);
-        if (literal is null) return null;                 // identifiers, literals, operators-without-names
+        if (literal is null) return null;
         var text = literal.Trim('\'');
-        // Keep alphabetic keywords (SELECT, FROM, JOIN…); drop punctuation literals ('(' etc.).
         return text.Length > 0 && text.All(ch => char.IsLetter(ch) || ch == '_') ? text : null;
     }
 
     private readonly record struct CaretResolution(int TokenIndex, int ReplacementStart, int ReplacementLength);
 
-    /// <summary>
-    /// Map a character offset to the c3 caret token index + the source span a committed suggestion
-    /// should overwrite. If the caret sits inside a word token, that token is being edited and gets
-    /// replaced; otherwise the suggestion is inserted at the caret.
-    /// </summary>
-    private static CaretResolution ResolveCaret(BufferedTokenStream stream, int caret)
+    private static CaretResolution ResolveCaret(Antlr4.Runtime.BufferedTokenStream stream, int caret)
     {
         var tokens = stream.GetTokens();
-        IToken? eof = tokens.Count > 0 ? tokens[^1] : null;
+        var eof = tokens.Count > 0 ? tokens[^1] : null;
 
         foreach (var t in tokens)
         {
-            if (t.Type == TokenConstants.EOF) break;
+            if (t.Type == Antlr4.Runtime.TokenConstants.EOF) break;
 
             var start = t.StartIndex;
             var endExclusive = t.StopIndex + 1;
 
             if (caret <= start)
-                // Caret is before this token begins → insert here, complete at this token index.
                 return new CaretResolution(t.TokenIndex, caret, 0);
 
             if (caret <= endExclusive)
             {
                 if (IsWord(t))
-                    // Editing this identifier/keyword: replace the whole token.
                     return new CaretResolution(t.TokenIndex, start, endExclusive - start);
                 return new CaretResolution(t.TokenIndex, caret, 0);
             }
         }
 
-        // Past the last real token → complete at EOF, inserting.
         return new CaretResolution(eof?.TokenIndex ?? 0, caret, 0);
     }
 
-    private static bool IsWord(IToken t)
+    private static bool IsWord(Antlr4.Runtime.IToken t)
     {
         var s = t.Text;
         if (string.IsNullOrEmpty(s)) return false;

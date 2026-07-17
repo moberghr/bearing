@@ -2,6 +2,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Squirrel.Core.Data;
+using Squirrel.Core.Schema;
 
 namespace Squirrel.App.ViewModels;
 
@@ -14,6 +15,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly IProviderRegistry _providers;
     private IDbConnectionFactory? _factory;
     private IQueryExecutor? _executor;
+    private IMetadataReader? _metadata;
 
     public MainWindowViewModel(IProviderRegistry providers)
     {
@@ -39,6 +41,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty] private bool _isConnected;
     [ObservableProperty] private QueryResult? _lastResult;
 
+    /// <summary>Live schema, loaded after connect; handed to the completion engine per keystroke.</summary>
+    [ObservableProperty] private ISchemaSnapshot? _currentSnapshot;
+
     public async Task ConnectAsync()
     {
         if (IsBusy) return;
@@ -59,11 +64,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
             };
 
             if (_factory is not null) await _factory.DisposeAsync();
+            CurrentSnapshot = null;
             _factory = provider.CreateConnectionFactory(info, Password);
             var ok = await _factory.TestConnectionAsync(CancellationToken.None);
             _executor = provider.CreateQueryExecutor(_factory);
+            _metadata = provider.CreateMetadataReader(_factory);
             IsConnected = ok;
             StatusText = ok ? $"Connected to {Host}:{Port}/{Database}." : "Connection failed.";
+            if (ok) _ = LoadSchemaAsync();
         }
         catch (Exception ex)
         {
@@ -72,6 +80,22 @@ public sealed partial class MainWindowViewModel : ObservableObject
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    public async Task LoadSchemaAsync()
+    {
+        if (_metadata is null) return;
+        try
+        {
+            StatusText = "Loading schema…";
+            var snapshot = await _metadata.LoadSnapshotAsync(Database, CancellationToken.None);
+            CurrentSnapshot = snapshot;
+            StatusText = $"Connected to {Host}:{Port}/{Database} · {snapshot.Tables.Count} tables.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Schema load error: {ex.Message}";
         }
     }
 

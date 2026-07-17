@@ -33,6 +33,18 @@ public sealed record Suggestion
     /// <summary>Text actually inserted, replacing the caret's replacement span.</summary>
     public required string ReplacementText { get; init; }
 
+    /// <summary>
+    /// Text the editor matches against the typed prefix for as-you-type filtering. Defaults to
+    /// <see cref="DisplayText"/> — set it explicitly when the inserted text differs (e.g. a join
+    /// snippet the user filters by the joined table's name).
+    /// </summary>
+    private readonly string? _filterText;
+    public string FilterText
+    {
+        get => _filterText ?? DisplayText;
+        init => _filterText = value;
+    }
+
     /// <summary>Optional long-form tooltip.</summary>
     public string? Description { get; init; }
 

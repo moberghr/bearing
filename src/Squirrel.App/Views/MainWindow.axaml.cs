@@ -4,18 +4,24 @@ using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using AvaloniaEdit.TextMate;
+using Squirrel.App.Completion;
 using Squirrel.App.ViewModels;
 using Squirrel.Core.Data;
+using Squirrel.Sql;
 using TextMateSharp.Grammars;
 
 namespace Squirrel.App.Views;
 
 public partial class MainWindow : Window
 {
+    private readonly CompletionController _completion;
+
     public MainWindow()
     {
         InitializeComponent();
         InstallSqlHighlighting();
+
+        _completion = new CompletionController(Editor, new CompletionEngine(), () => Vm?.CurrentSnapshot);
 
         DataContextChanged += (_, _) => SyncEditorFromViewModel();
         Loaded += (_, _) => SyncEditorFromViewModel();
@@ -62,6 +68,11 @@ public partial class MainWindow : Window
         {
             e.Handled = true;
             await RunAsync();
+        }
+        else if (e.Key == Key.Space && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            e.Handled = true;
+            _completion.TriggerExplicit();
         }
     }
 
