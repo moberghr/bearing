@@ -38,7 +38,7 @@
         <ae:TextEditor x:Name="PreviewEditor" Grid.Row="1"
                        IsReadOnly="True"
                        ShowLineNumbers="True"
-                       FontFamily="Cascadia Code,Consolas,Menlo,monospace"
+                       FontFamily="{StaticResource MonoFontFamily}"
                        FontSize="13"
                        HorizontalScrollBarVisibility="Auto"
                        VerticalScrollBarVisibility="Auto"/>
