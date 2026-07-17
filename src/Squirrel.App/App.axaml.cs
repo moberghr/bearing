@@ -24,12 +24,17 @@ public partial class App : Application
             IProjectStore projectStore = new JsonProjectStore();
             ISessionStore sessionStore = new JsonSessionStore();
             IQueryLog queryLog = new SqliteQueryLog();
+            IRecentProjects recentProjects = new FileRecentProjects();
 
-            var vm = new MainWindowViewModel(providers, projectStore, sessionStore, queryLog);
+            var vm = new MainWindowViewModel(providers, projectStore, sessionStore, queryLog, recentProjects);
             var window = new MainWindow { DataContext = vm };
 
             // Synchronous save — no async/await, so nothing to deadlock on during close.
-            window.Closing += (_, _) => vm.SaveWorkspace(window.CurrentSql, window.CurrentCaret);
+            window.Closing += (_, _) =>
+            {
+                window.FlushActiveEditor();
+                vm.SaveWorkspace();
+            };
 
             desktop.MainWindow = window;
 

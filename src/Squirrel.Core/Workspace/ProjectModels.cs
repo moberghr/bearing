@@ -41,5 +41,6 @@ public sealed record SessionState
 {
     public Guid? ActiveConnectionId { get; init; }
     public List<OpenEditor> OpenEditors { get; init; } = new();
+    public int SelectedEditorIndex { get; init; }
     public string? LastOpenedUtc { get; init; }
 }
