@@ -52,7 +52,13 @@ public partial class MainWindow : Window
     {
         if (e.PropertyName == nameof(MainWindowViewModel.LastResult))
             RebuildResultsGrid(Vm?.LastResult);
+        else if (e.PropertyName == nameof(MainWindowViewModel.Sql) && Vm is not null && Editor.Text != Vm.Sql)
+            Editor.Text = Vm.Sql; // session restore populated the buffer
     }
+
+    /// <summary>Current editor buffer + caret, for session save on close.</summary>
+    internal string CurrentSql => Editor.Text;
+    internal int CurrentCaret => Editor.CaretOffset;
 
     private async void OnConnectClick(object? sender, RoutedEventArgs e)
     {

@@ -9,6 +9,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Squirrel.Data.Tests/Squirrel.Data.Tests.csproj" />
+    <Project Path="tests/Squirrel.Persistence.Tests/Squirrel.Persistence.Tests.csproj" />
     <Project Path="tests/Squirrel.Sql.Tests/Squirrel.Sql.Tests.csproj" />
   </Folder>
 </Solution>

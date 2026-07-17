@@ -6,7 +6,9 @@
     <ProjectReference Include="..\Squirrel.Core\Squirrel.Core.csproj" />
   </ItemGroup>
 
-  <!-- Microsoft.Data.Sqlite (query log, M6) and Tmds.DBus / libsecret (secret store, M5)
-       are added in their respective milestones to keep the dependency surface minimal. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+  </ItemGroup>
 
 </Project>
