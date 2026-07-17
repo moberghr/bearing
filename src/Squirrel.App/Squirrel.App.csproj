@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- UI library (App.axaml, Views, ViewModels). The executable entry point lives in
+       Squirrel.Desktop so this stays referenceable from tests without an entry-point clash. -->
+  <PropertyGroup>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Squirrel.Core\Squirrel.Core.csproj" />
+    <ProjectReference Include="..\Squirrel.Sql\Squirrel.Sql.csproj" />
+    <ProjectReference Include="..\Squirrel.Data\Squirrel.Data.csproj" />
+    <ProjectReference Include="..\Squirrel.Persistence\Squirrel.Persistence.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="Avalonia.Fonts.Inter" />
+    <PackageReference Include="Avalonia.Controls.DataGrid" />
+    <PackageReference Include="Avalonia.AvaloniaEdit" />
+    <PackageReference Include="AvaloniaEdit.TextMate" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,20 @@
+# Build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+
+# Antlr4BuildTasks downloads a JRE + antlr tool jar into these caches
+.antlr/
+**/fetched-*/
+
+# Rider / VS
+.idea/
+.vs/
+
+# Per-user session state inside projects (never shared)
+.squirrel/
+
+# OS
+.DS_Store

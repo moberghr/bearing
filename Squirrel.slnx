@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Squirrel.App/Squirrel.App.csproj" />
+    <Project Path="src/Squirrel.Core/Squirrel.Core.csproj" />
+    <Project Path="src/Squirrel.Data/Squirrel.Data.csproj" />
+    <Project Path="src/Squirrel.Desktop/Squirrel.Desktop.csproj" />
+    <Project Path="src/Squirrel.Persistence/Squirrel.Persistence.csproj" />
+    <Project Path="src/Squirrel.Sql/Squirrel.Sql.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Squirrel.Data.Tests/Squirrel.Data.Tests.csproj" />
+    <Project Path="tests/Squirrel.Sql.Tests/Squirrel.Sql.Tests.csproj" />
+  </Folder>
+</Solution>

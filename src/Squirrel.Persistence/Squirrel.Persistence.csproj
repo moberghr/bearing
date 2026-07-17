@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Squirrel.Persistence: project files, session state, query log (SQLite), secret store. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\Squirrel.Core\Squirrel.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Microsoft.Data.Sqlite (query log, M6) and Tmds.DBus / libsecret (secret store, M5)
+       are added in their respective milestones to keep the dependency surface minimal. -->
+
+</Project>

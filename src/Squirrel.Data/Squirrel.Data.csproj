@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Squirrel.Data: provider abstractions' PostgreSQL/Npgsql implementation. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\Squirrel.Core\Squirrel.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Npgsql" />
+  </ItemGroup>
+
+</Project>

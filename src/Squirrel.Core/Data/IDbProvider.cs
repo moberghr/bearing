@@ -1,0 +1,48 @@
+using Squirrel.Core.Schema;
+
+namespace Squirrel.Core.Data;
+
+/// <summary>
+/// One per database engine. The registry key for pluggable engines (Postgres in v1; SQL Server /
+/// MySQL / DuckDB / SQLite later). Everything DB-touching hangs off this so the rest of the app
+/// stays engine-agnostic.
+/// </summary>
+public interface IDbProvider
+{
+    string Id { get; }
+    string DisplayName { get; }
+
+    /// <summary>Fields the connect dialog renders for this engine.</summary>
+    IReadOnlyList<ConnectionField> ConnectionFields { get; }
+
+    IDbConnectionFactory CreateConnectionFactory(ConnectionInfo info, string? password);
+    IMetadataReader CreateMetadataReader(IDbConnectionFactory factory);
+    IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory);
+}
+
+/// <summary>Opens/pools underlying connections; hides the concrete ADO.NET driver.</summary>
+public interface IDbConnectionFactory : IAsyncDisposable
+{
+    Task<bool> TestConnectionAsync(CancellationToken ct);
+}
+
+public interface IMetadataReader
+{
+    Task<IReadOnlyList<string>> GetDatabasesAsync(CancellationToken ct);
+
+    /// <summary>Bulk catalog read → an immutable snapshot the completion engine can query cheaply.</summary>
+    Task<ISchemaSnapshot> LoadSnapshotAsync(string database, CancellationToken ct);
+}
+
+public interface IQueryExecutor
+{
+    Task<QueryResult> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct);
+    IAsyncEnumerable<ResultBatch> StreamAsync(string sql, QueryOptions options, CancellationToken ct);
+}
+
+/// <summary>Registry of available providers, resolved by <see cref="IDbProvider.Id"/>.</summary>
+public interface IProviderRegistry
+{
+    IDbProvider Get(string providerId);
+    IReadOnlyCollection<IDbProvider> All { get; }
+}
