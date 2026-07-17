@@ -32,6 +32,9 @@ public sealed record OpenEditor
     /// <summary>Inlined text for an unsaved scratch buffer (null when backed by a file).</summary>
     public string? ScratchText { get; init; }
 
+    /// <summary>Display name for a scratch buffer ("Scratch N" or a user rename); null for saved scripts.</summary>
+    public string? ScratchName { get; init; }
+
     public int CaretOffset { get; init; }
     public Guid? ConnectionId { get; init; }
 }
@@ -43,4 +46,10 @@ public sealed record SessionState
     public List<OpenEditor> OpenEditors { get; init; } = new();
     public int SelectedEditorIndex { get; init; }
     public string? LastOpenedUtc { get; init; }
+
+    /// <summary>Whether the connections/scripts side pane is expanded.</summary>
+    public bool SidePaneOpen { get; init; } = true;
+
+    /// <summary>Persisted width of the side pane, in pixels.</summary>
+    public double SidePaneWidth { get; init; } = 260;
 }

@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Data;
@@ -25,7 +27,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         InstallSqlHighlighting();
 
-        _completion = new CompletionController(Editor, new CompletionEngine(), () => Vm?.CurrentSnapshot);
+        _completion = new CompletionController(Editor, new CompletionEngine(), () => Vm?.SnapshotForSelectedTab());
 
         Editor.TextChanged += (_, _) =>
         {
@@ -64,7 +66,7 @@ public partial class MainWindow : Window
     {
         if (e.PropertyName == nameof(MainWindowViewModel.SelectedTab))
             LoadEditorFromSelectedTab();
-        else if (e.PropertyName == nameof(MainWindowViewModel.Title))
+        else if (e.PropertyName is nameof(MainWindowViewModel.Title) or nameof(MainWindowViewModel.ProjectDirectory))
             SyncProjectCombo();
     }
 
@@ -83,7 +85,7 @@ public partial class MainWindow : Window
     {
         if (Vm?.ProjectDirectory is not { } dir) return;
         _suppressProjectChange = true;
-        ProjectCombo.SelectedItem = dir;
+        ProjectCombo.SelectedItem = Vm.RecentProjects.FirstOrDefault(r => r.Directory == dir);
         _suppressProjectChange = false;
     }
 
@@ -96,13 +98,103 @@ public partial class MainWindow : Window
         if (sender is Button { CommandParameter: EditorTabViewModel tab }) Vm?.CloseTab(tab);
     }
 
+    private async void OnTabHeaderDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (sender is Control { DataContext: EditorTabViewModel tab }) await RenameTabAsync(tab);
+    }
+
+    private async Task RenameTabAsync(EditorTabViewModel tab)
+    {
+        if (Vm is null) return;
+        var current = tab.IsScratch ? tab.DisplayName : tab.Header;
+        var prompt = new TextPromptDialog(tab.IsScratch ? "Rename tab" : "Rename script file", current);
+        var name = await prompt.ShowDialog<string?>(this);
+        if (name is not null) await Vm.RenameTabAsync(tab, name);
+    }
+
+    // ---- side pane ----
+
+    private void OnToggleSidePane(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is not null) Vm.SidePaneOpen = !Vm.SidePaneOpen;
+    }
+
+    // ---- connections ----
+
+    private async void OnAddConnectionClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is null) return;
+        var dialog = new ConnectionDialog(null, null, (i, p, ct) => Vm.TestConnectionAsync(i, p, ct));
+        var result = await dialog.ShowDialog<ConnectionDialogResult?>(this);
+        if (result is { Delete: false }) await Vm.AddOrUpdateConnectionAsync(result.Connection, result.Password);
+    }
+
+    private async void OnEditConnectionClick(object? sender, RoutedEventArgs e) => await EditSelectedConnection();
+
+    private async Task EditSelectedConnection()
+    {
+        if (Vm is null || ConnectionsList.SelectedItem is not ConnectionInfo existing) return;
+        var password = await Vm.GetConnectionPasswordAsync(existing.Id);
+        var dialog = new ConnectionDialog(existing, password, (i, p, ct) => Vm.TestConnectionAsync(i, p, ct));
+        var result = await dialog.ShowDialog<ConnectionDialogResult?>(this);
+        if (result is null) return;
+        if (result.Delete) await Vm.DeleteConnectionAsync(existing.Id);
+        else await Vm.AddOrUpdateConnectionAsync(result.Connection, result.Password);
+    }
+
+    private void OnSetTabConnectionClick(object? sender, RoutedEventArgs e) => AssignSelectedConnectionToTab();
+
+    private void OnConnectionActivated(object? sender, TappedEventArgs e) => AssignSelectedConnectionToTab();
+
+    private void AssignSelectedConnectionToTab()
+    {
+        if (Vm?.SelectedTab is { } tab && ConnectionsList.SelectedItem is ConnectionInfo conn)
+            Vm.SetTabConnection(tab, conn.Id);
+    }
+
+    private async void OnDeleteConnectionClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is not null && ConnectionsList.SelectedItem is ConnectionInfo conn)
+            await Vm.DeleteConnectionAsync(conn.Id);
+    }
+
+    // ---- scripts ----
+
+    private async void OnScriptActivated(object? sender, TappedEventArgs e) => await OpenSelectedScript();
+    private async void OnOpenScriptClick(object? sender, RoutedEventArgs e) => await OpenSelectedScript();
+
+    private async Task OpenSelectedScript()
+    {
+        if (Vm is not null && ScriptsList.SelectedItem is ScriptItem script)
+        {
+            await Vm.OpenScriptInNewTabAsync(script.FullPath);
+            LoadEditorFromSelectedTab();
+        }
+    }
+
+    private async void OnRenameScriptClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is null || ScriptsList.SelectedItem is not ScriptItem script) return;
+        var prompt = new TextPromptDialog("Rename script file", script.Name);
+        var name = await prompt.ShowDialog<string?>(this);
+        if (name is not null) await Vm.RenameScriptAsync(script.FullPath, name);
+    }
+
     // ---- projects ----
 
     private async void OnProjectSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (_suppressProjectChange || Vm is null) return;
-        if (ProjectCombo.SelectedItem is string dir && dir != Vm.ProjectDirectory)
-            await Vm.OpenProjectAsync(dir);
+        if (ProjectCombo.SelectedItem is RecentProjectItem item && item.Directory != Vm.ProjectDirectory)
+            await Vm.OpenProjectAsync(item.Directory);
+    }
+
+    private async void OnRenameProjectClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm?.CurrentProjectName is not { } current) return;
+        var prompt = new TextPromptDialog("Project name", current);
+        var name = await prompt.ShowDialog<string?>(this);
+        if (name is not null) await Vm.RenameProjectAsync(name);
     }
 
     private async void OnOpenProjectClick(object? sender, RoutedEventArgs e)
@@ -126,15 +218,14 @@ public partial class MainWindow : Window
             AllowMultiple = false,
         });
         if (folders.Count > 0 && folders[0].TryGetLocalPath() is { } path)
-            await Vm.NewProjectAsync(path, new System.IO.DirectoryInfo(path).Name);
+        {
+            var prompt = new TextPromptDialog("Project name", new System.IO.DirectoryInfo(path).Name);
+            var name = await prompt.ShowDialog<string?>(this);
+            if (name is not null) await Vm.NewProjectAsync(path, name);
+        }
     }
 
-    // ---- connection / run / scripts / history ----
-
-    private async void OnConnectClick(object? sender, RoutedEventArgs e)
-    {
-        if (Vm is not null) await Vm.ConnectAsync();
-    }
+    // ---- run / open / save / history ----
 
     private async void OnRunClick(object? sender, RoutedEventArgs e) => await RunAsync();
 
@@ -154,7 +245,9 @@ public partial class MainWindow : Window
         else if (e.Key == Key.S && ctrl) { e.Handled = true; await SaveAsync(); }
         else if (e.Key == Key.O && ctrl) { e.Handled = true; await OpenAsync(); }
         else if (e.Key == Key.T && ctrl) { e.Handled = true; Vm?.NewTab(); }
+        else if (e.Key == Key.B && ctrl) { e.Handled = true; if (Vm is not null) Vm.SidePaneOpen = !Vm.SidePaneOpen; }
         else if (e.Key == Key.W && ctrl && Vm?.SelectedTab is { } tab) { e.Handled = true; Vm.CloseTab(tab); }
+        else if (e.Key == Key.F2 && Vm?.SelectedTab is { } rt) { e.Handled = true; await RenameTabAsync(rt); }
     }
 
     private async Task RunAsync()

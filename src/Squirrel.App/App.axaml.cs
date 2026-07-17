@@ -30,10 +30,12 @@ public partial class App : Application
             var window = new MainWindow { DataContext = vm };
 
             // Synchronous save — no async/await, so nothing to deadlock on during close.
+            // Live connections are torn down fire-and-forget: never block the UI thread here.
             window.Closing += (_, _) =>
             {
                 window.FlushActiveEditor();
                 vm.SaveWorkspace();
+                _ = vm.DisposeSessionsAsync();
             };
 
             desktop.MainWindow = window;
@@ -50,6 +52,8 @@ public partial class App : Application
         var secretStore = await SecretStoreFactory.CreateAsync();
         vm.AttachSecretStore(secretStore);
         await vm.InitializeAsync(DefaultProjectDirectory());
+        // First-run convenience: point the default project at the local pagila demo container.
+        await vm.SeedDemoConnectionAsync("localhost", 5434, "pagila", "postgres", "squirrel");
     }
 
     private static string DefaultProjectDirectory()

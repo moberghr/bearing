@@ -19,6 +19,12 @@ public sealed record ConnectionInfo
     public string Database { get; init; } = "";
     public string User { get; init; } = "";
 
+    /// <summary>Free-form environment label (e.g. "local", "staging", "production"); null = untagged.</summary>
+    public string? Environment { get; init; }
+
+    /// <summary>Hex color for the environment badge (e.g. "#E53935"); null = neutral.</summary>
+    public string? EnvironmentColor { get; init; }
+
     /// <summary>Provider-specific extra options (e.g. sslmode, search_path).</summary>
     public IReadOnlyDictionary<string, string> Options { get; init; }
         = new Dictionary<string, string>();

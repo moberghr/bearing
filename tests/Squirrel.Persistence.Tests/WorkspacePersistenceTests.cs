@@ -43,6 +43,76 @@ public class WorkspacePersistenceTests : IDisposable
     }
 
     [Fact]
+    public async Task Connection_environment_round_trips_and_defaults_null_when_absent()
+    {
+        var dir = Path.Combine(_root, "envproj");
+        var store = new JsonProjectStore();
+        var created = await store.CreateAsync(dir, "Envs", CancellationToken.None);
+        created.Manifest.Connections.Add(new ConnectionInfo
+        {
+            Id = Guid.NewGuid(), Name = "prod", ProviderId = "postgres",
+            Host = "db", Database = "app", User = "svc",
+            Environment = "production", EnvironmentColor = "#E5484D",
+        });
+        created.Manifest.Connections.Add(new ConnectionInfo
+        {
+            Id = Guid.NewGuid(), Name = "untagged", ProviderId = "postgres",
+            Host = "db", Database = "app", User = "svc",
+        });
+        await store.SaveAsync(created, CancellationToken.None);
+
+        var reopened = await store.OpenAsync(dir, CancellationToken.None);
+        var prod = reopened.Manifest.Connections.Single(c => c.Name == "prod");
+        Assert.Equal("production", prod.Environment);
+        Assert.Equal("#E5484D", prod.EnvironmentColor);
+
+        var untagged = reopened.Manifest.Connections.Single(c => c.Name == "untagged");
+        Assert.Null(untagged.Environment);
+        Assert.Null(untagged.EnvironmentColor);
+    }
+
+    [Fact]
+    public async Task Session_round_trips_scratch_name_and_side_pane_state()
+    {
+        var dir = Path.Combine(_root, "paneproj");
+        Directory.CreateDirectory(dir);
+        var store = new JsonSessionStore();
+        var connId = Guid.NewGuid();
+
+        var state = new SessionState
+        {
+            ActiveConnectionId = connId,
+            OpenEditors = { new OpenEditor { ScratchText = "select 1", ScratchName = "My scratch", ConnectionId = connId } },
+            SidePaneOpen = false,
+            SidePaneWidth = 320,
+        };
+        await store.SaveAsync(dir, state, CancellationToken.None);
+
+        var loaded = await store.LoadAsync(dir, CancellationToken.None);
+        Assert.NotNull(loaded);
+        Assert.Equal("My scratch", loaded!.OpenEditors[0].ScratchName);
+        Assert.Equal(connId, loaded.OpenEditors[0].ConnectionId);
+        Assert.False(loaded.SidePaneOpen);
+        Assert.Equal(320, loaded.SidePaneWidth);
+    }
+
+    [Fact]
+    public async Task Session_side_pane_defaults_to_open_when_absent()
+    {
+        var dir = Path.Combine(_root, "legacyproj");
+        Directory.CreateDirectory(Path.Combine(dir, ".squirrel"));
+        // A legacy session.json predating the side-pane fields.
+        await File.WriteAllTextAsync(Path.Combine(dir, ".squirrel", "session.json"),
+            "{ \"openEditors\": [ { \"scratchText\": \"select 1\" } ] }");
+
+        var loaded = await new JsonSessionStore().LoadAsync(dir, CancellationToken.None);
+        Assert.NotNull(loaded);
+        Assert.True(loaded!.SidePaneOpen);   // default
+        Assert.Equal(260, loaded.SidePaneWidth);
+        Assert.Null(loaded.OpenEditors[0].ScratchName);
+    }
+
+    [Fact]
     public async Task Session_round_trips_open_editors_and_active_connection()
     {
         var dir = Path.Combine(_root, "proj2");
