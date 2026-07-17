@@ -102,6 +102,38 @@ public class StatementSplitterTests
     }
 
     [Fact]
+    public void Split_breaks_on_blank_lines_without_semicolons()
+    {
+        var spans = StatementSplitter.Split("select 1\nfrom a\n\nselect 2\nfrom b");
+
+        Assert.Equal(2, spans.Count);
+        Assert.Contains("select 1", spans[0].Text);
+        Assert.DoesNotContain("select 2", spans[0].Text);
+        Assert.Contains("select 2", spans[1].Text);
+    }
+
+    [Fact]
+    public void Split_ignores_blank_lines_inside_parentheses()
+    {
+        // A blank line inside a subquery must not split the enclosing statement.
+        var spans = StatementSplitter.Split("select * from (\n select 1\n\n from t\n) x");
+
+        Assert.Single(spans);
+    }
+
+    [Fact]
+    public void StatementAt_selects_the_blank_line_separated_statement()
+    {
+        const string sql = "select 1\nfrom a\n\nselect 2\nfrom b";
+        var caret = sql.IndexOf("from b", StringComparison.Ordinal);
+
+        var stmt = StatementSplitter.StatementAt(sql, caret);
+
+        Assert.Contains("select 2", stmt!.Text);
+        Assert.DoesNotContain("select 1", stmt.Text);
+    }
+
+    [Fact]
     public void StatementAt_returns_null_for_blank_buffer()
     {
         Assert.Null(StatementSplitter.StatementAt("   \n  ", 2));

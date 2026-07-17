@@ -27,18 +27,33 @@ public static class StatementSplitter
         var spans = new List<StatementSpan>();
         if (string.IsNullOrEmpty(sql)) return spans;
 
-        // First on-channel token index of each statement (statements are delimited by SEMI).
+        // First on-channel token index of each statement. Statements are delimited by SEMI or, at
+        // paren depth 0, by a blank line between tokens (a common "run this block" convention).
         var starts = new List<int>();
         int? firstStart = null;
+        IToken? prev = null;
+        var depth = 0;
         foreach (var t in PgParsing.LexAll(sql))
         {
             if (t.Channel != TokenConstants.DefaultChannel || t.Type == TokenConstants.EOF) continue;
+
+            if (firstStart is not null && prev is not null && depth == 0
+                && HasBlankLine(sql, prev.StopIndex + 1, t.StartIndex))
+            {
+                starts.Add(firstStart.Value);   // a blank line ended the previous statement
+                firstStart = null;
+            }
+
+            if (t.Type == PostgreSQLLexer.OPEN_PAREN) depth++;
+            else if (t.Type == PostgreSQLLexer.CLOSE_PAREN && depth > 0) depth--;
+
             firstStart ??= t.StartIndex;
             if (t.Type == PostgreSQLLexer.SEMI)
             {
                 starts.Add(firstStart.Value);
                 firstStart = null;
             }
+            prev = t;
         }
         if (firstStart is not null) starts.Add(firstStart.Value); // trailing statement, no ';'
         if (starts.Count == 0) return spans;                       // only whitespace/comments
@@ -53,6 +68,16 @@ public static class StatementSplitter
             spans.Add(new StatementSpan(start, end, sql[start..end]));
         }
         return spans;
+    }
+
+    /// <summary>True if the text in [from,to) spans a blank line (≥2 newlines) — an empty line gap.</summary>
+    private static bool HasBlankLine(string sql, int from, int to)
+    {
+        if (from < 0 || to > sql.Length || from >= to) return false;
+        var newlines = 0;
+        for (var i = from; i < to; i++)
+            if (sql[i] == '\n' && ++newlines >= 2) return true;
+        return false;
     }
 
     /// <summary>
