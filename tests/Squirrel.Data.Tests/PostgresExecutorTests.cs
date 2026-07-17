@@ -91,6 +91,36 @@ public class PostgresExecutorTests
     }
 
     [SkippableFact]
+    public async Task Paging_and_count_over_a_single_select()
+    {
+        var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
+        await using var factory = provider.CreateConnectionFactory(Info(), Password);
+        Skip.IfNot(await Reachable(factory), "No PostgreSQL reachable for integration test.");
+
+        var executor = provider.CreateQueryExecutor(factory);
+        const string sql = "select film_id from film order by film_id";
+
+        // Total count wraps the query.
+        var total = await executor.CountAsync(sql, CancellationToken.None);
+        Assert.Equal(1000, total); // pagila has 1000 films
+
+        // First page.
+        var page1 = await executor.ExecutePageAsync(sql, offset: 0, limit: 100, CancellationToken.None);
+        Assert.True(page1.Success, page1.Error?.Message);
+        Assert.Equal(100, page1.RowCount);
+        Assert.Equal(1, Convert.ToInt32(page1.Rows[0][0]));
+
+        // Next page continues from the offset (infinite-paging append).
+        var page2 = await executor.ExecutePageAsync(sql, offset: 100, limit: 100, CancellationToken.None);
+        Assert.Equal(100, page2.RowCount);
+        Assert.Equal(101, Convert.ToInt32(page2.Rows[0][0]));
+
+        // A trailing semicolon is tolerated (statement-at-caret often includes it).
+        var counted = await executor.CountAsync("select film_id from film;", CancellationToken.None);
+        Assert.Equal(1000, counted);
+    }
+
+    [SkippableFact]
     public async Task Lists_databases()
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);

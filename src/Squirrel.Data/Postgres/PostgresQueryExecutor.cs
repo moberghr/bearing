@@ -43,6 +43,53 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         }
     }
 
+    public async Task<QueryResult> ExecutePageAsync(string sql, int offset, int limit, CancellationToken ct)
+    {
+        // offset/limit are ints (not user text) so interpolation is injection-safe.
+        var wrapped = $"select * from (\n{StripTrailingSemicolon(sql)}\n) as _sq offset {offset} limit {limit}";
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            await using var conn = await _factory.DataSource.OpenConnectionAsync(ct);
+            await using var cmd = new NpgsqlCommand(wrapped, conn);
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            return await ReadResultSetAsync(reader, new QueryOptions { MaxRows = null }, sw, ct);
+        }
+        catch (PostgresException pg)
+        {
+            sw.Stop();
+            var pos = pg.Position > 0 ? pg.Position : (int?)null;
+            return Failure(sw.Elapsed, new QueryError(pg.MessageText, pg.SqlState, pos));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            sw.Stop();
+            return Failure(sw.Elapsed, new QueryError(ex.Message, null, null));
+        }
+    }
+
+    public async Task<long?> CountAsync(string sql, CancellationToken ct)
+    {
+        var wrapped = $"select count(*) from (\n{StripTrailingSemicolon(sql)}\n) as _sq";
+        try
+        {
+            await using var conn = await _factory.DataSource.OpenConnectionAsync(ct);
+            await using var cmd = new NpgsqlCommand(wrapped, conn);
+            var scalar = await cmd.ExecuteScalarAsync(ct);
+            return scalar is null or DBNull ? null : Convert.ToInt64(scalar);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null; // uncountable (e.g. multi-statement or non-SELECT) — caller just hides the total
+        }
+    }
+
+    private static string StripTrailingSemicolon(string sql)
+    {
+        var s = sql.TrimEnd();
+        return s.EndsWith(';') ? s[..^1] : s;
+    }
+
     private static async Task<QueryResult> ReadResultSetAsync(
         NpgsqlDataReader reader, QueryOptions options, Stopwatch sw, CancellationToken ct)
     {

@@ -44,6 +44,15 @@ public interface IQueryExecutor
     /// </summary>
     Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct);
 
+    /// <summary>
+    /// Fetch one page of a single SELECT by wrapping it — <c>select * from (&lt;sql&gt;) offset..limit..</c>
+    /// — for "load more" paging. The SQL must be a single row-returning statement.
+    /// </summary>
+    Task<QueryResult> ExecutePageAsync(string sql, int offset, int limit, CancellationToken ct);
+
+    /// <summary>Total row count of a single SELECT (<c>select count(*) from (&lt;sql&gt;)</c>); null if it can't be counted.</summary>
+    Task<long?> CountAsync(string sql, CancellationToken ct);
+
     IAsyncEnumerable<ResultBatch> StreamAsync(string sql, QueryOptions options, CancellationToken ct);
 }
 

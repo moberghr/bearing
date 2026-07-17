@@ -402,7 +402,9 @@ public partial class MainWindow : Window
             CanUserResizeColumns = true,
             CanUserReorderColumns = true,
             GridLinesVisibility = DataGridGridLinesVisibility.All,
+            HeadersVisibility = DataGridHeadersVisibility.All, // row-number gutter + column headers
         };
+        grid.LoadingRow += (_, e) => e.Row.Header = (e.Row.GetIndex() + 1).ToString();
         for (var i = 0; i < result.Columns.Count; i++)
             grid.Columns.Add(new DataGridTextColumn
             {
