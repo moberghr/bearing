@@ -51,8 +51,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
     }
 
     [ObservableProperty] private string _statusText = "Not connected.";
-    [ObservableProperty] private bool _isBusy;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RunButtonText))]
+    private bool _isBusy;
+
     [ObservableProperty] private bool _isConnected;
+
+    /// <summary>The Run button doubles as Cancel while a query is in flight.</summary>
+    public string RunButtonText => IsBusy ? "Cancel (Esc)" : "Run (Ctrl+Enter)";
+
+    private CancellationTokenSource? _executionCts;
     [ObservableProperty] private string _title = "Squirrel";
 
     [ObservableProperty] private bool _sidePaneOpen = true;
@@ -482,16 +491,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (info is null) { StatusText = "Connection no longer exists."; return; }
 
         IsBusy = true;
+        _executionCts = new CancellationTokenSource();
+        var ct = _executionCts.Token;
         try
         {
             ConnectionSession session;
-            try { session = await _sessions.GetOrConnectAsync(info, CancellationToken.None); }
+            try { session = await _sessions.GetOrConnectAsync(info, ct); }
             catch (ConnectionFailedException ex) { IsConnected = false; StatusText = ex.Message; return; }
 
             IsConnected = true;
             _ = _sessions.EnsureSchemaAsync(session, CancellationToken.None); // warm completion, don't block Run
 
-            var result = await session.Executor.ExecuteAsync(sql, new QueryOptions(), CancellationToken.None);
+            StatusText = "Running…";
+            var result = await session.Executor.ExecuteAsync(sql, new QueryOptions(), ct);
             tab.LastResult = result;
             LogExecution(info, sql, result);
             StatusText = result.Success
@@ -499,14 +511,27 @@ public sealed partial class MainWindowViewModel : ObservableObject
                   + (result.Truncated ? " (truncated)" : "")
                 : $"Error{(result.Error?.SqlState is { } s ? $" [{s}]" : "")}: {result.Error?.Message}";
         }
+        catch (OperationCanceledException)
+        {
+            StatusText = "Query cancelled.";
+        }
         catch (Exception ex)
         {
             StatusText = $"Execution error: {ex.Message}";
         }
         finally
         {
+            _executionCts.Dispose();
+            _executionCts = null;
             IsBusy = false;
         }
+    }
+
+    /// <summary>Cancel the in-flight query, if any (Esc / the Run button while busy).</summary>
+    public void CancelExecution()
+    {
+        try { _executionCts?.Cancel(); }
+        catch (ObjectDisposedException) { /* completed between the null-check and Cancel */ }
     }
 
     /// <summary>Schema for the selected tab's connection (drives completion); null when not yet loaded.</summary>

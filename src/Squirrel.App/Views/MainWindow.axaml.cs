@@ -9,6 +9,7 @@ using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using AvaloniaEdit.TextMate;
 using Squirrel.App.Completion;
+using Squirrel.App.Editing;
 using Squirrel.App.ViewModels;
 using Squirrel.Core.Data;
 using Squirrel.Sql;
@@ -19,6 +20,7 @@ namespace Squirrel.App.Views;
 public partial class MainWindow : Window
 {
     private readonly CompletionController _completion;
+    private readonly StatementMargin _statementHighlight = new();
     private bool _loadingEditor;          // guards editor<->tab sync while swapping tabs
     private bool _suppressProjectChange;   // guards the project combo during programmatic updates
 
@@ -28,15 +30,19 @@ public partial class MainWindow : Window
         InstallSqlHighlighting();
 
         _completion = new CompletionController(Editor, new CompletionEngine(), () => Vm?.SnapshotForSelectedTab());
+        Editor.TextArea.LeftMargins.Add(_statementHighlight); // its own column, right of the line numbers
 
         Editor.TextChanged += (_, _) =>
         {
             if (!_loadingEditor && Vm?.SelectedTab is { } tab) tab.Text = Editor.Text;
+            UpdateStatementHighlight();
         };
         Editor.TextArea.Caret.PositionChanged += (_, _) =>
         {
             if (!_loadingEditor && Vm?.SelectedTab is { } tab) tab.CaretOffset = Editor.CaretOffset;
+            UpdateStatementHighlight();
         };
+        Editor.TextArea.SelectionChanged += (_, _) => UpdateStatementHighlight();
 
         DataContextChanged += (_, _) => HookViewModel();
         Loaded += (_, _) => HookViewModel();
@@ -79,6 +85,36 @@ public partial class MainWindow : Window
             Editor.CaretOffset = System.Math.Clamp(tab.CaretOffset, 0, Editor.Text.Length);
         _loadingEditor = false;
         RebuildResultsGrid(tab?.LastResult);
+        UpdateStatementHighlight();
+    }
+
+    /// <summary>Mark the statement Run will execute — the selection if any, else the statement at
+    /// the caret — so the highlight always matches <see cref="RunAsync"/>.</summary>
+    private void UpdateStatementHighlight()
+    {
+        if (!string.IsNullOrEmpty(Editor.SelectedText))
+            _statementHighlight.SetSpan(-1, -1); // selection is its own indicator
+        else if (Squirrel.Sql.StatementSplitter.StatementAt(Editor.Text, Editor.CaretOffset) is { } stmt)
+            _statementHighlight.SetSpan(stmt.TrimmedStart, stmt.TrimmedEnd);
+        else
+            _statementHighlight.SetSpan(-1, -1);
+    }
+
+    /// <summary>Alt+Up / Alt+Down: move the caret to the previous / next runnable statement.</summary>
+    private void MoveToAdjacentStatement(int direction)
+    {
+        var text = Editor.Text;
+        var spans = Squirrel.Sql.StatementSplitter.Split(text)
+            .Where(s => !string.IsNullOrWhiteSpace(s.Text)).ToList();
+        if (spans.Count == 0) return;
+
+        var current = Squirrel.Sql.StatementSplitter.StatementAt(text, Editor.CaretOffset);
+        var idx = current is null ? 0 : spans.FindIndex(s => s.Start == current.Start);
+        if (idx < 0) idx = 0;
+
+        var target = System.Math.Clamp(idx + direction, 0, spans.Count - 1);
+        Editor.CaretOffset = spans[target].TrimmedStart;
+        Editor.TextArea.Caret.BringCaretToView();
     }
 
     private void SyncProjectCombo()
@@ -227,7 +263,11 @@ public partial class MainWindow : Window
 
     // ---- run / open / save / history ----
 
-    private async void OnRunClick(object? sender, RoutedEventArgs e) => await RunAsync();
+    private async void OnRunClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm?.IsBusy == true) { Vm.CancelExecution(); return; }
+        await RunAsync();
+    }
 
     private void OnHistoryClick(object? sender, RoutedEventArgs e)
     {
@@ -240,7 +280,11 @@ public partial class MainWindow : Window
     {
         base.OnKeyDown(e);
         var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
-        if (e.Key == Key.F5) { e.Handled = true; await RunAsync(); }
+        var alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+        if (e.Key == Key.F5 || (e.Key == Key.Enter && ctrl)) { e.Handled = true; await RunAsync(); }
+        else if (e.Key == Key.Escape && Vm?.IsBusy == true) { e.Handled = true; Vm.CancelExecution(); }
+        else if (e.Key == Key.Up && alt) { e.Handled = true; MoveToAdjacentStatement(-1); }
+        else if (e.Key == Key.Down && alt) { e.Handled = true; MoveToAdjacentStatement(+1); }
         else if (e.Key == Key.Space && ctrl) { e.Handled = true; _completion.TriggerExplicit(); }
         else if (e.Key == Key.S && ctrl) { e.Handled = true; await SaveAsync(); }
         else if (e.Key == Key.O && ctrl) { e.Handled = true; await OpenAsync(); }
@@ -254,7 +298,9 @@ public partial class MainWindow : Window
     {
         if (Vm is null) return;
         var selected = Editor.SelectedText;
-        var sql = string.IsNullOrWhiteSpace(selected) ? Editor.Text : selected;
+        var sql = string.IsNullOrWhiteSpace(selected)
+            ? Squirrel.Sql.StatementSplitter.StatementAt(Editor.Text, Editor.CaretOffset)?.Text ?? Editor.Text
+            : selected;
         await Vm.ExecuteAsync(sql);
         RebuildResultsGrid(Vm.SelectedTab?.LastResult);
     }

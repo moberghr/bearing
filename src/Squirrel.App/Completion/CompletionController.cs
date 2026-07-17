@@ -66,14 +66,19 @@ internal sealed class CompletionController
         var snapshot = _snapshot();
         if (snapshot is null) return;
 
-        var text = _editor.Text;
         var caret = _editor.CaretOffset;
+        // Scope completion to the statement at the caret so earlier statements in a multi-statement
+        // buffer can't leak sources/aliases into the current one. Offsets are shifted back on Show.
+        var stmt = Squirrel.Sql.StatementSplitter.StatementAt(_editor.Text, caret);
+        var text = stmt?.Text ?? _editor.Text;
+        var localCaret = stmt is null ? caret : caret - stmt.Start;
+        var baseOffset = stmt?.Start ?? 0;
         var generation = ++_generation;
 
         CompletionResult result;
         try
         {
-            result = await Task.Run(() => _engine.Complete(text, caret, snapshot));
+            result = await Task.Run(() => _engine.Complete(text, localCaret, snapshot));
         }
         catch
         {
@@ -81,10 +86,10 @@ internal sealed class CompletionController
         }
 
         if (generation != _generation) return; // a newer keystroke superseded this
-        Show(result);
+        Show(result, baseOffset);
     }
 
-    private void Show(CompletionResult result)
+    private void Show(CompletionResult result, int baseOffset)
     {
         if (result.Suggestions.Count == 0)
         {
@@ -96,8 +101,8 @@ internal sealed class CompletionController
 
         var window = new CompletionWindow(_editor.TextArea)
         {
-            StartOffset = result.ReplacementStart,
-            EndOffset = result.ReplacementStart + result.ReplacementLength,
+            StartOffset = baseOffset + result.ReplacementStart,
+            EndOffset = baseOffset + result.ReplacementStart + result.ReplacementLength,
         };
 
         foreach (var suggestion in result.Suggestions)

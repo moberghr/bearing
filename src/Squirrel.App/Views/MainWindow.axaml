@@ -49,7 +49,7 @@
             </DataTemplate>
           </ComboBox.ItemTemplate>
         </ComboBox>
-        <Button x:Name="RunButton" Content="Run (F5)" Click="OnRunClick" Margin="16,0,0,0"/>
+        <Button x:Name="RunButton" Content="{Binding RunButtonText}" Click="OnRunClick" Margin="16,0,0,0"/>
         <Button Content="Open" Click="OnOpenClick" Margin="16,0,0,0"/>
         <Button Content="Save" Click="OnSaveClick" Margin="4,0,0,0"/>
       </StackPanel>
