@@ -16,15 +16,22 @@ public static class CellFormat
     public const string DatePattern = "dd.MM.yyyy";
     public const string TimePattern = "HH:mm:ss";
 
+    /// <summary>Shown for a NULL cell, and the token a user types to set a cell to NULL. Distinct from
+    /// an empty string (which renders blank and, for text columns, saves as empty).</summary>
+    public const string NullToken = "(null)";
+
     public static string Display(object? value) => value switch
     {
-        null => "",
+        null => NullToken,
         DateTime dt => dt.ToString(DateTimePattern, CultureInfo.InvariantCulture),
         DateTimeOffset dto => dto.ToString(DateTimePattern, CultureInfo.InvariantCulture),
         DateOnly d => d.ToString(DatePattern, CultureInfo.InvariantCulture),
         TimeOnly t => t.ToString(TimePattern, CultureInfo.InvariantCulture),
         _ => value.ToString() ?? "",
     };
+
+    /// <summary>Whether an edited cell string means "set NULL" (the <see cref="NullToken"/>, trimmed).</summary>
+    public static bool IsNullToken(string? s) => string.Equals(s?.Trim(), NullToken, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Parse an edited cell string back to <paramref name="target"/> — the display pattern
     /// first, then a lenient current-culture parse. Returns false if neither matches.</summary>

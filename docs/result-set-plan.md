@@ -220,10 +220,16 @@ Goal: editable grid; changes become generated `UPDATE`/`DELETE`/`INSERT` keyed b
     and a top toolbar (`+ Add row`, `Delete row`, and — when pending — count + `Save changes`/`Discard`).
   - Tested: `WorkspaceFlowTests.Editable_grid_saves_insert_update_delete_in_one_batch` (live, one save
     batch verified via independent read).
-  - **Known limitations (first cut, need live QA):** FK columns aren't editable; empty cell ⇒ NULL (can't
-    type an empty string); deleted rows vanish immediately (Discard restores); save reloads page 1 (paged
-    rows dropped); a table created *after* connect isn't editable until the snapshot refreshes (no refresh
-    button yet — deferred item); change detection is value-equality (retyping the same value = no-op UPDATE).
+  - **Refinements (2026-07-18):** save now updates affected rows **in place** (delete→remove, update→committed
+    values, insert→`RETURNING` result via `ApplySavedChanges`/`ReplaceRow`) — no DB reload, paged rows & scroll
+    kept; the window calls `ResultView.RefreshRowHighlights()` (Dispatcher-posted) instead of rebuilding.
+    Deletes stay visible (red) until save (`ToggleDelete`); Discard reverts in place (`RevertPending`).
+    Row tints: green = new/edited, red = pending-delete. Empty cell stays **empty for text columns**, NULL
+    for others; a **`(null)`** token (`CellFormat.NullToken`/`IsNullToken`) displays NULLs (dim italic) and
+    sets a cell to NULL. Coerce handles the token + empty-vs-null.
+  - **Remaining limitations:** FK columns aren't editable (kept as read-only jump icons); a table created
+    *after* connect isn't editable until the snapshot refreshes (no refresh button yet — deferred);
+    INSERT `RETURNING` maps back by column name, so aliased new-row cells may not refill (cosmetic).
 
 ### Detailed original notes
 

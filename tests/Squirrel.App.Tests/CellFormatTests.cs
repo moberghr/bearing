@@ -19,12 +19,23 @@ public class CellFormatTests
     }
 
     [Fact]
-    public void Non_dates_pass_through_unchanged()
+    public void Null_shows_a_marker_distinct_from_empty_string()
     {
-        Assert.Equal("", CellFormat.Display(null));
+        Assert.Equal("(null)", CellFormat.Display(null));   // null → marker
+        Assert.Equal("", CellFormat.Display(""));           // empty string → blank
         Assert.Equal("42", CellFormat.Display(42));
         Assert.Equal("hello", CellFormat.Display("hello"));
     }
+
+    [Theory]
+    [InlineData("(null)", true)]
+    [InlineData("(NULL)", true)]
+    [InlineData("  (null) ", true)]
+    [InlineData("", false)]
+    [InlineData("null-ish", false)]
+    [InlineData(null, false)]
+    public void Null_token_recognition(string? text, bool expected)
+        => Assert.Equal(expected, CellFormat.IsNullToken(text));
 
     [Fact]
     public void Round_trips_through_parse()

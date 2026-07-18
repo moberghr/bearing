@@ -8,6 +8,7 @@ using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Squirrel.App.Formatting;
 using Squirrel.App.ViewModels;
@@ -60,6 +61,14 @@ public sealed class ResultView : UserControl
     // Green for new/edited rows, red for rows pending deletion (kept visible until save).
     private static readonly IBrush ChangedRowBrush = new SolidColorBrush(Color.FromArgb(0x33, 0x3F, 0xB9, 0x50));
     private static readonly IBrush DeletedRowBrush = new SolidColorBrush(Color.FromArgb(0x33, 0xE0, 0x40, 0x40));
+    private static readonly IBrush NullBrush = new SolidColorBrush(Color.FromArgb(0x99, 0x88, 0x88, 0x88));
+
+    // Editable grids currently rendered (grid + its result) — used to re-tint rows after an in-place save.
+    private readonly List<(DataGrid Grid, ResultSetViewModel Result)> _editableGrids = new();
+
+    /// <summary>Re-apply pending-change row highlights (call after an in-place save clears pending state).</summary>
+    public void RefreshRowHighlights()
+        => Dispatcher.UIThread.Post(() => { foreach (var (grid, result) in _editableGrids) RefreshRowColors(grid, result); });
 
     private static IBrush RowBrush(ResultSetViewModel result, object?[]? row)
     {
@@ -78,6 +87,7 @@ public sealed class ResultView : UserControl
 
     private void Rebuild()
     {
+        _editableGrids.Clear();
         var body = BuildBody();
         Content = CanGoBack ? WithBackBar(body) : body;
     }
@@ -193,6 +203,8 @@ public sealed class ResultView : UserControl
         grid.ItemsSource = result.Rows; // ObservableCollection → paged rows append without a rebuild
 
         if (result.IsEditable)
+        {
+            _editableGrids.Add((grid, result));
             grid.CellEditEnding += (_, e) =>
             {
                 if (e.EditAction != DataGridEditAction.Commit) return;
@@ -201,6 +213,7 @@ public sealed class ResultView : UserControl
                 result.MarkEdited(row);
                 e.Row.Background = RowBrush(result, row); // tint the edited row immediately
             };
+        }
         return grid;
     }
 
@@ -211,12 +224,21 @@ public sealed class ResultView : UserControl
         {
             Header = result.Columns[index].Name,
             Tag = index, // column index, read back in CellEditEnding
-            CellTemplate = new FuncDataTemplate<object?[]>((row, _) => new TextBlock
+            CellTemplate = new FuncDataTemplate<object?[]>((row, _) =>
             {
-                Text = CellText(row, index),
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(4, 0),
-                TextTrimming = TextTrimming.CharacterEllipsis,
+                var cell = new TextBlock
+                {
+                    Text = CellText(row, index),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(4, 0),
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                };
+                if (row is null || index >= row.Length || row[index] is null) // dim "(null)" as a marker
+                {
+                    cell.FontStyle = FontStyle.Italic;
+                    cell.Foreground = NullBrush;
+                }
+                return cell;
             }),
             CellEditingTemplate = new FuncDataTemplate<object?[]>((row, _) => new TextBox
             {

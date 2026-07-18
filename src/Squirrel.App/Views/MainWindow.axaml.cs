@@ -50,14 +50,14 @@ public partial class MainWindow : Window
         ResultsView.SaveChanges = async rs =>
         {
             if (Vm is null) return;
-            await Vm.SaveChangesAsync(rs); // applies in one tx, then reloads the frame
-            RebuildResults(Vm.SelectedTab);
+            await Vm.SaveChangesAsync(rs);      // applies in one tx, updating affected rows in place
+            ResultsView.RefreshRowHighlights(); // clear the pending tints (no full rebuild → scroll kept)
         };
         ResultsView.DiscardChanges = async rs =>
         {
             if (Vm is null) return;
-            await Vm.DiscardChangesAsync(rs); // reloads from source, dropping edits
-            RebuildResults(Vm.SelectedTab);
+            await Vm.DiscardChangesAsync(rs);   // reverts pending changes in place
+            RebuildResults(Vm.SelectedTab);     // re-render the restored rows
         };
         ResultsView.PreviewSql = rs =>
         {

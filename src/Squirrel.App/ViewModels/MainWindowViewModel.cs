@@ -676,32 +676,71 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     // ---- Inline editing (Phase 3) ------------------------------------------------------------
 
-    /// <summary>Apply a result set's pending edits/inserts/deletes in one transaction, then reload it.</summary>
+    private enum ChangeKind { Delete, Update, Insert }
+
+    /// <summary>A pending change tagged with the grid row it came from, so the saved result can be
+    /// applied back to that exact row (delete → remove, update → committed values, insert → RETURNING).</summary>
+    private sealed record PendingChange(ChangeKind Kind, object?[] Row, SqlWriteCommand Command);
+
+    /// <summary>Apply a result set's pending edits/inserts/deletes in one transaction, then update the
+    /// affected rows in place (no reload — paged-in rows and scroll are preserved).</summary>
     public async Task SaveChangesAsync(ResultSetViewModel rs)
     {
         if (IsBusy) return;
         if (rs.EditTarget is not { } target || !rs.HasPendingChanges) return;
         if (ResolveLiveSession() is not { } session) return;
 
-        var commands = BuildWriteCommands(rs, target);
-        if (commands.Count == 0) { rs.ClearPending(); return; }
+        var changes = BuildPendingChanges(rs, target);
+        if (changes.Count == 0) { rs.ClearPending(); return; }
 
         IsBusy = true;
         _executionCts = new CancellationTokenSource();
         var ct = _executionCts.Token;
         try
         {
-            StatusText = $"Saving {commands.Count} change(s)…";
-            var results = await session.Executor.ExecuteWriteAsync(commands, ct);
+            StatusText = $"Saving {changes.Count} change(s)…";
+            var results = await session.Executor.ExecuteWriteAsync(changes.Select(c => c.Command).ToList(), ct);
             if (results.FirstOrDefault(r => !r.Success) is { } failed)
-            { StatusText = $"Save failed: {failed.Error?.Message}"; return; }
+            { StatusText = $"Save failed: {failed.Error?.Message}"; return; } // rows/pending untouched
 
-            await ReloadFromSourceAsync(rs, session, ct); // reflect generated keys/defaults, clears pending
-            StatusText = $"Saved {commands.Count} change(s).";
+            ApplySavedChanges(rs, target, changes, results);
+            StatusText = $"Saved {changes.Count} change(s).";
         }
         catch (OperationCanceledException) { StatusText = "Save cancelled."; }
         catch (Exception ex) { StatusText = $"Save failed: {ex.Message}"; }
         finally { _executionCts.Dispose(); _executionCts = null; IsBusy = false; }
+    }
+
+    /// <summary>Reflect a successful save back into the grid rows: remove deletes, swap updates for their
+    /// committed values, swap new rows for the INSERT … RETURNING result.</summary>
+    private static void ApplySavedChanges(
+        ResultSetViewModel rs, EditTarget target, List<PendingChange> changes, IReadOnlyList<QueryResult> results)
+    {
+        for (var i = 0; i < changes.Count; i++)
+        {
+            var ch = changes[i];
+            switch (ch.Kind)
+            {
+                case ChangeKind.Delete:
+                    rs.RemoveRow(ch.Row);
+                    break;
+                case ChangeKind.Update:
+                    rs.ReplaceRow(ch.Row, CommittedRow(rs, target, ch.Row));
+                    break;
+                case ChangeKind.Insert:
+                    var returned = i < results.Count ? MapReturnedRow(results[i], rs.Columns) : null;
+                    rs.ReplaceRow(ch.Row, returned ?? CommittedRow(rs, target, ch.Row));
+                    break;
+            }
+        }
+        rs.ClearPending();
+    }
+
+    /// <summary>Discard all pending changes in place (restore edited cells, drop new rows, un-mark deletes).</summary>
+    public Task DiscardChangesAsync(ResultSetViewModel rs)
+    {
+        if (rs.HasPendingChanges) { rs.RevertPending(); StatusText = "Changes discarded."; }
+        return Task.CompletedTask;
     }
 
     /// <summary>Render the write statements a save would run, values inlined, wrapped in a transaction.
@@ -709,12 +748,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public string? PreviewChanges(ResultSetViewModel rs)
     {
         if (rs.EditTarget is not { } target || !rs.HasPendingChanges) return null;
-        var commands = BuildWriteCommands(rs, target);
-        if (commands.Count == 0) return null;
+        var changes = BuildPendingChanges(rs, target);
+        if (changes.Count == 0) return null;
 
         var sb = new StringBuilder();
         sb.AppendLine("begin;");
-        foreach (var c in commands) sb.Append("  ").Append(InlineParameters(c)).AppendLine(";");
+        foreach (var c in changes) sb.Append("  ").Append(InlineParameters(c.Command)).AppendLine(";");
         sb.Append("commit;");
         return sb.ToString();
     }
@@ -728,38 +767,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
             byName.TryGetValue(m.Value, out var v) ? (v is null ? "null" : SqlLiteral(v)) : m.Value);
     }
 
-    /// <summary>Drop all pending changes by reloading the result set from its source query.</summary>
-    public async Task DiscardChangesAsync(ResultSetViewModel rs)
+    /// <summary>Turn a result set's pending state into row-tagged, ordered changes (deletes, updates, inserts).</summary>
+    private static List<PendingChange> BuildPendingChanges(ResultSetViewModel rs, EditTarget t)
     {
-        if (IsBusy || !rs.HasPendingChanges) return;
-        if (rs.SourceSql is null) { rs.ClearPending(); return; }
-        if (ResolveLiveSession() is not { } session) return;
-
-        IsBusy = true;
-        _executionCts = new CancellationTokenSource();
-        var ct = _executionCts.Token;
-        try { await ReloadFromSourceAsync(rs, session, ct); StatusText = "Changes discarded."; }
-        catch (Exception ex) when (ex is not OperationCanceledException) { StatusText = $"Reload failed: {ex.Message}"; }
-        finally { _executionCts.Dispose(); _executionCts = null; IsBusy = false; }
-    }
-
-    /// <summary>Re-run the result set's source SELECT (first page) and replace the displayed frame.</summary>
-    private async Task ReloadFromSourceAsync(ResultSetViewModel rs, ConnectionSession session, CancellationToken ct)
-    {
-        if (rs.SourceSql is not { } sourceSql) { rs.ClearPending(); return; }
-        var refreshed = await session.Executor.ExecuteAsync(sourceSql, new QueryOptions { MaxRows = PageSize }, ct);
-        if (SelectedTab is { } tab) tab.ReplaceResults(BuildResultSets(refreshed, sourceSql, session.Snapshot));
-    }
-
-    /// <summary>Turn a result set's pending state into ordered write commands (deletes, updates, inserts).</summary>
-    private static List<SqlWriteCommand> BuildWriteCommands(ResultSetViewModel rs, EditTarget t)
-    {
-        var cmds = new List<SqlWriteCommand>();
+        var changes = new List<PendingChange>();
 
         foreach (var row in rs.DeletedRows)
         {
             var keys = KeyValues(t, rs.OriginalOf(row) ?? row);
-            if (keys.Count > 0) cmds.Add(DmlGenerator.Delete(t.Schema, t.Table, keys));
+            if (keys.Count > 0) changes.Add(new PendingChange(ChangeKind.Delete, row, DmlGenerator.Delete(t.Schema, t.Table, keys)));
         }
         foreach (var row in rs.EditedRows)
         {
@@ -767,14 +783,38 @@ public sealed partial class MainWindowViewModel : ObservableObject
             var assignments = ChangedAssignments(rs, t, original, row);
             var keys = KeyValues(t, original);
             if (assignments.Count > 0 && keys.Count > 0)
-                cmds.Add(DmlGenerator.Update(t.Schema, t.Table, assignments, keys));
+                changes.Add(new PendingChange(ChangeKind.Update, row, DmlGenerator.Update(t.Schema, t.Table, assignments, keys)));
         }
         foreach (var row in rs.NewRows)
         {
             var values = InsertValues(rs, t, row);
-            if (values.Count > 0) cmds.Add(DmlGenerator.Insert(t.Schema, t.Table, values));
+            if (values.Count > 0) changes.Add(new PendingChange(ChangeKind.Insert, row, DmlGenerator.Insert(t.Schema, t.Table, values)));
         }
-        return cmds;
+        return changes;
+    }
+
+    /// <summary>The committed form of an edited row: original values with the edited cells coerced to
+    /// their column type (so the grid shows canonical values after save).</summary>
+    private static object?[] CommittedRow(ResultSetViewModel rs, EditTarget t, object?[] row)
+    {
+        var committed = (object?[])row.Clone();
+        foreach (var c in t.Columns)
+            if (c.ResultIndex < committed.Length && committed[c.ResultIndex] is string s)
+                committed[c.ResultIndex] = Coerce(s, rs.Columns[c.ResultIndex].ClrType);
+        return committed;
+    }
+
+    /// <summary>Build a result-shaped row from an INSERT … RETURNING result, matching columns by name.</summary>
+    private static object?[]? MapReturnedRow(QueryResult res, IReadOnlyList<ColumnDescriptor> resultColumns)
+    {
+        if (!res.Success || res.Columns.Count == 0 || res.Rows.Count == 0) return null;
+        var byName = new Dictionary<string, int>();
+        for (var j = 0; j < res.Columns.Count; j++) byName[res.Columns[j].Name] = j;
+
+        var row = new object?[resultColumns.Count];
+        for (var k = 0; k < resultColumns.Count; k++)
+            row[k] = byName.TryGetValue(resultColumns[k].Name, out var j) ? res.Rows[0][j] : null;
+        return row;
     }
 
     /// <summary>Primary-key predicates from the row's original (typed) values.</summary>
@@ -811,13 +851,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
         return list;
     }
 
-    /// <summary>Coerce a grid string back to the column's CLR type; empty ⇒ NULL. Falls back to the raw
-    /// string (letting the DB reject it) when parsing fails.</summary>
+    /// <summary>Coerce a grid string back to the column's CLR type. The "(null)" token ⇒ NULL; an empty
+    /// string stays empty for text columns and ⇒ NULL for others. Falls back to the raw string (letting
+    /// the DB reject it) when parsing fails.</summary>
     private static object? Coerce(object? value, Type clrType)
     {
         if (value is not string s) return value; // unchanged cells keep their typed value
-        if (s.Length == 0) return null;
+        if (CellFormat.IsNullToken(s)) return null;
         var t = Nullable.GetUnderlyingType(clrType) ?? clrType;
+        if (s.Length == 0) return t == typeof(string) ? "" : null; // empty: keep for text, else NULL
         try
         {
             if (t == typeof(string)) return s;

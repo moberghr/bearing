@@ -223,6 +223,58 @@ public class WorkspaceFlowTests : IDisposable
         }
     }
 
+    [SkippableFact]
+    public async Task Empty_saves_as_empty_for_text_and_null_token_saves_null()
+    {
+        Skip.IfNot(await Reachable(), "No PostgreSQL reachable for integration test.");
+
+        var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
+        var info = new ConnectionInfo { Id = Guid.NewGuid(), Name = "setup", ProviderId = PostgresProvider.ProviderId,
+            Host = Host, Port = Port, Database = Db, User = User };
+        await using var setup = provider.CreateConnectionFactory(info, Password);
+        var raw = provider.CreateQueryExecutor(setup);
+        const string tbl = "squirrel_null_test";
+        await raw.ExecuteAsync($"drop table if exists {tbl}; create table {tbl} (id serial primary key, name text, qty int);",
+            new QueryOptions(), CancellationToken.None);
+        try
+        {
+            var vm = NewVm();
+            await vm.InitializeAsync(Path.Combine(_root, "nullproj"));
+            await vm.SeedDemoConnectionAsync(Host, Port, Db, User, Password);
+            await WaitForSnapshot(vm);
+
+            vm.SelectedTab!.Text = $"select id, name, qty from {tbl} order by id;";
+            await vm.ExecuteAsync(vm.SelectedTab.Text);
+            var rs = vm.SelectedTab.LastResult!;
+            Assert.True(rs.IsEditable, vm.StatusText);
+
+            // New row: empty text stays empty; the "(null)" token in an int column becomes SQL NULL.
+            var added = rs.AddRow();
+            added[1] = "";          // name (text) → empty string, NOT null
+            added[2] = "(null)";    // qty (int)  → NULL
+            await vm.SaveChangesAsync(rs);
+
+            var check = await raw.ExecuteAsync($"select name, qty from {tbl};", new QueryOptions(), CancellationToken.None);
+            var row = Assert.Single(check[0].Rows);
+            Assert.Equal("", row[0]);   // empty string preserved
+            Assert.Null(row[1]);        // explicit NULL
+
+            // Editing the text cell to the null token clears it to NULL.
+            var saved = vm.SelectedTab.LastResult!.Rows[0];
+            saved[1] = "(null)"; vm.SelectedTab.LastResult!.MarkEdited(saved);
+            await vm.SaveChangesAsync(vm.SelectedTab.LastResult!);
+
+            var check2 = await raw.ExecuteAsync($"select name from {tbl};", new QueryOptions(), CancellationToken.None);
+            Assert.Null(Assert.Single(check2[0].Rows)[0]);
+
+            await vm.DisposeSessionsAsync();
+        }
+        finally
+        {
+            await raw.ExecuteAsync($"drop table if exists {tbl};", new QueryOptions(), CancellationToken.None);
+        }
+    }
+
     [Fact]
     public async Task Rename_scratch_and_saved_script()
     {

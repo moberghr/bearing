@@ -168,7 +168,42 @@ public sealed partial class ResultSetViewModel : ObservableObject
         RaisePending();
     }
 
-    /// <summary>Clear all pending state after a successful save (fresh rows are re-loaded by the caller).</summary>
+    /// <summary>Replace a saved row's array in place (committed values / RETURNING result) and reset its
+    /// baseline. The ObservableCollection swap makes the grid re-render just that row.</summary>
+    public void ReplaceRow(object?[] oldRow, object?[] newRow)
+    {
+        var i = Rows.IndexOf(oldRow);
+        if (i >= 0) Rows[i] = newRow; else Rows.Add(newRow);
+        _originals.Remove(oldRow);
+        _originals[newRow] = (object?[])newRow.Clone();
+    }
+
+    /// <summary>Remove a saved-as-deleted row from the grid.</summary>
+    public void RemoveRow(object?[] row)
+    {
+        Rows.Remove(row);
+        _originals.Remove(row);
+        OnPropertyChanged(nameof(Loaded));
+        OnPropertyChanged(nameof(FooterText));
+    }
+
+    /// <summary>Revert all pending changes in place: restore edited cells, drop new rows, un-mark deletes.</summary>
+    public void RevertPending()
+    {
+        foreach (var row in _edited)
+            if (_originals.TryGetValue(row, out var original))
+                Array.Copy(original, row, Math.Min(original.Length, row.Length));
+        foreach (var row in _newRows)
+        {
+            Rows.Remove(row);
+            _originals.Remove(row);
+        }
+        ClearPending();
+        OnPropertyChanged(nameof(Loaded));
+        OnPropertyChanged(nameof(FooterText));
+    }
+
+    /// <summary>Clear all pending marks after a save (rows were already updated in place).</summary>
     public void ClearPending()
     {
         _edited.Clear();
