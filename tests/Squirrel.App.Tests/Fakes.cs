@@ -68,6 +68,15 @@ internal sealed class FakeMetadata : IMetadataReader
         Interlocked.Increment(ref LoadCount);
         return Task.FromResult<ISchemaSnapshot>(new FakeSnapshot(database));
     }
+
+    public Task<IReadOnlyList<PgRoutine>> GetRoutinesAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<PgRoutine>>(System.Array.Empty<PgRoutine>());
+
+    public Task<string> GetViewDefinitionAsync(uint relOid, CancellationToken ct)
+        => Task.FromResult("");
+
+    public Task<string> GetRoutineDefinitionAsync(uint routineOid, CancellationToken ct)
+        => Task.FromResult("");
 }
 
 internal sealed class FakeExecutor : IQueryExecutor

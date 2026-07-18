@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Media;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
@@ -201,11 +202,13 @@ public partial class MainWindow : Window
         if (result is { Delete: false }) await Vm.AddOrUpdateConnectionAsync(result.Connection, result.Password);
     }
 
-    private async void OnEditConnectionClick(object? sender, RoutedEventArgs e) => await EditSelectedConnection();
+    /// <summary>The schema-tree node the clicked menu item / tapped row belongs to (via its DataContext).</summary>
+    private static SchemaNodeViewModel? NodeOf(object? sender) => (sender as Control)?.DataContext as SchemaNodeViewModel;
 
-    private async Task EditSelectedConnection()
+    private async void OnEditServer(object? sender, RoutedEventArgs e)
     {
-        if (Vm is null || ConnectionsList.SelectedItem is not ConnectionInfo existing) return;
+        if (Vm is null || NodeOf(sender) is not ServerNodeViewModel server) return;
+        var existing = server.Connection;
         var password = await Vm.GetConnectionPasswordAsync(existing.Id);
         var dialog = new ConnectionDialog(existing, password, (i, p, ct) => Vm.TestConnectionAsync(i, p, ct));
         var result = await dialog.ShowDialog<ConnectionDialogResult?>(this);
@@ -214,20 +217,45 @@ public partial class MainWindow : Window
         else await Vm.AddOrUpdateConnectionAsync(result.Connection, result.Password);
     }
 
-    private void OnSetTabConnectionClick(object? sender, RoutedEventArgs e) => AssignSelectedConnectionToTab();
+    private void OnUseConnectionInTab(object? sender, RoutedEventArgs e) => AssignConnectionToTab(NodeOf(sender));
 
-    private void OnConnectionActivated(object? sender, TappedEventArgs e) => AssignSelectedConnectionToTab();
+    private void OnSchemaNodeDoubleTapped(object? sender, TappedEventArgs e) => AssignConnectionToTab(NodeOf(sender));
 
-    private void AssignSelectedConnectionToTab()
+    private void AssignConnectionToTab(SchemaNodeViewModel? node)
     {
-        if (Vm?.SelectedTab is { } tab && ConnectionsList.SelectedItem is ConnectionInfo conn)
-            Vm.SetTabConnection(tab, conn.Id);
+        if (Vm?.SelectedTab is { } tab && node is ServerNodeViewModel server)
+            Vm.SetTabConnection(tab, server.Connection.Id);
     }
 
-    private async void OnDeleteConnectionClick(object? sender, RoutedEventArgs e)
+    private async void OnDeleteServer(object? sender, RoutedEventArgs e)
     {
-        if (Vm is not null && ConnectionsList.SelectedItem is ConnectionInfo conn)
-            await Vm.DeleteConnectionAsync(conn.Id);
+        if (Vm is not null && NodeOf(sender) is ServerNodeViewModel server)
+            await Vm.DeleteConnectionAsync(server.Connection.Id);
+    }
+
+    private async void OnRefreshServer(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is not null && NodeOf(sender) is ServerNodeViewModel server)
+            await Vm.RefreshServerMetadataAsync(server.Connection.Id);
+    }
+
+    private async void OnShowDefinition(object? sender, RoutedEventArgs e)
+    {
+        if (NodeOf(sender) is not { CanShowDefinition: true } node) return;
+        try
+        {
+            var definition = await node.LoadDefinitionAsync(CancellationToken.None);
+            ShowSqlPreview(string.IsNullOrWhiteSpace(definition) ? "-- (no definition)" : definition, node.DefinitionTitle);
+        }
+        catch (System.Exception ex)
+        {
+            if (Vm is not null) Vm.StatusText = $"Could not load definition: {ex.Message}";
+        }
+    }
+
+    private void OnCopyNodeName(object? sender, RoutedEventArgs e)
+    {
+        if (NodeOf(sender) is { } node) TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(node.Title);
     }
 
     // ---- scripts ----
@@ -404,8 +432,8 @@ public partial class MainWindow : Window
         ResultsView.Results = tab?.Results; // assignment triggers the rebuild (reads CanGoBack)
     }
 
-    /// <summary>Show the generated write SQL in a read-only, monospace preview window (selectable to copy).</summary>
-    private void ShowSqlPreview(string sql)
+    /// <summary>Show SQL in a read-only, monospace preview window (selectable to copy).</summary>
+    private void ShowSqlPreview(string sql, string title = "SQL preview — changes to save")
     {
         var box = new AvaloniaEdit.TextEditor
         {
@@ -421,7 +449,7 @@ public partial class MainWindow : Window
 
         var win = new Window
         {
-            Title = "SQL preview — changes to save",
+            Title = title,
             Width = 720,
             Height = 420,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,

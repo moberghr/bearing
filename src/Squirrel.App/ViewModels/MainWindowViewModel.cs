@@ -32,6 +32,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly IQueryLog _queryLog;
     private readonly IRecentProjects _recentProjects;
     private readonly IConnectionSessionManager _sessions;
+    private readonly ISchemaBrowser _schemaBrowser;
     private ISecretStore? _secretStore;
 
     private Project? _project;
@@ -52,6 +53,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _recentProjects = recentProjects;
         _secretStore = secretStore;
         _sessions = new ConnectionSessionManager(providers, () => _secretStore);
+        _schemaBrowser = new SchemaBrowser(providers, () => _secretStore);
     }
 
     [ObservableProperty] private string _statusText = "Not connected.";
@@ -77,6 +79,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>The project's named connections (mirror of the manifest), shown in the side pane.</summary>
     public ObservableCollection<ConnectionInfo> Connections { get; } = new();
 
+    /// <summary>Root nodes of the schema browser tree — one server node per connection.</summary>
+    public ObservableCollection<ServerNodeViewModel> ServerNodes { get; } = new();
+
     /// <summary>Saved scripts under the project's scripts/ folder, shown in the side pane.</summary>
     public ObservableCollection<ScriptItem> Scripts { get; } = new();
 
@@ -98,8 +103,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public void AttachSecretStore(ISecretStore secretStore) => _secretStore = secretStore;
 
-    /// <summary>Dispose all live connections; safe to call fire-and-forget from the close path.</summary>
-    public ValueTask DisposeSessionsAsync() => _sessions.DisposeAsync();
+    /// <summary>Dispose all live connections (query sessions + schema-browser pools); safe to call fire-and-forget from the close path.</summary>
+    public async ValueTask DisposeSessionsAsync()
+    {
+        await _sessions.DisposeAsync();
+        await _schemaBrowser.DisposeAsync();
+    }
 
     // ---- Project lifecycle -------------------------------------------------------------------
 
@@ -144,6 +153,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         SaveWorkspace();
         await _sessions.DisposeAsync();
+        await _schemaBrowser.DisposeAsync();
         IsConnected = false;
         DefaultConnectionId = null;
         Tabs.Clear();
@@ -154,6 +164,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         SaveWorkspace();
         await _sessions.DisposeAsync();
+        await _schemaBrowser.DisposeAsync();
         IsConnected = false;
         DefaultConnectionId = null;
         Tabs.Clear();
@@ -356,8 +367,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private void RefreshConnections()
     {
         Connections.Clear();
+        ServerNodes.Clear();
         if (_project is null) return;
-        foreach (var c in _project.Manifest.Connections) Connections.Add(c);
+        foreach (var c in _project.Manifest.Connections)
+        {
+            Connections.Add(c);
+            ServerNodes.Add(new ServerNodeViewModel(c, _schemaBrowser));
+        }
     }
 
     private ConnectionInfo? FindConnection(Guid id)
@@ -434,6 +450,23 @@ public sealed partial class MainWindowViewModel : ObservableObject
         RefreshConnections();
         OnPropertyChanged(nameof(SelectedTabConnection));
         StatusText = removed is null ? "Connection deleted." : $"Deleted connection '{removed.Name}'.";
+    }
+
+    /// <summary>
+    /// Refresh all cached metadata for a connection: drop the schema-browser's per-database readers,
+    /// evict the live session so completion + editability reload its snapshot, reload the tree node,
+    /// and re-warm the selected tab if it targets this connection.
+    /// </summary>
+    public async Task RefreshServerMetadataAsync(Guid connectionId)
+    {
+        await _schemaBrowser.InvalidateAsync(connectionId);
+        await _sessions.EvictAsync(connectionId);
+
+        var node = ServerNodes.FirstOrDefault(n => n.Connection.Id == connectionId);
+        if (node is not null) await node.RefreshAsync();
+
+        if (SelectedTab?.ConnectionId == connectionId) WarmConnection(SelectedTab);
+        StatusText = "Schema metadata refreshed.";
     }
 
     private static bool SameNetwork(ConnectionInfo a, ConnectionInfo b)

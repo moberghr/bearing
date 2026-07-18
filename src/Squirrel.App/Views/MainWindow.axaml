@@ -112,32 +112,40 @@
             <Button Grid.Column="1" Content="＋" Padding="6,0" Click="OnAddConnectionClick"
                     ToolTip.Tip="Add connection"/>
           </Grid>
-          <ListBox Grid.Row="1" x:Name="ConnectionsList" ItemsSource="{Binding Connections}"
-                   DoubleTapped="OnConnectionActivated">
-            <ListBox.ContextMenu>
-              <ContextMenu>
-                <MenuItem Header="Use in current tab" Click="OnSetTabConnectionClick"/>
-                <MenuItem Header="Edit…" Click="OnEditConnectionClick"/>
-                <Separator/>
-                <MenuItem Header="Delete" Click="OnDeleteConnectionClick"/>
-              </ContextMenu>
-            </ListBox.ContextMenu>
-            <ListBox.ItemTemplate>
-              <DataTemplate x:DataType="data:ConnectionInfo">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <Border CornerRadius="4" Padding="5,1" VerticalAlignment="Center" MinWidth="10"
-                          IsVisible="{Binding Environment, Converter={x:Static ObjectConverters.IsNotNull}}"
-                          Background="{Binding EnvironmentColor, Converter={StaticResource HexBrush}}">
-                    <TextBlock Text="{Binding Environment}" FontSize="10" Foreground="White"/>
-                  </Border>
-                  <StackPanel VerticalAlignment="Center">
-                    <TextBlock Text="{Binding Name}"/>
-                    <TextBlock Text="{Binding Host}" FontSize="11" Opacity="0.55"/>
-                  </StackPanel>
+          <TreeView Grid.Row="1" x:Name="SchemaTree" ItemsSource="{Binding ServerNodes}">
+            <TreeView.Styles>
+              <!-- Two-way bind each item's expansion to its node so children load lazily on first expand. -->
+              <Style Selector="TreeViewItem">
+                <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+              </Style>
+            </TreeView.Styles>
+            <TreeView.DataTemplates>
+              <!-- One template for every node type: matched by the base type, so subclasses share it.
+                   Leaves have no children, so no expander is shown. -->
+              <TreeDataTemplate DataType="vm:SchemaNodeViewModel" ItemsSource="{Binding Children}">
+                <StackPanel Orientation="Horizontal" Spacing="6" Background="Transparent"
+                            DoubleTapped="OnSchemaNodeDoubleTapped">
+                  <StackPanel.ContextMenu>
+                    <ContextMenu>
+                      <MenuItem Header="Use in current tab" Click="OnUseConnectionInTab" IsVisible="{Binding IsServer}"/>
+                      <MenuItem Header="Refresh metadata" Click="OnRefreshServer" IsVisible="{Binding IsServer}"/>
+                      <MenuItem Header="Edit…" Click="OnEditServer" IsVisible="{Binding IsServer}"/>
+                      <MenuItem Header="Show definition" Click="OnShowDefinition" IsVisible="{Binding CanShowDefinition}"/>
+                      <MenuItem Header="Copy name" Click="OnCopyNodeName"/>
+                      <Separator IsVisible="{Binding IsServer}"/>
+                      <MenuItem Header="Delete" Click="OnDeleteServer" IsVisible="{Binding IsServer}"/>
+                    </ContextMenu>
+                  </StackPanel.ContextMenu>
+                  <Border Width="9" Height="9" CornerRadius="4" VerticalAlignment="Center"
+                          IsVisible="{Binding BadgeColor, Converter={x:Static ObjectConverters.IsNotNull}}"
+                          Background="{Binding BadgeColor, Converter={StaticResource HexBrush}}"/>
+                  <TextBlock Text="{Binding Glyph}" VerticalAlignment="Center" Opacity="0.75"/>
+                  <TextBlock Text="{Binding Title}" VerticalAlignment="Center"/>
+                  <TextBlock Text="{Binding Detail}" VerticalAlignment="Center" FontSize="11" Opacity="0.5"/>
                 </StackPanel>
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
+              </TreeDataTemplate>
+            </TreeView.DataTemplates>
+          </TreeView>
 
           <!-- Scripts -->
           <TextBlock Grid.Row="2" Text="SCRIPTS" FontSize="11" Opacity="0.6" Margin="2,8,2,4"/>

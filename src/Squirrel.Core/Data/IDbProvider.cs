@@ -32,6 +32,15 @@ public interface IMetadataReader
 
     /// <summary>Bulk catalog read → an immutable snapshot the completion engine can query cheaply.</summary>
     Task<ISchemaSnapshot> LoadSnapshotAsync(string database, CancellationToken ct);
+
+    /// <summary>Stored routines (functions/procedures/…) in the reader's database, for schema browsing.</summary>
+    Task<IReadOnlyList<PgRoutine>> GetRoutinesAsync(CancellationToken ct);
+
+    /// <summary>Rendered SQL of a view / materialized view (pg_get_viewdef), by relation OID.</summary>
+    Task<string> GetViewDefinitionAsync(uint relOid, CancellationToken ct);
+
+    /// <summary>Rendered <c>CREATE … FUNCTION/PROCEDURE</c> source (pg_get_functiondef), by routine OID.</summary>
+    Task<string> GetRoutineDefinitionAsync(uint routineOid, CancellationToken ct);
 }
 
 public interface IQueryExecutor

@@ -33,3 +33,25 @@ public sealed record PgForeignKey(
     IReadOnlyList<short> ParentAttNums,
     uint ReferencedOid,
     IReadOnlyList<short> ReferencedAttNums);
+
+/// <summary>Callable-routine kind, mirroring pg_proc.prokind (the ones we surface).</summary>
+public enum PgRoutineKind
+{
+    Function,
+    Procedure,
+    Aggregate,
+    Window,
+}
+
+/// <summary>
+/// A stored routine (function/procedure/aggregate/window) as read from pg_proc. OID-identified.
+/// <see cref="Arguments"/> is the rendered argument list (pg_get_function_arguments) and
+/// <see cref="ReturnType"/> the rendered result (pg_get_function_result; empty for procedures).
+/// </summary>
+public sealed record PgRoutine(
+    uint Oid,
+    string Schema,
+    string Name,
+    PgRoutineKind Kind,
+    string Arguments,
+    string ReturnType);

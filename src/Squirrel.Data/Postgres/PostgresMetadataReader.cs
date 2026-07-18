@@ -139,6 +139,61 @@ public sealed class PostgresMetadataReader : IMetadataReader
         return list;
     }
 
+    public async Task<IReadOnlyList<PgRoutine>> GetRoutinesAsync(CancellationToken ct)
+    {
+        const string sql = """
+            select p.oid::bigint, n.nspname, p.proname, p.prokind::text,
+                   pg_get_function_arguments(p.oid) as args,
+                   pg_get_function_result(p.oid)    as result
+            from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+            where p.prokind in ('f','p','a','w')
+              and n.nspname not in ('pg_catalog','information_schema')
+              and n.nspname not like 'pg\_temp%' and n.nspname not like 'pg\_toast%'
+            order by n.nspname, p.proname
+            """;
+        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        var list = new List<PgRoutine>();
+        while (await r.ReadAsync(ct))
+        {
+            list.Add(new PgRoutine(
+                Oid: (uint)r.GetInt64(0),
+                Schema: r.GetString(1),
+                Name: r.GetString(2),
+                Kind: MapProKind(r.GetString(3)[0]),
+                Arguments: r.IsDBNull(4) ? "" : r.GetString(4),
+                ReturnType: r.IsDBNull(5) ? "" : r.GetString(5)));
+        }
+        return list;
+    }
+
+    // The OID is a uint we read from the catalog (pure digits) — safe to interpolate, and both
+    // pg_get_*def overloads take oid, which an integer literal casts to implicitly.
+    public Task<string> GetViewDefinitionAsync(uint relOid, CancellationToken ct)
+        => ScalarTextAsync($"select pg_get_viewdef({relOid}, true)", ct);
+
+    public Task<string> GetRoutineDefinitionAsync(uint routineOid, CancellationToken ct)
+        => ScalarTextAsync($"select pg_get_functiondef({routineOid})", ct);
+
+    private async Task<string> ScalarTextAsync(string sql, CancellationToken ct)
+    {
+        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return result as string ?? "";
+    }
+
+    private static PgRoutineKind MapProKind(char prokind) => prokind switch
+    {
+        'f' => PgRoutineKind.Function,
+        'p' => PgRoutineKind.Procedure,
+        'a' => PgRoutineKind.Aggregate,
+        'w' => PgRoutineKind.Window,
+        _ => PgRoutineKind.Function,
+    };
+
     private static PgRelKind MapRelKind(char relkind) => relkind switch
     {
         'r' => PgRelKind.Table,
