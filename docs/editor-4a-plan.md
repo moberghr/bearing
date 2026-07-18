@@ -257,9 +257,19 @@ server pointing at different DBs share one session and will reconnect when you s
 queries run against it; dropdowns open/close, pill borders color.
 **Tests**: list-databases (Data, live pagila), DB-switch session resolution (App), `OpenDropdown` logic.
 
-## Phase 4 — Scripts folders
+## Phase 4 — Scripts folders  (DONE 2026-07-18, awaiting user live QA)
 
 **Goal**: the folder tree for scripts (design §3).
+
+**Shipped** (builds; 46 App tests green; app launches clean): Scripts panel is a `TreeView` over
+`ScriptNodes` — one level of subdirectories become `ScriptFolderViewModel` folders (amber `Icon.Folder`
++ right-aligned count), root `.sql` files stay ungrouped. `ScriptItem.IsUnsaved` shows an orange dot
+when a backing tab is dirty (snapshot at refresh). Filter box (`ScriptFilter`) narrows folders + files
+(empty folders hidden, auto-expand while filtering). New-folder button → `CreateScriptFolder`; new-script
+`＋` → new tab. Open/rename resolve the tapped node. Flat `Scripts` kept for existing callers.
+(`ScriptTreeTests`.) **Deferred**: drag-to-folder, nested (>1 level) folders.
+
+### Original task list (for reference)
 
 - Extend the scripts model: folders (name, count, collapsed) → scripts (name, unsaved flag), plus
   ungrouped scripts. Back it with the on-disk `ScriptsDirectory` layout (subfolders = folders). Update

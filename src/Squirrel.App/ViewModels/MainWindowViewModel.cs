@@ -81,6 +81,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>The inline history panel (day-grouped, filterable) shown when ActivePanel = History.</summary>
     public HistoryPanelViewModel History { get; }
 
+    /// <summary>The Alt-toggled menu bar (File/Edit/View/Query/Help); hidden by default (design §).</summary>
+    [ObservableProperty] private bool _isMenuVisible;
+
+    /// <summary>Distraction-free focus mode: full-window centered editor overlay (design §7).</summary>
+    [ObservableProperty] private bool _isFocusMode;
+
     partial void OnActivePanelChanged(SidePanel value)
     {
         SidePaneOpen = true; // selecting a rail tile always reveals the panel

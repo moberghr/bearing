@@ -164,6 +164,7 @@
     </Style>
   </Window.Styles>
 
+  <Grid>
   <DockPanel LastChildFill="True">
 
     <!-- Toolbar (design §Toolbar): proj · | · server · › · database · Run … Focus -->
@@ -226,8 +227,53 @@
           <Path Data="{StaticResource Icon.Run}" Fill="{DynamicResource Ok.Green}" Stretch="Uniform"
                 Width="14" Height="14"/>
         </Button>
+
+        <Border Width="1" Height="22" Background="{DynamicResource Border}" Margin="4,0"/>
+        <Border Background="{DynamicResource Bg.Editor}" BorderBrush="{DynamicResource Border.Control}"
+                BorderThickness="1" CornerRadius="4" Padding="6,2" VerticalAlignment="Center"
+                ToolTip.Tip="Tap Alt for the menu bar">
+          <TextBlock Text="Alt" FontSize="11" Foreground="{DynamicResource Text.Dim}"/>
+        </Border>
+
+        <!-- Focus mode (design §7) -->
+        <Button Classes="rail" Theme="{StaticResource RailButton}" Width="30" Height="30"
+                Click="OnFocusClick" ToolTip.Tip="Focus mode (Ctrl+Cmd+F)">
+          <Path Data="{StaticResource Icon.Focus}"/>
+        </Button>
       </StackPanel>
     </Border>
+
+    <!-- Alt-toggled menu bar (design §Interactions): hidden by default. Open/Save live only here. -->
+    <Menu DockPanel.Dock="Top" IsVisible="{Binding IsMenuVisible}" Background="{DynamicResource Bg.Window}"
+          BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
+      <MenuItem Header="_File">
+        <MenuItem Header="New Query" InputGesture="Ctrl+N" Click="OnNewTabClick"/>
+        <MenuItem Header="Open…" InputGesture="Ctrl+O" Click="OnOpenClick"/>
+        <Separator/>
+        <MenuItem Header="Save" InputGesture="Ctrl+S" Click="OnSaveClick"/>
+        <MenuItem Header="Save As…" InputGesture="Ctrl+Shift+S" Click="OnSaveAsClick"/>
+        <Separator/>
+        <MenuItem Header="Close Tab" InputGesture="Ctrl+W" Click="OnCloseCurrentTabClick"/>
+      </MenuItem>
+      <MenuItem Header="_Edit">
+        <MenuItem Header="Rename Tab…" InputGesture="F2" Click="OnMenuRenameTabClick"/>
+      </MenuItem>
+      <MenuItem Header="_View">
+        <MenuItem Header="Toggle Side Pane" InputGesture="Ctrl+B" Click="OnToggleSidePane"/>
+        <Separator/>
+        <MenuItem Header="Schema" Click="OnMenuSchemaClick"/>
+        <MenuItem Header="Scripts" Click="OnMenuScriptsClick"/>
+        <MenuItem Header="History" Click="OnHistoryClick"/>
+        <Separator/>
+        <MenuItem Header="Focus Mode" Click="OnFocusClick"/>
+      </MenuItem>
+      <MenuItem Header="_Query">
+        <MenuItem Header="Run" InputGesture="Ctrl+Enter" Click="OnRunClick"/>
+      </MenuItem>
+      <MenuItem Header="_Help">
+        <MenuItem Header="About Squirrel" Click="OnAboutClick"/>
+      </MenuItem>
+    </Menu>
 
     <!-- Status bar: 3px ConnectionBrush line across the top edge, then muted metadata. -->
     <Border DockPanel.Dock="Bottom" Padding="8,4" Background="{DynamicResource Bg.Window}"
@@ -523,4 +569,51 @@
     </DockPanel>
 
   </DockPanel>
+
+  <!-- ===== Focus mode (design §7): full-window centered editor overlay ===== -->
+  <Border x:Name="FocusOverlay" IsVisible="{Binding IsFocusMode}" Background="{DynamicResource Bg.Editor}">
+    <DockPanel LastChildFill="True">
+      <!-- Slim top bar -->
+      <Border DockPanel.Dock="Top" Height="34" Padding="12,0" Background="{DynamicResource Bg.Window}"
+              BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
+        <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto,Auto">
+          <TextBlock Grid.Column="0" Text="{Binding SelectedTab.Header}" VerticalAlignment="Center"
+                     Foreground="{DynamicResource Text.Primary}" FontWeight="SemiBold"/>
+          <TextBlock Grid.Column="1" Text="●" FontSize="11" Margin="6,0,0,0" VerticalAlignment="Center"
+                     Foreground="{DynamicResource Accent.Orange}" IsVisible="{Binding SelectedTab.IsDirty}"/>
+          <Border Grid.Column="2" Width="8" Height="8" CornerRadius="4" Margin="12,0,6,0" VerticalAlignment="Center"
+                  IsVisible="{Binding SelectedTab.ConnectionColor, Converter={x:Static ObjectConverters.IsNotNull}}"
+                  Background="{Binding SelectedTab.ConnectionColor, Converter={StaticResource HexBrush}}"/>
+          <TextBlock Grid.Column="3" Text="{Binding SelectedTab.ConnectionDisplay}" VerticalAlignment="Center"
+                     FontSize="12" Foreground="{Binding SelectedTab.ConnectionColor, Converter={StaticResource HexBrush}}"/>
+          <Button Grid.Column="5" Classes="rail" Theme="{StaticResource RailButton}" Width="28" Height="28"
+                  Click="OnRunClick" ToolTip.Tip="{Binding RunButtonText}">
+            <Path Data="{StaticResource Icon.Run}" Fill="{DynamicResource Ok.Green}" Stretch="Uniform" Width="12" Height="12"/>
+          </Button>
+          <Button Grid.Column="6" Click="OnFocusClick" Margin="8,0,0,0" Padding="8,3"
+                  Background="Transparent" ToolTip.Tip="Exit focus (Esc)">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <Path Data="{StaticResource Icon.Focus}" Stroke="{DynamicResource Text.Dim}" StrokeThickness="1.6"
+                    Stretch="Uniform" Width="14" Height="14"/>
+              <TextBlock Text="Exit" VerticalAlignment="Center" Foreground="{DynamicResource Text.Dim}"/>
+              <Border Background="{DynamicResource Bg.Editor}" BorderBrush="{DynamicResource Border.Control}"
+                      BorderThickness="1" CornerRadius="4" Padding="5,1">
+                <TextBlock Text="Esc" FontSize="10" Foreground="{DynamicResource Text.Faint}"/>
+              </Border>
+            </StackPanel>
+          </Button>
+        </Grid>
+      </Border>
+      <!-- 3px ConnectionBrush line pinned to the bottom -->
+      <Border DockPanel.Dock="Bottom" Height="3" Background="{DynamicResource ConnectionBrush}"/>
+      <!-- Centered editor column -->
+      <Grid Background="{DynamicResource Bg.Editor}">
+        <ae:TextEditor x:Name="FocusEditor" MaxWidth="820" HorizontalAlignment="Stretch"
+                       Margin="0,24" Padding="24,0"
+                       ShowLineNumbers="False" FontFamily="{StaticResource MonoFontFamily}" FontSize="15"/>
+      </Grid>
+    </DockPanel>
+  </Border>
+
+  </Grid>
 </Window>

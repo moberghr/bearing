@@ -9,6 +9,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Media;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using AvaloniaEdit.TextMate;
 using Squirrel.App.Completion;
 using Squirrel.App.Editing;
@@ -106,23 +107,29 @@ public partial class MainWindow : Window
 
     private void InstallSqlHighlighting()
     {
+        SetupEditorChrome(Editor);
+        SetupEditorChrome(FocusEditor); // focus-mode editor shares the theme + grammar
+    }
+
+    private void SetupEditorChrome(AvaloniaEdit.TextEditor editor)
+    {
         // DarkPlus supplies the grammar token colors. Exact Kanagawa syntax hues are deferred (a
         // custom TextMate theme needs internal TextMateSharp APIs; the handoff flags syntax colors
         // as its one deliberately-loose area — docs/design/editor-4a/README.md §Fidelity).
         var options = new RegistryOptions(ThemeName.DarkPlus);
-        var installation = Editor.InstallTextMate(options);
+        var installation = editor.InstallTextMate(options);
         var sql = options.GetLanguageByExtension(".sql");
         if (sql is not null)
             installation.SetGrammar(options.GetScopeByLanguageId(sql.Id));
 
         // Editor chrome the TextMate theme doesn't drive to spec: Kanagawa surface (#1F1F28),
         // current-line highlight (#252535), and faint line numbers (#54546D).
-        Editor.Background = ThemeBrush("Bg.Editor");
-        Editor.LineNumbersForeground = ThemeBrush("Text.Faint");
-        Editor.Options.HighlightCurrentLine = true;
+        editor.Background = ThemeBrush("Bg.Editor");
+        editor.LineNumbersForeground = ThemeBrush("Text.Faint");
+        editor.Options.HighlightCurrentLine = true;
         var lineActive = ((SolidColorBrush)ThemeBrush("Bg.LineActive")).Color;
-        Editor.TextArea.TextView.CurrentLineBackground = new SolidColorBrush(lineActive);
-        Editor.TextArea.TextView.CurrentLineBorder = new Pen(new SolidColorBrush(lineActive)); // no contrasting box
+        editor.TextArea.TextView.CurrentLineBackground = new SolidColorBrush(lineActive);
+        editor.TextArea.TextView.CurrentLineBorder = new Pen(new SolidColorBrush(lineActive)); // no contrasting box
     }
 
     /// <summary>Resolve a token brush from app resources (falls back to transparent if missing).</summary>
@@ -135,8 +142,26 @@ public partial class MainWindow : Window
             LoadEditorFromSelectedTab();
         else if (e.PropertyName == nameof(MainWindowViewModel.ActiveConnectionColor))
             App.SetConnectionAccent(Vm?.ActiveConnectionColor); // recolor tab accent, dots, results, status line
+        else if (e.PropertyName == nameof(MainWindowViewModel.IsFocusMode))
+            OnFocusModeChanged();
         else if (e.PropertyName is nameof(MainWindowViewModel.Title) or nameof(MainWindowViewModel.ProjectDirectory))
             SyncProjectCombo();
+    }
+
+    /// <summary>Entering focus mode shares the main editor's document with the overlay editor (edits stay
+    /// in sync via the one <c>TextDocument</c>) and moves focus; exiting returns focus to the main editor.</summary>
+    private void OnFocusModeChanged()
+    {
+        if (Vm?.IsFocusMode == true)
+        {
+            FocusEditor.Document = Editor.Document;   // shared document → two views, edits mirror
+            FocusEditor.CaretOffset = System.Math.Clamp(Editor.CaretOffset, 0, FocusEditor.Text.Length);
+            Dispatcher.UIThread.Post(() => FocusEditor.Focus());
+        }
+        else
+        {
+            Dispatcher.UIThread.Post(() => Editor.Focus());
+        }
     }
 
     private void LoadEditorFromSelectedTab()
@@ -395,6 +420,41 @@ public partial class MainWindow : Window
         if (Vm is not null) Vm.StatusText = "Settings — coming soon.";
     }
 
+    // ---- menu bar (Alt) + focus mode ----
+
+    /// <summary>Esc unwinds, most-modal first: focus mode → menu bar → a running query.</summary>
+    private bool HandleEscape()
+    {
+        if (Vm is null) return false;
+        if (Vm.IsFocusMode) { Vm.IsFocusMode = false; return true; }
+        if (Vm.IsMenuVisible) { Vm.IsMenuVisible = false; return true; }
+        if (Vm.IsBusy) { Vm.CancelExecution(); return true; }
+        return false;
+    }
+
+    private void ToggleFocusMode()
+    {
+        if (Vm is not null) Vm.IsFocusMode = !Vm.IsFocusMode;
+    }
+
+    private void OnFocusClick(object? sender, RoutedEventArgs e) => ToggleFocusMode();
+
+    private async void OnSaveAsClick(object? sender, RoutedEventArgs e) => await SaveAsAsync();
+    private void OnCloseCurrentTabClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm?.SelectedTab is { } tab) Vm.CloseTab(tab);
+    }
+    private async void OnMenuRenameTabClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm?.SelectedTab is { } tab) await RenameTabAsync(tab);
+    }
+    private void OnMenuSchemaClick(object? sender, RoutedEventArgs e) { if (Vm is not null) Vm.ActivePanel = SidePanel.Schema; }
+    private void OnMenuScriptsClick(object? sender, RoutedEventArgs e) { if (Vm is not null) Vm.ActivePanel = SidePanel.Scripts; }
+    private void OnAboutClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is not null) Vm.StatusText = "Squirrel — SQL query editor.";
+    }
+
     /// <summary>
     /// Editor-scoped editing shortcuts, handled in the tunnel phase so they win over AvaloniaEdit's
     /// own handling of Enter / '/' / brackets. App-level shortcuts (Run, Save, …) stay in <see cref="OnKeyDown"/>.
@@ -475,13 +535,30 @@ public partial class MainWindow : Window
         Editor.CaretOffset = stmt.TrimmedEnd;
     }
 
+    // Tracks whether Alt was pressed on its own (no other key during the hold) → a "tap" toggles the menu.
+    private bool _altAlone;
+
+    protected override void OnKeyUp(KeyEventArgs e)
+    {
+        base.OnKeyUp(e);
+        if (e.Key is Key.LeftAlt or Key.RightAlt && _altAlone && Vm is not null)
+        {
+            _altAlone = false;
+            Vm.IsMenuVisible = !Vm.IsMenuVisible;
+        }
+    }
+
     protected override async void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+        // Alt-tap tracking: a lone Alt press arms the toggle; any other key cancels it.
+        _altAlone = e.Key is Key.LeftAlt or Key.RightAlt;
+
         var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
         var alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
-        if (e.Key == Key.F5 || (e.Key == Key.Enter && ctrl)) { e.Handled = true; await RunAsync(); }
-        else if (e.Key == Key.Escape && Vm?.IsBusy == true) { e.Handled = true; Vm.CancelExecution(); }
+        if (e.Key == Key.F11 || (ctrl && alt && e.Key == Key.F)) { e.Handled = true; ToggleFocusMode(); }
+        else if (e.Key == Key.F5 || (e.Key == Key.Enter && ctrl)) { e.Handled = true; await RunAsync(); }
+        else if (e.Key == Key.Escape) { e.Handled = HandleEscape(); }
         else if (e.Key == Key.Up && alt) { e.Handled = true; MoveToAdjacentStatement(-1); }
         else if (e.Key == Key.Down && alt) { e.Handled = true; MoveToAdjacentStatement(+1); }
         else if (e.Key == Key.Space && ctrl) { e.Handled = true; _completion.TriggerExplicit(); }
@@ -532,12 +609,18 @@ public partial class MainWindow : Window
             await Vm.SaveSelectedScriptAsync(existing, Editor.Text);
             return;
         }
+        await SaveAsAsync();
+    }
 
+    /// <summary>Always prompt for a destination (File ▸ Save As…), even for a file-backed tab.</summary>
+    private async Task SaveAsAsync()
+    {
+        if (Vm is null) return;
         var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
         {
             Title = "Save SQL script",
             DefaultExtension = "sql",
-            SuggestedFileName = "query.sql",
+            SuggestedFileName = System.IO.Path.GetFileName(Vm.SelectedTab?.ScriptPath ?? "query.sql"),
             FileTypeChoices = new[] { SqlFileType },
             SuggestedStartLocation = await StartFolder(),
         });
