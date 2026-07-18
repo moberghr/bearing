@@ -207,10 +207,23 @@ Goal: editable grid; changes become generated `UPDATE`/`DELETE`/`INSERT` keyed b
   one real table (not view/expression), the table has a PK, and every PK column is in the result.
   Uses catalog names (not aliases). Unit-tested: `Squirrel.Sql.Tests/EditabilityResolverTests.cs` (5).
 
-**Step 4 remaining (UI + wiring):** expose `EditTarget`/`IsEditable` on `ResultSetViewModel` (detect in
-`MainWindowViewModel` like FK columns); editable `DataGrid` (`IsReadOnly=false`), capture edits via
-`CellEditEnding`, pending-row markers, row add/delete, **[Save changes]** → build `SqlWriteCommand`s via
-`DmlGenerator` → `ExecuteWriteAsync` in one tx → refresh affected rows. Commit UX pending user pick.
+- **Step 4 — editable grid UI (DONE 2026-07-17, commit UX = batch [Save changes]):**
+  - `ResultSetViewModel` gained `EditTarget`/`IsEditable` + pending tracking (`_originals` captured at
+    load/append; `_edited`/`_newRows`/`_deleted` keyed by row-array reference) with `PendingCount`/
+    `PendingText`/`HasPendingChanges`, and `MarkEdited`/`AddRow`/`DeleteRow`/`ClearPending`/`OriginalOf`.
+  - `MainWindowViewModel`: editability detected in `BuildResultSets`; `SaveChangesAsync` builds ordered
+    `SqlWriteCommand`s (`BuildWriteCommands` → delete/update/insert; `Coerce` string→ClrType, empty⇒NULL)
+    and runs them via `ExecuteWriteAsync` (one tx), then `ReloadFromSourceAsync` re-runs `SourceSql`.
+    `DiscardChangesAsync` just reloads. `EditorTabViewModel.ReplaceResults` swaps the frame (no history change).
+  - `ResultView`: editable results get `IsReadOnly=false` text columns (FK columns stay read-only jump
+    icons), `CellEditEnding` writes the edited string into the row + `MarkEdited`, new rows tinted green,
+    and a top toolbar (`+ Add row`, `Delete row`, and — when pending — count + `Save changes`/`Discard`).
+  - Tested: `WorkspaceFlowTests.Editable_grid_saves_insert_update_delete_in_one_batch` (live, one save
+    batch verified via independent read).
+  - **Known limitations (first cut, need live QA):** FK columns aren't editable; empty cell ⇒ NULL (can't
+    type an empty string); deleted rows vanish immediately (Discard restores); save reloads page 1 (paged
+    rows dropped); a table created *after* connect isn't editable until the snapshot refreshes (no refresh
+    button yet — deferred item); change detection is value-equality (retyping the same value = no-op UPDATE).
 
 ### Detailed original notes
 

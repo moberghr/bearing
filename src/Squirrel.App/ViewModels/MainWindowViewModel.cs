@@ -4,14 +4,17 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Squirrel.App.Connections;
+using Squirrel.App.Formatting;
 using Squirrel.Core.Data;
 using Squirrel.Core.Logging;
 using Squirrel.Core.Schema;
 using Squirrel.Core.Workspace;
+using Squirrel.Sql;
 
 namespace Squirrel.App.ViewModels;
 
@@ -595,15 +598,23 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     // ---- FK navigation -----------------------------------------------------------------------
 
-    /// <summary>Wrap raw query results into pageable/FK-aware view models (shared by run + navigation).</summary>
+    /// <summary>Wrap raw query results into pageable/FK-aware/editable view models (shared by run + navigation).</summary>
     private static List<ResultSetViewModel> BuildResultSets(
         IReadOnlyList<QueryResult> results, string sql, ISchemaSnapshot? snapshot)
     {
         var pageable = results.Count == 1 && results[0].Success && results[0].Columns.Count > 0;
         return results
-            .Select(r => new ResultSetViewModel(r, sql, pageable)
+            .Select(r =>
             {
-                ForeignKeyColumns = DetectForeignKeyColumns(snapshot, r.Columns),
+                var vm = new ResultSetViewModel(r, sql, pageable)
+                {
+                    ForeignKeyColumns = DetectForeignKeyColumns(snapshot, r.Columns),
+                    EditTarget = snapshot is null || r.Columns.Count == 0
+                        ? null
+                        : EditabilityResolver.Resolve(snapshot, r.Columns),
+                };
+                if (vm.IsEditable) vm.CaptureOriginals();
+                return vm;
             })
             .ToList();
     }
@@ -661,6 +672,163 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 : $"{QuoteIdent(t.RefColumns[i])} = {SqlLiteral(value)}");
         }
         return $"select * from {QuoteIdent(t.RefSchema)}.{QuoteIdent(t.RefTable)}\nwhere {string.Join("\n  and ", preds)};";
+    }
+
+    // ---- Inline editing (Phase 3) ------------------------------------------------------------
+
+    /// <summary>Apply a result set's pending edits/inserts/deletes in one transaction, then reload it.</summary>
+    public async Task SaveChangesAsync(ResultSetViewModel rs)
+    {
+        if (IsBusy) return;
+        if (rs.EditTarget is not { } target || !rs.HasPendingChanges) return;
+        if (ResolveLiveSession() is not { } session) return;
+
+        var commands = BuildWriteCommands(rs, target);
+        if (commands.Count == 0) { rs.ClearPending(); return; }
+
+        IsBusy = true;
+        _executionCts = new CancellationTokenSource();
+        var ct = _executionCts.Token;
+        try
+        {
+            StatusText = $"Saving {commands.Count} change(s)…";
+            var results = await session.Executor.ExecuteWriteAsync(commands, ct);
+            if (results.FirstOrDefault(r => !r.Success) is { } failed)
+            { StatusText = $"Save failed: {failed.Error?.Message}"; return; }
+
+            await ReloadFromSourceAsync(rs, session, ct); // reflect generated keys/defaults, clears pending
+            StatusText = $"Saved {commands.Count} change(s).";
+        }
+        catch (OperationCanceledException) { StatusText = "Save cancelled."; }
+        catch (Exception ex) { StatusText = $"Save failed: {ex.Message}"; }
+        finally { _executionCts.Dispose(); _executionCts = null; IsBusy = false; }
+    }
+
+    /// <summary>Render the write statements a save would run, values inlined, wrapped in a transaction.
+    /// Null when there's nothing pending. For preview only — the real save uses parameters.</summary>
+    public string? PreviewChanges(ResultSetViewModel rs)
+    {
+        if (rs.EditTarget is not { } target || !rs.HasPendingChanges) return null;
+        var commands = BuildWriteCommands(rs, target);
+        if (commands.Count == 0) return null;
+
+        var sb = new StringBuilder();
+        sb.AppendLine("begin;");
+        foreach (var c in commands) sb.Append("  ").Append(InlineParameters(c)).AppendLine(";");
+        sb.Append("commit;");
+        return sb.ToString();
+    }
+
+    /// <summary>Substitute a command's @pN parameters with SQL literals in a single pass (so neither
+    /// overlapping names nor a value that contains "@pN" corrupts the rendered SQL).</summary>
+    private static string InlineParameters(SqlWriteCommand c)
+    {
+        var byName = c.Parameters.ToDictionary(p => p.Name, p => p.Value);
+        return System.Text.RegularExpressions.Regex.Replace(c.Sql, @"@p\d+", m =>
+            byName.TryGetValue(m.Value, out var v) ? (v is null ? "null" : SqlLiteral(v)) : m.Value);
+    }
+
+    /// <summary>Drop all pending changes by reloading the result set from its source query.</summary>
+    public async Task DiscardChangesAsync(ResultSetViewModel rs)
+    {
+        if (IsBusy || !rs.HasPendingChanges) return;
+        if (rs.SourceSql is null) { rs.ClearPending(); return; }
+        if (ResolveLiveSession() is not { } session) return;
+
+        IsBusy = true;
+        _executionCts = new CancellationTokenSource();
+        var ct = _executionCts.Token;
+        try { await ReloadFromSourceAsync(rs, session, ct); StatusText = "Changes discarded."; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { StatusText = $"Reload failed: {ex.Message}"; }
+        finally { _executionCts.Dispose(); _executionCts = null; IsBusy = false; }
+    }
+
+    /// <summary>Re-run the result set's source SELECT (first page) and replace the displayed frame.</summary>
+    private async Task ReloadFromSourceAsync(ResultSetViewModel rs, ConnectionSession session, CancellationToken ct)
+    {
+        if (rs.SourceSql is not { } sourceSql) { rs.ClearPending(); return; }
+        var refreshed = await session.Executor.ExecuteAsync(sourceSql, new QueryOptions { MaxRows = PageSize }, ct);
+        if (SelectedTab is { } tab) tab.ReplaceResults(BuildResultSets(refreshed, sourceSql, session.Snapshot));
+    }
+
+    /// <summary>Turn a result set's pending state into ordered write commands (deletes, updates, inserts).</summary>
+    private static List<SqlWriteCommand> BuildWriteCommands(ResultSetViewModel rs, EditTarget t)
+    {
+        var cmds = new List<SqlWriteCommand>();
+
+        foreach (var row in rs.DeletedRows)
+        {
+            var keys = KeyValues(t, rs.OriginalOf(row) ?? row);
+            if (keys.Count > 0) cmds.Add(DmlGenerator.Delete(t.Schema, t.Table, keys));
+        }
+        foreach (var row in rs.EditedRows)
+        {
+            if (rs.OriginalOf(row) is not { } original) continue;
+            var assignments = ChangedAssignments(rs, t, original, row);
+            var keys = KeyValues(t, original);
+            if (assignments.Count > 0 && keys.Count > 0)
+                cmds.Add(DmlGenerator.Update(t.Schema, t.Table, assignments, keys));
+        }
+        foreach (var row in rs.NewRows)
+        {
+            var values = InsertValues(rs, t, row);
+            if (values.Count > 0) cmds.Add(DmlGenerator.Insert(t.Schema, t.Table, values));
+        }
+        return cmds;
+    }
+
+    /// <summary>Primary-key predicates from the row's original (typed) values.</summary>
+    private static List<ColumnValue> KeyValues(EditTarget t, object?[] source)
+        => t.KeyColumns
+            .Where(k => k.ResultIndex < source.Length)
+            .Select(k => new ColumnValue(k.BaseColumn, source[k.ResultIndex]))
+            .ToList();
+
+    /// <summary>Assignments for columns whose value differs from the original (coerced to the column type).</summary>
+    private static List<ColumnValue> ChangedAssignments(ResultSetViewModel rs, EditTarget t, object?[] original, object?[] row)
+    {
+        var list = new List<ColumnValue>();
+        foreach (var c in t.Columns)
+        {
+            if (c.ResultIndex >= row.Length || c.ResultIndex >= original.Length) continue;
+            if (Equals(row[c.ResultIndex], original[c.ResultIndex])) continue;
+            list.Add(new ColumnValue(c.BaseColumn, Coerce(row[c.ResultIndex], rs.Columns[c.ResultIndex].ClrType)));
+        }
+        return list;
+    }
+
+    /// <summary>Insert values for the user-filled (non-null) columns; null cells are left to DB defaults.</summary>
+    private static List<ColumnValue> InsertValues(ResultSetViewModel rs, EditTarget t, object?[] row)
+    {
+        var list = new List<ColumnValue>();
+        foreach (var c in t.Columns)
+        {
+            if (c.ResultIndex >= row.Length) continue;
+            var value = row[c.ResultIndex];
+            if (value is null) continue; // let serial/defaults fill it
+            list.Add(new ColumnValue(c.BaseColumn, Coerce(value, rs.Columns[c.ResultIndex].ClrType)));
+        }
+        return list;
+    }
+
+    /// <summary>Coerce a grid string back to the column's CLR type; empty ⇒ NULL. Falls back to the raw
+    /// string (letting the DB reject it) when parsing fails.</summary>
+    private static object? Coerce(object? value, Type clrType)
+    {
+        if (value is not string s) return value; // unchanged cells keep their typed value
+        if (s.Length == 0) return null;
+        var t = Nullable.GetUnderlyingType(clrType) ?? clrType;
+        try
+        {
+            if (t == typeof(string)) return s;
+            if (t == typeof(Guid)) return Guid.Parse(s);
+            if (t == typeof(bool)) return bool.Parse(s);
+            if (t.IsEnum) return Enum.Parse(t, s, ignoreCase: true);
+            // Dates: accept the display pattern (dd.MM.yyyy HH:mm:ss) the user sees, else a lenient parse.
+            if (CellFormat.TryParseDate(s, t, out var date)) return date;
+            return Convert.ChangeType(s, t, CultureInfo.InvariantCulture);
+        }
+        catch { return s; }
     }
 
     private static string QuoteIdent(string ident) => "\"" + ident.Replace("\"", "\"\"") + "\"";

@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Squirrel.Core.Data;
+using Squirrel.Core.Schema;
 
 namespace Squirrel.App.ViewModels;
 
@@ -79,9 +81,106 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// <summary>Append a freshly-fetched page and update whether more remain.</summary>
     public void AppendPage(IReadOnlyList<object?[]> rows, bool hasMore)
     {
-        foreach (var row in rows) Rows.Add(row);
+        foreach (var row in rows)
+        {
+            Rows.Add(row);
+            if (IsEditable) _originals[row] = (object?[])row.Clone();
+        }
         HasMore = hasMore;
         OnPropertyChanged(nameof(Loaded));
         OnPropertyChanged(nameof(FooterText));
+    }
+
+    // ---- Inline editing (Phase 3) ------------------------------------------------------------
+
+    /// <summary>The single table this result set edits, plus per-column base name + PK flag. Null when
+    /// the result isn't a single-table select over a PK'd table (then the grid stays read-only).</summary>
+    public EditTarget? EditTarget { get; init; }
+
+    /// <summary>True when rows can be edited/added/deleted (a detectable single table + PK).</summary>
+    public bool IsEditable => EditTarget is not null;
+
+    // Pending change tracking, keyed by row-array reference (rows are plain object?[] with no identity).
+    private readonly Dictionary<object?[], object?[]> _originals = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<object?[]> _edited = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<object?[]> _newRows = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<object?[]> _deleted = new(ReferenceEqualityComparer.Instance);
+
+    public bool HasPendingChanges => _edited.Count + _newRows.Count + _deleted.Count > 0;
+    public int PendingCount => _edited.Count + _newRows.Count + _deleted.Count;
+    public string PendingText => PendingCount == 1 ? "1 pending change" : $"{PendingCount} pending changes";
+
+    /// <summary>Snapshot the loaded rows' original values (call once after EditTarget is assigned).</summary>
+    public void CaptureOriginals()
+    {
+        foreach (var r in Rows) _originals[r] = (object?[])r.Clone();
+    }
+
+    /// <summary>The stored original values for a row (pre-edit), or null for a new/untracked row.</summary>
+    public object?[]? OriginalOf(object?[] row) => _originals.TryGetValue(row, out var o) ? o : null;
+
+    public bool IsNewRow(object?[] row) => _newRows.Contains(row);
+    public bool IsRowDeleted(object?[] row) => _deleted.Contains(row);
+    public bool IsRowEdited(object?[] row) => _edited.Contains(row);
+
+    public IReadOnlyCollection<object?[]> EditedRows => _edited;
+    public IReadOnlyCollection<object?[]> NewRows => _newRows;
+    public IReadOnlyCollection<object?[]> DeletedRows => _deleted;
+
+    /// <summary>Record that a cell in <paramref name="row"/> changed (new rows fold into their INSERT).</summary>
+    public void MarkEdited(object?[] row)
+    {
+        if (!IsEditable) return;
+        if (!_newRows.Contains(row) && !_deleted.Contains(row)) _edited.Add(row);
+        RaisePending();
+    }
+
+    /// <summary>Append a blank row to be INSERTed on save; returns it so the grid can focus it.</summary>
+    public object?[] AddRow()
+    {
+        var row = new object?[Columns.Count];
+        Rows.Add(row);
+        _newRows.Add(row);
+        OnPropertyChanged(nameof(Loaded));
+        OnPropertyChanged(nameof(FooterText));
+        RaisePending();
+        return row;
+    }
+
+    /// <summary>Toggle a row's pending-delete mark. The row stays visible (styled) and is only removed
+    /// from the DB on save; a second toggle un-marks it. A not-yet-saved new row is dropped outright.</summary>
+    public void ToggleDelete(object?[] row)
+    {
+        if (_newRows.Contains(row))
+        {
+            _newRows.Remove(row);
+            Rows.Remove(row);
+            OnPropertyChanged(nameof(Loaded));
+            OnPropertyChanged(nameof(FooterText));
+            RaisePending();
+            return;
+        }
+        if (!_deleted.Remove(row))   // not marked → mark it (delete supersedes pending edits)
+        {
+            _deleted.Add(row);
+            _edited.Remove(row);
+        }
+        RaisePending();
+    }
+
+    /// <summary>Clear all pending state after a successful save (fresh rows are re-loaded by the caller).</summary>
+    public void ClearPending()
+    {
+        _edited.Clear();
+        _newRows.Clear();
+        _deleted.Clear();
+        RaisePending();
+    }
+
+    private void RaisePending()
+    {
+        OnPropertyChanged(nameof(HasPendingChanges));
+        OnPropertyChanged(nameof(PendingCount));
+        OnPropertyChanged(nameof(PendingText));
     }
 }

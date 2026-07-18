@@ -8,6 +8,8 @@ using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.VisualTree;
+using Squirrel.App.Formatting;
 using Squirrel.App.ViewModels;
 using Path = Avalonia.Controls.Shapes.Path;
 
@@ -45,7 +47,34 @@ public sealed class ResultView : UserControl
     /// <summary>Invoked when the back bar's button is clicked.</summary>
     public Action? GoBack { get; set; }
 
+    /// <summary>Invoked to commit a result set's pending edits (the [Save changes] button).</summary>
+    public Func<ResultSetViewModel, Task>? SaveChanges { get; set; }
+
+    /// <summary>Invoked to discard a result set's pending edits (the [Discard] button).</summary>
+    public Func<ResultSetViewModel, Task>? DiscardChanges { get; set; }
+
+    /// <summary>Invoked to preview the SQL a save would run (the [Preview SQL] button).</summary>
+    public Action<ResultSetViewModel>? PreviewSql { get; set; }
+
     private static readonly IBrush LinkBrush = new SolidColorBrush(Color.FromRgb(0x4D, 0x9B, 0xFF));
+    // Green for new/edited rows, red for rows pending deletion (kept visible until save).
+    private static readonly IBrush ChangedRowBrush = new SolidColorBrush(Color.FromArgb(0x33, 0x3F, 0xB9, 0x50));
+    private static readonly IBrush DeletedRowBrush = new SolidColorBrush(Color.FromArgb(0x33, 0xE0, 0x40, 0x40));
+
+    private static IBrush RowBrush(ResultSetViewModel result, object?[]? row)
+    {
+        if (row is null) return Brushes.Transparent;
+        if (result.IsRowDeleted(row)) return DeletedRowBrush;
+        if (result.IsNewRow(row) || result.IsRowEdited(row)) return ChangedRowBrush;
+        return Brushes.Transparent;
+    }
+
+    /// <summary>Re-tint the currently-realized rows to reflect pending edit/new/delete state.</summary>
+    private static void RefreshRowColors(DataGrid grid, ResultSetViewModel result)
+    {
+        foreach (var dgr in grid.GetVisualDescendants().OfType<DataGridRow>())
+            dgr.Background = RowBrush(result, dgr.DataContext as object?[]);
+    }
 
     private void Rebuild()
     {
@@ -126,7 +155,8 @@ public sealed class ResultView : UserControl
             return new TextBlock { Text = result.Message ?? "Statement executed.", Margin = new Thickness(8) };
 
         var grid = BuildGrid(result);
-        return result.IsPageable ? WithFooter(grid, result) : grid;
+        Control content = result.IsPageable ? WithFooter(grid, result) : grid;
+        return result.IsEditable ? WithEditToolbar(content, grid, result) : content;
     }
 
     private DataGrid BuildGrid(ResultSetViewModel result)
@@ -134,19 +164,121 @@ public sealed class ResultView : UserControl
         var grid = new DataGrid
         {
             AutoGenerateColumns = false,
-            IsReadOnly = true,
+            IsReadOnly = !result.IsEditable,
             CanUserResizeColumns = true,
             CanUserReorderColumns = true,
             GridLinesVisibility = DataGridGridLinesVisibility.All,
             HeadersVisibility = DataGridHeadersVisibility.All, // row-number gutter + column headers
         };
-        grid.LoadingRow += (_, e) => e.Row.Header = (e.Row.Index + 1).ToString();
+        grid.LoadingRow += (_, e) =>
+        {
+            e.Row.Header = (e.Row.Index + 1).ToString();
+            if (result.IsEditable) e.Row.Background = RowBrush(result, e.Row.DataContext as object?[]);
+        };
         for (var i = 0; i < result.Columns.Count; i++)
-            grid.Columns.Add(result.ForeignKeyColumns.Contains(i)
-                ? ForeignKeyColumn(result, i)
-                : new DataGridTextColumn { Header = result.Columns[i].Name, Binding = new Binding($"[{i}]") });
+        {
+            // FK columns keep their (read-only) jump-icon template; other columns are editable text
+            // (an explicit template-column editor — indexer-bound DataGridTextColumns don't edit reliably).
+            if (result.ForeignKeyColumns.Contains(i))
+                grid.Columns.Add(ForeignKeyColumn(result, i));
+            else if (result.IsEditable)
+                grid.Columns.Add(EditableColumn(result, i));
+            else
+                grid.Columns.Add(new DataGridTextColumn
+                {
+                    Header = result.Columns[i].Name,
+                    Binding = new Binding($"[{i}]") { Converter = CellDisplayConverter.Instance },
+                });
+        }
         grid.ItemsSource = result.Rows; // ObservableCollection → paged rows append without a rebuild
+
+        if (result.IsEditable)
+            grid.CellEditEnding += (_, e) =>
+            {
+                if (e.EditAction != DataGridEditAction.Commit) return;
+                if (e.Row.DataContext is not object?[] row || e.Column.Tag is not int idx) return;
+                if (e.EditingElement is TextBox tb && idx < row.Length) row[idx] = tb.Text;
+                result.MarkEdited(row);
+                e.Row.Background = RowBrush(result, row); // tint the edited row immediately
+            };
         return grid;
+    }
+
+    /// <summary>An editable column: a TextBlock display cell + a TextBox editing cell (shown on
+    /// double-click / F2). The committed text is written back to the row in <c>CellEditEnding</c>.</summary>
+    private static DataGridColumn EditableColumn(ResultSetViewModel result, int index)
+        => new DataGridTemplateColumn
+        {
+            Header = result.Columns[index].Name,
+            Tag = index, // column index, read back in CellEditEnding
+            CellTemplate = new FuncDataTemplate<object?[]>((row, _) => new TextBlock
+            {
+                Text = CellText(row, index),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(4, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            }),
+            CellEditingTemplate = new FuncDataTemplate<object?[]>((row, _) => new TextBox
+            {
+                Text = CellText(row, index),
+                Padding = new Thickness(3, 1),
+                BorderThickness = new Thickness(0),
+                VerticalContentAlignment = VerticalAlignment.Center,
+            }),
+        };
+
+    private static string CellText(object?[]? row, int index)
+        => row is not null && index < row.Length ? CellFormat.Display(row[index]) : "";
+
+    /// <summary>Add an edit toolbar above the grid: Add row / Delete row, and — when there are pending
+    /// changes — a count plus Save / Discard.</summary>
+    private Control WithEditToolbar(Control content, DataGrid grid, ResultSetViewModel result)
+    {
+        var add = new Button { Content = "+ Add row", Margin = new Thickness(0, 0, 6, 0) };
+        add.Click += (_, _) => { var row = result.AddRow(); grid.ScrollIntoView(row, null); RefreshRowColors(grid, result); };
+
+        var delete = new Button { Content = "Delete row", Margin = new Thickness(0, 0, 12, 0) };
+        delete.Click += (_, _) => { if (grid.SelectedItem is object?[] row) { result.ToggleDelete(row); RefreshRowColors(grid, result); } };
+
+        var pending = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+        pending.Bind(TextBlock.TextProperty, new Binding(nameof(ResultSetViewModel.PendingText)));
+
+        var preview = new Button { Content = "Preview SQL", Margin = new Thickness(0, 0, 6, 0) };
+        preview.Click += (_, _) => PreviewSql?.Invoke(result);
+
+        var save = new Button { Content = "Save changes", Margin = new Thickness(0, 0, 6, 0) };
+        save.Click += async (_, _) => { if (SaveChanges is { } f) await f(result); };
+
+        var discard = new Button { Content = "Discard" };
+        discard.Click += async (_, _) => { if (DiscardChanges is { } f) await f(result); };
+
+        // The pending group only shows once there's something to save.
+        var pendingGroup = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        pendingGroup.Children.Add(pending);
+        pendingGroup.Children.Add(preview);
+        pendingGroup.Children.Add(save);
+        pendingGroup.Children.Add(discard);
+        pendingGroup.Bind(IsVisibleProperty, new Binding(nameof(ResultSetViewModel.HasPendingChanges)));
+
+        var bar = new StackPanel { Orientation = Orientation.Horizontal };
+        bar.Children.Add(add);
+        bar.Children.Add(delete);
+        bar.Children.Add(pendingGroup);
+
+        var toolbar = new Border
+        {
+            DataContext = result,
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0x33, 0x88, 0x88, 0x88)),
+            Padding = new Thickness(6, 4),
+            Child = bar,
+        };
+        DockPanel.SetDock(toolbar, Dock.Top);
+
+        var panel = new DockPanel();
+        panel.Children.Add(toolbar);
+        panel.Children.Add(content);
+        return panel;
     }
 
     /// <summary>A foreign-key column: the value shows as plain text with a clickable jump-icon on the
@@ -162,7 +294,7 @@ public sealed class ResultView : UserControl
 
                 var value = new TextBlock
                 {
-                    Text = row.Length > index ? row[index]?.ToString() ?? "" : "",
+                    Text = CellText(row, index),
                     VerticalAlignment = VerticalAlignment.Center,
                     TextTrimming = TextTrimming.CharacterEllipsis,
                     Margin = new Thickness(4, 0, 4, 0),

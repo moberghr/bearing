@@ -47,6 +47,22 @@ public partial class MainWindow : Window
             Vm?.SelectedTab?.GoBack();
             RebuildResults(Vm?.SelectedTab);
         };
+        ResultsView.SaveChanges = async rs =>
+        {
+            if (Vm is null) return;
+            await Vm.SaveChangesAsync(rs); // applies in one tx, then reloads the frame
+            RebuildResults(Vm.SelectedTab);
+        };
+        ResultsView.DiscardChanges = async rs =>
+        {
+            if (Vm is null) return;
+            await Vm.DiscardChangesAsync(rs); // reloads from source, dropping edits
+            RebuildResults(Vm.SelectedTab);
+        };
+        ResultsView.PreviewSql = rs =>
+        {
+            if (Vm?.PreviewChanges(rs) is { } sql) ShowSqlPreview(sql);
+        };
 
         // Translucent selection so syntax-highlighted glyphs stay readable through it — the opaque
         // default paints solid blue over the colored text.
@@ -386,5 +402,38 @@ public partial class MainWindow : Window
     {
         ResultsView.CanGoBack = tab?.CanGoBack ?? false;
         ResultsView.Results = tab?.Results; // assignment triggers the rebuild (reads CanGoBack)
+    }
+
+    /// <summary>Show the generated write SQL in a read-only, monospace preview window (selectable to copy).</summary>
+    private void ShowSqlPreview(string sql)
+    {
+        var box = new AvaloniaEdit.TextEditor
+        {
+            Text = sql,
+            IsReadOnly = true,
+            FontFamily = new FontFamily("Cascadia Code,Cascadia Mono,Consolas,Menlo,monospace"),
+            FontSize = 13,
+            Margin = new Thickness(8),
+            ShowLineNumbers = false,
+            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+        };
+
+        var win = new Window
+        {
+            Title = "SQL preview — changes to save",
+            Width = 720,
+            Height = 420,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+        };
+        var close = new Button { Content = "Close", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right, Margin = new Thickness(8, 0, 8, 8) };
+        close.Click += (_, _) => win.Close();
+        DockPanel.SetDock(close, Dock.Bottom);
+
+        var panel = new DockPanel();
+        panel.Children.Add(close);
+        panel.Children.Add(box);
+        win.Content = panel;
+        win.Show(this);
     }
 }

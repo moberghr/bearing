@@ -87,6 +87,9 @@ public sealed partial class EditorTabViewModel : ObservableObject
         OnPropertyChanged(nameof(CanGoBack));
     }
 
+    /// <summary>Swap the current result frame (e.g. after a save/discard refresh) without touching history.</summary>
+    public void ReplaceResults(IReadOnlyList<ResultSetViewModel> results) => Results = results;
+
     [ObservableProperty] private string _header = "";
 
     /// <summary>Scratch display label ("Scratch N" or a user rename); ignored once backed by a file.</summary>

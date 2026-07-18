@@ -163,6 +163,66 @@ public class WorkspaceFlowTests : IDisposable
         await vm.DisposeSessionsAsync();
     }
 
+    [SkippableFact]
+    public async Task Editable_grid_saves_insert_update_delete_in_one_batch()
+    {
+        Skip.IfNot(await Reachable(), "No PostgreSQL reachable for integration test.");
+
+        // Create + seed a test table via a separate connection BEFORE the VM connects, so it's in the
+        // schema snapshot (editability is resolved from the snapshot).
+        var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
+        var info = new ConnectionInfo { Id = Guid.NewGuid(), Name = "setup", ProviderId = PostgresProvider.ProviderId,
+            Host = Host, Port = Port, Database = Db, User = User };
+        await using var setup = provider.CreateConnectionFactory(info, Password);
+        var raw = provider.CreateQueryExecutor(setup);
+        const string tbl = "squirrel_edit_test";
+        await raw.ExecuteAsync($"drop table if exists {tbl}; create table {tbl} (id serial primary key, name text, qty int);",
+            new QueryOptions(), CancellationToken.None);
+        await raw.ExecuteAsync($"insert into {tbl} (name, qty) values ('one', 1), ('two', 2);", new QueryOptions(), CancellationToken.None);
+        try
+        {
+            var vm = NewVm();
+            await vm.InitializeAsync(Path.Combine(_root, "editproj"));
+            await vm.SeedDemoConnectionAsync(Host, Port, Db, User, Password);
+            await WaitForSnapshot(vm);
+
+            vm.SelectedTab!.Text = $"select id, name, qty from {tbl} order by id;";
+            await vm.ExecuteAsync(vm.SelectedTab.Text);
+            var rs = vm.SelectedTab.LastResult!;
+            Assert.True(rs.IsEditable, vm.StatusText);
+            Assert.Equal(2, rs.Rows.Count);
+
+            var row0 = rs.Rows[0]; // (1, one, 1)
+            var row1 = rs.Rows[1]; // (2, two, 2)
+
+            row0[1] = "one-edited"; rs.MarkEdited(row0);      // UPDATE
+            var added = rs.AddRow(); added[1] = "three"; added[2] = "3"; // INSERT (id serial → left null)
+            rs.ToggleDelete(row1);                             // DELETE (row kept visible until save)
+            Assert.Equal(3, rs.PendingCount);
+            Assert.True(rs.IsRowDeleted(row1));
+            Assert.Contains(row1, rs.Rows);                    // still present, just marked
+
+            await vm.SaveChangesAsync(rs);
+            var reloaded = vm.SelectedTab.LastResult!;      // save swaps in a fresh, reloaded result set
+            Assert.False(reloaded.HasPendingChanges, vm.StatusText);
+            Assert.Equal(2, reloaded.Rows.Count);           // 2 original − 1 delete + 1 insert
+
+            // Verify against an independent read: edit applied, delete gone, insert present.
+            var check = await raw.ExecuteAsync($"select name, qty from {tbl} order by id;", new QueryOptions(), CancellationToken.None);
+            var names = check[0].Rows.Select(r => (string?)r[0]).ToList();
+            Assert.Equal(2, check[0].Rows.Count);
+            Assert.Contains("one-edited", names);
+            Assert.DoesNotContain("two", names);
+            Assert.Contains("three", names);
+
+            await vm.DisposeSessionsAsync();
+        }
+        finally
+        {
+            await raw.ExecuteAsync($"drop table if exists {tbl};", new QueryOptions(), CancellationToken.None);
+        }
+    }
+
     [Fact]
     public async Task Rename_scratch_and_saved_script()
     {
