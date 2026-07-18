@@ -94,6 +94,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public string? ScriptsDirectory => _project?.ScriptsDirectory;
     public string? CurrentProjectName => _project?.Manifest.Name;
 
+    /// <summary>Environment hex of the selected tab's connection (null = untagged/none). Drives the
+    /// app-wide <c>ConnectionBrush</c>; the view recolors the accent when this changes.</summary>
+    public string? ActiveConnectionColor => SelectedTab?.ConnectionColor;
+
     /// <summary>Two-way binding target for the per-tab connection picker.</summary>
     public ConnectionInfo? SelectedTabConnection
     {
@@ -283,6 +287,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     partial void OnSelectedTabChanged(EditorTabViewModel? value)
     {
         OnPropertyChanged(nameof(SelectedTabConnection));
+        OnPropertyChanged(nameof(ActiveConnectionColor));
         IsConnected = value?.ConnectionId is { } id && _sessions.TryGet(id) is not null;
         WarmConnection(value);
     }
@@ -393,6 +398,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (ReferenceEquals(tab, SelectedTab))
         {
             OnPropertyChanged(nameof(SelectedTabConnection));
+            OnPropertyChanged(nameof(ActiveConnectionColor));
             IsConnected = id is { } cid && _sessions.TryGet(cid) is not null;
             WarmConnection(tab);
         }
@@ -492,7 +498,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             Name = $"{database} (local)",
             ProviderId = "postgres",
             Host = host, Port = port, Database = database, User = user,
-            Environment = "local", EnvironmentColor = "#3FB950",
+            Environment = "local", EnvironmentColor = "#7AA89F",
         };
         await AddOrUpdateConnectionAsync(conn, password);
         DefaultConnectionId = conn.Id;

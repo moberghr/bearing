@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  html,body{margin:0;height:100%;background:#16161D;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+  *{box-sizing:border-box}
+  a{color:#7E9CD8;text-decoration:none}
+  a:hover{color:#9CB8EA}
+  .rail-btn:hover{background:#20202A}
+  .menu-row:hover{background:#223249}
+  .drop-row:hover{background:#20202A}
+</style>
+</helmet>
+<div style="position:relative;width:100vw;height:100vh;display:flex;flex-direction:column;background:#1F1F28;color:#DCD7BA;font-size:13px;overflow:hidden">
+
+  <!-- title bar -->
+  <div style="height:36px;background:#16161D;border-bottom:1px solid #2A2A37;display:flex;align-items:center;padding:0 12px;flex:none;position:relative;z-index:5">
+    <div style="display:flex;gap:8px"><span style="width:12px;height:12px;border-radius:50%;background:#E46876"></span><span style="width:12px;height:12px;border-radius:50%;background:#E6C384"></span><span style="width:12px;height:12px;border-radius:50%;background:#98BB6C"></span></div>
+    <div style="flex:1;text-align:center;font-size:12.5px;color:#727169;font-weight:500;display:flex;align-items:center;justify-content:center;gap:7px"><span style="color:#FF9E3B">🐿</span> Squirrel — analytics</div>
+    <div style="width:52px;text-align:right;color:#54546D;font-size:11px" title="Press Alt for menu">⌥</div>
+  </div>
+
+  <!-- toolbar -->
+  <div style="height:46px;background:#181820;border-bottom:1px solid #2A2A37;display:flex;align-items:center;gap:8px;padding:0 12px;flex:none;position:relative;z-index:20">
+    <div class="drop-row" style="display:flex;align-items:center;gap:8px;background:#1F1F28;border:1px solid #363646;border-radius:7px;padding:6px 10px;min-width:120px;cursor:pointer"><span style="color:#727169;font-size:11px;text-transform:uppercase;letter-spacing:.06em">Proj</span><span style="flex:1;color:#DCD7BA;font-weight:500">analytics</span><span style="color:#6A6A82">▾</span></div>
+    <div style="width:1px;height:22px;background:#2A2A37;margin:0 2px"></div>
+    <div class="drop-row" onClick="{{ openServer }}" style="display:flex;align-items:center;gap:7px;background:#1F1F28;border-radius:7px;padding:6px 10px;cursor:pointer;border:1px solid {{ serverBorder }}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7E9CD8" stroke-width="2"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><line x1="7" y1="7.5" x2="7.01" y2="7.5"/><line x1="7" y1="16.5" x2="7.01" y2="16.5"/></svg><span style="color:#DCD7BA;font-weight:500">{{ connHost }}</span><span style="color:#6A6A82">▾</span></div>
+    <span style="color:#54546D">›</span>
+    <div class="drop-row" onClick="{{ openDb }}" style="display:flex;align-items:center;gap:7px;background:#1F1F28;border-radius:7px;padding:6px 10px;cursor:pointer;border:1px solid {{ dbBorder }}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#98BB6C" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg><span style="color:#DCD7BA;font-weight:600">{{ connDb }}</span><span style="width:7px;height:7px;border-radius:50%;background:{{ connColor }}"></span><span style="color:#6A6A82">▾</span></div>
+    <button title="Run  ⌘⏎" style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;background:transparent;color:#98BB6C;border:1px solid #363646;border-radius:7px;cursor:pointer;font-size:11px;margin-left:2px">▶</button>
+    <div style="flex:1"></div>
+    <span style="color:#54546D;font-size:11.5px;display:flex;align-items:center;gap:6px"><kbd style="background:#16161D;border:1px solid #2A2A37;border-radius:4px;padding:1px 6px;font-family:ui-monospace,monospace;font-size:10.5px;color:#727169">Alt</kbd> menu</span>
+    <button onClick="{{ enterFocus }}" title="Focus mode  ⌃⌘F" style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;background:transparent;color:#727169;border:1px solid #363646;border-radius:7px;cursor:pointer;font-size:14px">⤢</button>
+  </div>
+
+  <div style="flex:1;display:flex;min-height:0">
+    <!-- left icon rail -->
+    <div style="width:52px;flex:none;background:#16161D;border-right:1px solid #2A2A37;display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:6px">
+      <div class="rail-btn" title="Connections" style="width:36px;height:36px;border-radius:9px;color:#727169;display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer">🖧</div>
+      <div class="rail-btn" onClick="{{ goSchema }}" title="Schema" style="width:36px;height:36px;border-radius:9px;background:{{ schemaBg }};color:{{ schemaFg }};display:flex;align-items:center;justify-content:center;font-size:17px;cursor:pointer">🗄</div>
+      <div class="rail-btn" onClick="{{ goScripts }}" title="Scripts" style="width:36px;height:36px;border-radius:9px;background:{{ scriptsBg }};color:{{ scriptsFg }};display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer">📄</div>
+      <div class="rail-btn" onClick="{{ goHistory }}" title="History" style="width:36px;height:36px;border-radius:9px;background:{{ historyBg }};color:{{ historyFg }};display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer">🕘</div>
+      <div style="flex:1"></div>
+      <div class="rail-btn" title="Settings" style="width:36px;height:36px;border-radius:9px;color:#727169;display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer">⚙</div>
+    </div>
+
+    <!-- SCHEMA side panel -->
+    <sc-if value="{{ isSchema }}" hint-placeholder-val="{{ true }}">
+    <div style="width:262px;flex:none;background:#181820;border-right:1px solid #2A2A37;display:flex;flex-direction:column;min-height:0">
+      <div style="padding:11px 13px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#727169;font-weight:700;display:flex;align-items:center;justify-content:space-between">Schema <span style="color:#54546D;font-size:11px;text-transform:none;letter-spacing:0">⌕</span></div>
+      <div style="flex:1;overflow:hidden;padding:2px 6px;font-family:ui-monospace,monospace;font-size:12.5px;line-height:1.95;color:#C8C093">
+        <div style="display:flex;align-items:center;gap:7px;padding-left:4px"><span style="color:#54546D">▾</span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7E9CD8" stroke-width="2" style="flex:none"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><line x1="7" y1="7.5" x2="7.01" y2="7.5"/><line x1="7" y1="16.5" x2="7.01" y2="16.5"/></svg><span style="color:#DCD7BA">{{ connHost }}</span><span style="width:7px;height:7px;border-radius:50%;background:{{ connColor }};margin-left:auto;margin-right:6px"></span></div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:20px"><span style="color:#54546D">▾</span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#98BB6C" stroke-width="2" style="flex:none"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg><b style="color:#DCD7BA">{{ connDb }}</b><span style="background:#2A2A37;color:#98BB6C;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px">DEFAULT</span></div>
+        <div style="padding-left:44px;color:#9d967f">▾ public</div>
+        <div style="display:flex;align-items:center;gap:6px;padding-left:56px;color:#9d967f"><span style="color:#54546D">▸</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6A9589" stroke-width="2" style="flex:none"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9.5h18M9 4v16"/></svg>actor</div>
+        <div style="display:flex;align-items:center;gap:6px;padding-left:56px;background:#223249;border-radius:5px;color:#DCD7BA"><span style="color:#54546D">▾</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#7AA89F" stroke-width="2" style="flex:none"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9.5h18M9 4v16"/></svg>film</div>
+        <div style="padding-left:78px;display:flex;color:#C8C093"><span style="flex:1">film_id</span><span style="color:#FF9E3B;font-size:10px;font-weight:700;margin-right:6px">PK</span><span style="color:#727169">int4</span></div>
+        <div style="padding-left:78px;display:flex;color:#C8C093"><span style="flex:1">title</span><span style="color:#727169">varchar</span></div>
+        <div style="padding-left:78px;display:flex;color:#C8C093"><span style="flex:1">language_id</span><span style="color:#957FB8;font-size:10px;font-weight:700;margin-right:6px">FK</span><span style="color:#727169">int2</span></div>
+        <div style="padding-left:78px;display:flex;color:#C8C093"><span style="flex:1">rental_rate</span><span style="color:#727169">numeric</span></div>
+        <div style="padding-left:78px;color:#727169">▸ Indexes (3)</div>
+        <div style="display:flex;align-items:center;gap:6px;padding-left:56px;color:#9d967f"><span style="color:#54546D">▸</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6A9589" stroke-width="2" style="flex:none"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9.5h18M9 4v16"/></svg>rental</div>
+        <div style="display:flex;align-items:center;gap:6px;padding-left:56px;color:#9d967f"><span style="color:#54546D">▸</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6A9589" stroke-width="2" style="flex:none"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9.5h18M9 4v16"/></svg>inventory</div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- SCRIPTS side panel: folders -->
+    <sc-if value="{{ isScripts }}" hint-placeholder-val="{{ false }}">
+    <div style="width:262px;flex:none;background:#181820;border-right:1px solid #2A2A37;display:flex;flex-direction:column;min-height:0">
+      <div style="padding:11px 13px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#727169;font-weight:700;display:flex;align-items:center;justify-content:space-between">Scripts <span style="display:flex;gap:10px;color:#54546D;font-size:13px;text-transform:none;letter-spacing:0"><span title="New folder">🗀</span><span title="New script">＋</span></span></div>
+      <div style="padding:0 10px 8px"><div style="display:flex;align-items:center;gap:6px;background:#16161D;border:1px solid #2A2A37;border-radius:6px;padding:5px 8px;color:#54546D;font-size:12px">⌕ Filter scripts…</div></div>
+      <div style="flex:1;overflow:hidden;padding:2px 6px;font-size:12.5px;line-height:2.05;color:#C8C093">
+        <div style="display:flex;align-items:center;gap:7px;padding-left:4px;color:#DCD7BA"><span style="color:#54546D">▾</span><span style="color:#E6C384">🗀</span>Reports<span style="margin-left:auto;margin-right:8px;color:#54546D;font-size:11px">4</span></div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:30px"><span style="color:#727169">📄</span>monthly_rentals.sql</div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:30px;background:#223249;border-radius:5px;color:#DCD7BA"><span style="color:#FF9E3B">📄</span>top_films.sql<span style="margin-left:auto;margin-right:8px;color:#FF9E3B;font-size:15px;line-height:0">•</span></div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:30px"><span style="color:#727169">📄</span>revenue_by_store.sql</div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:30px"><span style="color:#727169">📄</span>customer_ltv.sql</div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:4px;color:#DCD7BA;margin-top:2px"><span style="color:#54546D">▾</span><span style="color:#E6C384">🗀</span>Migrations<span style="margin-left:auto;margin-right:8px;color:#54546D;font-size:11px">2</span></div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:30px"><span style="color:#727169">📄</span>001_add_indexes.sql</div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:30px"><span style="color:#727169">📄</span>002_seed_data.sql</div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:4px;color:#9d967f;margin-top:2px"><span style="color:#54546D">▸</span><span style="color:#E6C384">🗀</span>Ad-hoc<span style="margin-left:auto;margin-right:8px;color:#54546D;font-size:11px">11</span></div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:4px;margin-top:2px"><span style="width:11px"></span><span style="color:#727169">📄</span>scratch.sql</div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- HISTORY side panel -->
+    <sc-if value="{{ isHistory }}" hint-placeholder-val="{{ false }}">
+    <div style="width:262px;flex:none;background:#181820;border-right:1px solid #2A2A37;display:flex;flex-direction:column;min-height:0">
+      <div style="padding:11px 13px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#727169;font-weight:700;display:flex;align-items:center;justify-content:space-between">History <span style="color:#54546D;font-size:11px;text-transform:none;letter-spacing:0">⌕</span></div>
+      <div style="padding:0 10px 8px;display:flex;gap:6px">
+        <span style="padding:3px 9px;border-radius:6px;background:#2A2A37;color:#DCD7BA;font-size:11px;font-weight:600">All</span>
+        <span style="padding:3px 9px;border-radius:6px;color:#727169;font-size:11px">✓ ok</span>
+        <span style="padding:3px 9px;border-radius:6px;color:#727169;font-size:11px">✕ error</span>
+      </div>
+      <div style="flex:1;overflow:hidden;font-size:12px;color:#9d967f">
+        <div style="padding:6px 13px 4px;color:#54546D;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Today</div>
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:#223249;color:#DCD7BA;border-left:2px solid #FF9E3B"><span style="width:6px;height:6px;border-radius:50%;background:#E46876;flex:none"></span><span style="flex:1;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">select f.title, count(*)…</span><span style="color:#54546D;font-size:11px">14:22</span></div>
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px"><span style="width:6px;height:6px;border-radius:50%;background:#E46876;flex:none"></span><span style="flex:1;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">select * from film limit…</span><span style="color:#54546D;font-size:11px">14:20</span></div>
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;color:#C34043"><span style="width:6px;height:6px;border-radius:50%;background:#7AA89F;flex:none"></span><span style="flex:1;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">✕ update rental set…</span><span style="color:#54546D;font-size:11px">13:58</span></div>
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px"><span style="width:6px;height:6px;border-radius:50%;background:#E6C384;flex:none"></span><span style="flex:1;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">explain analyze select…</span><span style="color:#54546D;font-size:11px">11:04</span></div>
+        <div style="padding:6px 13px 4px;color:#54546D;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Yesterday</div>
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px"><span style="width:6px;height:6px;border-radius:50%;background:#7AA89F;flex:none"></span><span style="flex:1;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">select store_id, sum…</span><span style="color:#54546D;font-size:11px">18:31</span></div>
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px"><span style="width:6px;height:6px;border-radius:50%;background:#E6C384;flex:none"></span><span style="flex:1;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">select count(*) from…</span><span style="color:#54546D;font-size:11px">16:12</span></div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- editor column (shared) -->
+    <div style="flex:1;display:flex;flex-direction:column;min-width:0;background:#1F1F28">
+      <div style="height:40px;flex:none;display:flex;align-items:flex-end;background:#181820;border-bottom:1px solid #2A2A37;padding:0 6px;gap:2px">
+        <div style="display:flex;align-items:center;gap:9px;padding:8px 12px;background:#1F1F28;border:1px solid #2A2A37;border-top:2px solid {{ connColor }};border-bottom:none;border-radius:7px 7px 0 0;margin-bottom:-1px"><span style="color:#DCD7BA;font-weight:600">top_films.sql</span><span style="color:#FF9E3B;font-size:15px;line-height:0" title="unsaved">•</span><span style="display:flex;align-items:center;gap:5px"><span style="width:7px;height:7px;border-radius:50%;background:{{ connColor }}"></span><span style="font-size:11px;font-weight:600;color:{{ connColor }}">{{ connName }}</span></span><span style="color:#727169;margin-left:2px">✕</span></div>
+        <div style="display:flex;align-items:center;gap:9px;padding:8px 12px;color:#9d967f">scratch.sql<span style="display:flex;align-items:center;gap:5px"><span style="width:7px;height:7px;border-radius:50%;background:#7AA89F"></span><span style="font-size:11px;font-weight:600;color:#7AA89F">local</span></span><span style="color:#727169">✕</span></div>
+        <div style="padding:8px 12px;color:#727169">+</div>
+      </div>
+
+      <div style="flex:1;overflow:hidden;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:13.5px;line-height:1.62;padding:10px 0">
+        <div style="display:flex"><span style="width:44px;text-align:right;padding-right:14px;color:#54546D">1</span><span><span style="color:#957FB8">select</span> f.title, <span style="color:#7E9CD8">count</span>(*) <span style="color:#957FB8">as</span> rentals</span></div>
+        <div style="display:flex"><span style="width:44px;text-align:right;padding-right:14px;color:#54546D">2</span><span><span style="color:#957FB8">from</span> rental r <span style="color:#957FB8">join</span> inventory i <span style="color:#957FB8">on</span> i.inventory_id = r.inventory_id</span></div>
+        <div style="display:flex"><span style="width:44px;text-align:right;padding-right:14px;color:#54546D">3</span><span><span style="color:#957FB8">join</span> film f <span style="color:#957FB8">on</span> f.film_id = i.film_id</span></div>
+        <div style="display:flex;background:#252535"><span style="width:44px;text-align:right;padding-right:14px;color:#FF9E3B">4</span><span><span style="color:#957FB8">group by</span> f.title <span style="color:#957FB8">order by</span> rentals <span style="color:#957FB8">desc</span> <span style="color:#957FB8">limit</span> <span style="color:#FFA066">10</span>;</span></div>
+      </div>
+
+      <div style="flex:none;height:288px;border-top:1px solid #2A2A37;background:#1F1F28;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;font-size:11px;color:#727169;letter-spacing:.06em;text-transform:uppercase;font-weight:700;border-bottom:1px solid #2A2A37">Results<div style="flex:1"></div><div style="display:flex;background:#16161D;border-radius:7px;padding:2px;text-transform:none;letter-spacing:0"><span style="padding:3px 10px;border-radius:5px;background:#FF9E3B;color:#1F1F28;font-size:11px;font-weight:600">▤ Stacked</span><span style="padding:3px 10px;border-radius:5px;color:#727169;font-size:11px">▭ Tabbed</span></div></div>
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;font-size:12px;border-bottom:1px solid #2A2A37"><span style="color:#DCD7BA;font-weight:600">▾ Result</span><span style="color:#727169">top rentals</span><span style="color:#54546D">·</span><span style="color:#C8C093">10 rows</span><span style="color:#54546D">·</span><span style="color:#98BB6C">88 ms</span><div style="flex:1"></div><span style="color:#C8C093;border:1px solid #363646;border-radius:6px;padding:3px 9px;font-size:11px">⭳ Export</span></div>
+        <div style="font-family:ui-monospace,monospace;font-size:12px">
+          <div style="display:flex;background:#16161D;color:#727169;border-bottom:1px solid #2A2A37;font-weight:600"><span style="width:280px;padding:5px 10px;border-right:1px solid #2A2A37">title</span><span style="flex:1;padding:5px 10px">rentals</span></div>
+          <div style="display:flex;color:#DCD7BA;border-bottom:1px solid #252531"><span style="width:280px;padding:5px 10px;border-right:1px solid #252531">BUCKET BROTHERHOOD</span><span style="flex:1;padding:5px 10px">34</span></div>
+          <div style="display:flex;color:#DCD7BA;border-bottom:1px solid #252531"><span style="width:280px;padding:5px 10px;border-right:1px solid #252531">ROCKETEER MOTHER</span><span style="flex:1;padding:5px 10px">33</span></div>
+          <div style="display:flex;color:#DCD7BA;border-bottom:1px solid #252531"><span style="width:280px;padding:5px 10px;border-right:1px solid #252531">FORWARD TEMPLE</span><span style="flex:1;padding:5px 10px">32</span></div>
+          <div style="display:flex;color:#DCD7BA;border-bottom:1px solid #252531"><span style="width:280px;padding:5px 10px;border-right:1px solid #252531">GRIT CLOCKWORK</span><span style="flex:1;padding:5px 10px">32</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- status bar -->
+  <div style="flex:none;background:#16161D;border-top:3px solid {{ connColor }};display:flex;align-items:center;gap:14px;padding:5px 12px 6px;font-size:11.5px;color:#727169">
+    <span style="display:flex;align-items:center;gap:6px;color:{{ connColor }};font-weight:600"><span style="width:8px;height:8px;border-radius:50%;background:{{ connColor }}"></span>{{ connName }}</span>
+    <span>{{ connDb }} @ {{ connHost }}</span><span>·</span><span>30 tables</span>
+    <div style="flex:1"></div>
+    <span>Ln 4, Col 24</span><span>UTF-8</span><span>PostgreSQL 16.2</span>
+  </div>
+
+  <!-- SERVER dropdown -->
+  <sc-if value="{{ serverOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeDrop }}" style="position:absolute;inset:0;z-index:30"></div>
+    <div style="position:absolute;top:88px;left:150px;z-index:31;width:280px;background:#16161D;border:1px solid #363646;border-radius:9px;box-shadow:0 20px 50px -12px rgba(0,0,0,.75);padding:6px;font-size:12.5px">
+      <div style="padding:6px 8px 8px;color:#54546D;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Connections</div>
+      <div class="menu-row" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;background:#223249;color:#DCD7BA"><span style="width:8px;height:8px;border-radius:50%;background:#E46876"></span><span style="flex:1"><b>prod-db-01</b><div style="color:#727169;font-size:11px">production · postgres 16.2</div></span><span style="color:#98BB6C">✓</span></div>
+      <div class="menu-row" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#C8C093"><span style="width:8px;height:8px;border-radius:50%;background:#E6C384"></span><span style="flex:1"><b>staging-db</b><div style="color:#727169;font-size:11px">staging · postgres 16.1</div></span></div>
+      <div class="menu-row" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#C8C093"><span style="width:8px;height:8px;border-radius:50%;background:#7AA89F"></span><span style="flex:1"><b>localhost</b><div style="color:#727169;font-size:11px">local · postgres 16.2</div></span></div>
+      <div style="border-top:1px solid #2A2A37;margin:5px 6px"></div>
+      <div class="menu-row" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#7E9CD8">＋ New connection…</div>
+    </div>
+  </sc-if>
+
+  <!-- DATABASE dropdown -->
+  <sc-if value="{{ dbOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeDrop }}" style="position:absolute;inset:0;z-index:30"></div>
+    <div style="position:absolute;top:88px;left:300px;z-index:31;width:250px;background:#16161D;border:1px solid #363646;border-radius:9px;box-shadow:0 20px 50px -12px rgba(0,0,0,.75);padding:6px;font-size:12.5px">
+      <div style="padding:5px 8px;color:#54546D;font-size:11px;display:flex;align-items:center;gap:6px">⌕ <span style="color:#54546D">Search databases…</span></div>
+      <div style="border-top:1px solid #2A2A37;margin:3px 6px"></div>
+      <div class="menu-row" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;background:#223249;color:#DCD7BA"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#98BB6C" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/></svg><span style="flex:1">pagila</span><span style="background:#2A2A37;color:#98BB6C;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px">DEFAULT</span><span style="color:#98BB6C">✓</span></div>
+      <div class="menu-row" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#C8C093"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6A9589" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/></svg><span style="flex:1">analytics</span></div>
+      <div class="menu-row" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#C8C093"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6A9589" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/></svg><span style="flex:1">warehouse</span></div>
+      <div class="menu-row" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#C8C093"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6A9589" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/></svg><span style="flex:1">postgres</span></div>
+    </div>
+  </sc-if>
+
+  <!-- FOCUS MODE overlay -->
+  <sc-if value="{{ focus }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0;z-index:50;background:#1F1F28;display:flex;flex-direction:column">
+      <div style="height:34px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;background:#181820;border-bottom:1px solid #2A2A37;font-size:12px">
+        <span style="color:#DCD7BA;font-weight:600">top_films.sql</span>
+        <span style="color:#FF9E3B;font-size:15px;line-height:0">•</span>
+        <span style="display:flex;align-items:center;gap:5px"><span style="width:7px;height:7px;border-radius:50%;background:{{ connColor }}"></span><span style="font-size:11px;font-weight:600;color:{{ connColor }}">{{ connName }}</span></span>
+        <div style="flex:1"></div>
+        <button title="Run  ⌘⏎" style="display:flex;align-items:center;justify-content:center;width:26px;height:26px;background:transparent;color:#98BB6C;border:1px solid #363646;border-radius:6px;cursor:pointer;font-size:10px">▶</button>
+        <button onClick="{{ exitFocus }}" title="Exit focus  Esc" style="display:flex;align-items:center;gap:6px;background:transparent;color:#727169;border:1px solid #363646;border-radius:6px;cursor:pointer;font-size:11px;padding:4px 9px">⤡ Exit <kbd style="font-family:ui-monospace,monospace;color:#54546D">Esc</kbd></button>
+      </div>
+      <div style="flex:1;overflow:hidden;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:15px;line-height:1.85;padding:26px 0;max-width:820px;margin:0 auto;width:100%">
+        <div style="display:flex"><span style="width:52px;text-align:right;padding-right:18px;color:#54546D">1</span><span><span style="color:#957FB8">select</span> f.title, <span style="color:#7E9CD8">count</span>(*) <span style="color:#957FB8">as</span> rentals</span></div>
+        <div style="display:flex"><span style="width:52px;text-align:right;padding-right:18px;color:#54546D">2</span><span><span style="color:#957FB8">from</span> rental r <span style="color:#957FB8">join</span> inventory i <span style="color:#957FB8">on</span> i.inventory_id = r.inventory_id</span></div>
+        <div style="display:flex"><span style="width:52px;text-align:right;padding-right:18px;color:#54546D">3</span><span><span style="color:#957FB8">join</span> film f <span style="color:#957FB8">on</span> f.film_id = i.film_id</span></div>
+        <div style="display:flex;background:#252535"><span style="width:52px;text-align:right;padding-right:18px;color:#FF9E3B">4</span><span><span style="color:#957FB8">group by</span> f.title <span style="color:#957FB8">order by</span> rentals <span style="color:#957FB8">desc</span> <span style="color:#957FB8">limit</span> <span style="color:#FFA066">10</span>;</span></div>
+      </div>
+      <div style="flex:none;height:3px;background:{{ connColor }}"></div>
+    </div>
+  </sc-if>
+
+  <!-- Alt menu -->
+  <sc-if value="{{ menuVisible }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ hideMenu }}" style="position:absolute;inset:0;z-index:40"></div>
+    <div style="position:absolute;top:36px;left:0;right:0;height:30px;z-index:41;background:#181820;border-bottom:1px solid #2A2A37;display:flex;align-items:center;padding:0 8px;gap:2px;font-size:12.5px">
+      <span style="padding:4px 10px;border-radius:5px;background:#2A2A37;color:#DCD7BA;font-weight:600"><u>F</u>ile</span>
+      <span style="padding:4px 10px;color:#C8C093"><u>E</u>dit</span>
+      <span style="padding:4px 10px;color:#C8C093"><u>V</u>iew</span>
+      <span style="padding:4px 10px;color:#C8C093"><u>Q</u>uery</span>
+      <span style="padding:4px 10px;color:#C8C093"><u>H</u>elp</span>
+    </div>
+    <div style="position:absolute;top:66px;left:8px;z-index:41;width:250px;background:#16161D;border:1px solid #363646;border-radius:8px;box-shadow:0 18px 46px -12px rgba(0,0,0,.7);padding:5px;font-size:12.5px">
+      <div class="menu-row" style="display:flex;align-items:center;padding:7px 10px;border-radius:6px;color:#C8C093"><span style="flex:1">New Query</span><span style="color:#54546D;font-family:ui-monospace,monospace">⌘N</span></div>
+      <div class="menu-row" style="display:flex;align-items:center;padding:7px 10px;border-radius:6px;background:#223249;color:#DCD7BA"><span style="flex:1">Open…</span><span style="color:#7E9CD8;font-family:ui-monospace,monospace">⌘O</span></div>
+      <div class="menu-row" style="display:flex;align-items:center;padding:7px 10px;border-radius:6px;color:#C8C093"><span style="flex:1">Open Recent</span><span style="color:#54546D">▸</span></div>
+      <div style="border-top:1px solid #2A2A37;margin:4px 6px"></div>
+      <div class="menu-row" style="display:flex;align-items:center;padding:7px 10px;border-radius:6px;color:#C8C093"><span style="flex:1">Save</span><span style="color:#54546D;font-family:ui-monospace,monospace">⌘S</span></div>
+      <div class="menu-row" style="display:flex;align-items:center;padding:7px 10px;border-radius:6px;color:#C8C093"><span style="flex:1">Save As…</span><span style="color:#54546D;font-family:ui-monospace,monospace">⇧⌘S</span></div>
+      <div style="border-top:1px solid #2A2A37;margin:4px 6px"></div>
+      <div class="menu-row" style="display:flex;align-items:center;padding:7px 10px;border-radius:6px;color:#C8C093"><span style="flex:1">Close Tab</span><span style="color:#54546D;font-family:ui-monospace,monospace">⌘W</span></div>
+    </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;connectionEnv&quot;: {&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;production&quot;,&quot;options&quot;:[&quot;production&quot;,&quot;staging&quot;,&quot;local&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Connection&quot;}
+}">
+class Component extends DCLogic {
+  state = { menuVisible: false, screen: 'schema', drop: null, focus: false };
+  componentDidMount() {
+    this._kd = (e) => {
+      if (e.key === 'Alt' || e.keyCode === 18) {
+        e.preventDefault();
+        this.setState(s => ({ menuVisible: !s.menuVisible, drop: null }));
+      } else if (e.key === 'Escape') {
+        this.setState({ menuVisible: false, drop: null, focus: false });
+      } else if (e.key === 'f' && (e.metaKey || e.ctrlKey) && e.ctrlKey) {
+        e.preventDefault();
+        this.setState(s => ({ focus: !s.focus }));
+      }
+    };
+    window.addEventListener('keydown', this._kd);
+  }
+  componentWillUnmount() { window.removeEventListener('keydown', this._kd); }
+  renderVals() {
+    const env = this.props.connectionEnv || 'production';
+    const map = {
+      production: { name: 'production', color: '#E46876', db: 'pagila', host: 'prod-db-01' },
+      staging:    { name: 'staging',    color: '#E6C384', db: 'pagila', host: 'staging-db' },
+      local:      { name: 'local',      color: '#7AA89F', db: 'pagila', host: 'localhost'  },
+    };
+    const c = map[env] || map.production;
+    const s = this.state;
+    const active = (name, on, off) => (s.screen === name ? on : off);
+    return {
+      menuVisible: s.menuVisible,
+      hideMenu: () => this.setState({ menuVisible: false }),
+      isSchema: s.screen === 'schema',
+      isScripts: s.screen === 'scripts',
+      isHistory: s.screen === 'history',
+      goSchema: () => this.setState({ screen: 'schema' }),
+      goScripts: () => this.setState({ screen: 'scripts' }),
+      goHistory: () => this.setState({ screen: 'history' }),
+      schemaBg: active('schema', '#2A2A37', 'transparent'),
+      schemaFg: active('schema', '#FF9E3B', '#727169'),
+      scriptsBg: active('scripts', '#2A2A37', 'transparent'),
+      scriptsFg: active('scripts', '#FF9E3B', '#727169'),
+      historyBg: active('history', '#2A2A37', 'transparent'),
+      historyFg: active('history', '#FF9E3B', '#727169'),
+      serverOpen: s.drop === 'server',
+      dbOpen: s.drop === 'database',
+      openServer: () => this.setState(x => ({ drop: x.drop === 'server' ? null : 'server', menuVisible: false })),
+      openDb: () => this.setState(x => ({ drop: x.drop === 'database' ? null : 'database', menuVisible: false })),
+      closeDrop: () => this.setState({ drop: null }),
+      serverBorder: s.drop === 'server' ? '#7E9CD8' : '#363646',
+      dbBorder: s.drop === 'database' ? '#98BB6C' : '#363646',
+      focus: s.focus,
+      enterFocus: () => this.setState({ focus: true, drop: null, menuVisible: false }),
+      exitFocus: () => this.setState({ focus: false }),
+      connName: c.name, connColor: c.color, connDb: c.db, connHost: c.host,
+    };
+  }
+}
+</script>
+</body>
+</html>

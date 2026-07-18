@@ -2,13 +2,25 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:conv="using:Squirrel.App.Converters"
              x:Class="Squirrel.App.App"
-             RequestedThemeVariant="Default">
+             RequestedThemeVariant="Dark">
 
   <Application.Resources>
-    <conv:HexBrushConverter x:Key="HexBrush"/>
-    <!-- Shared monospace family for the code editor(s) and result grid. Iosevka is
-         installed as the "Nerd Font Mono" build; the rest are fallbacks. -->
-    <FontFamily x:Key="MonoFontFamily">Iosevka Nerd Font Mono,Iosevka,Cascadia Code,JetBrains Mono,Consolas,Menlo,monospace</FontFamily>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <!-- Editor 4a Kanagawa design tokens (Bg.*, Text.*, Accent.*, Syntax.*, geometry). -->
+        <ResourceInclude Source="avares://Squirrel.App/Themes/Tokens.axaml"/>
+      </ResourceDictionary.MergedDictionaries>
+
+      <conv:HexBrushConverter x:Key="HexBrush"/>
+      <!-- Shared monospace family for the code editor(s) and result grid. Iosevka is
+           installed as the "Nerd Font Mono" build; the rest are fallbacks. -->
+      <FontFamily x:Key="MonoFontFamily">Iosevka Nerd Font Mono,Iosevka,Cascadia Code,JetBrains Mono,Consolas,Menlo,monospace</FontFamily>
+
+      <!-- The linchpin accent: mutated in place (App.SetConnectionAccent) when the selected tab's
+           connection changes, so the tab accent, dots, results accent and status-bar line recolor
+           together. Bind via {DynamicResource ConnectionBrush}. Default = neutral slate. -->
+      <SolidColorBrush x:Key="ConnectionBrush" Color="#54546D"/>
+    </ResourceDictionary>
   </Application.Resources>
 
   <Application.Styles>

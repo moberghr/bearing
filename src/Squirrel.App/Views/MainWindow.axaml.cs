@@ -72,8 +72,8 @@ public partial class MainWindow : Window
         };
 
         // Translucent selection so syntax-highlighted glyphs stay readable through it — the opaque
-        // default paints solid blue over the colored text.
-        Editor.TextArea.SelectionBrush = new SolidColorBrush(Color.FromArgb(0x40, 0x3B, 0x82, 0xF6));
+        // default paints solid over the colored text. Kanagawa wave-blue at ~40% alpha.
+        Editor.TextArea.SelectionBrush = new SolidColorBrush(Color.FromArgb(0x66, 0x2D, 0x4F, 0x67));
 
         Editor.TextChanged += (_, _) =>
         {
@@ -101,21 +101,40 @@ public partial class MainWindow : Window
         Vm.PropertyChanged += OnViewModelPropertyChanged;
         LoadEditorFromSelectedTab();
         SyncProjectCombo();
+        App.SetConnectionAccent(Vm.ActiveConnectionColor); // seed the accent for the initial tab
     }
 
     private void InstallSqlHighlighting()
     {
+        // DarkPlus supplies the grammar token colors. Exact Kanagawa syntax hues are deferred (a
+        // custom TextMate theme needs internal TextMateSharp APIs; the handoff flags syntax colors
+        // as its one deliberately-loose area — docs/design/editor-4a/README.md §Fidelity).
         var options = new RegistryOptions(ThemeName.DarkPlus);
         var installation = Editor.InstallTextMate(options);
         var sql = options.GetLanguageByExtension(".sql");
         if (sql is not null)
             installation.SetGrammar(options.GetScopeByLanguageId(sql.Id));
+
+        // Editor chrome the TextMate theme doesn't drive to spec: Kanagawa surface (#1F1F28),
+        // current-line highlight (#252535), and faint line numbers (#54546D).
+        Editor.Background = ThemeBrush("Bg.Editor");
+        Editor.LineNumbersForeground = ThemeBrush("Text.Faint");
+        Editor.Options.HighlightCurrentLine = true;
+        var lineActive = ((SolidColorBrush)ThemeBrush("Bg.LineActive")).Color;
+        Editor.TextArea.TextView.CurrentLineBackground = new SolidColorBrush(lineActive);
+        Editor.TextArea.TextView.CurrentLineBorder = new Pen(new SolidColorBrush(lineActive)); // no contrasting box
     }
+
+    /// <summary>Resolve a token brush from app resources (falls back to transparent if missing).</summary>
+    private IBrush ThemeBrush(string key)
+        => (Application.Current?.FindResource(key) as IBrush) ?? Brushes.Transparent;
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(MainWindowViewModel.SelectedTab))
             LoadEditorFromSelectedTab();
+        else if (e.PropertyName == nameof(MainWindowViewModel.ActiveConnectionColor))
+            App.SetConnectionAccent(Vm?.ActiveConnectionColor); // recolor tab accent, dots, results, status line
         else if (e.PropertyName is nameof(MainWindowViewModel.Title) or nameof(MainWindowViewModel.ProjectDirectory))
             SyncProjectCombo();
     }

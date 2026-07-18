@@ -18,6 +18,20 @@ public partial class App : Application
 {
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
+    /// <summary>
+    /// Recolor the app-wide <c>ConnectionBrush</c> from the active connection's environment hex.
+    /// Mutating the shared brush's color updates every <c>{DynamicResource ConnectionBrush}</c>
+    /// consumer at once (tab accent, dots, results accent, status-bar line). Null/invalid → neutral.
+    /// </summary>
+    public static void SetConnectionAccent(string? environmentHex)
+    {
+        if (Current?.Resources.TryGetResource("ConnectionBrush", Current.ActualThemeVariant, out var res) == true
+            && res is Avalonia.Media.SolidColorBrush brush)
+        {
+            brush.Color = Theming.ConnectionColors.Resolve(environmentHex);
+        }
+    }
+
     public override void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
