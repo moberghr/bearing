@@ -134,6 +134,47 @@ public class StatementSplitterTests
     }
 
     [Fact]
+    public void Leading_comment_groups_with_the_statement_below_it()
+    {
+        // Blank lines separate the first query from the comment; the comment documents the query
+        // that follows, so the caret on the comment resolves to that following query.
+        const string sql = "select 1\nfrom a\nlimit 100;\n\n\n-- select *\nfrom film f\norder by id";
+        var caret = sql.IndexOf("-- select *", StringComparison.Ordinal);
+
+        var stmt = StatementSplitter.StatementAt(sql, caret)!;
+
+        Assert.Contains("-- select *", stmt.Text);
+        Assert.Contains("from film f", stmt.Text);
+        Assert.DoesNotContain("limit 100", stmt.Text);
+    }
+
+    [Fact]
+    public void Leading_comment_groups_with_the_next_block_without_semicolons()
+    {
+        const string sql = "select 1\nfrom a\n\n-- header\nselect 2\nfrom b";
+        var caret = sql.IndexOf("-- header", StringComparison.Ordinal);
+
+        var stmt = StatementSplitter.StatementAt(sql, caret)!;
+
+        Assert.Contains("-- header", stmt.Text);
+        Assert.Contains("select 2", stmt.Text);
+        Assert.DoesNotContain("select 1", stmt.Text);
+    }
+
+    [Fact]
+    public void Trailing_comment_on_the_same_line_stays_with_its_statement()
+    {
+        const string sql = "select 1; -- note\nselect 2;";
+        var caret = sql.IndexOf("-- note", StringComparison.Ordinal);
+
+        var stmt = StatementSplitter.StatementAt(sql, caret)!;
+
+        Assert.Contains("select 1", stmt.Text);
+        Assert.Contains("-- note", stmt.Text);
+        Assert.DoesNotContain("select 2", stmt.Text);
+    }
+
+    [Fact]
     public void StatementAt_returns_null_for_blank_buffer()
     {
         Assert.Null(StatementSplitter.StatementAt("   \n  ", 2));

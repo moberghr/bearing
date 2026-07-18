@@ -27,15 +27,38 @@ public static class StatementSplitter
         var spans = new List<StatementSpan>();
         if (string.IsNullOrEmpty(sql)) return spans;
 
-        // First on-channel token index of each statement. Statements are delimited by SEMI or, at
-        // paren depth 0, by a blank line between tokens (a common "run this block" convention).
+        // First index of each statement. Statements are delimited by SEMI or, at paren depth 0, by a
+        // blank line between tokens (a common "run this block" convention). A comment block sitting
+        // directly above a statement (no blank line between them) is a leading comment and starts
+        // that statement, so it groups with the query it documents rather than the previous one.
         var starts = new List<int>();
         int? firstStart = null;
-        IToken? prev = null;
+        IToken? prev = null;                 // last on-channel token
+        int? commentBlockStart = null;       // start of the current contiguous comment block
+        var lastCommentEnd = -1;
         var depth = 0;
         foreach (var t in PgParsing.LexAll(sql))
         {
-            if (t.Channel != TokenConstants.DefaultChannel || t.Type == TokenConstants.EOF) continue;
+            if (t.Type == TokenConstants.EOF) continue;
+
+            if (t.Channel != TokenConstants.DefaultChannel)
+            {
+                // Only own-line comments can lead a statement; a comment sharing a line with the
+                // previous token trails that statement (e.g. "select 1; -- note").
+                if (IsComment(t) && (prev is null || ContainsNewline(sql, prev.StopIndex + 1, t.StartIndex)))
+                {
+                    // A blank line ends the previous comment block; start a fresh one.
+                    if (commentBlockStart is null || HasBlankLine(sql, lastCommentEnd + 1, t.StartIndex))
+                        commentBlockStart = t.StartIndex;
+                    lastCommentEnd = t.StopIndex;
+                }
+                continue;
+            }
+
+            // A leading comment block counts only when it abuts this token (no blank line between).
+            int? leading = commentBlockStart is { } cbs && !HasBlankLine(sql, lastCommentEnd + 1, t.StartIndex)
+                ? cbs
+                : null;
 
             if (firstStart is not null && prev is not null && depth == 0
                 && HasBlankLine(sql, prev.StopIndex + 1, t.StartIndex))
@@ -47,7 +70,8 @@ public static class StatementSplitter
             if (t.Type == PostgreSQLLexer.OPEN_PAREN) depth++;
             else if (t.Type == PostgreSQLLexer.CLOSE_PAREN && depth > 0) depth--;
 
-            firstStart ??= t.StartIndex;
+            firstStart ??= leading ?? t.StartIndex;
+            commentBlockStart = null;           // consumed (or not leading) — don't leak forward
             if (t.Type == PostgreSQLLexer.SEMI)
             {
                 starts.Add(firstStart.Value);
@@ -68,6 +92,17 @@ public static class StatementSplitter
             spans.Add(new StatementSpan(start, end, sql[start..end]));
         }
         return spans;
+    }
+
+    /// <summary>True for a line (<c>--</c>) or block (<c>/* */</c>) comment token.</summary>
+    private static bool IsComment(IToken t)
+        => t.Text is { } text && (text.StartsWith("--") || text.StartsWith("/*"));
+
+    /// <summary>True if the text in [from,to) contains at least one newline.</summary>
+    private static bool ContainsNewline(string sql, int from, int to)
+    {
+        if (from < 0 || to > sql.Length || from >= to) return false;
+        return sql.IndexOf('\n', from, to - from) >= 0;
     }
 
     /// <summary>True if the text in [from,to) spans a blank line (≥2 newlines) — an empty line gap.</summary>
