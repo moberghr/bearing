@@ -136,4 +136,25 @@ public static class StatementSplitter
         }
         return spans[^1];
     }
+
+    /// <summary>
+    /// Re-join a (possibly multi-statement) block so every statement is semicolon-terminated. Lets a
+    /// selection of blank-line-separated statements — where the user relied on the blank line, not a
+    /// <c>;</c> — run as a proper batch instead of one malformed command. A single statement is
+    /// returned unchanged (no semicolon forced onto a lone run-at-caret).
+    /// </summary>
+    public static string EnsureSeparated(string sql)
+    {
+        var spans = Split(sql);
+        if (spans.Count <= 1) return sql;
+
+        var parts = new List<string>();
+        foreach (var span in spans)
+        {
+            var t = span.Text.Trim();
+            while (t.EndsWith(";", StringComparison.Ordinal)) t = t[..^1].TrimEnd();
+            if (t.Length > 0) parts.Add(t);
+        }
+        return parts.Count == 0 ? sql : string.Join(";\n", parts) + ";";
+    }
 }

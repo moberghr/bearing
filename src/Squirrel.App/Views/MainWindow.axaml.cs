@@ -634,6 +634,9 @@ public partial class MainWindow : Window
         var sql = string.IsNullOrWhiteSpace(selected)
             ? Squirrel.Sql.StatementSplitter.StatementAt(Editor.Text, Editor.CaretOffset)?.Text ?? Editor.Text
             : selected;
+        // A selection (or whole buffer) may hold several blank-line-separated statements without
+        // semicolons — normalize so they run as a batch instead of one malformed command.
+        sql = Squirrel.Sql.StatementSplitter.EnsureSeparated(sql);
         await Vm.ExecuteAsync(sql);
         RebuildResults(Vm.SelectedTab);
     }

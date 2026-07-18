@@ -23,6 +23,28 @@ public class StatementSplitterTests
     }
 
     [Fact]
+    public void EnsureSeparated_terminates_blank_line_separated_statements()
+    {
+        // Two statements separated only by a blank line, first without a semicolon.
+        var sql = "select 1\n\nselect 2";
+        var normalized = StatementSplitter.EnsureSeparated(sql);
+        Assert.Equal("select 1;\nselect 2;", normalized);
+    }
+
+    [Fact]
+    public void EnsureSeparated_leaves_a_single_statement_untouched()
+    {
+        Assert.Equal("select 1", StatementSplitter.EnsureSeparated("select 1"));
+        Assert.Equal("select 1;", StatementSplitter.EnsureSeparated("select 1;"));
+    }
+
+    [Fact]
+    public void EnsureSeparated_collapses_existing_semicolons_without_duplicating()
+    {
+        Assert.Equal("select 1;\nselect 2;", StatementSplitter.EnsureSeparated("select 1;\n\nselect 2;"));
+    }
+
+    [Fact]
     public void Split_ignores_semicolons_inside_strings()
     {
         var spans = StatementSplitter.Split("select ';not a boundary;' as x; select 2");
