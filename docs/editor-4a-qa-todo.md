@@ -31,6 +31,14 @@ commit on branch `editor-4a-redesign`. Status: `[ ]` todo · `[~]` in progress �
       Decision: **auto-split** the run text via `StatementSplitter` and send statements properly separated
       (consistent with the editor's statement model), rather than forcing semicolons.
 
+## Round 2 (2026-07-19)  (DONE)
+- [x] Sidepane expanded + click a **different** icon → keep expanded, switch panel; click the **open**
+      icon → collapse pane **and** unselect its tile (`PanelActiveConverter` = active AND open).
+- [x] **Side pane resizable** (drag grip on the right edge → `SidePaneWidth`).
+- [x] **History preview resizable** (GridSplitter) and **bigger by default** (220px).
+- [x] Database dropdown still showed "— db —" — `RefreshTabDatabases` re-notifies after populating.
+- [x] Fuzzy find: keep the current match while it still matches (don't advance each keystroke).
+
 ---
 Deferred refinements from the original plan still stand (see `docs/editor-4a-plan.md` tail):
 exact Kanagawa syntax theme, custom Popup dropdowns, retire unused `HistoryWindow`, etc.
