@@ -342,8 +342,10 @@
             </Grid>
             <!-- Type-ahead fuzzy jump: letters/digits build a search, matches are tinted, Enter/typing
                  cycles to the next match (handled in code-behind OnSchemaTreeTextInput/KeyDown). -->
+            <!-- KeyDown is hooked in the tunnel phase (code-behind) so Up/Down can pre-empt the tree's
+                 own node navigation and cycle matches instead. -->
             <TreeView x:Name="SchemaTree" ItemsSource="{Binding ServerNodes}" Background="Transparent"
-                      TextInput="OnSchemaTreeTextInput" KeyDown="OnSchemaTreeKeyDown">
+                      TextInput="OnSchemaTreeTextInput">
               <TreeView.Styles>
                 <!-- Two-way bind each item's expansion to its node so children load lazily on first expand. -->
                 <Style Selector="TreeViewItem">

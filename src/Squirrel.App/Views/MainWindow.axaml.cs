@@ -40,6 +40,10 @@ public partial class MainWindow : Window
         // its own KeyDown — so handle them during the tunnel phase, before the editor sees them.
         Editor.AddHandler(KeyDownEvent, OnEditorKeyDown, Avalonia.Interactivity.RoutingStrategies.Tunnel);
 
+        // Same trick for the connections tree: intercept Up/Down/Esc/Backspace before the TreeView's
+        // built-in node navigation, so a search cycles matches instead of walking every row.
+        SchemaTree.AddHandler(KeyDownEvent, OnSchemaTreeKeyDown, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+
         // Paging footer buttons call back into the shell VM (Vm is resolved lazily at click time).
         ResultsView.LoadMore = rs => Vm?.LoadMoreAsync(rs) ?? Task.CompletedTask;
         ResultsView.CountTotal = rs => Vm?.CountTotalAsync(rs) ?? Task.CompletedTask;
