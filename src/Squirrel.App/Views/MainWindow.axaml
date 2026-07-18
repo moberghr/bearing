@@ -164,18 +164,12 @@
     </Style>
   </Window.Styles>
 
-  <Grid>
   <DockPanel LastChildFill="True">
 
-    <!-- Toolbar (design §Toolbar): proj · | · server · › · database · Run … Focus -->
+    <!-- Toolbar (design §Toolbar): proj · | · server · › · database · Run -->
     <Border DockPanel.Dock="Top" Height="46" Padding="8,0" Background="{DynamicResource Bg.Chrome}"
             BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
       <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Spacing="6">
-        <Button Classes="rail" Theme="{StaticResource RailButton}" Width="30" Height="30"
-                Click="OnToggleSidePane" ToolTip.Tip="Toggle side pane (Ctrl+B)">
-          <Path Data="M4,7 h16 M4,12 h16 M4,17 h16"/>
-        </Button>
-
         <!-- Project selector + overflow (Rename/Open/New live here) -->
         <ComboBox x:Name="ProjectCombo" Classes="pill" Width="200" ItemsSource="{Binding RecentProjects}"
                   SelectionChanged="OnProjectSelectionChanged" ToolTip.Tip="Project">
@@ -234,12 +228,6 @@
                 ToolTip.Tip="Tap Alt for the menu bar">
           <TextBlock Text="Alt" FontSize="11" Foreground="{DynamicResource Text.Dim}"/>
         </Border>
-
-        <!-- Focus mode (design §7) -->
-        <Button Classes="rail" Theme="{StaticResource RailButton}" Width="30" Height="30"
-                Click="OnFocusClick" ToolTip.Tip="Focus mode (Ctrl+Cmd+F)">
-          <Path Data="{StaticResource Icon.Focus}"/>
-        </Button>
       </StackPanel>
     </Border>
 
@@ -264,8 +252,6 @@
         <MenuItem Header="Schema" Click="OnMenuSchemaClick"/>
         <MenuItem Header="Scripts" Click="OnMenuScriptsClick"/>
         <MenuItem Header="History" Click="OnHistoryClick"/>
-        <Separator/>
-        <MenuItem Header="Focus Mode" Click="OnFocusClick"/>
       </MenuItem>
       <MenuItem Header="_Query">
         <MenuItem Header="Run" InputGesture="Ctrl+Enter" Click="OnRunClick"/>
@@ -285,21 +271,26 @@
     <!-- Body: persistent icon rail + swappable 262px side panel + editor workspace -->
     <DockPanel LastChildFill="True">
 
-      <!-- Left rail (design §1): Schema / Scripts / History nav tiles, Settings pinned bottom. -->
+      <!-- Left rail (design §1): Connections / Scripts / History nav tiles, Settings pinned bottom.
+           Clicking a tile activates its panel; re-clicking the active tile collapses the pane
+           (OnRailTileClick → ActivateOrTogglePanel). IsChecked is one-way (highlight only). -->
       <Border DockPanel.Dock="Left" Width="52" Background="{DynamicResource Bg.Window}"
               BorderBrush="{DynamicResource Border}" BorderThickness="0,0,1,0">
         <Grid RowDefinitions="Auto,*,Auto">
           <StackPanel Grid.Row="0" HorizontalAlignment="Center" Margin="0,8,0,0">
-            <RadioButton Classes="rail" Theme="{StaticResource RailTile}" GroupName="rail" ToolTip.Tip="Schema"
-                         IsChecked="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=Schema, Mode=TwoWay}">
-              <Path Data="{StaticResource Icon.Schema}"/>
+            <RadioButton Classes="rail" Theme="{StaticResource RailTile}" GroupName="rail" Tag="Schema"
+                         ToolTip.Tip="Connections" Click="OnRailTileClick"
+                         IsChecked="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=Schema}">
+              <Path Data="{StaticResource Icon.Database}"/>
             </RadioButton>
-            <RadioButton Classes="rail" Theme="{StaticResource RailTile}" GroupName="rail" ToolTip.Tip="Scripts"
-                         IsChecked="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=Scripts, Mode=TwoWay}">
+            <RadioButton Classes="rail" Theme="{StaticResource RailTile}" GroupName="rail" Tag="Scripts"
+                         ToolTip.Tip="Scripts" Click="OnRailTileClick"
+                         IsChecked="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=Scripts}">
               <Path Data="{StaticResource Icon.Scripts}"/>
             </RadioButton>
-            <RadioButton Classes="rail" Theme="{StaticResource RailTile}" GroupName="rail" ToolTip.Tip="History"
-                         IsChecked="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=History, Mode=TwoWay}">
+            <RadioButton Classes="rail" Theme="{StaticResource RailTile}" GroupName="rail" Tag="History"
+                         ToolTip.Tip="History" Click="OnRailTileClick"
+                         IsChecked="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=History}">
               <Path Data="{StaticResource Icon.History}"/>
             </RadioButton>
           </StackPanel>
@@ -318,16 +309,19 @@
       <SplitView.Pane>
         <Grid>
 
-          <!-- ===== Schema panel (connection/schema tree) ===== -->
+          <!-- ===== Connections / servers panel (connection → databases → objects tree) ===== -->
           <DockPanel Margin="8,8,6,6"
                      IsVisible="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=Schema}">
             <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="2,0,2,6">
-              <TextBlock Grid.Column="0" Text="SCHEMA" FontSize="11" FontWeight="Bold"
+              <TextBlock Grid.Column="0" Text="CONNECTIONS" FontSize="11" FontWeight="Bold"
                          Foreground="{DynamicResource Text.Dim}" VerticalAlignment="Center"/>
               <Button Grid.Column="1" Content="＋" Padding="6,0" Click="OnAddConnectionClick"
                       ToolTip.Tip="Add connection"/>
             </Grid>
-            <TreeView x:Name="SchemaTree" ItemsSource="{Binding ServerNodes}" Background="Transparent">
+            <!-- Type-ahead fuzzy jump: letters/digits build a search, matches are tinted, Enter/typing
+                 cycles to the next match (handled in code-behind OnSchemaTreeTextInput/KeyDown). -->
+            <TreeView x:Name="SchemaTree" ItemsSource="{Binding ServerNodes}" Background="Transparent"
+                      TextInput="OnSchemaTreeTextInput" KeyDown="OnSchemaTreeKeyDown">
               <TreeView.Styles>
                 <!-- Two-way bind each item's expansion to its node so children load lazily on first expand. -->
                 <Style Selector="TreeViewItem">
@@ -354,8 +348,17 @@
                     <Border Width="9" Height="9" CornerRadius="4" VerticalAlignment="Center"
                             IsVisible="{Binding BadgeColor, Converter={x:Static ObjectConverters.IsNotNull}}"
                             Background="{Binding BadgeColor, Converter={StaticResource HexBrush}}"/>
-                    <TextBlock Text="{Binding Glyph}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Muted}"/>
-                    <TextBlock Text="{Binding Title}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Primary}"/>
+                    <!-- Vector icon (server/database) when the node provides one; else the text glyph. -->
+                    <Path Data="{Binding IconKey, Converter={StaticResource ResourceGeometry}}"
+                          IsVisible="{Binding IconKey, Converter={x:Static ObjectConverters.IsNotNull}}"
+                          Stroke="{Binding IconColorHex, Converter={StaticResource HexBrush}}" StrokeThickness="1.4"
+                          StrokeLineCap="Round" StrokeJoin="Round" Stretch="Uniform" Width="15" Height="15"
+                          VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Glyph}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Muted}"
+                               IsVisible="{Binding IconKey, Converter={x:Static ObjectConverters.IsNull}}"/>
+                    <TextBlock Text="{Binding Title}" VerticalAlignment="Center"
+                               Background="{Binding IsMatch, Converter={StaticResource MatchHighlight}}"
+                               Foreground="{DynamicResource Text.Primary}"/>
                     <TextBlock Text="{Binding Detail}" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource Text.Dim}"/>
                   </StackPanel>
                 </TreeDataTemplate>
@@ -569,51 +572,4 @@
     </DockPanel>
 
   </DockPanel>
-
-  <!-- ===== Focus mode (design §7): full-window centered editor overlay ===== -->
-  <Border x:Name="FocusOverlay" IsVisible="{Binding IsFocusMode}" Background="{DynamicResource Bg.Editor}">
-    <DockPanel LastChildFill="True">
-      <!-- Slim top bar -->
-      <Border DockPanel.Dock="Top" Height="34" Padding="12,0" Background="{DynamicResource Bg.Window}"
-              BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
-        <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto,Auto">
-          <TextBlock Grid.Column="0" Text="{Binding SelectedTab.Header}" VerticalAlignment="Center"
-                     Foreground="{DynamicResource Text.Primary}" FontWeight="SemiBold"/>
-          <TextBlock Grid.Column="1" Text="●" FontSize="11" Margin="6,0,0,0" VerticalAlignment="Center"
-                     Foreground="{DynamicResource Accent.Orange}" IsVisible="{Binding SelectedTab.IsDirty}"/>
-          <Border Grid.Column="2" Width="8" Height="8" CornerRadius="4" Margin="12,0,6,0" VerticalAlignment="Center"
-                  IsVisible="{Binding SelectedTab.ConnectionColor, Converter={x:Static ObjectConverters.IsNotNull}}"
-                  Background="{Binding SelectedTab.ConnectionColor, Converter={StaticResource HexBrush}}"/>
-          <TextBlock Grid.Column="3" Text="{Binding SelectedTab.ConnectionDisplay}" VerticalAlignment="Center"
-                     FontSize="12" Foreground="{Binding SelectedTab.ConnectionColor, Converter={StaticResource HexBrush}}"/>
-          <Button Grid.Column="5" Classes="rail" Theme="{StaticResource RailButton}" Width="28" Height="28"
-                  Click="OnRunClick" ToolTip.Tip="{Binding RunButtonText}">
-            <Path Data="{StaticResource Icon.Run}" Fill="{DynamicResource Ok.Green}" Stretch="Uniform" Width="12" Height="12"/>
-          </Button>
-          <Button Grid.Column="6" Click="OnFocusClick" Margin="8,0,0,0" Padding="8,3"
-                  Background="Transparent" ToolTip.Tip="Exit focus (Esc)">
-            <StackPanel Orientation="Horizontal" Spacing="6">
-              <Path Data="{StaticResource Icon.Focus}" Stroke="{DynamicResource Text.Dim}" StrokeThickness="1.6"
-                    Stretch="Uniform" Width="14" Height="14"/>
-              <TextBlock Text="Exit" VerticalAlignment="Center" Foreground="{DynamicResource Text.Dim}"/>
-              <Border Background="{DynamicResource Bg.Editor}" BorderBrush="{DynamicResource Border.Control}"
-                      BorderThickness="1" CornerRadius="4" Padding="5,1">
-                <TextBlock Text="Esc" FontSize="10" Foreground="{DynamicResource Text.Faint}"/>
-              </Border>
-            </StackPanel>
-          </Button>
-        </Grid>
-      </Border>
-      <!-- 3px ConnectionBrush line pinned to the bottom -->
-      <Border DockPanel.Dock="Bottom" Height="3" Background="{DynamicResource ConnectionBrush}"/>
-      <!-- Centered editor column -->
-      <Grid Background="{DynamicResource Bg.Editor}">
-        <ae:TextEditor x:Name="FocusEditor" MaxWidth="820" HorizontalAlignment="Stretch"
-                       Margin="0,24" Padding="24,0"
-                       ShowLineNumbers="False" FontFamily="{StaticResource MonoFontFamily}" FontSize="15"/>
-      </Grid>
-    </DockPanel>
-  </Border>
-
-  </Grid>
 </Window>

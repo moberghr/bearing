@@ -15,6 +15,8 @@
 
       <conv:HexBrushConverter x:Key="HexBrush"/>
       <conv:EnumToBoolConverter x:Key="EnumToBool"/>
+      <conv:ResourceGeometryConverter x:Key="ResourceGeometry"/>
+      <conv:MatchHighlightConverter x:Key="MatchHighlight"/>
       <!-- Shared monospace family for the code editor(s) and result grid. Iosevka is
            installed as the "Nerd Font Mono" build; the rest are fallbacks. -->
       <FontFamily x:Key="MonoFontFamily">Iosevka Nerd Font Mono,Iosevka,Cascadia Code,JetBrains Mono,Consolas,Menlo,monospace</FontFamily>

@@ -9,7 +9,6 @@ using Avalonia.Input.Platform;
 using Avalonia.Media;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
-using Avalonia.Threading;
 using AvaloniaEdit.TextMate;
 using Squirrel.App.Completion;
 using Squirrel.App.Editing;
@@ -105,11 +104,7 @@ public partial class MainWindow : Window
         App.SetConnectionAccent(Vm.ActiveConnectionColor); // seed the accent for the initial tab
     }
 
-    private void InstallSqlHighlighting()
-    {
-        SetupEditorChrome(Editor);
-        SetupEditorChrome(FocusEditor); // focus-mode editor shares the theme + grammar
-    }
+    private void InstallSqlHighlighting() => SetupEditorChrome(Editor);
 
     private void SetupEditorChrome(AvaloniaEdit.TextEditor editor)
     {
@@ -142,26 +137,8 @@ public partial class MainWindow : Window
             LoadEditorFromSelectedTab();
         else if (e.PropertyName == nameof(MainWindowViewModel.ActiveConnectionColor))
             App.SetConnectionAccent(Vm?.ActiveConnectionColor); // recolor tab accent, dots, results, status line
-        else if (e.PropertyName == nameof(MainWindowViewModel.IsFocusMode))
-            OnFocusModeChanged();
         else if (e.PropertyName is nameof(MainWindowViewModel.Title) or nameof(MainWindowViewModel.ProjectDirectory))
             SyncProjectCombo();
-    }
-
-    /// <summary>Entering focus mode shares the main editor's document with the overlay editor (edits stay
-    /// in sync via the one <c>TextDocument</c>) and moves focus; exiting returns focus to the main editor.</summary>
-    private void OnFocusModeChanged()
-    {
-        if (Vm?.IsFocusMode == true)
-        {
-            FocusEditor.Document = Editor.Document;   // shared document → two views, edits mirror
-            FocusEditor.CaretOffset = System.Math.Clamp(Editor.CaretOffset, 0, FocusEditor.Text.Length);
-            Dispatcher.UIThread.Post(() => FocusEditor.Focus());
-        }
-        else
-        {
-            Dispatcher.UIThread.Post(() => Editor.Focus());
-        }
     }
 
     private void LoadEditorFromSelectedTab()
@@ -255,6 +232,88 @@ public partial class MainWindow : Window
 
     /// <summary>The schema-tree node the clicked menu item / tapped row belongs to (via its DataContext).</summary>
     private static SchemaNodeViewModel? NodeOf(object? sender) => (sender as Control)?.DataContext as SchemaNodeViewModel;
+
+    // ---- schema tree type-ahead fuzzy jump ----
+    private string _treeSearch = "";
+
+    /// <summary>Type letters to fuzzy-search the (realized) tree: highlight every match and jump the
+    /// selection to the next one; repeating the same/extending text cycles through matches.</summary>
+    private void OnSchemaTreeTextInput(object? sender, TextInputEventArgs e)
+    {
+        if (string.IsNullOrEmpty(e.Text) || char.IsControl(e.Text[0])) return;
+        _treeSearch += e.Text;
+        e.Handled = true;
+        ApplyTreeSearch(advance: true);
+    }
+
+    private void OnSchemaTreeKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape && _treeSearch.Length > 0) { ClearTreeSearch(); e.Handled = true; }
+        else if (e.Key == Key.Back && _treeSearch.Length > 0)
+        {
+            _treeSearch = _treeSearch[..^1];
+            e.Handled = true;
+            if (_treeSearch.Length == 0) ClearTreeSearch(); else ApplyTreeSearch(advance: false);
+        }
+    }
+
+    private void ClearTreeSearch()
+    {
+        _treeSearch = "";
+        foreach (var n in FlattenRealized()) n.IsMatch = false;
+        if (Vm is not null) Vm.StatusText = "";
+    }
+
+    private void ApplyTreeSearch(bool advance)
+    {
+        var nodes = FlattenRealized();
+        var matches = nodes.Where(n => FuzzyMatch(n.Title, _treeSearch)).ToList();
+        foreach (var n in nodes) n.IsMatch = false;
+        foreach (var m in matches) m.IsMatch = true;
+
+        if (matches.Count == 0) { Vm!.StatusText = $"No match for “{_treeSearch}”."; return; }
+
+        // Select the first match at/after the current selection (advance moves past it) so typing cycles.
+        var current = SchemaTree.SelectedItem as SchemaNodeViewModel;
+        var startIdx = current is null ? -1 : nodes.IndexOf(current);
+        var next = matches.FirstOrDefault(m => nodes.IndexOf(m) > startIdx) ?? matches[0];
+        if (!advance && current is not null && FuzzyMatch(current.Title, _treeSearch)) next = current;
+
+        SchemaTree.SelectedItem = next;
+        Vm!.StatusText = $"“{_treeSearch}” · {matches.Count} match{(matches.Count == 1 ? "" : "es")}";
+    }
+
+    /// <summary>Depth-first list of realized (already-loaded, non-placeholder) tree nodes.</summary>
+    private System.Collections.Generic.List<SchemaNodeViewModel> FlattenRealized()
+    {
+        var list = new System.Collections.Generic.List<SchemaNodeViewModel>();
+        void Walk(System.Collections.Generic.IEnumerable<SchemaNodeViewModel> ns)
+        {
+            foreach (var n in ns)
+            {
+                if (n is MessageNodeViewModel) continue;
+                list.Add(n);
+                if (n.IsExpanded) Walk(n.Children);
+            }
+        }
+        if (Vm is not null) Walk(Vm.ServerNodes);
+        return list;
+    }
+
+    /// <summary>Case-insensitive subsequence (fuzzy) match: query chars appear in order in the text.</summary>
+    private static bool FuzzyMatch(string text, string query)
+    {
+        if (string.IsNullOrEmpty(query)) return false;
+        text = text.ToLowerInvariant(); query = query.ToLowerInvariant();
+        var ti = 0;
+        foreach (var c in query)
+        {
+            ti = text.IndexOf(c, ti);
+            if (ti < 0) return false;
+            ti++;
+        }
+        return true;
+    }
 
     private async void OnEditServer(object? sender, RoutedEventArgs e)
     {
@@ -422,22 +481,21 @@ public partial class MainWindow : Window
 
     // ---- menu bar (Alt) + focus mode ----
 
-    /// <summary>Esc unwinds, most-modal first: focus mode → menu bar → a running query.</summary>
+    /// <summary>Esc unwinds, most-modal first: the menu bar → a running query.</summary>
     private bool HandleEscape()
     {
         if (Vm is null) return false;
-        if (Vm.IsFocusMode) { Vm.IsFocusMode = false; return true; }
         if (Vm.IsMenuVisible) { Vm.IsMenuVisible = false; return true; }
         if (Vm.IsBusy) { Vm.CancelExecution(); return true; }
         return false;
     }
 
-    private void ToggleFocusMode()
+    // Rail tile clicked: activate that panel, or collapse the pane if its tile is re-clicked while open.
+    private void OnRailTileClick(object? sender, RoutedEventArgs e)
     {
-        if (Vm is not null) Vm.IsFocusMode = !Vm.IsFocusMode;
+        if (Vm is not null && (sender as Control)?.Tag is string tag && System.Enum.TryParse<SidePanel>(tag, out var panel))
+            Vm.ActivateOrTogglePanel(panel);
     }
-
-    private void OnFocusClick(object? sender, RoutedEventArgs e) => ToggleFocusMode();
 
     private async void OnSaveAsClick(object? sender, RoutedEventArgs e) => await SaveAsAsync();
     private void OnCloseCurrentTabClick(object? sender, RoutedEventArgs e)
@@ -556,8 +614,7 @@ public partial class MainWindow : Window
 
         var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
         var alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
-        if (e.Key == Key.F11 || (ctrl && alt && e.Key == Key.F)) { e.Handled = true; ToggleFocusMode(); }
-        else if (e.Key == Key.F5 || (e.Key == Key.Enter && ctrl)) { e.Handled = true; await RunAsync(); }
+        if (e.Key == Key.F5 || (e.Key == Key.Enter && ctrl)) { e.Handled = true; await RunAsync(); }
         else if (e.Key == Key.Escape) { e.Handled = HandleEscape(); }
         else if (e.Key == Key.Up && alt) { e.Handled = true; MoveToAdjacentStatement(-1); }
         else if (e.Key == Key.Down && alt) { e.Handled = true; MoveToAdjacentStatement(+1); }

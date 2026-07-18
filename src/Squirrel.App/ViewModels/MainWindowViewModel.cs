@@ -84,8 +84,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>The Alt-toggled menu bar (File/Edit/View/Query/Help); hidden by default (design §).</summary>
     [ObservableProperty] private bool _isMenuVisible;
 
-    /// <summary>Distraction-free focus mode: full-window centered editor overlay (design §7).</summary>
-    [ObservableProperty] private bool _isFocusMode;
+    /// <summary>Activate a side panel, or toggle the pane shut when its tile is re-clicked while open.</summary>
+    public void ActivateOrTogglePanel(SidePanel panel)
+    {
+        if (ActivePanel == panel && SidePaneOpen) { SidePaneOpen = false; return; }
+        ActivePanel = panel;
+        SidePaneOpen = true;
+    }
 
     partial void OnActivePanelChanged(SidePanel value)
     {
@@ -354,7 +359,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 Scripts.Add(item);
                 if (Matches(item.Name)) folder.Scripts.Add(item);
             }
-            if (folder.Scripts.Count > 0) ScriptNodes.Add(folder); // hide folders with no match
+            // Show every folder when unfiltered; while filtering, hide folders with no matching script.
+            if (folder.Scripts.Count > 0 || filter.Length == 0) ScriptNodes.Add(folder);
         }
 
         // Ungrouped scripts at the root.
@@ -500,10 +506,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>Databases available on the selected tab's server (populates the Database pill).</summary>
     public ObservableCollection<string> TabDatabases { get; } = new();
 
-    /// <summary>Two-way binding target for the Database pill; switching opens a session on that DB.</summary>
+    /// <summary>Two-way binding target for the Database pill; switching opens a session on that DB.
+    /// Falls back to the connection's own database so the pill shows the DB actually in use even when
+    /// no explicit override has been chosen.</summary>
     public string? SelectedTabDatabase
     {
-        get => SelectedTab?.DatabaseName;
+        get
+        {
+            if (SelectedTab is not { } tab) return null;
+            return tab.DatabaseName ?? (tab.ConnectionId is { } id ? FindConnection(id)?.Database : null);
+        }
         set { if (SelectedTab is { } tab && value is not null) SetTabDatabase(tab, value); }
     }
 

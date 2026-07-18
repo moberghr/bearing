@@ -43,11 +43,20 @@ public abstract partial class SchemaNodeViewModel : ObservableObject
     [ObservableProperty] private bool _isExpanded;
     [ObservableProperty] private bool _isLoading;
 
+    /// <summary>True when the node's title matches the current type-ahead search (drives the highlight).</summary>
+    [ObservableProperty] private bool _isMatch;
+
     /// <summary>True only for the root server node (drives its context-menu items + double-tap).</summary>
     public virtual bool IsServer => false;
 
     /// <summary>Hex color for a leading badge (environment color on the server node); null = no badge.</summary>
     public virtual string? BadgeColor => null;
+
+    /// <summary>Resource key of a vector icon (Icon.*) shown instead of the text <see cref="Glyph"/>; null = use the glyph.</summary>
+    public virtual string? IconKey => null;
+
+    /// <summary>Hex stroke color for the vector icon.</summary>
+    public virtual string IconColorHex => "#9D967F";
 
     /// <summary>Relations and routines can render a definition; other nodes cannot.</summary>
     public virtual bool CanShowDefinition => false;
@@ -120,6 +129,8 @@ public sealed class ServerNodeViewModel : SchemaNodeViewModel
     public ConnectionInfo Connection { get; }
     public override bool IsServer => true;
     public override string? BadgeColor => Connection.EnvironmentColor;
+    public override string? IconKey => "Icon.Connections"; // server / postgres
+    public override string IconColorHex => "#7E9CD8";
 
     protected override async Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync()
     {
@@ -145,6 +156,9 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
         _database = database;
         _browser = browser;
     }
+
+    public override string? IconKey => "Icon.Database";
+    public override string IconColorHex => "#98BB6C";
 
     protected override async Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync()
     {
