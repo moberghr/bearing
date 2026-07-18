@@ -23,11 +23,11 @@ commit on branch `editor-4a-redesign`. Status: `[ ]` todo · `[~]` in progress �
 - [x] **Highlight all matches** (translucent orange, `IsMatch` + `MatchHighlight`); Esc/Backspace clear.
       Note: only searches *realized* (expanded/loaded) nodes; collapsed DBs' tables aren't matched until expanded.
 
-## Batch D — history panel
-- [ ] Single-click a history row shows a **preview** of the query before double-click opens it in a new scratch tab.
+## Batch D — history panel  (DONE)
+- [x] Single-click a history row shows a **preview** of the query before double-click opens it in a new scratch tab.
 
-## Batch E — execution
-- [ ] Selecting **two blank-line-separated statements** (first has no `;`) and running → PG syntax error.
+## Batch E — execution  (DONE)
+- [x] Selecting **two blank-line-separated statements** (first has no `;`) and running → PG syntax error.
       Decision: **auto-split** the run text via `StatementSplitter` and send statements properly separated
       (consistent with the editor's statement model), rather than forcing semicolons.
 

@@ -441,6 +441,22 @@
             </StackPanel>
             <TextBlock DockPanel.Dock="Bottom" Text="{Binding History.Status}" FontSize="11"
                        Foreground="{DynamicResource Text.Faint}" Margin="2,4,2,0"/>
+            <!-- Preview of the selected query (single-click); double-click a row opens it in a tab. -->
+            <Border DockPanel.Dock="Bottom" Height="130" Margin="0,6,0,0"
+                    Background="{DynamicResource Bg.Window}" BorderBrush="{DynamicResource Border}"
+                    BorderThickness="1" CornerRadius="6"
+                    IsVisible="{Binding History.SelectedRow, Converter={x:Static ObjectConverters.IsNotNull}}">
+              <DockPanel Margin="6">
+                <TextBlock DockPanel.Dock="Top" Text="PREVIEW" FontSize="10" FontWeight="Bold"
+                           Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,4"/>
+                <TextBox Text="{Binding History.SelectedRow.Sql, Mode=OneWay}" IsReadOnly="True"
+                         FontFamily="{StaticResource MonoFontFamily}" FontSize="12"
+                         Background="Transparent" BorderThickness="0"
+                         TextWrapping="NoWrap" AcceptsReturn="True"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         ScrollViewer.HorizontalScrollBarVisibility="Auto"/>
+              </DockPanel>
+            </Border>
             <ScrollViewer>
               <ItemsControl ItemsSource="{Binding History.Groups}">
                 <ItemsControl.ItemTemplate>
@@ -449,7 +465,8 @@
                       <TextBlock Text="{Binding Caption}" FontSize="10" FontWeight="Bold"
                                  Foreground="{DynamicResource Text.Faint}" Margin="2,2,2,3"/>
                       <ListBox Classes="history" ItemsSource="{Binding Rows}" Background="Transparent"
-                               BorderThickness="0" Padding="0">
+                               BorderThickness="0" Padding="0"
+                               SelectedItem="{Binding DataContext.History.SelectedRow, RelativeSource={RelativeSource AncestorType=Window}, Mode=TwoWay}">
                         <ListBox.ItemTemplate>
                           <DataTemplate x:DataType="vm:HistoryRowViewModel">
                             <Grid ColumnDefinitions="Auto,*,Auto" Background="Transparent"
