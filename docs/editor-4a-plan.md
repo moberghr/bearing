@@ -281,9 +281,15 @@ when a backing tab is dirty (snapshot at refresh). Filter box (`ScriptFilter`) n
 **Verify**: folders render, counts correct, new/rename/open work, unsaved dot shows.
 **Tests**: scripts folder enumeration/grouping (App/Persistence).
 
-## Phase 5 — Alt menu bar + File flyout
+## Phase 5 — Alt menu bar + File flyout  (DONE 2026-07-18, awaiting user live QA)
 
 **Goal**: design §, interaction rules in §Interactions.
+
+**Shipped**: `IsMenuVisible`; a native `Menu` (File/Edit/View/Query/Help) docked below the toolbar,
+hidden by default. A **lone Alt tap** toggles it (tracked via `_altAlone` so Alt+combo doesn't); Esc
+closes it. File = New Query/Open/Save/Save As/Close Tab (reusing existing handlers; keyboard shortcuts
+retained). Toolbar shows an `Alt` hint chip. **Deviation**: the menu bar is toggled but the File flyout
+does not auto-open on Alt (showing the bar is the core); `Open Recent ▸` submenu deferred.
 
 - Alt toggles a menu bar (`File/Edit/View/Query/Help`) hidden by default + a File flyout (New Query ⌘N,
   Open… ⌘O, Open Recent ▸, Save ⌘S, Save As… ⇧⌘S, Close Tab ⌘W). **Open/Save live only here** (remove
@@ -293,9 +299,29 @@ when a backing tab is dirty (snapshot at refresh). Filter box (`ScriptFilter`) n
 **Verify**: Alt shows/hides menu; File actions work; Esc closes.
 **Tests**: `IsMenuVisible` toggle + Esc-closes logic (App).
 
-## Phase 6 — Focus mode
+## Phase 6 — Focus mode  (DONE 2026-07-18, awaiting user live QA)
 
 **Goal**: distraction-free overlay (design §7).
+
+**Shipped**: `IsFocusMode` drives a full-window `Border` overlay (`Bg.Editor`) over a root `Grid`: slim
+34px top bar (filename + unsaved dot + connection dot/name + understated Run + Exit·`Esc`), a centered
+`FocusEditor` (max-width 820, 15px), and a 3px `ConnectionBrush` line pinned to the bottom. `FocusEditor`
+**shares the main editor's `TextDocument`** so edits mirror both ways. Focus button + `F11` / `Ctrl+Alt+F`
+toggle; Esc unwinds focus → menu → running query. **Deviation**: line-height 1.85 not applied
+(AvaloniaEdit has no direct line-spacing knob); no completion in the focus editor.
+
+---
+
+## Status: all six phases COMPLETE (2026-07-18) — committed on branch `editor-4a-redesign`
+
+Commits: Phases 1–3, Phase 4, Phases 5–6. 46 App tests green; every phase builds and the app launches
+clean. **None visually QA'd** — Wayland blocks screenshots here, so the user eyeballs each phase.
+Follow-up refinements (deferred, all documented above): exact Kanagawa syntax theme (custom
+`IRegistryOptions`/`IRawTheme`); orange current-line line-number; custom Popup dropdowns for server/db
+(currently styled ComboBoxes); schema-panel search glyph; scripts drag-to-folder / nested folders;
+File-flyout auto-open on Alt + Open Recent submenu; focus-editor line-height; retire the unused
+`HistoryWindow`. Known limitation: sessions keyed by connection Id → two tabs on one server with
+different DBs share a session and reconnect on switch.
 
 - `IsFocusMode` state; full-window overlay (`Bg.Editor`, above all) with a slim 34px top bar
   (filename + unsaved • + conn dot/name; small ▶ Run + `⤡ Exit` + `Esc` hint), a centered editor column
