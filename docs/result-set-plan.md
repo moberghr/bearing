@@ -193,6 +193,27 @@ FK-navigable. Composite FKs: build the WHERE with all key columns from the same 
 
 Goal: editable grid; changes become generated `UPDATE`/`DELETE`/`INSERT` keyed by PK.
 
+### Progress (2026-07-17): backend done (steps 1–3), UI remaining (step 4)
+
+- **DML generator** — `src/Squirrel.Sql/DmlGenerator.cs` + value types in
+  `src/Squirrel.Core/Data/SqlWriteCommand.cs` (`ColumnValue`, `SqlParameter`, `SqlWriteCommand`).
+  Pure/parameterized `Update`/`Delete`/`Insert` (INSERT does `returning *`); identifiers quoted,
+  values never interpolated. Unit-tested: `Squirrel.Sql.Tests/DmlGeneratorTests.cs` (7).
+- **Executor write path** — `IQueryExecutor.ExecuteWriteAsync(IReadOnlyList<SqlWriteCommand>, ct)`;
+  Postgres impl runs the batch in **one transaction** (rollback on any failure), one result per command.
+  Integration-tested: `Squirrel.Data.Tests/PostgresWriteTests.cs` (insert/update/delete + rollback).
+- **Editability gate** — `src/Squirrel.Core/Schema/EditabilityResolver.cs` → `EditTarget(Schema, Table,
+  Columns[])` with per-column base name + PK flag (`KeyColumns`). Editable only when all columns map to
+  one real table (not view/expression), the table has a PK, and every PK column is in the result.
+  Uses catalog names (not aliases). Unit-tested: `Squirrel.Sql.Tests/EditabilityResolverTests.cs` (5).
+
+**Step 4 remaining (UI + wiring):** expose `EditTarget`/`IsEditable` on `ResultSetViewModel` (detect in
+`MainWindowViewModel` like FK columns); editable `DataGrid` (`IsReadOnly=false`), capture edits via
+`CellEditEnding`, pending-row markers, row add/delete, **[Save changes]** → build `SqlWriteCommand`s via
+`DmlGenerator` → `ExecuteWriteAsync` in one tx → refresh affected rows. Commit UX pending user pick.
+
+### Detailed original notes
+
 1. **Editability gate**: enable only when all result columns share one `BaseTable` (single-table select)
    AND that table has a primary key present among the result columns. Reuse the Phase-2 `ColumnDescriptor`
    base mapping. Expose a per-result `IsEditable` + the PK column indices + target table.
@@ -219,18 +240,12 @@ all original values); read-only/computed columns; views are not editable.
 
 ## Other pending / deferred (same session)
 
-- **Verify terminal Ctrl+C saves the session.** `App.axaml.cs` now saves on `window.Closing`,
-  `desktop.ShutdownRequested`, and `AppDomain.CurrentDomain.ProcessExit` (dropped the buggy
-  `PosixSignalRegistration`). The ProcessExit-on-Ctrl+C path was NOT verified live (an earlier test was
-  contaminated by a second running instance). Verify: with no other squirrel instance running, launch,
-  edit, Ctrl+C the terminal, relaunch, confirm session restored. Session file:
-  `~/.local/share/squirrel/projects/default/.squirrel/session.json`.
-- **Visual QA pass** — these landed but were never eyeballed (no headless GUI): statement gutter bar +
-  Alt+Up/Down nav; result-set sub-tabs; both tab strips' bottom-underline restyle; the amber ● unsaved
-  marker; translucent text selection; row-number gutter; the autocomplete behavior (alias-dot columns +
-  FK-equality predicate).
-- **Stale connection**: the pre-existing `~/.local/share/squirrel/projects/default/project.json` may still
-  point a connection at old port 5433; the demo seed skips non-empty projects. Fix in-app or edit to 5434.
+- **Terminal Ctrl+C saves the session.** VERIFIED 2026-07-17 (user confirmed relaunch restores session).
+- **Visual QA pass** — Phase 1–2 UI (paging footer/Load more/Count, row-number gutter, FK ↗ icon, inline
+  nav + Back bar, tab close ✕) VERIFIED 2026-07-17 by the user. Still un-eyeballed from earlier work:
+  statement gutter bar + Alt+Up/Down nav, result-set sub-tabs, tab-strip underline restyle, amber ●
+  marker, translucent selection, autocomplete (alias-dot columns + FK-equality predicate).
+- **Stale connection**: RESOLVED 2026-07-17 (user confirmed default project points at 5434).
 - **M7 hardening** (from the original plan): query cancellation (DONE — Esc/`_executionCts`); large-result
   streaming (partially addressed by paging); schema snapshot refresh (no refresh button yet); packaging /
   AppImage. `PostgresQueryExecutor.StreamAsync` exists but is unused.

@@ -53,6 +53,14 @@ public interface IQueryExecutor
     /// <summary>Total row count of a single SELECT (<c>select count(*) from (&lt;sql&gt;)</c>); null if it can't be counted.</summary>
     Task<long?> CountAsync(string sql, CancellationToken ct);
 
+    /// <summary>
+    /// Run one or more generated writes (UPDATE/DELETE/INSERT) in a single transaction. Returns one
+    /// <see cref="QueryResult"/> per command in order (INSERT … RETURNING yields rows; UPDATE/DELETE
+    /// yield an affected-rows message). Any failure rolls back the whole batch and is returned as a
+    /// single error result rather than thrown.
+    /// </summary>
+    Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct);
+
     IAsyncEnumerable<ResultBatch> StreamAsync(string sql, QueryOptions options, CancellationToken ct);
 }
 

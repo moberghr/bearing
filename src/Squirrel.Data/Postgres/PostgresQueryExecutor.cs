@@ -87,6 +87,40 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         }
     }
 
+    public async Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(
+        IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
+        var results = new List<QueryResult>(commands.Count);
+        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct);
+        // One transaction for the whole batch: any failure disposes the tx uncommitted → rollback.
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        try
+        {
+            foreach (var c in commands)
+            {
+                await using var cmd = new NpgsqlCommand(c.Sql, conn, tx);
+                foreach (var p in c.Parameters)
+                    cmd.Parameters.Add(new NpgsqlParameter(p.Name, p.Value ?? DBNull.Value));
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                results.Add(await ReadResultSetAsync(reader, new QueryOptions { MaxRows = null }, sw, ct));
+            }
+            await tx.CommitAsync(ct);
+            return results;
+        }
+        catch (PostgresException pg)
+        {
+            sw.Stop();
+            var pos = pg.Position > 0 ? pg.Position : (int?)null;
+            return new[] { Failure(sw.Elapsed, new QueryError(pg.MessageText, pg.SqlState, pos)) };
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            sw.Stop();
+            return new[] { Failure(sw.Elapsed, new QueryError(ex.Message, null, null)) };
+        }
+    }
+
     private static string StripTrailingSemicolon(string sql)
     {
         var s = sql.TrimEnd();

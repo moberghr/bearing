@@ -85,6 +85,9 @@ internal sealed class FakeExecutor : IQueryExecutor
     public Task<long?> CountAsync(string sql, CancellationToken ct)
         => Task.FromResult<long?>(0);
 
+    public Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<QueryResult>>(new[] { Empty });
+
     public async IAsyncEnumerable<ResultBatch> StreamAsync(string sql, QueryOptions options,
         [EnumeratorCancellation] CancellationToken ct)
     {
