@@ -22,6 +22,7 @@ namespace Squirrel.App.Views;
 public partial class MainWindow : Window
 {
     private readonly CompletionController _completion;
+    private readonly SqlFoldingController _folding;
     private readonly StatementMargin _statementHighlight = new();
     private bool _loadingEditor;          // guards editor<->tab sync while swapping tabs
     private bool _suppressProjectChange;   // guards the project combo during programmatic updates
@@ -32,7 +33,12 @@ public partial class MainWindow : Window
         InstallSqlHighlighting();
 
         _completion = new CompletionController(Editor, new CompletionEngine(), () => Vm?.SnapshotForSelectedTab());
+        _folding = new SqlFoldingController(Editor); // installs the fold margin (left of the text)
         Editor.TextArea.LeftMargins.Add(_statementHighlight); // its own column, right of the line numbers
+
+        // Editor-editing shortcuts must pre-empt AvaloniaEdit, which consumes Enter/'/'/brackets on
+        // its own KeyDown — so handle them during the tunnel phase, before the editor sees them.
+        Editor.AddHandler(KeyDownEvent, OnEditorKeyDown, Avalonia.Interactivity.RoutingStrategies.Tunnel);
 
         // Paging footer buttons call back into the shell VM (Vm is resolved lazily at click time).
         ResultsView.LoadMore = rs => Vm?.LoadMoreAsync(rs) ?? Task.CompletedTask;
@@ -73,6 +79,7 @@ public partial class MainWindow : Window
         {
             if (!_loadingEditor && Vm?.SelectedTab is { } tab) tab.Text = Editor.Text;
             UpdateStatementHighlight();
+            _folding.Refresh();
         };
         Editor.TextArea.Caret.PositionChanged += (_, _) =>
         {
@@ -338,6 +345,86 @@ public partial class MainWindow : Window
         if (Vm is null) return;
         var history = new HistoryWindow((text, ct) => Vm.SearchHistoryAsync(text, ct), sql => Editor.Text = sql);
         history.Show(this);
+    }
+
+    /// <summary>
+    /// Editor-scoped editing shortcuts, handled in the tunnel phase so they win over AvaloniaEdit's
+    /// own handling of Enter / '/' / brackets. App-level shortcuts (Run, Save, …) stay in <see cref="OnKeyDown"/>.
+    /// </summary>
+    private void OnEditorKeyDown(object? sender, KeyEventArgs e)
+    {
+        var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        var alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+        if (alt) return;
+
+        // Fold / unfold the current query. Match the physical [ ] keys so it works on any layout —
+        // on the Croatian keyboard those same physical keys type š / đ.
+        if (ctrl && shift && e.PhysicalKey is PhysicalKey.BracketLeft or PhysicalKey.BracketRight)
+        {
+            if (e.PhysicalKey == PhysicalKey.BracketLeft) _folding.FoldCurrent();
+            else _folding.UnfoldCurrent();
+            e.Handled = true;
+            return;
+        }
+
+        switch (e.Key)
+        {
+            case Key.Enter when shift && !ctrl: OpenLine(below: true); break;
+            case Key.Enter when shift && ctrl: OpenLine(below: false); break;
+            // Ctrl+/ on US, Ctrl+- on the HR layout (that physical key reports as OemMinus there).
+            case Key.OemQuestion when ctrl && !shift: ToggleLineComment(); break;
+            case Key.OemMinus when ctrl && !shift: ToggleLineComment(); break;
+            case Key.A when ctrl && shift: SelectCurrentQuery(); break;
+            case Key.OemMinus when ctrl && shift: _folding.FoldAll(); break;
+            case Key.OemPlus when ctrl && shift: _folding.UnfoldAll(); break;
+            default: return;
+        }
+        e.Handled = true;
+    }
+
+    /// <summary>Insert a blank line below (or above) the caret's line, matching its indentation.</summary>
+    private void OpenLine(bool below)
+    {
+        var doc = Editor.Document;
+        var line = doc.GetLineByOffset(Editor.CaretOffset);
+        var lineText = doc.GetText(line.Offset, line.Length);
+        var indent = lineText[..(lineText.Length - lineText.TrimStart().Length)];
+
+        if (below)
+        {
+            doc.Insert(line.EndOffset, "\n" + indent);
+            Editor.CaretOffset = line.EndOffset + 1 + indent.Length;
+        }
+        else
+        {
+            doc.Insert(line.Offset, indent + "\n");
+            Editor.CaretOffset = line.Offset + indent.Length;
+        }
+        Editor.TextArea.Caret.BringCaretToView();
+    }
+
+    /// <summary>Ctrl+/: toggle <c>-- </c> comments over the lines the caret/selection touches.</summary>
+    private void ToggleLineComment()
+    {
+        var start = Editor.SelectionLength > 0 ? Editor.SelectionStart : Editor.CaretOffset;
+        var end = Editor.SelectionLength > 0 ? Editor.SelectionStart + Editor.SelectionLength : Editor.CaretOffset;
+        var result = Squirrel.Sql.LineCommenter.Toggle(Editor.Text, start, end);
+        if (result.Text == Editor.Text) return;
+
+        Editor.Document.Replace(0, Editor.Document.TextLength, result.Text);
+        Editor.SelectionStart = result.SelectionStart;
+        Editor.SelectionLength = result.SelectionLength;
+        Editor.CaretOffset = result.SelectionStart + result.SelectionLength;
+    }
+
+    /// <summary>Ctrl+Shift+A: select the whole statement the caret sits in.</summary>
+    private void SelectCurrentQuery()
+    {
+        if (Squirrel.Sql.StatementSplitter.StatementAt(Editor.Text, Editor.CaretOffset) is not { } stmt) return;
+        Editor.SelectionStart = stmt.TrimmedStart;
+        Editor.SelectionLength = stmt.TrimmedEnd - stmt.TrimmedStart;
+        Editor.CaretOffset = stmt.TrimmedEnd;
     }
 
     protected override async void OnKeyDown(KeyEventArgs e)
