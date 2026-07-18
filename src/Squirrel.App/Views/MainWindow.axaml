@@ -210,9 +210,11 @@
 
         <TextBlock Text="›" VerticalAlignment="Center" Foreground="{DynamicResource Text.Faint}"/>
 
-        <!-- Database (switchable; lists all DBs on the server) -->
+        <!-- Database (switchable; lists all DBs on the server). Selection is driven in code-behind
+             (SyncDbPicker) because TabDatabases is populated asynchronously, which defeats a plain
+             SelectedItem binding's timing. -->
         <ComboBox x:Name="DatabasePicker" Classes="pill" Width="150"
-                  ItemsSource="{Binding TabDatabases}" SelectedItem="{Binding SelectedTabDatabase}"
+                  ItemsSource="{Binding TabDatabases}" SelectionChanged="OnDatabaseSelected"
                   PlaceholderText="— db —" ToolTip.Tip="Database (switch DB on this server)"/>
 
         <!-- Run: understated 30×30 icon button (doubles as Cancel while busy; Esc also cancels) -->
@@ -472,8 +474,15 @@
             </StackPanel>
             <TextBlock DockPanel.Dock="Bottom" Text="{Binding History.Status}" FontSize="11"
                        Foreground="{DynamicResource Text.Faint}" Margin="2,4,2,0"/>
-            <!-- List (fills) · drag splitter · query preview (resizable, hidden until a row is selected). -->
-            <Grid RowDefinitions="*,Auto,Auto">
+            <!-- List (fills) · drag splitter · query preview (resizable, hidden until a row is selected).
+                 HistoryPreviewRow is a real pixel row so the GridSplitter actually resizes the pane;
+                 code-behind sets it to 0 when nothing is selected. -->
+            <Grid x:Name="HistoryGrid">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="*"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="0"/>
+            </Grid.RowDefinitions>
             <ScrollViewer Grid.Row="0">
               <ItemsControl ItemsSource="{Binding History.Groups}">
                 <ItemsControl.ItemTemplate>
@@ -508,7 +517,7 @@
             </ScrollViewer>
             <GridSplitter Grid.Row="1" Height="4" ResizeDirection="Rows" Background="{DynamicResource Border}"
                           IsVisible="{Binding History.SelectedRow, Converter={x:Static ObjectConverters.IsNotNull}}"/>
-            <Border Grid.Row="2" Height="220" Margin="0,6,0,0"
+            <Border Grid.Row="2" Margin="0,6,0,0" VerticalAlignment="Stretch"
                     Background="{DynamicResource Bg.Window}" BorderBrush="{DynamicResource Border}"
                     BorderThickness="1" CornerRadius="6"
                     IsVisible="{Binding History.SelectedRow, Converter={x:Static ObjectConverters.IsNotNull}}">

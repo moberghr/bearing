@@ -99,9 +99,22 @@ public partial class MainWindow : Window
         if (Vm is null) return;
         Vm.PropertyChanged -= OnViewModelPropertyChanged;
         Vm.PropertyChanged += OnViewModelPropertyChanged;
+        Vm.TabDatabases.CollectionChanged -= OnTabDatabasesChanged;
+        Vm.TabDatabases.CollectionChanged += OnTabDatabasesChanged;
+        Vm.History.PropertyChanged -= OnHistoryPropertyChanged;
+        Vm.History.PropertyChanged += OnHistoryPropertyChanged;
         LoadEditorFromSelectedTab();
         SyncProjectCombo();
+        SyncDbPicker();
         App.SetConnectionAccent(Vm.ActiveConnectionColor); // seed the accent for the initial tab
+    }
+
+    private void OnTabDatabasesChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        => SyncDbPicker();
+
+    private void OnHistoryPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ViewModels.HistoryPanelViewModel.SelectedRow)) UpdateHistoryPreviewRow();
     }
 
     private void InstallSqlHighlighting() => SetupEditorChrome(Editor);
@@ -137,6 +150,8 @@ public partial class MainWindow : Window
             LoadEditorFromSelectedTab();
         else if (e.PropertyName == nameof(MainWindowViewModel.ActiveConnectionColor))
             App.SetConnectionAccent(Vm?.ActiveConnectionColor); // recolor tab accent, dots, results, status line
+        else if (e.PropertyName == nameof(MainWindowViewModel.SelectedTabDatabase))
+            SyncDbPicker();
         else if (e.PropertyName is nameof(MainWindowViewModel.Title) or nameof(MainWindowViewModel.ProjectDirectory))
             SyncProjectCombo();
     }
@@ -255,6 +270,25 @@ public partial class MainWindow : Window
             e.Handled = true;
             if (_treeSearch.Length == 0) ClearTreeSearch(); else ApplyTreeSearch();
         }
+        // While a search is active, Up/Down cycle through the highlighted matches (not every node).
+        else if (_treeSearch.Length > 0 && e.Key is Key.Down or Key.Up)
+        {
+            e.Handled = true;
+            MoveToAdjacentMatch(e.Key == Key.Down ? 1 : -1);
+        }
+    }
+
+    private void MoveToAdjacentMatch(int direction)
+    {
+        var nodes = FlattenRealized();
+        var matches = nodes.Where(n => FuzzyMatch(n.Title, _treeSearch)).ToList();
+        if (matches.Count == 0) return;
+        var current = SchemaTree.SelectedItem as SchemaNodeViewModel;
+        var idx = current is null ? -1 : matches.IndexOf(current);
+        idx = idx < 0
+            ? (direction > 0 ? 0 : matches.Count - 1)
+            : (idx + direction + matches.Count) % matches.Count;
+        SchemaTree.SelectedItem = matches[idx];
     }
 
     private void ClearTreeSearch()
@@ -563,6 +597,41 @@ public partial class MainWindow : Window
     private void OnSettingsClick(object? sender, RoutedEventArgs e)
     {
         if (Vm is not null) Vm.StatusText = "Settings — coming soon.";
+    }
+
+    // ---- database pill selection (driven in code; async ItemsSource defeats a plain binding) ----
+    private bool _syncingDb;
+
+    private void SyncDbPicker()
+    {
+        if (Vm is null) return;
+        _syncingDb = true;
+        DatabasePicker.SelectedItem = Vm.SelectedTabDatabase; // matched by value; null → placeholder
+        _syncingDb = false;
+    }
+
+    private void OnDatabaseSelected(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingDb || Vm is null) return;
+        if (DatabasePicker.SelectedItem is string db) Vm.SelectedTabDatabase = db;
+    }
+
+    // ---- history preview row (real pixel row so the splitter resizes it; 0 when nothing selected) ----
+    private double _historyPreviewHeight = 220;
+
+    private void UpdateHistoryPreviewRow()
+    {
+        var row = HistoryGrid.RowDefinitions[2];
+        if (Vm?.History.SelectedRow is not null)
+        {
+            row.Height = new Avalonia.Controls.GridLength(_historyPreviewHeight);
+        }
+        else
+        {
+            if (row.Height.IsAbsolute && row.Height.Value > 0)
+                _historyPreviewHeight = row.Height.Value; // remember the user's drag size
+            row.Height = new Avalonia.Controls.GridLength(0);
+        }
     }
 
     // ---- side-pane resize grip ----
