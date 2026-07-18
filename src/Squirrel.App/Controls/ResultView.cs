@@ -240,14 +240,18 @@ public sealed class ResultView : UserControl
                 }
                 return cell;
             }),
-            CellEditingTemplate = new FuncDataTemplate<object?[]>((row, _) => new TextBox
-            {
-                Text = CellText(row, index),
-                Padding = new Thickness(3, 1),
-                BorderThickness = new Thickness(0),
-                VerticalContentAlignment = VerticalAlignment.Center,
-            }),
+            CellEditingTemplate = CellEditor(index),
         };
+
+    /// <summary>The in-cell editor (a TextBox seeded with the current value) shared by editable and FK columns.</summary>
+    private static IDataTemplate CellEditor(int index)
+        => new FuncDataTemplate<object?[]>((row, _) => new TextBox
+        {
+            Text = CellText(row, index),
+            Padding = new Thickness(3, 1),
+            BorderThickness = new Thickness(0),
+            VerticalContentAlignment = VerticalAlignment.Center,
+        });
 
     private static string CellText(object?[]? row, int index)
         => row is not null && index < row.Length ? CellFormat.Display(row[index]) : "";
@@ -304,11 +308,14 @@ public sealed class ResultView : UserControl
     }
 
     /// <summary>A foreign-key column: the value shows as plain text with a clickable jump-icon on the
-    /// right that navigates to the referenced row.</summary>
+    /// right that navigates to the referenced row. In an editable result the value is also editable
+    /// (double-click / F2) via the shared editor; the jump icon stays on the display cell.</summary>
     private DataGridColumn ForeignKeyColumn(ResultSetViewModel result, int index)
         => new DataGridTemplateColumn
         {
             Header = result.Columns[index].Name,
+            Tag = index, // enables CellEditEnding capture when the grid is editable
+            CellEditingTemplate = result.IsEditable ? CellEditor(index) : null,
             CellTemplate = new FuncDataTemplate<object?[]>((row, _) =>
             {
                 if (row is null) return new TextBlock();
