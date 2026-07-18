@@ -333,6 +333,33 @@ public class WorkspaceFlowTests : IDisposable
         Assert.Equal("select 1; -- WIP", await File.ReadAllTextAsync(path));
     }
 
+    [SkippableFact]
+    public async Task Switching_database_runs_against_the_chosen_db_on_the_same_server()
+    {
+        Skip.IfNot(await Reachable(), "No PostgreSQL reachable for integration test.");
+
+        var vm = NewVm();
+        await vm.InitializeAsync(Path.Combine(_root, "dbswitch"));
+        await vm.SeedDemoConnectionAsync(Host, Port, Db, User, Password);
+        var tab = vm.SelectedTab!;
+
+        // Default DB is the connection's own.
+        Assert.Equal(Db, tab.DatabaseName);
+
+        // Switch to the always-present 'postgres' maintenance DB (same server, reused credentials).
+        vm.SetTabDatabase(tab, "postgres");
+        Assert.Equal("postgres", tab.DatabaseName);
+
+        await vm.ExecuteAsync("select current_database();");
+        Assert.True(tab.LastResult?.Success, vm.StatusText);
+        Assert.Equal("postgres", tab.LastResult!.Rows[0][0]?.ToString());
+
+        // Switch back — the original database's tables resolve again.
+        vm.SetTabDatabase(tab, Db);
+        await vm.ExecuteAsync("select current_database();");
+        Assert.Equal(Db, tab.LastResult!.Rows[0][0]?.ToString());
+    }
+
     private static async Task<Core.Schema.ISchemaSnapshot?> WaitForSnapshot(MainWindowViewModel vm)
     {
         for (var i = 0; i < 50; i++)

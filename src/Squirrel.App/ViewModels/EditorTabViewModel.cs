@@ -98,6 +98,10 @@ public sealed partial class EditorTabViewModel : ObservableObject
     /// <summary>The connection this tab executes against; null means "no connection chosen".</summary>
     [ObservableProperty] private Guid? _connectionId;
 
+    /// <summary>Active database on the connection's server (may differ from the connection's default DB —
+    /// the toolbar Database pill switches it). Null falls back to the connection's default.</summary>
+    [ObservableProperty] private string? _databaseName;
+
     /// <summary>Denormalized connection name for tab-header display (set when the connection is assigned).</summary>
     [ObservableProperty] private string? _connectionDisplay;
 

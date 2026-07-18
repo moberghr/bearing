@@ -1,0 +1,37 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- ============================================================================================
+       Line-icon geometries (24×24 viewport) drawn as Path Data — stroked, not filled — so they
+       recolor with the owning control's Foreground and never depend on a symbol font (the app font
+       clips some Unicode glyphs; see result-set FK ↗ note). Used by the left rail + toolbar.
+       ============================================================================================ -->
+
+  <!-- Server / connections: two stacked units -->
+  <StreamGeometry x:Key="Icon.Connections">M4,6 h16 v4 h-16 z M4,13 h16 v4 h-16 z M7,8 h2 M7,15 h2</StreamGeometry>
+
+  <!-- Schema: a table grid -->
+  <StreamGeometry x:Key="Icon.Schema">M4,5 h16 v14 h-16 z M4,10 h16 M4,14.5 h16 M11,5 v14</StreamGeometry>
+
+  <!-- Scripts: a document with a folded corner -->
+  <StreamGeometry x:Key="Icon.Scripts">M7,3 h8 l4,4 v14 h-12 z M15,3 v4 h4 M9,12 h6 M9,15 h6 M9,18 h4</StreamGeometry>
+
+  <!-- History: a clock -->
+  <StreamGeometry x:Key="Icon.History">M4,12 a8,8 0 1 1 16,0 a8,8 0 1 1 -16,0 M12,7 v5.3 l3.5,2</StreamGeometry>
+
+  <!-- Settings: a gear (center ring + spokes) -->
+  <StreamGeometry x:Key="Icon.Settings">M9.5,12 a2.5,2.5 0 1 1 5,0 a2.5,2.5 0 1 1 -5,0 M12,3 v3 M12,18 v3 M3,12 h3 M18,12 h3 M5.6,5.6 l2.1,2.1 M16.3,16.3 l2.1,2.1 M18.4,5.6 l-2.1,2.1 M5.6,18.4 l2.1,-2.1</StreamGeometry>
+
+  <!-- Search: magnifier -->
+  <StreamGeometry x:Key="Icon.Search">M10,4 a6,6 0 1 1 0,12 a6,6 0 1 1 0,-12 M14.5,14.5 l5,5</StreamGeometry>
+
+  <!-- Run: filled triangle (this one is meant to be filled) -->
+  <StreamGeometry x:Key="Icon.Run">M7,5 L18,12 L7,19 Z</StreamGeometry>
+
+  <!-- Focus: expand arrows -->
+  <StreamGeometry x:Key="Icon.Focus">M4,9 v-5 h5 M20,9 v-5 h-5 M4,15 v5 h5 M20,15 v5 h-5</StreamGeometry>
+
+  <!-- Database cylinder (toolbar db pill / tree) -->
+  <StreamGeometry x:Key="Icon.Database">M5,6 a7,3 0 1 1 14,0 a7,3 0 1 1 -14,0 M5,6 v12 a7,3 0 0 0 14,0 v-12 M5,12 a7,3 0 0 0 14,0</StreamGeometry>
+
+</ResourceDictionary>

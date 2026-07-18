@@ -162,10 +162,31 @@ uniformly, not per-line) — line numbers are uniformly faint for now.
 connection, tab top-accent + name label track the connection, syntax colors match.
 **Tests**: unit-test the env-color→Color mapping (App). No behavior change to logic paths.
 
-## Phase 2 — Shell: left icon rail + swappable side panel (+ inline History)
+## Phase 2 — Shell: left icon rail + swappable side panel (+ inline History)  (DONE 2026-07-18, awaiting user live QA)
 
 **Goal**: replace the `☰`-toggled stacked pane with the 52px rail + 262px swappable panel; bring History
 inline. Biggest structural change; do it before the toolbar so panels have their home.
+
+**Shipped** (builds; 44 App tests green; app launches clean):
+- **Left rail** (52px, `Bg.Window`): `RadioButton` tiles themed by `RailTile` ControlTheme (idle dim /
+  hover / `:checked` = `Bg.TileActive` + `Accent.Orange`), bound to `ActivePanel` via a new
+  `EnumToBoolConverter`; Settings is a `RailButton` (stub → status text). Icons are vector `Path`
+  geometries in `Themes/Icons.axaml` (`Icon.Schema/Scripts/History/Settings/...`) — stroke follows the
+  tile Foreground, no symbol-font dependency.
+- **`SidePanel` enum** {Schema, Scripts, History} + `MainWindowViewModel.ActivePanel` (selecting a tile
+  reveals the pane; History auto-reloads). Connections folded into the Schema tree (documented
+  divergence — no separate Connections rail tile; the tree is connection-rooted).
+- **262px pane** = three `IsVisible`-toggled panels (Schema tree moved in as-is + restyled; Scripts list;
+  History). Rail is a persistent `DockPanel.Dock=Left` border; `SplitView` still hosts pane+editor.
+- **Inline History** (`HistoryPanelViewModel` + `HistoryDayGroup`/`HistoryRowViewModel`): day-grouped
+  (`DayCaption` TODAY/YESTERDAY/dd.MM.yyyy), ok/error filter pills (`PillToggle` theme, re-group from
+  cache, no round-trip), search box (Enter → FTS reload), conn-color dot per row (resolved by connection
+  name), error rows red + `✕`, selected row = `Bg.Select` + 2px orange left border. Double-click a row →
+  opens SQL in a **new tab** (non-destructive). Toolbar History button now sets `ActivePanel=History`
+  (the standalone `HistoryWindow` is now unused — retire in a cleanup).
+- Tests: `HistoryPanelTests` (grouping, filter pills, row color/marker, DayCaption).
+
+**Deferred to later phases**: schema-panel search glyph, scripts filter input + new-folder (Phase 4).
 
 - **Left rail** (`52px`): a vertical column of 36×36 icon toggle tiles — Connections, Schema, Scripts,
   History, spacer, Settings. Idle transparent + `#727169` glyph; hover `#20202A`; active tile

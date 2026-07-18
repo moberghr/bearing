@@ -11,7 +11,122 @@
         Foreground="{DynamicResource Text.Primary}"
         Title="{Binding Title}">
 
+  <Window.Resources>
+    <!-- Left-rail tile: a 36×36 rounded button with just an icon. Idle = dim glyph on transparent;
+         hover tints; the checked (active) tile fills Bg.TileActive and turns the glyph orange. -->
+    <ControlTheme x:Key="RailTile" TargetType="RadioButton">
+      <Setter Property="Width" Value="36"/>
+      <Setter Property="Height" Value="36"/>
+      <Setter Property="Margin" Value="0,3"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="{DynamicResource Text.Dim}"/>
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Background="{TemplateBinding Background}" CornerRadius="9">
+            <ContentPresenter Content="{TemplateBinding Content}"
+                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+      <Style Selector="^:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
+        <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+      </Style>
+      <Style Selector="^:checked">
+        <Setter Property="Background" Value="{DynamicResource Bg.TileActive}"/>
+        <Setter Property="Foreground" Value="{DynamicResource Accent.Orange}"/>
+      </Style>
+    </ControlTheme>
+
+    <!-- Same tile as a plain Button (Settings) — hover only, no checked state. -->
+    <ControlTheme x:Key="RailButton" TargetType="Button">
+      <Setter Property="Width" Value="36"/>
+      <Setter Property="Height" Value="36"/>
+      <Setter Property="Margin" Value="0,3"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="{DynamicResource Text.Dim}"/>
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Background="{TemplateBinding Background}" CornerRadius="9">
+            <ContentPresenter Content="{TemplateBinding Content}"
+                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+      <Style Selector="^:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
+        <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+      </Style>
+    </ControlTheme>
+
+    <!-- History filter pill: small rounded toggle; active segment fills Bg.TileActive. -->
+    <ControlTheme x:Key="PillToggle" TargetType="RadioButton">
+      <Setter Property="Padding" Value="9,2"/>
+      <Setter Property="MinHeight" Value="0"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="{DynamicResource Text.Dim}"/>
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+            <ContentPresenter Content="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}"
+                              VerticalAlignment="Center"/>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+      <Style Selector="^:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
+      </Style>
+      <Style Selector="^:checked">
+        <Setter Property="Background" Value="{DynamicResource Bg.TileActive}"/>
+        <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+      </Style>
+    </ControlTheme>
+  </Window.Resources>
+
   <Window.Styles>
+    <!-- Toolbar pill selectors: compact, rounded, token-colored ComboBoxes. -->
+    <Style Selector="ComboBox.pill">
+      <Setter Property="Background" Value="{DynamicResource Bg.Editor}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Border.Control}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+      <Setter Property="CornerRadius" Value="7"/>
+      <Setter Property="MinHeight" Value="30"/>
+      <Setter Property="Height" Value="30"/>
+      <Setter Property="Padding" Value="10,0"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="FontSize" Value="12.5"/>
+    </Style>
+
+    <!-- Rail icon paths inherit the tile's Foreground so they recolor on hover/active. -->
+    <Style Selector="RadioButton.rail Path, Button.rail Path">
+      <Setter Property="Stroke" Value="{Binding $parent[TemplatedControl].Foreground}"/>
+      <Setter Property="StrokeThickness" Value="1.6"/>
+      <Setter Property="StrokeLineCap" Value="Round"/>
+      <Setter Property="StrokeJoin" Value="Round"/>
+      <Setter Property="Stretch" Value="Uniform"/>
+      <Setter Property="Width" Value="20"/>
+      <Setter Property="Height" Value="20"/>
+    </Style>
+
+    <!-- History rows: selected = wave-blue fill + 2px orange left border (design §4). -->
+    <Style Selector="ListBox.history > ListBoxItem">
+      <Setter Property="Padding" Value="8,3"/>
+      <Setter Property="Margin" Value="0"/>
+      <Setter Property="MinHeight" Value="0"/>
+      <Setter Property="BorderThickness" Value="2,0,0,0"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+    </Style>
+    <Style Selector="ListBox.history > ListBoxItem:selected /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource Bg.Select}"/>
+    </Style>
+    <Style Selector="ListBox.history > ListBoxItem:selected">
+      <Setter Property="BorderBrush" Value="{DynamicResource Accent.Orange}"/>
+    </Style>
+
     <!-- Result-set tabs (TabControl/TabItem): same compact underline style as the editor tabs. -->
     <Style Selector="TabItem">
       <Setter Property="FontSize" Value="13"/>
@@ -51,50 +166,66 @@
 
   <DockPanel LastChildFill="True">
 
-    <!-- Project bar -->
-    <Border DockPanel.Dock="Top" Padding="8,6" Background="{DynamicResource Bg.Chrome}"
+    <!-- Toolbar (design §Toolbar): proj · | · server · › · database · Run … Focus -->
+    <Border DockPanel.Dock="Top" Height="46" Padding="8,0" Background="{DynamicResource Bg.Chrome}"
             BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
-      <StackPanel Orientation="Horizontal">
-        <Button Content="☰" Click="OnToggleSidePane" Padding="8,2" Margin="0,0,10,0"
-                ToolTip.Tip="Toggle side pane (Ctrl+B)"/>
-        <TextBlock Text="Project" VerticalAlignment="Center" Margin="0,0,6,0"/>
-        <ComboBox x:Name="ProjectCombo" Width="340" ItemsSource="{Binding RecentProjects}"
-                  SelectionChanged="OnProjectSelectionChanged">
+      <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Spacing="6">
+        <Button Classes="rail" Theme="{StaticResource RailButton}" Width="30" Height="30"
+                Click="OnToggleSidePane" ToolTip.Tip="Toggle side pane (Ctrl+B)">
+          <Path Data="M4,7 h16 M4,12 h16 M4,17 h16"/>
+        </Button>
+
+        <!-- Project selector + overflow (Rename/Open/New live here) -->
+        <ComboBox x:Name="ProjectCombo" Classes="pill" Width="200" ItemsSource="{Binding RecentProjects}"
+                  SelectionChanged="OnProjectSelectionChanged" ToolTip.Tip="Project">
           <ComboBox.ItemTemplate>
             <DataTemplate x:DataType="vm:RecentProjectItem">
               <TextBlock Text="{Binding Name}" ToolTip.Tip="{Binding Directory}"/>
             </DataTemplate>
           </ComboBox.ItemTemplate>
         </ComboBox>
-        <Button Content="Rename…" Click="OnRenameProjectClick" Margin="8,0,0,0"/>
-        <Button Content="Open…" Click="OnOpenProjectClick" Margin="4,0,0,0"/>
-        <Button Content="New…" Click="OnNewProjectClick" Margin="4,0,0,0"/>
-        <Button Content="History" Click="OnHistoryClick" Margin="16,0,0,0"/>
-      </StackPanel>
-    </Border>
+        <Button Content="⋯" Padding="8,4" ToolTip.Tip="Project actions">
+          <Button.Flyout>
+            <MenuFlyout>
+              <MenuItem Header="Rename project…" Click="OnRenameProjectClick"/>
+              <MenuItem Header="Open project…" Click="OnOpenProjectClick"/>
+              <MenuItem Header="New project…" Click="OnNewProjectClick"/>
+            </MenuFlyout>
+          </Button.Flyout>
+        </Button>
 
-    <!-- Action bar: per-tab connection + run/open/save -->
-    <Border DockPanel.Dock="Top" Padding="8,6" Background="{DynamicResource Bg.Chrome}"
-            BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
-      <StackPanel Orientation="Horizontal">
-        <TextBlock Text="Connection" VerticalAlignment="Center" Margin="0,0,6,0"/>
-        <ComboBox x:Name="ConnectionPicker" Width="240"
-                  ItemsSource="{Binding Connections}"
-                  SelectedItem="{Binding SelectedTabConnection}"
-                  PlaceholderText="— none —">
+        <Border Width="1" Height="22" Background="{DynamicResource Border}" Margin="4,0"/>
+
+        <!-- Server (connection) -->
+        <ComboBox x:Name="ConnectionPicker" Classes="pill" Width="210"
+                  ItemsSource="{Binding Connections}" SelectedItem="{Binding SelectedTabConnection}"
+                  PlaceholderText="— server —" ToolTip.Tip="Server / connection">
           <ComboBox.ItemTemplate>
             <DataTemplate x:DataType="data:ConnectionInfo">
               <StackPanel Orientation="Horizontal" Spacing="8">
                 <Border Width="9" Height="9" CornerRadius="4" VerticalAlignment="Center"
                         Background="{Binding EnvironmentColor, Converter={StaticResource HexBrush}}"/>
                 <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding Host}" VerticalAlignment="Center" FontSize="11"
+                           Foreground="{DynamicResource Text.Dim}"/>
               </StackPanel>
             </DataTemplate>
           </ComboBox.ItemTemplate>
         </ComboBox>
-        <Button x:Name="RunButton" Content="{Binding RunButtonText}" Click="OnRunClick" Margin="16,0,0,0"/>
-        <Button Content="Open" Click="OnOpenClick" Margin="16,0,0,0"/>
-        <Button Content="Save" Click="OnSaveClick" Margin="4,0,0,0"/>
+
+        <TextBlock Text="›" VerticalAlignment="Center" Foreground="{DynamicResource Text.Faint}"/>
+
+        <!-- Database (switchable; lists all DBs on the server) -->
+        <ComboBox x:Name="DatabasePicker" Classes="pill" Width="150"
+                  ItemsSource="{Binding TabDatabases}" SelectedItem="{Binding SelectedTabDatabase}"
+                  PlaceholderText="— db —" ToolTip.Tip="Database (switch DB on this server)"/>
+
+        <!-- Run: understated 30×30 icon button (doubles as Cancel while busy; Esc also cancels) -->
+        <Button x:Name="RunButton" Classes="rail" Theme="{StaticResource RailButton}" Width="30" Height="30"
+                Click="OnRunClick" Margin="6,0,0,0" ToolTip.Tip="{Binding RunButtonText}">
+          <Path Data="{StaticResource Icon.Run}" Fill="{DynamicResource Ok.Green}" Stretch="Uniform"
+                Width="14" Height="14"/>
+        </Button>
       </StackPanel>
     </Border>
 
@@ -105,73 +236,162 @@
                  Foreground="{DynamicResource Text.Dim}"/>
     </Border>
 
-    <!-- Side pane + workspace -->
+    <!-- Body: persistent icon rail + swappable 262px side panel + editor workspace -->
+    <DockPanel LastChildFill="True">
+
+      <!-- Left rail (design §1): Schema / Scripts / History nav tiles, Settings pinned bottom. -->
+      <Border DockPanel.Dock="Left" Width="52" Background="{DynamicResource Bg.Window}"
+              BorderBrush="{DynamicResource Border}" BorderThickness="0,0,1,0">
+        <Grid RowDefinitions="Auto,*,Auto">
+          <StackPanel Grid.Row="0" HorizontalAlignment="Center" Margin="0,8,0,0">
+            <RadioButton Classes="rail" Theme="{StaticResource RailTile}" GroupName="rail" ToolTip.Tip="Schema"
+                         IsChecked="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=Schema, Mode=TwoWay}">
+              <Path Data="{StaticResource Icon.Schema}"/>
+            </RadioButton>
+            <RadioButton Classes="rail" Theme="{StaticResource RailTile}" GroupName="rail" ToolTip.Tip="Scripts"
+                         IsChecked="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=Scripts, Mode=TwoWay}">
+              <Path Data="{StaticResource Icon.Scripts}"/>
+            </RadioButton>
+            <RadioButton Classes="rail" Theme="{StaticResource RailTile}" GroupName="rail" ToolTip.Tip="History"
+                         IsChecked="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=History, Mode=TwoWay}">
+              <Path Data="{StaticResource Icon.History}"/>
+            </RadioButton>
+          </StackPanel>
+          <Button Grid.Row="2" Classes="rail" Theme="{StaticResource RailButton}" ToolTip.Tip="Settings"
+                  Click="OnSettingsClick" HorizontalAlignment="Center" Margin="0,0,0,8">
+            <Path Data="{StaticResource Icon.Settings}"/>
+          </Button>
+        </Grid>
+      </Border>
+
+    <!-- Side panel + workspace -->
     <SplitView IsPaneOpen="{Binding SidePaneOpen}" DisplayMode="Inline" PanePlacement="Left"
                PaneBackground="{DynamicResource Bg.Chrome}"
                OpenPaneLength="{Binding SidePaneWidth}" CompactPaneLength="0">
 
       <SplitView.Pane>
-        <Grid RowDefinitions="Auto,2*,Auto,3*" Margin="6" >
+        <Grid>
 
-          <!-- Connections -->
-          <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="2,0,2,4">
-            <TextBlock Grid.Column="0" Text="CONNECTIONS" FontSize="11" FontWeight="Bold"
-                       Foreground="{DynamicResource Text.Dim}" VerticalAlignment="Center"/>
-            <Button Grid.Column="1" Content="＋" Padding="6,0" Click="OnAddConnectionClick"
-                    ToolTip.Tip="Add connection"/>
-          </Grid>
-          <TreeView Grid.Row="1" x:Name="SchemaTree" ItemsSource="{Binding ServerNodes}">
-            <TreeView.Styles>
-              <!-- Two-way bind each item's expansion to its node so children load lazily on first expand. -->
-              <Style Selector="TreeViewItem">
-                <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
-              </Style>
-            </TreeView.Styles>
-            <TreeView.DataTemplates>
-              <!-- One template for every node type: matched by the base type, so subclasses share it.
-                   Leaves have no children, so no expander is shown. -->
-              <TreeDataTemplate DataType="vm:SchemaNodeViewModel" ItemsSource="{Binding Children}">
-                <StackPanel Orientation="Horizontal" Spacing="6" Background="Transparent"
-                            DoubleTapped="OnSchemaNodeDoubleTapped">
-                  <StackPanel.ContextMenu>
-                    <ContextMenu>
-                      <MenuItem Header="Use in current tab" Click="OnUseConnectionInTab" IsVisible="{Binding IsServer}"/>
-                      <MenuItem Header="Refresh metadata" Click="OnRefreshServer" IsVisible="{Binding IsServer}"/>
-                      <MenuItem Header="Edit…" Click="OnEditServer" IsVisible="{Binding IsServer}"/>
-                      <MenuItem Header="Show definition" Click="OnShowDefinition" IsVisible="{Binding CanShowDefinition}"/>
-                      <MenuItem Header="Copy name" Click="OnCopyNodeName"/>
-                      <Separator IsVisible="{Binding IsServer}"/>
-                      <MenuItem Header="Delete" Click="OnDeleteServer" IsVisible="{Binding IsServer}"/>
-                    </ContextMenu>
-                  </StackPanel.ContextMenu>
-                  <Border Width="9" Height="9" CornerRadius="4" VerticalAlignment="Center"
-                          IsVisible="{Binding BadgeColor, Converter={x:Static ObjectConverters.IsNotNull}}"
-                          Background="{Binding BadgeColor, Converter={StaticResource HexBrush}}"/>
-                  <TextBlock Text="{Binding Glyph}" VerticalAlignment="Center" Opacity="0.75"/>
-                  <TextBlock Text="{Binding Title}" VerticalAlignment="Center"/>
-                  <TextBlock Text="{Binding Detail}" VerticalAlignment="Center" FontSize="11" Opacity="0.5"/>
-                </StackPanel>
-              </TreeDataTemplate>
-            </TreeView.DataTemplates>
-          </TreeView>
+          <!-- ===== Schema panel (connection/schema tree) ===== -->
+          <DockPanel Margin="8,8,6,6"
+                     IsVisible="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=Schema}">
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="2,0,2,6">
+              <TextBlock Grid.Column="0" Text="SCHEMA" FontSize="11" FontWeight="Bold"
+                         Foreground="{DynamicResource Text.Dim}" VerticalAlignment="Center"/>
+              <Button Grid.Column="1" Content="＋" Padding="6,0" Click="OnAddConnectionClick"
+                      ToolTip.Tip="Add connection"/>
+            </Grid>
+            <TreeView x:Name="SchemaTree" ItemsSource="{Binding ServerNodes}" Background="Transparent">
+              <TreeView.Styles>
+                <!-- Two-way bind each item's expansion to its node so children load lazily on first expand. -->
+                <Style Selector="TreeViewItem">
+                  <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+                </Style>
+              </TreeView.Styles>
+              <TreeView.DataTemplates>
+                <!-- One template for every node type: matched by the base type, so subclasses share it.
+                     Leaves have no children, so no expander is shown. -->
+                <TreeDataTemplate DataType="vm:SchemaNodeViewModel" ItemsSource="{Binding Children}">
+                  <StackPanel Orientation="Horizontal" Spacing="6" Background="Transparent"
+                              DoubleTapped="OnSchemaNodeDoubleTapped">
+                    <StackPanel.ContextMenu>
+                      <ContextMenu>
+                        <MenuItem Header="Use in current tab" Click="OnUseConnectionInTab" IsVisible="{Binding IsServer}"/>
+                        <MenuItem Header="Refresh metadata" Click="OnRefreshServer" IsVisible="{Binding IsServer}"/>
+                        <MenuItem Header="Edit…" Click="OnEditServer" IsVisible="{Binding IsServer}"/>
+                        <MenuItem Header="Show definition" Click="OnShowDefinition" IsVisible="{Binding CanShowDefinition}"/>
+                        <MenuItem Header="Copy name" Click="OnCopyNodeName"/>
+                        <Separator IsVisible="{Binding IsServer}"/>
+                        <MenuItem Header="Delete" Click="OnDeleteServer" IsVisible="{Binding IsServer}"/>
+                      </ContextMenu>
+                    </StackPanel.ContextMenu>
+                    <Border Width="9" Height="9" CornerRadius="4" VerticalAlignment="Center"
+                            IsVisible="{Binding BadgeColor, Converter={x:Static ObjectConverters.IsNotNull}}"
+                            Background="{Binding BadgeColor, Converter={StaticResource HexBrush}}"/>
+                    <TextBlock Text="{Binding Glyph}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Muted}"/>
+                    <TextBlock Text="{Binding Title}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Primary}"/>
+                    <TextBlock Text="{Binding Detail}" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource Text.Dim}"/>
+                  </StackPanel>
+                </TreeDataTemplate>
+              </TreeView.DataTemplates>
+            </TreeView>
+          </DockPanel>
 
-          <!-- Scripts -->
-          <TextBlock Grid.Row="2" Text="SCRIPTS" FontSize="11" FontWeight="Bold"
-                     Foreground="{DynamicResource Text.Dim}" Margin="2,8,2,4"/>
-          <ListBox Grid.Row="3" x:Name="ScriptsList" ItemsSource="{Binding Scripts}"
-                   DoubleTapped="OnScriptActivated">
-            <ListBox.ContextMenu>
-              <ContextMenu>
-                <MenuItem Header="Open" Click="OnOpenScriptClick"/>
-                <MenuItem Header="Rename…" Click="OnRenameScriptClick"/>
-              </ContextMenu>
-            </ListBox.ContextMenu>
-            <ListBox.ItemTemplate>
-              <DataTemplate x:DataType="vm:ScriptItem">
-                <TextBlock Text="{Binding Name}"/>
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
+          <!-- ===== Scripts panel ===== -->
+          <DockPanel Margin="8,8,6,6"
+                     IsVisible="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=Scripts}">
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="2,0,2,6">
+              <TextBlock Grid.Column="0" Text="SCRIPTS" FontSize="11" FontWeight="Bold"
+                         Foreground="{DynamicResource Text.Dim}" VerticalAlignment="Center"/>
+              <Button Grid.Column="1" Content="＋" Padding="6,0" Click="OnNewTabClick"
+                      ToolTip.Tip="New editor tab (Ctrl+T)"/>
+            </Grid>
+            <ListBox x:Name="ScriptsList" ItemsSource="{Binding Scripts}" Background="Transparent"
+                     DoubleTapped="OnScriptActivated">
+              <ListBox.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="Open" Click="OnOpenScriptClick"/>
+                  <MenuItem Header="Rename…" Click="OnRenameScriptClick"/>
+                </ContextMenu>
+              </ListBox.ContextMenu>
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:ScriptItem">
+                  <TextBlock Text="{Binding Name}" Foreground="{DynamicResource Text.Primary}"/>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+
+          <!-- ===== History panel (design §4): day-grouped, filterable ===== -->
+          <DockPanel Margin="8,8,6,6"
+                     IsVisible="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=History}">
+            <TextBlock DockPanel.Dock="Top" Text="HISTORY" FontSize="11" FontWeight="Bold"
+                       Foreground="{DynamicResource Text.Dim}" Margin="2,0,2,6"/>
+            <TextBox DockPanel.Dock="Top" Text="{Binding History.SearchText, Mode=TwoWay}"
+                     PlaceholderText="Search history…" KeyDown="OnHistorySearchKeyDown" Margin="0,0,0,6"/>
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,6">
+              <RadioButton Theme="{StaticResource PillToggle}" GroupName="histfilter" Content="All"
+                           IsChecked="{Binding History.Filter, Converter={StaticResource EnumToBool}, ConverterParameter=All, Mode=TwoWay}"/>
+              <RadioButton Theme="{StaticResource PillToggle}" GroupName="histfilter" Content="✓ ok"
+                           IsChecked="{Binding History.Filter, Converter={StaticResource EnumToBool}, ConverterParameter=Ok, Mode=TwoWay}"/>
+              <RadioButton Theme="{StaticResource PillToggle}" GroupName="histfilter" Content="✕ error"
+                           IsChecked="{Binding History.Filter, Converter={StaticResource EnumToBool}, ConverterParameter=Error, Mode=TwoWay}"/>
+            </StackPanel>
+            <TextBlock DockPanel.Dock="Bottom" Text="{Binding History.Status}" FontSize="11"
+                       Foreground="{DynamicResource Text.Faint}" Margin="2,4,2,0"/>
+            <ScrollViewer>
+              <ItemsControl ItemsSource="{Binding History.Groups}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:HistoryDayGroup">
+                    <StackPanel Margin="0,0,0,8">
+                      <TextBlock Text="{Binding Caption}" FontSize="10" FontWeight="Bold"
+                                 Foreground="{DynamicResource Text.Faint}" Margin="2,2,2,3"/>
+                      <ListBox Classes="history" ItemsSource="{Binding Rows}" Background="Transparent"
+                               BorderThickness="0" Padding="0">
+                        <ListBox.ItemTemplate>
+                          <DataTemplate x:DataType="vm:HistoryRowViewModel">
+                            <Grid ColumnDefinitions="Auto,*,Auto" Background="Transparent"
+                                  DoubleTapped="OnHistoryRowActivated" ToolTip.Tip="{Binding Detail}">
+                              <Border Grid.Column="0" Width="8" Height="8" CornerRadius="4"
+                                      VerticalAlignment="Center" Margin="0,0,6,0"
+                                      Background="{Binding ConnectionColor, Converter={StaticResource HexBrush}}"/>
+                              <TextBlock Grid.Column="1" Text="{Binding DisplayQuery}" TextTrimming="CharacterEllipsis"
+                                         FontFamily="{StaticResource MonoFontFamily}" FontSize="12"
+                                         VerticalAlignment="Center"
+                                         Foreground="{Binding QueryColorHex, Converter={StaticResource HexBrush}}"/>
+                              <TextBlock Grid.Column="2" Text="{Binding Time}" FontSize="11" Margin="8,0,0,0"
+                                         VerticalAlignment="Center" Foreground="{DynamicResource Text.Faint}"/>
+                            </Grid>
+                          </DataTemplate>
+                        </ListBox.ItemTemplate>
+                      </ListBox>
+                    </StackPanel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </DockPanel>
+
         </Grid>
       </SplitView.Pane>
 
@@ -266,6 +486,8 @@
       </DockPanel>
 
     </SplitView>
+
+    </DockPanel>
 
   </DockPanel>
 </Window>

@@ -54,6 +54,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _secretStore = secretStore;
         _sessions = new ConnectionSessionManager(providers, () => _secretStore);
         _schemaBrowser = new SchemaBrowser(providers, () => _secretStore);
+        History = new HistoryPanelViewModel(SearchHistoryAsync, ColorForConnection);
     }
 
     [ObservableProperty] private string _statusText = "Not connected.";
@@ -71,7 +72,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty] private string _title = "Squirrel";
 
     [ObservableProperty] private bool _sidePaneOpen = true;
-    [ObservableProperty] private double _sidePaneWidth = 260;
+    [ObservableProperty] private double _sidePaneWidth = 262;
+
+    /// <summary>Which side panel the 262px column shows (driven by the left rail). The connection tree
+    /// serves as both the Connections and Schema view, so it maps to <see cref="SidePanel.Schema"/>.</summary>
+    [ObservableProperty] private SidePanel _activePanel = SidePanel.Schema;
+
+    /// <summary>The inline history panel (day-grouped, filterable) shown when ActivePanel = History.</summary>
+    public HistoryPanelViewModel History { get; }
+
+    partial void OnActivePanelChanged(SidePanel value)
+    {
+        SidePaneOpen = true; // selecting a rail tile always reveals the panel
+        if (value == SidePanel.History) _ = History.ReloadAsync(CancellationToken.None);
+    }
+
+    /// <summary>Environment color of a connection by display name (for the history dot); null if unknown.</summary>
+    private string? ColorForConnection(string name)
+        => Connections.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.Ordinal))?.EnvironmentColor;
 
     public ObservableCollection<EditorTabViewModel> Tabs { get; } = new();
     [ObservableProperty] private EditorTabViewModel? _selectedTab;
@@ -288,7 +306,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(SelectedTabConnection));
         OnPropertyChanged(nameof(ActiveConnectionColor));
+        OnPropertyChanged(nameof(SelectedTabDatabase));
         IsConnected = value?.ConnectionId is { } id && _sessions.TryGet(id) is not null;
+        RefreshTabDatabases(value);
         WarmConnection(value);
     }
 
@@ -389,19 +409,78 @@ public sealed partial class MainWindowViewModel : ObservableObject
         var info = tab.ConnectionId is { } id ? FindConnection(id) : null;
         tab.ConnectionDisplay = info?.Name;
         tab.ConnectionColor = info?.EnvironmentColor;
+        tab.DatabaseName ??= info?.Database; // default the active DB to the connection's own
+    }
+
+    /// <summary>The connection a tab actually runs against: its saved connection with the active
+    /// database substituted in (the toolbar Database pill can point at another DB on the same server).
+    /// Keeps the connection <c>Id</c> so the password (secret keyed by Id) is reused on connect.</summary>
+    private ConnectionInfo? EffectiveConnection(EditorTabViewModel tab)
+    {
+        if (tab.ConnectionId is not { } id || FindConnection(id) is not { } info) return null;
+        return tab.DatabaseName is { } db && !string.Equals(db, info.Database, StringComparison.Ordinal)
+            ? info with { Database = db }
+            : info;
     }
 
     public void SetTabConnection(EditorTabViewModel tab, Guid? id)
     {
         tab.ConnectionId = id;
+        tab.DatabaseName = null;            // reset to the new connection's default DB
         ApplyConnectionDisplay(tab);
         if (ReferenceEquals(tab, SelectedTab))
         {
             OnPropertyChanged(nameof(SelectedTabConnection));
             OnPropertyChanged(nameof(ActiveConnectionColor));
+            OnPropertyChanged(nameof(SelectedTabDatabase));
             IsConnected = id is { } cid && _sessions.TryGet(cid) is not null;
+            RefreshTabDatabases(tab);
             WarmConnection(tab);
         }
+    }
+
+    // ---- Database selection (toolbar Database pill) ------------------------------------------
+
+    /// <summary>Databases available on the selected tab's server (populates the Database pill).</summary>
+    public ObservableCollection<string> TabDatabases { get; } = new();
+
+    /// <summary>Two-way binding target for the Database pill; switching opens a session on that DB.</summary>
+    public string? SelectedTabDatabase
+    {
+        get => SelectedTab?.DatabaseName;
+        set { if (SelectedTab is { } tab && value is not null) SetTabDatabase(tab, value); }
+    }
+
+    /// <summary>Point a tab at another database on its server. Reuses the connection's credentials;
+    /// the session manager disposes the old DB's session and connects the new one on next use.</summary>
+    public void SetTabDatabase(EditorTabViewModel tab, string database)
+    {
+        if (string.Equals(tab.DatabaseName, database, StringComparison.Ordinal)) return;
+        tab.DatabaseName = database;
+        if (ReferenceEquals(tab, SelectedTab))
+        {
+            OnPropertyChanged(nameof(SelectedTabDatabase));
+            IsConnected = false;
+            WarmConnection(tab);
+        }
+    }
+
+    /// <summary>Load the server's database list into <see cref="TabDatabases"/> for the given tab.</summary>
+    private async void RefreshTabDatabases(EditorTabViewModel? tab)
+    {
+        TabDatabases.Clear();
+        if (tab?.ConnectionId is not { } id || FindConnection(id) is not { } info) return;
+        // Always show at least the tab's current DB so the pill is never empty while offline.
+        TabDatabases.Add(tab.DatabaseName ?? info.Database);
+        try
+        {
+            var dbs = await _schemaBrowser.GetDatabasesAsync(info, CancellationToken.None);
+            if (!ReferenceEquals(tab, SelectedTab)) return;
+            TabDatabases.Clear();
+            foreach (var d in dbs) TabDatabases.Add(d);
+            OnPropertyChanged(nameof(SelectedTabDatabase));
+        }
+        catch { /* offline — keep the single current-DB entry */ }
     }
 
     /// <summary>Fetch the stored password for the connection editor's edit mode (null if none).</summary>
@@ -509,8 +588,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>Background connect + schema warm so completion is ready before the first Run. Quiet on failure.</summary>
     private async void WarmConnection(EditorTabViewModel? tab)
     {
-        if (tab?.ConnectionId is not { } id) return;
-        var info = FindConnection(id);
+        if (tab is null) return;
+        var info = EffectiveConnection(tab);
         if (info is null) return;
         try
         {
@@ -538,8 +617,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (string.IsNullOrWhiteSpace(sql)) return;
         var tab = SelectedTab;
         if (tab is null) { StatusText = "No editor."; return; }
-        if (tab.ConnectionId is not { } id) { StatusText = "This tab has no connection — pick one."; return; }
-        var info = FindConnection(id);
+        if (tab.ConnectionId is null) { StatusText = "This tab has no connection — pick one."; return; }
+        var info = EffectiveConnection(tab);
         if (info is null) { StatusText = "Connection no longer exists."; return; }
 
         IsBusy = true;

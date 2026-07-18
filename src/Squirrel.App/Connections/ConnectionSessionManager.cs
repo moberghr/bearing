@@ -22,7 +22,9 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
 
     private readonly object _gate = new();
     private readonly Dictionary<Guid, ConnectionSession> _live = new();
-    private readonly Dictionary<Guid, Task<ConnectionSession>> _inflight = new();
+    // Value carries the target Info so a connect in flight for one database isn't reused for another
+    // (the toolbar can switch DB on the same connection id while the first connect is still running).
+    private readonly Dictionary<Guid, (ConnectionInfo Info, Task<ConnectionSession> Task)> _inflight = new();
     private readonly Dictionary<Guid, Task<ISchemaSnapshot?>> _schemaInflight = new();
 
     public ConnectionSessionManager(IProviderRegistry providers, Func<ISecretStore?> secretStore)
@@ -38,11 +40,23 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             if (_live.TryGetValue(info.Id, out var existing) && SameConnection(existing.Info, info))
                 return Task.FromResult(existing);
             if (_inflight.TryGetValue(info.Id, out var pending))
-                return pending;
+            {
+                if (SameConnection(pending.Info, info)) return pending.Task;
+                // A connect is in flight for a different database on this id — wait for it to settle,
+                // then connect the requested database (BuildAsync will dispose the stale session).
+                return WaitThenConnectAsync(pending.Task, info, ct);
+            }
             var task = BuildAsync(info, ct);
-            _inflight[info.Id] = task;
+            _inflight[info.Id] = (info, task);
             return task;
         }
+    }
+
+    private async Task<ConnectionSession> WaitThenConnectAsync(
+        Task<ConnectionSession> prior, ConnectionInfo info, CancellationToken ct)
+    {
+        try { await prior.ConfigureAwait(false); } catch { /* prior's failure is its caller's concern */ }
+        return await GetOrConnectAsync(info, ct).ConfigureAwait(false);
     }
 
     public ConnectionSession? TryGet(Guid connectionId)

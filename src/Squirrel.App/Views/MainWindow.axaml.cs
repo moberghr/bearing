@@ -359,11 +359,30 @@ public partial class MainWindow : Window
         await RunAsync();
     }
 
+    // The toolbar History button now reveals the inline History side-panel (design §4) instead of a window.
     private void OnHistoryClick(object? sender, RoutedEventArgs e)
     {
-        if (Vm is null) return;
-        var history = new HistoryWindow((text, ct) => Vm.SearchHistoryAsync(text, ct), sql => Editor.Text = sql);
-        history.Show(this);
+        if (Vm is not null) Vm.ActivePanel = SidePanel.History;
+    }
+
+    private async void OnHistorySearchKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && Vm is not null) { e.Handled = true; await Vm.History.ReloadAsync(CancellationToken.None); }
+    }
+
+    // Double-click a history row → open its SQL in a new tab (non-destructive; inherits the connection).
+    private void OnHistoryRowActivated(object? sender, TappedEventArgs e)
+    {
+        if (Vm is not null && (sender as Control)?.DataContext is HistoryRowViewModel row && row.Sql.Length > 0)
+        {
+            Vm.NewTab(row.Sql);
+            LoadEditorFromSelectedTab();
+        }
+    }
+
+    private void OnSettingsClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is not null) Vm.StatusText = "Settings — coming soon.";
     }
 
     /// <summary>
