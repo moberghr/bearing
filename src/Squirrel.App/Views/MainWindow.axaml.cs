@@ -243,7 +243,7 @@ public partial class MainWindow : Window
         if (string.IsNullOrEmpty(e.Text) || char.IsControl(e.Text[0])) return;
         _treeSearch += e.Text;
         e.Handled = true;
-        ApplyTreeSearch(advance: true);
+        ApplyTreeSearch();
     }
 
     private void OnSchemaTreeKeyDown(object? sender, KeyEventArgs e)
@@ -253,7 +253,7 @@ public partial class MainWindow : Window
         {
             _treeSearch = _treeSearch[..^1];
             e.Handled = true;
-            if (_treeSearch.Length == 0) ClearTreeSearch(); else ApplyTreeSearch(advance: false);
+            if (_treeSearch.Length == 0) ClearTreeSearch(); else ApplyTreeSearch();
         }
     }
 
@@ -264,7 +264,7 @@ public partial class MainWindow : Window
         if (Vm is not null) Vm.StatusText = "";
     }
 
-    private void ApplyTreeSearch(bool advance)
+    private void ApplyTreeSearch()
     {
         var nodes = FlattenRealized();
         var matches = nodes.Where(n => FuzzyMatch(n.Title, _treeSearch)).ToList();
@@ -273,13 +273,11 @@ public partial class MainWindow : Window
 
         if (matches.Count == 0) { Vm!.StatusText = $"No match for “{_treeSearch}”."; return; }
 
-        // Select the first match at/after the current selection (advance moves past it) so typing cycles.
+        // Stay put while the current selection still matches (refining the query shouldn't jump you
+        // around); otherwise land on the first match. Down/Up navigate between matches manually.
         var current = SchemaTree.SelectedItem as SchemaNodeViewModel;
-        var startIdx = current is null ? -1 : nodes.IndexOf(current);
-        var next = matches.FirstOrDefault(m => nodes.IndexOf(m) > startIdx) ?? matches[0];
-        if (!advance && current is not null && FuzzyMatch(current.Title, _treeSearch)) next = current;
-
-        SchemaTree.SelectedItem = next;
+        if (current is null || !FuzzyMatch(current.Title, _treeSearch))
+            SchemaTree.SelectedItem = matches[0];
         Vm!.StatusText = $"“{_treeSearch}” · {matches.Count} match{(matches.Count == 1 ? "" : "es")}";
     }
 
@@ -565,6 +563,34 @@ public partial class MainWindow : Window
     private void OnSettingsClick(object? sender, RoutedEventArgs e)
     {
         if (Vm is not null) Vm.StatusText = "Settings — coming soon.";
+    }
+
+    // ---- side-pane resize grip ----
+    private bool _resizingPane;
+    private double _resizeStartX;
+    private double _resizeStartWidth;
+
+    private void OnPaneResizePressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (Vm is null) return;
+        _resizingPane = true;
+        _resizeStartX = e.GetPosition(this).X;
+        _resizeStartWidth = Vm.SidePaneWidth;
+        e.Pointer.Capture(sender as IInputElement);
+        e.Handled = true;
+    }
+
+    private void OnPaneResizeMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_resizingPane || Vm is null) return;
+        var dx = e.GetPosition(this).X - _resizeStartX;
+        Vm.SidePaneWidth = System.Math.Clamp(_resizeStartWidth + dx, 180, 680);
+    }
+
+    private void OnPaneResizeReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        _resizingPane = false;
+        e.Pointer.Capture(null);
     }
 
     // ---- menu bar (Alt) + focus mode ----

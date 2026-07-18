@@ -571,15 +571,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private async void RefreshTabDatabases(EditorTabViewModel? tab)
     {
         TabDatabases.Clear();
-        if (tab?.ConnectionId is not { } id || FindConnection(id) is not { } info) return;
-        // Always show at least the tab's current DB so the pill is never empty while offline.
-        TabDatabases.Add(tab.DatabaseName ?? info.Database);
+        if (tab?.ConnectionId is not { } id || FindConnection(id) is not { } info)
+        {
+            OnPropertyChanged(nameof(SelectedTabDatabase));
+            return;
+        }
+        var current = tab.DatabaseName ?? info.Database;
+        // Show the tab's current DB immediately (never leave the pill empty while offline), and
+        // re-notify so the ComboBox selects it now that the item exists (the earlier notify from
+        // OnSelectedTabChanged fired before this list was populated).
+        TabDatabases.Add(current);
+        OnPropertyChanged(nameof(SelectedTabDatabase));
         try
         {
             var dbs = await _schemaBrowser.GetDatabasesAsync(info, CancellationToken.None);
             if (!ReferenceEquals(tab, SelectedTab)) return;
             TabDatabases.Clear();
             foreach (var d in dbs) TabDatabases.Add(d);
+            if (!TabDatabases.Contains(current)) TabDatabases.Insert(0, current); // keep the selection valid
             OnPropertyChanged(nameof(SelectedTabDatabase));
         }
         catch { /* offline — keep the single current-DB entry */ }

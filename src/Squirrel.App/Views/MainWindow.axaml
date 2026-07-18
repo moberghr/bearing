@@ -279,18 +279,33 @@
         <Grid RowDefinitions="Auto,*,Auto">
           <StackPanel Grid.Row="0" HorizontalAlignment="Center" Margin="0,8,0,0">
             <RadioButton Classes="rail" Theme="{StaticResource RailTile}" GroupName="rail" Tag="Schema"
-                         ToolTip.Tip="Connections" Click="OnRailTileClick"
-                         IsChecked="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=Schema}">
+                         ToolTip.Tip="Connections" Click="OnRailTileClick">
+              <RadioButton.IsChecked>
+                <MultiBinding Converter="{StaticResource PanelActive}" ConverterParameter="Schema">
+                  <Binding Path="ActivePanel"/>
+                  <Binding Path="SidePaneOpen"/>
+                </MultiBinding>
+              </RadioButton.IsChecked>
               <Path Data="{StaticResource Icon.Database}"/>
             </RadioButton>
             <RadioButton Classes="rail" Theme="{StaticResource RailTile}" GroupName="rail" Tag="Scripts"
-                         ToolTip.Tip="Scripts" Click="OnRailTileClick"
-                         IsChecked="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=Scripts}">
+                         ToolTip.Tip="Scripts" Click="OnRailTileClick">
+              <RadioButton.IsChecked>
+                <MultiBinding Converter="{StaticResource PanelActive}" ConverterParameter="Scripts">
+                  <Binding Path="ActivePanel"/>
+                  <Binding Path="SidePaneOpen"/>
+                </MultiBinding>
+              </RadioButton.IsChecked>
               <Path Data="{StaticResource Icon.Scripts}"/>
             </RadioButton>
             <RadioButton Classes="rail" Theme="{StaticResource RailTile}" GroupName="rail" Tag="History"
-                         ToolTip.Tip="History" Click="OnRailTileClick"
-                         IsChecked="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=History}">
+                         ToolTip.Tip="History" Click="OnRailTileClick">
+              <RadioButton.IsChecked>
+                <MultiBinding Converter="{StaticResource PanelActive}" ConverterParameter="History">
+                  <Binding Path="ActivePanel"/>
+                  <Binding Path="SidePaneOpen"/>
+                </MultiBinding>
+              </RadioButton.IsChecked>
               <Path Data="{StaticResource Icon.History}"/>
             </RadioButton>
           </StackPanel>
@@ -307,6 +322,11 @@
                OpenPaneLength="{Binding SidePaneWidth}" CompactPaneLength="0">
 
       <SplitView.Pane>
+        <DockPanel LastChildFill="True">
+          <!-- Drag grip to resize the pane (updates SidePaneWidth → OpenPaneLength live). -->
+          <Border DockPanel.Dock="Right" Width="5" Background="Transparent" Cursor="SizeWestEast"
+                  PointerPressed="OnPaneResizePressed" PointerMoved="OnPaneResizeMoved"
+                  PointerReleased="OnPaneResizeReleased"/>
         <Grid>
 
           <!-- ===== Connections / servers panel (connection → databases → objects tree) ===== -->
@@ -452,23 +472,9 @@
             </StackPanel>
             <TextBlock DockPanel.Dock="Bottom" Text="{Binding History.Status}" FontSize="11"
                        Foreground="{DynamicResource Text.Faint}" Margin="2,4,2,0"/>
-            <!-- Preview of the selected query (single-click); double-click a row opens it in a tab. -->
-            <Border DockPanel.Dock="Bottom" Height="130" Margin="0,6,0,0"
-                    Background="{DynamicResource Bg.Window}" BorderBrush="{DynamicResource Border}"
-                    BorderThickness="1" CornerRadius="6"
-                    IsVisible="{Binding History.SelectedRow, Converter={x:Static ObjectConverters.IsNotNull}}">
-              <DockPanel Margin="6">
-                <TextBlock DockPanel.Dock="Top" Text="PREVIEW" FontSize="10" FontWeight="Bold"
-                           Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,4"/>
-                <TextBox Text="{Binding History.SelectedRow.Sql, Mode=OneWay}" IsReadOnly="True"
-                         FontFamily="{StaticResource MonoFontFamily}" FontSize="12"
-                         Background="Transparent" BorderThickness="0"
-                         TextWrapping="NoWrap" AcceptsReturn="True"
-                         ScrollViewer.VerticalScrollBarVisibility="Auto"
-                         ScrollViewer.HorizontalScrollBarVisibility="Auto"/>
-              </DockPanel>
-            </Border>
-            <ScrollViewer>
+            <!-- List (fills) · drag splitter · query preview (resizable, hidden until a row is selected). -->
+            <Grid RowDefinitions="*,Auto,Auto">
+            <ScrollViewer Grid.Row="0">
               <ItemsControl ItemsSource="{Binding History.Groups}">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="vm:HistoryDayGroup">
@@ -500,9 +506,28 @@
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
             </ScrollViewer>
+            <GridSplitter Grid.Row="1" Height="4" ResizeDirection="Rows" Background="{DynamicResource Border}"
+                          IsVisible="{Binding History.SelectedRow, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+            <Border Grid.Row="2" Height="220" Margin="0,6,0,0"
+                    Background="{DynamicResource Bg.Window}" BorderBrush="{DynamicResource Border}"
+                    BorderThickness="1" CornerRadius="6"
+                    IsVisible="{Binding History.SelectedRow, Converter={x:Static ObjectConverters.IsNotNull}}">
+              <DockPanel Margin="6">
+                <TextBlock DockPanel.Dock="Top" Text="PREVIEW" FontSize="10" FontWeight="Bold"
+                           Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,4"/>
+                <TextBox Text="{Binding History.SelectedRow.Sql, Mode=OneWay}" IsReadOnly="True"
+                         FontFamily="{StaticResource MonoFontFamily}" FontSize="12"
+                         Background="Transparent" BorderThickness="0"
+                         TextWrapping="NoWrap" AcceptsReturn="True"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         ScrollViewer.HorizontalScrollBarVisibility="Auto"/>
+              </DockPanel>
+            </Border>
+            </Grid>
           </DockPanel>
 
         </Grid>
+        </DockPanel>
       </SplitView.Pane>
 
       <!-- Workspace: tab strip + editor + results -->
