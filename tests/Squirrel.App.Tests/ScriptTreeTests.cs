@@ -39,7 +39,7 @@ public class ScriptTreeTests : IDisposable
         vm.ScriptFilter = "alpha";
         var folder = Assert.IsType<ScriptFolderViewModel>(Assert.Single(vm.ScriptNodes)); // only Reports matches
         Assert.Equal("Reports", folder.Name);
-        Assert.Equal("alpha.sql", Assert.Single(folder.Scripts).Name);
+        Assert.Equal("alpha.sql", Assert.Single(folder.Children.OfType<ScriptItem>()).Name);
 
         vm.ScriptFilter = "";
         Assert.Equal(2, vm.ScriptNodes.Count);                                  // Reports folder + root.sql
@@ -47,5 +47,44 @@ public class ScriptTreeTests : IDisposable
         Assert.Equal(2, reports.Count);
         Assert.Contains(vm.ScriptNodes.OfType<ScriptItem>(), s => s.Name == "root.sql");
         Assert.Equal(3, vm.Scripts.Count);                                      // flat list has all three
+    }
+
+    [Fact]
+    public async Task Nested_subfolders_are_shown_recursively_and_empty_folders_kept()
+    {
+        var dir = Path.Combine(_root, "proj");
+        var vm = NewVm();
+        await vm.InitializeAsync(dir);
+        var scripts = vm.ScriptsDirectory!;
+
+        Directory.CreateDirectory(Path.Combine(scripts, "Reports", "Monthly"));
+        Directory.CreateDirectory(Path.Combine(scripts, "Empty"));
+        await File.WriteAllTextAsync(Path.Combine(scripts, "Reports", "top.sql"), "select 1;");
+        await File.WriteAllTextAsync(Path.Combine(scripts, "Reports", "Monthly", "jan.sql"), "select 2;");
+
+        vm.ScriptFilter = "x"; vm.ScriptFilter = ""; // force refresh
+
+        var reports = vm.ScriptNodes.OfType<ScriptFolderViewModel>().Single(f => f.Name == "Reports");
+        Assert.Equal(2, reports.Count);                                        // top.sql + Monthly/jan.sql
+        var monthly = reports.Children.OfType<ScriptFolderViewModel>().Single(f => f.Name == "Monthly");
+        Assert.Equal("jan.sql", Assert.Single(monthly.Children.OfType<ScriptItem>()).Name);
+        Assert.Contains(vm.ScriptNodes.OfType<ScriptFolderViewModel>(), f => f.Name == "Empty"); // empty folder kept
+    }
+
+    [Fact]
+    public async Task MoveScript_relocates_the_file_on_disk()
+    {
+        var dir = Path.Combine(_root, "proj");
+        var vm = NewVm();
+        await vm.InitializeAsync(dir);
+        var scripts = vm.ScriptsDirectory!;
+        Directory.CreateDirectory(Path.Combine(scripts, "Target"));
+        var src = Path.Combine(scripts, "loose.sql");
+        await File.WriteAllTextAsync(src, "select 1;");
+
+        vm.MoveScript(src, Path.Combine(scripts, "Target"));
+
+        Assert.False(File.Exists(src));
+        Assert.True(File.Exists(Path.Combine(scripts, "Target", "loose.sql")));
     }
 }

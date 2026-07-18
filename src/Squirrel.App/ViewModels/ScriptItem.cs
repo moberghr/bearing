@@ -10,7 +10,8 @@ public sealed record ScriptItem(string Name, string FullPath)
     public bool IsUnsaved { get; init; }
 }
 
-/// <summary>A folder (subdirectory of the scripts dir) grouping scripts in the Scripts tree.</summary>
+/// <summary>A folder (subdirectory of the scripts dir) in the Scripts tree. Holds subfolders and
+/// scripts (mixed, matched by type in the TreeView), so the tree nests to any depth.</summary>
 public sealed partial class ScriptFolderViewModel : ObservableObject
 {
     public ScriptFolderViewModel(string name, string fullPath)
@@ -21,8 +22,12 @@ public sealed partial class ScriptFolderViewModel : ObservableObject
 
     public string Name { get; }
     public string FullPath { get; }
-    public ObservableCollection<ScriptItem> Scripts { get; } = new();
-    public int Count => Scripts.Count;
+
+    /// <summary>Subfolders (<see cref="ScriptFolderViewModel"/>) then scripts (<see cref="ScriptItem"/>).</summary>
+    public ObservableCollection<object> Children { get; } = new();
+
+    /// <summary>Total scripts under this folder, recursively (shown right-aligned).</summary>
+    [ObservableProperty] private int _count;
 
     [ObservableProperty] private bool _isExpanded = true;
 }

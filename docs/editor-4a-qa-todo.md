@@ -12,11 +12,11 @@ commit on branch `editor-4a-redesign`. Status: `[ ]` todo · `[~]` in progress �
 - [x] Rename **Schema** view → **Connections**; rail tile uses the database icon.
 - [x] Tree node icons: **servers** → server icon (#7E9CD8), **databases** → cylinder icon (#98BB6C), via `IconKey`/`ResourceGeometry`.
 
-## Batch B — scripts panel
-- [ ] **Nested subfolders** (recursive tree, not just one level).
-- [ ] **Create subfolders** (new-folder inside a selected folder).
-- [ ] **Drag & drop** scripts between folders (moves the file on disk).
-- [ ] **Keyboard navigation** (up/down + Enter to open).
+## Batch B — scripts panel  (DONE)
+- [x] **Nested subfolders** (recursive tree, not just one level).
+- [x] **Create subfolders** (new-folder inside a selected folder).
+- [x] **Drag & drop** scripts between folders (moves the file on disk).
+- [x] **Keyboard navigation** (up/down + Enter to open).
 
 ## Batch C — connections/schema tree search  (DONE, shipped with A)
 - [x] **Type-ahead**: typing fuzzy-searches realized nodes and jumps selection to the next match (cycles).

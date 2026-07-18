@@ -400,6 +400,94 @@ public partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(name)) Vm.CreateScriptFolder(name);
     }
 
+    private static ScriptFolderViewModel? FolderOf(object? sender) => (sender as Control)?.DataContext as ScriptFolderViewModel;
+
+    private async void OnNewSubfolderClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is null || FolderOf(sender) is not { } folder) return;
+        var prompt = new TextPromptDialog("New subfolder name", "");
+        var name = await prompt.ShowDialog<string?>(this);
+        if (!string.IsNullOrWhiteSpace(name)) Vm.CreateScriptFolder(name, folder.FullPath);
+    }
+
+    private async void OnNewScriptInFolderClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is null || FolderOf(sender) is not { } folder) return;
+        var prompt = new TextPromptDialog("New script name", "");
+        var name = await prompt.ShowDialog<string?>(this);
+        if (string.IsNullOrWhiteSpace(name)) return;
+        if (await Vm.CreateScriptFileAsync(folder.FullPath, name) is { } path)
+        {
+            await Vm.OpenScriptInNewTabAsync(path);
+            LoadEditorFromSelectedTab();
+        }
+    }
+
+    private void OnScriptsTreeKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && ScriptsTree.SelectedItem is ScriptItem s)
+        {
+            e.Handled = true;
+            _ = OpenScript(s);
+        }
+    }
+
+    // ---- scripts drag & drop (move a script into a folder) — Avalonia 12 typed in-process transfer ----
+    private static readonly DataFormat<string> ScriptPathFormat =
+        DataFormat.CreateInProcessFormat<string>("squirrel.script-path");
+    private Avalonia.Point _dragStart;
+    private ScriptItem? _dragItem;
+    private PointerPressedEventArgs? _dragPress; // DoDragDropAsync requires the originating press args
+
+    private void OnScriptPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if ((sender as Control)?.DataContext is ScriptItem s
+            && e.GetCurrentPoint(sender as Visual).Properties.IsLeftButtonPressed)
+        {
+            _dragItem = s;
+            _dragPress = e;
+            _dragStart = e.GetPosition(null);
+        }
+    }
+
+    private void OnScriptPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (_dragItem is null || _dragPress is null || !e.GetCurrentPoint(sender as Visual).Properties.IsLeftButtonPressed) return;
+        var pos = e.GetPosition(null);
+        if (System.Math.Abs(pos.X - _dragStart.X) <= 4 && System.Math.Abs(pos.Y - _dragStart.Y) <= 4) return;
+
+        var transfer = new DataTransfer();
+        transfer.Add(DataTransferItem.Create(ScriptPathFormat, _dragItem.FullPath));
+        var press = _dragPress;
+        _dragItem = null;
+        _dragPress = null;
+        _ = DragDrop.DoDragDropAsync(press, transfer, DragDropEffects.Move);
+    }
+
+    private void OnScriptDragOver(object? sender, DragEventArgs e)
+    {
+        e.DragEffects = e.DataTransfer.Contains(ScriptPathFormat) ? DragDropEffects.Move : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void OnScriptDropOnFolder(object? sender, DragEventArgs e)
+    {
+        if (Vm is not null && FolderOf(sender) is { } folder && e.DataTransfer.TryGetValue(ScriptPathFormat) is string src)
+        {
+            Vm.MoveScript(src, folder.FullPath);
+            e.Handled = true;
+        }
+    }
+
+    private void OnScriptDropOnRoot(object? sender, DragEventArgs e)
+    {
+        if (Vm?.ScriptsDirectory is { } root && e.DataTransfer.TryGetValue(ScriptPathFormat) is string src)
+        {
+            Vm.MoveScript(src, root);
+            e.Handled = true;
+        }
+    }
+
     // ---- projects ----
 
     private async void OnProjectSelectionChanged(object? sender, SelectionChangedEventArgs e)

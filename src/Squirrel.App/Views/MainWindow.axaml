@@ -381,16 +381,26 @@
             </Grid>
             <TextBox DockPanel.Dock="Top" Text="{Binding ScriptFilter, Mode=TwoWay}"
                      PlaceholderText="Filter scripts…" Margin="0,0,0,6"/>
-            <TreeView x:Name="ScriptsTree" ItemsSource="{Binding ScriptNodes}" Background="Transparent">
+            <!-- Enter opens the selected script; drag a script onto a folder to move it (OnScripts* handlers). -->
+            <TreeView x:Name="ScriptsTree" ItemsSource="{Binding ScriptNodes}" Background="Transparent"
+                      KeyDown="OnScriptsTreeKeyDown" DragDrop.AllowDrop="True"
+                      DragDrop.DragOver="OnScriptDragOver" DragDrop.Drop="OnScriptDropOnRoot">
               <TreeView.Styles>
                 <Style Selector="TreeViewItem">
                   <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
                 </Style>
               </TreeView.Styles>
               <TreeView.DataTemplates>
-                <!-- Folder: amber glyph + name + right-aligned count -->
-                <TreeDataTemplate DataType="vm:ScriptFolderViewModel" ItemsSource="{Binding Scripts}">
-                  <Grid ColumnDefinitions="Auto,*,Auto">
+                <!-- Folder: amber glyph + name + right-aligned count. A drop target for scripts. -->
+                <TreeDataTemplate DataType="vm:ScriptFolderViewModel" ItemsSource="{Binding Children}">
+                  <Grid ColumnDefinitions="Auto,*,Auto" Background="Transparent"
+                        DragDrop.AllowDrop="True" DragDrop.DragOver="OnScriptDragOver" DragDrop.Drop="OnScriptDropOnFolder">
+                    <Grid.ContextMenu>
+                      <ContextMenu>
+                        <MenuItem Header="New subfolder…" Click="OnNewSubfolderClick"/>
+                        <MenuItem Header="New script here…" Click="OnNewScriptInFolderClick"/>
+                      </ContextMenu>
+                    </Grid.ContextMenu>
                     <Path Grid.Column="0" Data="{StaticResource Icon.Folder}" Stroke="#E6C384"
                           StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round" Stretch="Uniform"
                           Width="15" Height="15" VerticalAlignment="Center" Margin="0,0,6,0"/>
@@ -400,10 +410,11 @@
                                FontSize="11" Margin="6,0,4,0" Foreground="{DynamicResource Text.Faint}"/>
                   </Grid>
                 </TreeDataTemplate>
-                <!-- Script leaf: file glyph + name + unsaved dot -->
+                <!-- Script leaf: file glyph + name + unsaved dot. Draggable to a folder. -->
                 <TreeDataTemplate DataType="vm:ScriptItem">
                   <StackPanel Orientation="Horizontal" Spacing="6" Background="Transparent"
-                              DoubleTapped="OnScriptActivated">
+                              DoubleTapped="OnScriptActivated" PointerPressed="OnScriptPointerPressed"
+                              PointerMoved="OnScriptPointerMoved">
                     <StackPanel.ContextMenu>
                       <ContextMenu>
                         <MenuItem Header="Open" Click="OnOpenScriptClick"/>

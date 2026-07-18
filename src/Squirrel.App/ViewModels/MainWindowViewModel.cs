@@ -346,43 +346,77 @@ public sealed partial class MainWindowViewModel : ObservableObject
                           .ToHashSet(StringComparer.Ordinal);
         var filter = ScriptFilter?.Trim() ?? "";
         bool Matches(string name) => filter.Length == 0 || name.Contains(filter, StringComparison.OrdinalIgnoreCase);
-
         ScriptItem Make(string path) => new(Path.GetFileName(path), path) { IsUnsaved = unsaved.Contains(path) };
 
-        // Folders = immediate subdirectories, each with its own *.sql files.
+        BuildScriptNodes(dir, ScriptNodes, filter, Matches, Make);
+    }
+
+    /// <summary>Recursively fill <paramref name="target"/> with subfolders (each nested) then scripts;
+    /// returns how many scripts (matching the filter) are under this directory. Also feeds the flat
+    /// <see cref="Scripts"/> list. Empty folders show when unfiltered; while filtering, a folder shows
+    /// only if it has a matching descendant.</summary>
+    private int BuildScriptNodes(string dir, System.Collections.Generic.IList<object> target,
+        string filter, Func<string, bool> matches, Func<string, ScriptItem> make)
+    {
+        var total = 0;
         foreach (var sub in Directory.EnumerateDirectories(dir).OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
         {
             var folder = new ScriptFolderViewModel(Path.GetFileName(sub), sub) { IsExpanded = filter.Length > 0 };
-            foreach (var path in Directory.EnumerateFiles(sub, "*.sql").OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
-            {
-                var item = Make(path);
-                Scripts.Add(item);
-                if (Matches(item.Name)) folder.Scripts.Add(item);
-            }
-            // Show every folder when unfiltered; while filtering, hide folders with no matching script.
-            if (folder.Scripts.Count > 0 || filter.Length == 0) ScriptNodes.Add(folder);
+            var n = BuildScriptNodes(sub, folder.Children, filter, matches, make);
+            folder.Count = n;
+            total += n;
+            if (n > 0 || filter.Length == 0) target.Add(folder);
         }
-
-        // Ungrouped scripts at the root.
         foreach (var path in Directory.EnumerateFiles(dir, "*.sql").OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
         {
-            var item = Make(path);
+            var item = make(path);
             Scripts.Add(item);
-            if (Matches(item.Name)) ScriptNodes.Add(item);
+            if (matches(item.Name)) { target.Add(item); total++; }
         }
+        return total;
     }
 
-    /// <summary>Create a new folder (subdirectory) under the project's scripts directory.</summary>
-    public void CreateScriptFolder(string name)
+    /// <summary>Create a new folder under <paramref name="parentDir"/> (defaults to the scripts root).</summary>
+    public void CreateScriptFolder(string name, string? parentDir = null)
     {
-        var dir = _project?.ScriptsDirectory;
-        if (dir is null || string.IsNullOrWhiteSpace(name)) return;
+        var root = _project?.ScriptsDirectory;
+        if (root is null || string.IsNullOrWhiteSpace(name)) return;
+        var parent = parentDir ?? root;
         var safe = string.Concat(name.Trim().Split(Path.GetInvalidFileNameChars()));
         if (safe.Length == 0) return;
-        try { Directory.CreateDirectory(Path.Combine(dir, safe)); }
+        try { Directory.CreateDirectory(Path.Combine(parent, safe)); }
         catch (Exception ex) { StatusText = $"Could not create folder: {ex.Message}"; return; }
         RefreshScripts();
         StatusText = $"Created folder {safe}.";
+    }
+
+    /// <summary>Create an empty .sql file in <paramref name="dir"/>; returns its path (null on clash/error).</summary>
+    public async Task<string?> CreateScriptFileAsync(string dir, string name)
+    {
+        if (!Directory.Exists(dir) || string.IsNullOrWhiteSpace(name)) return null;
+        if (!name.EndsWith(".sql", StringComparison.OrdinalIgnoreCase)) name += ".sql";
+        var path = Path.Combine(dir, name);
+        if (File.Exists(path)) { StatusText = $"{name} already exists."; return null; }
+        try { await File.WriteAllTextAsync(path, "", CancellationToken.None); }
+        catch (Exception ex) { StatusText = $"Could not create script: {ex.Message}"; return null; }
+        RefreshScripts();
+        return path;
+    }
+
+    /// <summary>Move a script file into <paramref name="targetDir"/> (drag & drop between folders).</summary>
+    public void MoveScript(string sourcePath, string targetDir)
+    {
+        if (!File.Exists(sourcePath) || !Directory.Exists(targetDir)) return;
+        var dest = Path.Combine(targetDir, Path.GetFileName(sourcePath));
+        if (string.Equals(Path.GetFullPath(dest), Path.GetFullPath(sourcePath), StringComparison.Ordinal)) return;
+        if (File.Exists(dest)) { StatusText = $"{Path.GetFileName(dest)} already exists there."; return; }
+        try { File.Move(sourcePath, dest); }
+        catch (Exception ex) { StatusText = $"Move failed: {ex.Message}"; return; }
+
+        foreach (var t in Tabs)
+            if (string.Equals(t.ScriptPath, sourcePath, StringComparison.Ordinal)) t.ScriptPath = dest;
+        RefreshScripts();
+        StatusText = $"Moved {Path.GetFileName(sourcePath)}.";
     }
 
     /// <summary>Open a saved script: focus its existing tab, or load it into a new one.</summary>
