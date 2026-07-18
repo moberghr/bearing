@@ -208,10 +208,29 @@ inline. Biggest structural change; do it before the toolbar so panels have their
 **Verify**: rail switches panels; history shows inline, grouped, filterable; schema tree restyled.
 **Tests**: `HistoryPanelViewModel` grouping/filter (App), `ActivePanel` switching (App).
 
-## Phase 3 — Toolbar: proj/server/database pills + dropdowns + real DB switching
+## Phase 3 — Toolbar: proj/server/database pills + dropdowns + real DB switching  (DONE 2026-07-18, awaiting user live QA)
 
 **Goal**: the single 46px toolbar with pill selectors and Popup dropdowns, **and** the DB-switching
 backend. Highest-risk phase (touches connection/session lifecycle).
+
+**Shipped** (builds; 45 App tests green incl. a live DB-switch test; app launches clean):
+- **Single 46px toolbar** replaces both old bars: side-pane toggle, **Proj** ComboBox-pill + `⋯`
+  overflow (Rename/Open/New project), divider, **Server** pill (`Connections`, env dot + host),
+  `›`, **Database** pill (`TabDatabases`), understated 30×30 green **Run** (doubles as Cancel; tooltip
+  `RunButtonText`). Open/Save left the toolbar (keyboard `Ctrl+S`/`Ctrl+O` keep them; formalized in the
+  Phase 5 menu). `ComboBox.pill` style approximates the pill look.
+- **Real DB switching**: `EditorTabViewModel.DatabaseName` + `MainWindowViewModel.EffectiveConnection`
+  (saved connection `with { Database = active }`, same `Id` so the secret is reused). `TabDatabases`
+  (from `ISchemaBrowser.GetDatabasesAsync`) + `SelectedTabDatabase`/`SetTabDatabase`; switching evicts
+  the old DB's session and connects the new one. Server switch resets DB to the connection default.
+- **Session-manager race fix**: `_inflight` now carries the target `ConnectionInfo`; an in-flight
+  connect for one DB is not reused for another DB on the same id (`WaitThenConnectAsync`).
+
+**Deviations**: pills are styled **ComboBoxes**, not the design's custom 280/250px **Popup dropdowns**
+(no `CONNECTIONS` caption card, subtitles, `✓`, or colored-pill-border-while-open) — deferred as a
+visual refinement; functionality (server + DB selection, real switching) is complete. `OpenDropdown`
+state was not needed. **Limitation**: sessions are keyed by connection `Id`, so two tabs on the same
+server pointing at different DBs share one session and will reconnect when you switch between them.
 
 - **Backend — DB switching**:
   - Metadata: add "list databases on server" to `IMetadataReader`/`PostgresMetadataReader`

@@ -314,13 +314,63 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     // ---- Scripts -----------------------------------------------------------------------------
 
+    /// <summary>The Scripts tree: folders (one level of subdirectories) then ungrouped root scripts.</summary>
+    public ObservableCollection<object> ScriptNodes { get; } = new();
+
+    /// <summary>Name filter for the Scripts tree (empty = show all).</summary>
+    [ObservableProperty] private string _scriptFilter = "";
+
+    partial void OnScriptFilterChanged(string value) => RefreshScripts();
+
     private void RefreshScripts()
     {
         Scripts.Clear();
+        ScriptNodes.Clear();
         var dir = _project?.ScriptsDirectory;
         if (dir is null || !Directory.Exists(dir)) return;
+
+        // Tabs with unsaved edits mark their backing script with a dot.
+        var unsaved = Tabs.Where(t => t.IsDirty && t.ScriptPath is not null)
+                          .Select(t => t.ScriptPath!)
+                          .ToHashSet(StringComparer.Ordinal);
+        var filter = ScriptFilter?.Trim() ?? "";
+        bool Matches(string name) => filter.Length == 0 || name.Contains(filter, StringComparison.OrdinalIgnoreCase);
+
+        ScriptItem Make(string path) => new(Path.GetFileName(path), path) { IsUnsaved = unsaved.Contains(path) };
+
+        // Folders = immediate subdirectories, each with its own *.sql files.
+        foreach (var sub in Directory.EnumerateDirectories(dir).OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+        {
+            var folder = new ScriptFolderViewModel(Path.GetFileName(sub), sub) { IsExpanded = filter.Length > 0 };
+            foreach (var path in Directory.EnumerateFiles(sub, "*.sql").OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+            {
+                var item = Make(path);
+                Scripts.Add(item);
+                if (Matches(item.Name)) folder.Scripts.Add(item);
+            }
+            if (folder.Scripts.Count > 0) ScriptNodes.Add(folder); // hide folders with no match
+        }
+
+        // Ungrouped scripts at the root.
         foreach (var path in Directory.EnumerateFiles(dir, "*.sql").OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
-            Scripts.Add(new ScriptItem(Path.GetFileName(path), path));
+        {
+            var item = Make(path);
+            Scripts.Add(item);
+            if (Matches(item.Name)) ScriptNodes.Add(item);
+        }
+    }
+
+    /// <summary>Create a new folder (subdirectory) under the project's scripts directory.</summary>
+    public void CreateScriptFolder(string name)
+    {
+        var dir = _project?.ScriptsDirectory;
+        if (dir is null || string.IsNullOrWhiteSpace(name)) return;
+        var safe = string.Concat(name.Trim().Split(Path.GetInvalidFileNameChars()));
+        if (safe.Length == 0) return;
+        try { Directory.CreateDirectory(Path.Combine(dir, safe)); }
+        catch (Exception ex) { StatusText = $"Could not create folder: {ex.Message}"; return; }
+        RefreshScripts();
+        StatusText = $"Created folder {safe}.";
     }
 
     /// <summary>Open a saved script: focus its existing tab, or load it into a new one.</summary>

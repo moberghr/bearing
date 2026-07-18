@@ -286,12 +286,14 @@ public partial class MainWindow : Window
 
     // ---- scripts ----
 
-    private async void OnScriptActivated(object? sender, TappedEventArgs e) => await OpenSelectedScript();
-    private async void OnOpenScriptClick(object? sender, RoutedEventArgs e) => await OpenSelectedScript();
+    private static ScriptItem? ScriptOf(object? sender) => (sender as Control)?.DataContext as ScriptItem;
 
-    private async Task OpenSelectedScript()
+    private async void OnScriptActivated(object? sender, TappedEventArgs e) => await OpenScript(ScriptOf(sender));
+    private async void OnOpenScriptClick(object? sender, RoutedEventArgs e) => await OpenScript(ScriptOf(sender));
+
+    private async Task OpenScript(ScriptItem? script)
     {
-        if (Vm is not null && ScriptsList.SelectedItem is ScriptItem script)
+        if (Vm is not null && script is not null)
         {
             await Vm.OpenScriptInNewTabAsync(script.FullPath);
             LoadEditorFromSelectedTab();
@@ -300,10 +302,18 @@ public partial class MainWindow : Window
 
     private async void OnRenameScriptClick(object? sender, RoutedEventArgs e)
     {
-        if (Vm is null || ScriptsList.SelectedItem is not ScriptItem script) return;
+        if (Vm is null || ScriptOf(sender) is not { } script) return;
         var prompt = new TextPromptDialog("Rename script file", script.Name);
         var name = await prompt.ShowDialog<string?>(this);
         if (name is not null) await Vm.RenameScriptAsync(script.FullPath, name);
+    }
+
+    private async void OnNewScriptFolderClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is null) return;
+        var prompt = new TextPromptDialog("New folder name", "");
+        var name = await prompt.ShowDialog<string?>(this);
+        if (!string.IsNullOrWhiteSpace(name)) Vm.CreateScriptFolder(name);
     }
 
     // ---- projects ----

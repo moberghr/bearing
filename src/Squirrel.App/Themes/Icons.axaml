@@ -16,6 +16,12 @@
   <!-- Scripts: a document with a folded corner -->
   <StreamGeometry x:Key="Icon.Scripts">M7,3 h8 l4,4 v14 h-12 z M15,3 v4 h4 M9,12 h6 M9,15 h6 M9,18 h4</StreamGeometry>
 
+  <!-- Folder -->
+  <StreamGeometry x:Key="Icon.Folder">M4,7 h6 l2,2 h8 v9 h-16 z</StreamGeometry>
+
+  <!-- File (smaller doc, for script leaves) -->
+  <StreamGeometry x:Key="Icon.File">M8,4 h6 l3,3 v13 h-9 z M14,4 v3 h3</StreamGeometry>
+
   <!-- History: a clock -->
   <StreamGeometry x:Key="Icon.History">M4,12 a8,8 0 1 1 16,0 a8,8 0 1 1 -16,0 M12,7 v5.3 l3.5,2</StreamGeometry>
 
