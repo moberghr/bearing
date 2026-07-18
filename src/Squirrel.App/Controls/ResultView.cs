@@ -194,10 +194,10 @@ public sealed class ResultView : UserControl
             else if (result.IsEditable)
                 grid.Columns.Add(EditableColumn(result, i));
             else
-                grid.Columns.Add(new DataGridTextColumn
+                grid.Columns.Add(new DataGridTemplateColumn
                 {
                     Header = result.Columns[i].Name,
-                    Binding = new Binding($"[{i}]") { Converter = CellDisplayConverter.Instance },
+                    CellTemplate = DisplayCell(i),
                 });
         }
         grid.ItemsSource = result.Rows; // ObservableCollection → paged rows append without a rebuild
@@ -224,24 +224,33 @@ public sealed class ResultView : UserControl
         {
             Header = result.Columns[index].Name,
             Tag = index, // column index, read back in CellEditEnding
-            CellTemplate = new FuncDataTemplate<object?[]>((row, _) =>
-            {
-                var cell = new TextBlock
-                {
-                    Text = CellText(row, index),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(4, 0),
-                    TextTrimming = TextTrimming.CharacterEllipsis,
-                };
-                if (row is null || index >= row.Length || row[index] is null) // dim "(null)" as a marker
-                {
-                    cell.FontStyle = FontStyle.Italic;
-                    cell.Foreground = NullBrush;
-                }
-                return cell;
-            }),
+            CellTemplate = DisplayCell(index),
             CellEditingTemplate = CellEditor(index),
         };
+
+    /// <summary>Read-only display template for a value cell: plain text with a dimmed italic "(null)"
+    /// marker. Shared by read-only and editable columns. This is a <see cref="DataGridTemplateColumn"/>
+    /// template — re-materialized per row as the grid recycles containers on scroll — deliberately NOT a
+    /// <see cref="DataGridTextColumn"/> with an indexer binding (<c>[i]</c>): that binding doesn't
+    /// re-evaluate when a row container is reused for a new row, so recycled cells render the bare row
+    /// object as "System.Object" (Avalonia DataGrid recycling, discussion #17534).</summary>
+    private static IDataTemplate DisplayCell(int index)
+        => new FuncDataTemplate<object?[]>((row, _) =>
+        {
+            var cell = new TextBlock
+            {
+                Text = CellText(row, index),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(4, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            };
+            if (row is null || index >= row.Length || row[index] is null) // dim "(null)" as a marker
+            {
+                cell.FontStyle = FontStyle.Italic;
+                cell.Foreground = NullBrush;
+            }
+            return cell;
+        });
 
     /// <summary>The in-cell editor (a TextBox seeded with the current value) shared by editable and FK columns.</summary>
     private static IDataTemplate CellEditor(int index)

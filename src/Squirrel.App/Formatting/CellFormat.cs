@@ -1,6 +1,5 @@
 using System;
 using System.Globalization;
-using Avalonia.Data.Converters;
 
 namespace Squirrel.App.Formatting;
 
@@ -60,16 +59,4 @@ public static class CellFormat
         }
         return false;
     }
-}
-
-/// <summary>Formats a grid cell value for display (dates in the fixed day-first pattern).</summary>
-public sealed class CellDisplayConverter : IValueConverter
-{
-    public static readonly CellDisplayConverter Instance = new();
-
-    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
-        => CellFormat.Display(value);
-
-    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
-        => throw new NotSupportedException();
 }
