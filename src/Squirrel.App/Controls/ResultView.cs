@@ -98,10 +98,15 @@ public sealed class ResultView : UserControl
     private const string ChevronRight = "M0,0 L5,4 L0,8 Z";
     private const string ChevronDown = "M0,0 L8,0 L4,5 Z";
 
-    /// <summary>Faint zebra stripe for odd data rows (even rows keep the editor bg). Transparent for
-    /// even so the underlying grid surface shows through.</summary>
-    private static IBrush ZebraBackground(int rowIndex)
-        => rowIndex % 2 == 1 ? Tint("Text.Faint", 0x16) : Brushes.Transparent;
+    /// <summary>Subtle in-grid cell separator (design §Results grid: 1px #252531 row + column dividers).</summary>
+    private static readonly IBrush GridLine = new SolidColorBrush(Color.FromRgb(0x25, 0x25, 0x31));
+
+    /// <summary>Design row striping: a subtle neutral lift on alternate rows over the flat Bg.Editor body.</summary>
+    private static readonly IBrush RowStripe = new SolidColorBrush(Color.FromRgb(0x23, 0x23, 0x2E));
+
+    /// <summary>Striped background per row parity — odd (0-based) rows lift, even rows stay transparent
+    /// so the grid's flat Bg.Editor surface shows through.</summary>
+    private static IBrush RowBackground(int rowIndex) => rowIndex % 2 == 1 ? RowStripe : Brushes.Transparent;
 
     // Editable grids currently rendered (grid + its result) — used to re-tint rows after an in-place save.
     private readonly List<(DataGrid Grid, ResultSetViewModel Result)> _editableGrids = new();
@@ -129,6 +134,10 @@ public sealed class ResultView : UserControl
     private readonly List<(ResultSetViewModel Result, Border Bar)> _statsBars = new();
     private bool _dragging;                              // a click-drag cell selection is in progress
     private (object?[] Row, int Col)? _dragAnchor;       // the cell the drag started from
+    // Keyboard navigation: the active ("cursor") cell that arrow keys move, and the anchor a Shift-range
+    // extends from. Both belong to _selectionResult. Mouse clicks seed them; keys move them.
+    private (object?[] Row, int Col)? _active;
+    private (object?[] Row, int Col)? _selAnchor;
     private readonly HashSet<ResultSetViewModel> _autoLoading = new(); // paging fetch in flight (infinite scroll)
 
     /// <summary>Fetch the next page when scrolled near the bottom (single-flight per result set).</summary>
@@ -160,8 +169,8 @@ public sealed class ResultView : UserControl
     private static void ApplyRowStatus(DataGridRow dgr, ResultSetViewModel result)
     {
         var (tint, bar) = RowStatus(result, dgr.DataContext as object?[]);
-        // No pending change → fall back to the zebra stripe rather than a flat transparent row.
-        dgr.Background = ReferenceEquals(tint, Brushes.Transparent) ? ZebraBackground(dgr.Index) : tint;
+        // No pending change → the design row stripe; a pending edit/new/delete overrides with its tint.
+        dgr.Background = ReferenceEquals(tint, Brushes.Transparent) ? RowBackground(dgr.Index) : tint;
         dgr.BorderBrush = bar;
         dgr.BorderThickness = new Thickness(2, 0, 0, 0);
     }
@@ -543,6 +552,9 @@ public sealed class ResultView : UserControl
             CanUserReorderColumns = true,
             GridLinesVisibility = DataGridGridLinesVisibility.All,
             HeadersVisibility = DataGridHeadersVisibility.All, // row-number gutter + column headers
+            Background = Res("Bg.Editor"),                     // flat body per design (#1F1F28)
+            HorizontalGridLinesBrush = GridLine,               // subtle #252531 row/column dividers
+            VerticalGridLinesBrush = GridLine,
         };
         ScrollViewer.SetAllowAutoHide(grid, false); // keep the scrollbar visible
         SuppressRowSelectionHighlight(grid);        // cell-level selection only — no whole-row blue bar
@@ -551,9 +563,9 @@ public sealed class ResultView : UserControl
         grid.LoadingRow += (_, e) =>
         {
             e.Row.Header = (e.Row.Index + 1).ToString();
-            // Editable rows carry pending-edit tints (which fold in the zebra); others just stripe.
+            // Design row striping; editable rows still tint on a pending edit/new/delete (handled inside).
             if (result.IsEditable) ApplyRowStatus(e.Row, result);
-            else e.Row.Background = ZebraBackground(e.Row.Index);
+            else e.Row.Background = RowBackground(e.Row.Index);
             // Infinite scroll: when a near-bottom row realizes and more rows exist, fetch the next page.
             if (result.HasMore && e.Row.Index >= result.Rows.Count - 8) TriggerAutoLoad(result);
         };
@@ -594,6 +606,11 @@ public sealed class ResultView : UserControl
             RoutingStrategies.Bubble, handledEventsToo: true);
         // Clear on click-away: plain handler (skipped when a measure cell already handled the press).
         grid.PointerPressed += (_, _) => { if (_selection.Count > 0) { ClearSelection(); SelectionChanged(); } };
+
+        // Keyboard-drive the grid. Handled in the tunnel phase so we pre-empt the DataGrid's own
+        // arrow-nav / Ctrl+C before it acts (setting Handled skips its class-level OnKeyDown).
+        grid.Focusable = true;
+        grid.AddHandler(KeyDownEvent, (_, e) => OnGridKey(grid, result, e), RoutingStrategies.Tunnel);
 
         if (result.IsEditable)
         {
@@ -668,13 +685,22 @@ public sealed class ResultView : UserControl
         cell.Setters.Add(new Setter(Layoutable.MinHeightProperty, 26.0));
         grid.Styles.Add(cell);
 
-        // Row-number gutter: right-align the digits, give them breathing room + a separator, and dim them.
+        // Column headers (design §Results grid): bg.window fill, text.dim, 600 weight, border dividers —
+        // not the Fluent default near-black. The row-number gutter shares this exact fill (below).
+        var colHeader = new Style(x => x.OfType<DataGridColumnHeader>());
+        colHeader.Setters.Add(new Setter(TemplatedControl.BackgroundProperty, Res("Bg.Window")));
+        colHeader.Setters.Add(new Setter(TemplatedControl.ForegroundProperty, Res("Text.Dim")));
+        colHeader.Setters.Add(new Setter(TemplatedControl.FontWeightProperty, FontWeight.SemiBold));
+        colHeader.Setters.Add(new Setter(DataGridColumnHeader.SeparatorBrushProperty, Separator));
+        grid.Styles.Add(colHeader);
+
+        // Row-number gutter: same bg.window as the header row, right-aligned dim digits, a separator.
         var header = new Style(x => x.OfType<DataGridRowHeader>());
         header.Setters.Add(new Setter(ContentControl.HorizontalContentAlignmentProperty, HorizontalAlignment.Right));
         header.Setters.Add(new Setter(ContentControl.VerticalContentAlignmentProperty, VerticalAlignment.Center));
         header.Setters.Add(new Setter(TemplatedControl.PaddingProperty, new Thickness(10, 0, 14, 0)));
         header.Setters.Add(new Setter(TemplatedControl.ForegroundProperty, Res("Text.Faint")));
-        header.Setters.Add(new Setter(TemplatedControl.BackgroundProperty, Res("Bg.Chrome")));
+        header.Setters.Add(new Setter(TemplatedControl.BackgroundProperty, Res("Bg.Window")));
         header.Setters.Add(new Setter(TemplatedControl.BorderBrushProperty, Separator));
         header.Setters.Add(new Setter(TemplatedControl.BorderThicknessProperty, new Thickness(0, 0, 1, 0)));
         header.Setters.Add(new Setter(Layoutable.MinWidthProperty, 44.0)); // steady gutter for 2–3 digit counts
@@ -734,6 +760,9 @@ public sealed class ResultView : UserControl
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch,
             CornerRadius = new CornerRadius(2),
+            // Reserve 1px on every side always (as padding) so drawing the selection border later
+            // doesn't shift the content — border thickness and padding trade off to keep inset constant.
+            Padding = new Thickness(1),
         };
         if (row is null) return border; // nothing to key a selection on
 
@@ -746,6 +775,7 @@ public sealed class ResultView : UserControl
             {
                 border.Background = Brushes.Transparent;
                 border.BorderThickness = new Thickness(0);
+                border.Padding = new Thickness(1); // full reserve → content stays put
                 border.CornerRadius = new CornerRadius(2);
                 return;
             }
@@ -760,9 +790,13 @@ public sealed class ResultView : UserControl
             var left  = _selection.Contains((row, index - 1));
             var right = _selection.Contains((row, index + 1));
 
+            // Border on outer edges only. Each side's border + padding sums to 1px so content never shifts:
+            // a drawn edge is 1px border / 0 padding, a shared (undrawn) edge is 0 border / 1px padding.
+            double bl = left ? 0 : 1, bt = up ? 0 : 1, br = right ? 0 : 1, bb = down ? 0 : 1;
             border.Background = Tint("Syntax.Func", 0x2A);
             border.BorderBrush = Res("Syntax.Func");
-            border.BorderThickness = new Thickness(left ? 0 : 1, up ? 0 : 1, right ? 0 : 1, down ? 0 : 1);
+            border.BorderThickness = new Thickness(bl, bt, br, bb);
+            border.Padding = new Thickness(1 - bl, 1 - bt, 1 - br, 1 - bb);
             // Round only a lone cell's corners; a cell inside a block stays square so the edges abut cleanly.
             border.CornerRadius = new CornerRadius(up || down || left || right ? 0 : 2);
         }
@@ -774,18 +808,28 @@ public sealed class ResultView : UserControl
         {
             if (e.ClickCount >= 2) return; // let the grid start editing on double-click
             if (!e.GetCurrentPoint(border).Properties.IsLeftButtonPressed) return;
-            var extend = e.KeyModifiers.HasFlag(KeyModifiers.Control)
-                || e.KeyModifiers.HasFlag(KeyModifiers.Meta)
-                || e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-            if (extend)
+            grid.Focus(); // route subsequent key presses to this grid's keyboard handler
+            var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);
+            var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+            if (shift && _selAnchor is { } anchor && ReferenceEquals(_selectionResult, result))
+            {
+                // Shift-click: rectangular range from the existing anchor to the clicked cell.
+                SelectRectangle(result, anchor, (row, index));
+                _active = (row, index);
+            }
+            else if (ctrl)
             {
                 ToggleCellSelection(result, row, index, extend: true);
+                _active = (row, index);
+                _selAnchor = (row, index);
             }
             else
             {
                 _selectionResult = result;
                 _selection.Clear();
                 _selection.Add((row, index));
+                _active = (row, index);
+                _selAnchor = (row, index);
                 _dragging = true;
                 _dragAnchor = (row, index);
                 e.Pointer.Capture(grid);
@@ -912,12 +956,18 @@ public sealed class ResultView : UserControl
     /// deliberately NOT a <see cref="DataGridTextColumn"/> with an indexer binding (<c>[i]</c>): that
     /// binding doesn't re-evaluate when a row container is reused (Avalonia DataGrid recycling, #17534).</summary>
     private static IDataTemplate CellEditor(int index)
-        => new FuncDataTemplate<object?[]>((row, _) => new TextBox
+        => new FuncDataTemplate<object?[]>((row, _) =>
         {
-            Text = CellText(row, index),
-            Padding = new Thickness(3, 1),
-            BorderThickness = new Thickness(0),
-            VerticalContentAlignment = VerticalAlignment.Center,
+            var box = new TextBox
+            {
+                Text = CellText(row, index),
+                Padding = new Thickness(3, 1),
+                BorderThickness = new Thickness(0),
+                VerticalContentAlignment = VerticalAlignment.Center,
+            };
+            // Entering edit mode preselects the whole value (type-to-replace, like a spreadsheet).
+            box.AttachedToVisualTree += (_, _) => Dispatcher.UIThread.Post(() => { box.Focus(); box.SelectAll(); });
+            return box;
         });
 
     private static string CellText(object?[]? row, int index)
@@ -975,12 +1025,18 @@ public sealed class ResultView : UserControl
         return bar;
     }
 
-    /// <summary>A borderless, dim, hand-cursor button for subtle inline actions.</summary>
+    /// <summary>A borderless, dim, hand-cursor button for subtle inline actions. Each space-separated
+    /// token (icon glyph, word) is its own vertically-centered TextBlock so a tall icon glyph doesn't
+    /// enlarge the label's line-box and knock the words out of alignment with icon-less buttons.</summary>
     private static Button SubtleButton(string content, string tip)
     {
+        var tokens = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
+        foreach (var t in content.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            tokens.Children.Add(new TextBlock { Text = t, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+
         var b = new Button
         {
-            Content = content,
+            Content = tokens,
             FontSize = 12,
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
@@ -988,6 +1044,7 @@ public sealed class ResultView : UserControl
             Foreground = Res("Text.Dim"),
             Cursor = new Cursor(StandardCursorType.Hand),
             VerticalAlignment = VerticalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
         };
         ToolTip.SetTip(b, tip);
         return b;
@@ -1066,12 +1123,21 @@ public sealed class ResultView : UserControl
             .FirstOrDefault(b => b.Tag is ValueTuple<object?[], int>);
         if (cell?.Tag is not ValueTuple<object?[], int> target) return;
 
+        _active = (target.Item1, target.Item2);
+        SelectRectangle(result, anchor, (target.Item1, target.Item2));
+    }
+
+    /// <summary>Replace the selection with the rectangle spanning cells a..b (inclusive), skipping bool
+    /// checkbox columns (they render no selection ring). Shared by drag, Shift-click and Shift+arrows.</summary>
+    private void SelectRectangle(ResultSetViewModel result, (object?[] Row, int Col) a, (object?[] Row, int Col) b)
+    {
         var rows = result.Rows;
-        int r0 = rows.IndexOf(anchor.Row), r1 = rows.IndexOf(target.Item1);
+        int r0 = rows.IndexOf(a.Row), r1 = rows.IndexOf(b.Row);
         if (r0 < 0 || r1 < 0) return;
         if (r0 > r1) (r0, r1) = (r1, r0);
-        int c0 = Math.Min(anchor.Col, target.Item2), c1 = Math.Max(anchor.Col, target.Item2);
+        int c0 = Math.Min(a.Col, b.Col), c1 = Math.Max(a.Col, b.Col);
 
+        _selectionResult = result;
         _selection.Clear();
         for (var r = r0; r <= r1; r++)
         {
@@ -1096,6 +1162,184 @@ public sealed class ResultView : UserControl
     {
         _selection.Clear();
         _selectionResult = null;
+        _active = null;
+        _selAnchor = null;
+    }
+
+    // ---- Keyboard navigation & actions (spreadsheet-style) -----------------------------------
+
+    private static bool IsNavKey(Key k) => k is Key.Left or Key.Right or Key.Up or Key.Down
+        or Key.Home or Key.End or Key.PageUp or Key.PageDown;
+
+    /// <summary>Keyboard-drive a result grid: arrows/Home/End/PageUp/PageDown move the active cell
+    /// (Shift extends a rectangular range, Ctrl jumps to the row/column edge); Ctrl+A selects all;
+    /// Ctrl+C (or Ctrl+Insert) copies the selection as TSV; Delete marks the selected rows for deletion
+    /// on an editable result; Enter/F2 edits the active cell; Escape clears the selection. Runs in the
+    /// tunnel phase and marks handled keys so the DataGrid's own navigation/copy don't also fire.</summary>
+    private void OnGridKey(DataGrid grid, ResultSetViewModel result, KeyEventArgs e)
+    {
+        if (e.Source is TextBox) return;                 // a cell editor is focused — let it have the keys
+        if (!result.HasGrid || result.Rows.Count == 0) return;
+
+        var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);
+        var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+
+        switch (e.Key)
+        {
+            case Key.C when ctrl:
+            case Key.Insert when ctrl:
+                CopySelection(result); e.Handled = true; return;
+            case Key.A when ctrl:
+                SelectAll(result); e.Handled = true; return;
+            case Key.Delete when result.IsEditable:
+                DeleteSelectedRows(grid, result); e.Handled = true; return;
+            case Key.Enter or Key.F2:
+                if (result.IsEditable) { BeginEditActive(grid, result); e.Handled = true; }
+                return;
+            case Key.Escape:
+                if (_selection.Count > 0) { ClearSelection(); SelectionChanged(); e.Handled = true; }
+                return;
+        }
+
+        if (!IsNavKey(e.Key)) return;
+
+        // First arrow into a grid that isn't the active one: seed the active cell at the top-left.
+        if (!ReferenceEquals(_selectionResult, result) || _active is not { } active)
+        {
+            MoveActive(grid, result, result.Rows[0], FirstSelectableColumn(result), extend: false);
+            e.Handled = true;
+            return;
+        }
+
+        var rows = result.Rows;
+        var r = rows.IndexOf(active.Row);
+        if (r < 0) return;
+        var c = active.Col;
+        var last = rows.Count - 1;
+        var page = Math.Max(1, VisiblePageSize(grid) - 1);
+
+        int nr = r, nc = c;
+        switch (e.Key)
+        {
+            case Key.Left:     nc = ctrl ? FirstSelectableColumn(result) : StepColumn(result, c, -1); break;
+            case Key.Right:    nc = ctrl ? LastSelectableColumn(result)  : StepColumn(result, c, +1); break;
+            case Key.Up:       nr = ctrl ? 0 : Math.Max(0, r - 1); break;
+            case Key.Down:     nr = ctrl ? last : Math.Min(last, r + 1); break;
+            case Key.Home:     nc = FirstSelectableColumn(result); if (ctrl) nr = 0; break;
+            case Key.End:      nc = LastSelectableColumn(result);  if (ctrl) nr = last; break;
+            case Key.PageUp:   nr = Math.Max(0, r - page); break;
+            case Key.PageDown: nr = Math.Min(last, r + page); break;
+        }
+
+        MoveActive(grid, result, rows[nr], nc, extend: shift);
+        e.Handled = true;
+    }
+
+    /// <summary>Move the active cell to (row, col); Shift extends the rectangle from the anchor, otherwise
+    /// the selection collapses to the single cell and re-seeds the anchor. Scrolls the target into view.</summary>
+    private void MoveActive(DataGrid grid, ResultSetViewModel result, object?[] row, int col, bool extend)
+    {
+        _active = (row, col);
+        _selectionResult = result;
+        if (extend)
+        {
+            _selAnchor ??= _active;
+            SelectRectangle(result, _selAnchor.Value, _active.Value);
+        }
+        else
+        {
+            _selAnchor = _active;
+            _selection.Clear();
+            if (col < result.Columns.Count && !IsBoolColumn(result.Columns[col])) _selection.Add((row, col));
+            SelectionChanged();
+        }
+        if (col < grid.Columns.Count) grid.ScrollIntoView(row, grid.Columns[col]);
+    }
+
+    /// <summary>Next non-bool column from <paramref name="from"/> in direction ±1, or stay put at an edge.</summary>
+    private static int StepColumn(ResultSetViewModel result, int from, int dir)
+    {
+        for (var c = from + dir; c >= 0 && c < result.Columns.Count; c += dir)
+            if (!IsBoolColumn(result.Columns[c])) return c;
+        return from;
+    }
+
+    private static int FirstSelectableColumn(ResultSetViewModel result)
+    {
+        for (var c = 0; c < result.Columns.Count; c++)
+            if (!IsBoolColumn(result.Columns[c])) return c;
+        return 0;
+    }
+
+    private static int LastSelectableColumn(ResultSetViewModel result)
+    {
+        for (var c = result.Columns.Count - 1; c >= 0; c--)
+            if (!IsBoolColumn(result.Columns[c])) return c;
+        return Math.Max(0, result.Columns.Count - 1);
+    }
+
+    /// <summary>Approximate rows-per-page from the realized DataGridRow visuals (for PageUp/PageDown).</summary>
+    private static int VisiblePageSize(DataGrid grid)
+    {
+        var realized = grid.GetVisualDescendants().OfType<DataGridRow>().Count(dgr => dgr.IsVisible);
+        return realized > 0 ? realized : 12;
+    }
+
+    /// <summary>Select every (non-bool) cell of the result (Ctrl+A).</summary>
+    private void SelectAll(ResultSetViewModel result)
+    {
+        _selectionResult = result;
+        _selection.Clear();
+        foreach (var row in result.Rows)
+            for (var c = 0; c < result.Columns.Count; c++)
+                if (c < row.Length && !IsBoolColumn(result.Columns[c]))
+                    _selection.Add((row, c));
+        _active ??= (result.Rows[0], FirstSelectableColumn(result));
+        _selAnchor ??= _active;
+        SelectionChanged();
+    }
+
+    /// <summary>Copy the selection to the clipboard as tab-separated rows (condensed to the selected
+    /// rows × columns; gaps in a non-rectangular selection come out blank).</summary>
+    private void CopySelection(ResultSetViewModel result)
+    {
+        if (!ReferenceEquals(_selectionResult, result) || _selection.Count == 0) return;
+        var rows = result.Rows;
+        var rowIdx = _selection.Select(s => rows.IndexOf(s.Row)).Where(i => i >= 0).Distinct().OrderBy(i => i).ToList();
+        var colIdx = _selection.Select(s => s.Col).Distinct().OrderBy(i => i).ToList();
+        if (rowIdx.Count == 0 || colIdx.Count == 0) return;
+
+        var text = string.Join("\n", rowIdx.Select(ri =>
+        {
+            var row = rows[ri];
+            return string.Join("\t", colIdx.Select(c =>
+                _selection.Contains((row, c)) && c < row.Length ? CellText(row, c) : ""));
+        }));
+        TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(text);
+    }
+
+    /// <summary>Mark every row that owns a selected cell for deletion (editable results). A pending-new
+    /// row is dropped outright, so prune any now-dangling selection entries afterwards.</summary>
+    private void DeleteSelectedRows(DataGrid grid, ResultSetViewModel result)
+    {
+        if (!result.IsEditable || !ReferenceEquals(_selectionResult, result)) return;
+        foreach (var row in _selection.Select(s => s.Row).Distinct().ToList())
+            if (!result.IsRowDeleted(row)) result.ToggleDelete(row); // mark (never un-mark) for deletion
+        _selection.RemoveWhere(s => !result.Rows.Contains(s.Row));
+        if (_active is { } a && !result.Rows.Contains(a.Row)) { _active = null; _selAnchor = null; }
+        RefreshRowColors(grid, result);
+        SelectionChanged();
+    }
+
+    /// <summary>Begin editing the active cell via the DataGrid's own edit machinery (Enter/F2).</summary>
+    private void BeginEditActive(DataGrid grid, ResultSetViewModel result)
+    {
+        if (_active is not { } a || !ReferenceEquals(_selectionResult, result)) return;
+        if (result.Rows.IndexOf(a.Row) < 0 || a.Col >= grid.Columns.Count) return;
+        grid.ScrollIntoView(a.Row, grid.Columns[a.Col]);
+        grid.SelectedItem = a.Row;
+        grid.CurrentColumn = grid.Columns[a.Col];
+        grid.BeginEdit();
     }
 
     /// <summary>Recompute the stats bars and re-apply every realized cell's selection ring.</summary>
