@@ -104,6 +104,8 @@ public sealed class ResultView : UserControl
     private (ResultSetViewModel Result, int Index, object?[] Row)? _inspect;
     private ColumnDefinition? _inspectorCol;
     private ContentControl? _inspectorHost;
+    private GridSplitter? _inspectorSplitter;
+    private double _inspectorWidth = 400; // remembered across open/close (user can drag the splitter)
 
     /// <summary>Highlight brush for JSON nodes matching the inspector's find query.</summary>
     private static readonly FuncValueConverter<bool, IBrush> MatchHighlight =
@@ -115,6 +117,8 @@ public sealed class ResultView : UserControl
     private ResultSetViewModel? _selectionResult;
     private Action? _cellRestyle; // each realized measure cell subscribes to re-apply its selection ring
     private readonly List<(ResultSetViewModel Result, Border Bar)> _statsBars = new();
+    private bool _dragging;                              // a click-drag cell selection is in progress
+    private (object?[] Row, int Col)? _dragAnchor;       // the cell the drag started from
 
     /// <summary>Re-apply pending-change row highlights (call after an in-place save clears pending state).</summary>
     public void RefreshRowHighlights()
@@ -167,14 +171,25 @@ public sealed class ResultView : UserControl
         root.Children.Add(header);
         root.Children.Add(BuildBody(results));
 
-        // The grid column fills; the inspector pane occupies a second column that's 0-wide when closed.
-        var outer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        // The grid column fills; a draggable splitter + the inspector pane occupy two more columns that
+        // collapse to 0-wide when the inspector is closed.
+        var outer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto") };
         Grid.SetColumn(root, 0);
         outer.Children.Add(root);
 
-        _inspectorCol = outer.ColumnDefinitions[1];
+        _inspectorSplitter = new GridSplitter
+        {
+            Width = 4,
+            ResizeDirection = GridResizeDirection.Columns,
+            Background = Separator,
+            IsVisible = false,
+        };
+        Grid.SetColumn(_inspectorSplitter, 1);
+        outer.Children.Add(_inspectorSplitter);
+
+        _inspectorCol = outer.ColumnDefinitions[2];
         _inspectorHost = new ContentControl { HorizontalAlignment = HorizontalAlignment.Stretch };
-        Grid.SetColumn(_inspectorHost, 1);
+        Grid.SetColumn(_inspectorHost, 2);
         outer.Children.Add(_inspectorHost);
         RenderInspector(); // re-open the pane if a rebuild happened while it was showing
 
@@ -374,26 +389,17 @@ public sealed class ResultView : UserControl
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 5, 0),
         };
-        var text = new TextBlock
-        {
-            Text = $"Read-only — {reason}",
-            Foreground = amber,
-            FontSize = 11,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        var inner = new StackPanel { Orientation = Orientation.Horizontal };
-        inner.Children.Add(body);
-        inner.Children.Add(text);
-
+        body.Margin = new Thickness(0); // icon-only chip; reason lives in the tooltip
         var chip = new Border
         {
             Background = Tint("Accent.Orange", 0x1E),
             CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(7, 1),
+            Padding = new Thickness(6, 3),
             VerticalAlignment = VerticalAlignment.Center,
-            Child = inner,
+            Cursor = new Cursor(StandardCursorType.Help),
+            Child = body,
         };
-        ToolTip.SetTip(chip, reason);
+        ToolTip.SetTip(chip, $"Read-only — {reason}");
         return chip;
     }
 
@@ -480,6 +486,9 @@ public sealed class ResultView : UserControl
         return false;
     }
 
+    // A column is capped so long-text values (description, tsvector…) show partially but stay resizable.
+    private const double MaxColumnWidth = 360;
+
     private DataGrid BuildGrid(ResultSetViewModel result)
     {
         var grid = new DataGrid
@@ -491,6 +500,7 @@ public sealed class ResultView : UserControl
             GridLinesVisibility = DataGridGridLinesVisibility.All,
             HeadersVisibility = DataGridHeadersVisibility.All, // row-number gutter + column headers
         };
+        ScrollViewer.SetAllowAutoHide(grid, false); // keep the scrollbar visible so it never covers cell content
         grid.LoadingRow += (_, e) =>
         {
             e.Row.Header = (e.Row.Index + 1).ToString();
@@ -498,24 +508,32 @@ public sealed class ResultView : UserControl
         };
         for (var i = 0; i < result.Columns.Count; i++)
         {
-            // FK columns keep their (read-only) jump-icon template; other columns are editable text
-            // (an explicit template-column editor — indexer-bound DataGridTextColumns don't edit reliably).
+            // FK columns keep their (read-only) jump-icon template; bool columns render a checkbox;
+            // everything else is a value cell (measure / inspectable / plain text), editable via a
+            // template editor (indexer-bound DataGridTextColumns don't edit reliably on recycle).
             DataGridColumn col;
             if (result.ForeignKeyColumns.Contains(i))
                 col = ForeignKeyColumn(result, i);
+            else if (IsBoolColumn(result.Columns[i]))
+                col = new DataGridTemplateColumn { CellTemplate = BoolCell(result, i) }; // toggles inline
             else if (result.IsEditable)
                 col = new DataGridTemplateColumn
                 {
                     Tag = i, // column index, read back in CellEditEnding
-                    CellTemplate = ValueCell(result, i),
+                    CellTemplate = ValueCell(result, i, grid),
                     CellEditingTemplate = CellEditor(i),
                 };
             else
-                col = new DataGridTemplateColumn { CellTemplate = ValueCell(result, i) };
+                col = new DataGridTemplateColumn { CellTemplate = ValueCell(result, i, grid) };
             col.Header = BuildColumnHeader(result, i); // name + PK/FK/type badges
+            col.MaxWidth = MaxColumnWidth;
             grid.Columns.Add(col);
         }
         grid.ItemsSource = result.Rows; // ObservableCollection → paged rows append without a rebuild
+
+        // Drag-select across measure cells (pointer is captured on the grid by the anchor cell).
+        grid.PointerMoved += (_, e) => DragSelectTo(grid, result, e);
+        grid.PointerReleased += (_, e) => { if (_dragging) { _dragging = false; e.Pointer.Capture(null); } };
 
         if (result.IsEditable)
         {
@@ -534,14 +552,14 @@ public sealed class ResultView : UserControl
 
     /// <summary>A value display cell: text (dimmed italic "(null)"), plus an inspect (⤢) affordance for
     /// jsonb/json columns and any long/multiline value — clicking it opens the cell inspector pane.</summary>
-    private IDataTemplate ValueCell(ResultSetViewModel result, int index)
+    private IDataTemplate ValueCell(ResultSetViewModel result, int index, DataGrid grid)
     {
         // Numeric measure columns (not PK/FK) are selectable for quick-stats instead of inspectable.
         if (CellStats.IsMeasureColumn(
                 result.Columns[index].ClrType,
                 result.PrimaryKeyColumns.Contains(index),
                 result.ForeignKeyColumns.Contains(index)))
-            return MeasureCell(result, index);
+            return MeasureCell(result, index, grid);
 
         var isJsonCol = IsJsonType(result.Columns[index].DataTypeName);
         return new FuncDataTemplate<object?[]>((row, _) =>
@@ -566,12 +584,56 @@ public sealed class ResultView : UserControl
 
             var expand = InspectAffordance();
             expand.PointerPressed += (_, _) => ShowInspector(result, index, row);
-            var cell = new DockPanel();
+            var cell = new DockPanel { Margin = new Thickness(0, 0, 8, 0) }; // keep ⤢ clear of the scrollbar
             DockPanel.SetDock(expand, Dock.Right);
             cell.Children.Add(expand);
             cell.Children.Add(text);
             return cell;
         });
+    }
+
+    private static bool IsBoolColumn(Squirrel.Core.Data.ColumnDescriptor c)
+        => (Nullable.GetUnderlyingType(c.ClrType) ?? c.ClrType) == typeof(bool);
+
+    /// <summary>A boolean cell rendered as a checkbox: read-only display when the grid is locked,
+    /// interactive (toggles the row value + marks it edited) when the result is editable.</summary>
+    private IDataTemplate BoolCell(ResultSetViewModel result, int index)
+        => new FuncDataTemplate<object?[]>((row, _) =>
+        {
+            var cb = new CheckBox
+            {
+                IsThreeState = true, // null → indeterminate
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                IsChecked = ToBool(row, index),
+            };
+            if (!result.IsEditable)
+            {
+                cb.IsHitTestVisible = false; // display only (not greyed like IsEnabled=false)
+                cb.Focusable = false;
+                return cb;
+            }
+            cb.IsCheckedChanged += (_, _) =>
+            {
+                if (row is null || index >= row.Length) return;
+                if (Equals(row[index] as bool?, cb.IsChecked)) return; // no-op (e.g. initial bind)
+                row[index] = cb.IsChecked;
+                result.MarkEdited(row);
+                if (cb.GetVisualAncestors().OfType<DataGridRow>().FirstOrDefault() is { } dgr)
+                    ApplyRowStatus(dgr, result);
+            };
+            return cb;
+        });
+
+    private static bool? ToBool(object?[]? row, int index)
+    {
+        if (row is null || index >= row.Length) return null;
+        return row[index] switch
+        {
+            bool b => b,
+            string s when bool.TryParse(s, out var b) => b,
+            _ => null,
+        };
     }
 
     private static bool IsJsonType(string dataTypeName)
@@ -781,7 +843,7 @@ public sealed class ResultView : UserControl
                     if (hasValue && NavigateForeignKey is { } nav) await nav(result, index, row);
                 };
 
-                var cell = new DockPanel();
+                var cell = new DockPanel { Margin = new Thickness(0, 0, 8, 0) }; // keep ↗ clear of the scrollbar
                 DockPanel.SetDock(jump, Dock.Right);
                 cell.Children.Add(jump);
                 cell.Children.Add(value);
@@ -791,9 +853,11 @@ public sealed class ResultView : UserControl
 
     // ---- Numeric quick-stats: measure-cell selection (design RESULTS_GRID §7) -----------------
 
-    /// <summary>A numeric measure cell: single-click selects it for quick-stats (blue ring + tint),
-    /// Ctrl/Cmd/Shift-click extends the selection; double-click still enters edit on editable grids.</summary>
-    private IDataTemplate MeasureCell(ResultSetViewModel result, int index)
+    /// <summary>A numeric measure cell: single-click selects it for quick-stats (blue ring + tint) and
+    /// starts a click-drag rectangle; Ctrl/Cmd/Shift-click toggles a cell; double-click still enters
+    /// edit on editable grids. The pressed cell captures the pointer on the grid so a drag can extend
+    /// the selection across other measure cells; the whole-row highlight is suppressed.</summary>
+    private IDataTemplate MeasureCell(ResultSetViewModel result, int index, DataGrid grid)
         => new FuncDataTemplate<object?[]>((row, _) =>
         {
             var text = new TextBlock
@@ -807,7 +871,6 @@ public sealed class ResultView : UserControl
             {
                 text.FontStyle = FontStyle.Italic;
                 text.Foreground = NullBrush;
-                text.Text = CellText(row, index);
                 return text; // NULLs aren't selectable
             }
 
@@ -817,11 +880,12 @@ public sealed class ResultView : UserControl
                 CornerRadius = new CornerRadius(2),
                 BorderThickness = new Thickness(0),
                 Cursor = new Cursor(StandardCursorType.Cross),
+                Tag = (row, index), // read back when a drag hit-tests the cell under the pointer
             };
 
             void Restyle()
             {
-                var selected = _selectionResult == result && _selection.Contains((row, index));
+                var selected = ReferenceEquals(_selectionResult, result) && _selection.Contains((row, index));
                 border.Background = selected ? Tint("Syntax.Func", 0x2A) : Brushes.Transparent;
                 border.BorderBrush = selected ? Res("Syntax.Func") : Brushes.Transparent;
                 border.BorderThickness = new Thickness(selected ? 1 : 0);
@@ -834,13 +898,60 @@ public sealed class ResultView : UserControl
             border.PointerPressed += (_, e) =>
             {
                 if (e.ClickCount >= 2) return; // let the grid start editing on double-click
+                if (!e.GetCurrentPoint(border).Properties.IsLeftButtonPressed) return;
                 var extend = e.KeyModifiers.HasFlag(KeyModifiers.Control)
                     || e.KeyModifiers.HasFlag(KeyModifiers.Meta)
                     || e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-                ToggleCellSelection(result, row, index, extend);
+                if (extend)
+                {
+                    ToggleCellSelection(result, row, index, extend: true);
+                }
+                else
+                {
+                    // Start a fresh selection + drag anchored here.
+                    if (!ReferenceEquals(_selectionResult, result)) _selectionResult = result;
+                    _selection.Clear();
+                    _selection.Add((row, index));
+                    _dragging = true;
+                    _dragAnchor = (row, index);
+                    e.Pointer.Capture(grid);
+                    SelectionChanged();
+                }
+                e.Handled = true; // don't let the grid select the whole row
             };
             return border;
         });
+
+    /// <summary>During a drag, hit-test the measure cell under the pointer and select the rectangle
+    /// from the anchor to it (measure columns only).</summary>
+    private void DragSelectTo(DataGrid grid, ResultSetViewModel result, PointerEventArgs e)
+    {
+        if (!_dragging || !ReferenceEquals(_selectionResult, result) || _dragAnchor is not { } anchor) return;
+        if (grid.InputHitTest(e.GetPosition(grid)) is not Visual hit) return;
+        var cell = hit.GetSelfAndVisualAncestors().OfType<Border>()
+            .FirstOrDefault(b => b.Tag is ValueTuple<object?[], int>);
+        if (cell?.Tag is not ValueTuple<object?[], int> target) return;
+
+        var rows = result.Rows;
+        int r0 = rows.IndexOf(anchor.Row), r1 = rows.IndexOf(target.Item1);
+        if (r0 < 0 || r1 < 0) return;
+        if (r0 > r1) (r0, r1) = (r1, r0);
+        int c0 = Math.Min(anchor.Col, target.Item2), c1 = Math.Max(anchor.Col, target.Item2);
+
+        _selection.Clear();
+        for (var r = r0; r <= r1; r++)
+        {
+            var rr = rows[r];
+            for (var c = c0; c <= c1; c++)
+                if (c < rr.Length && rr[c] is not null && IsMeasureIndex(result, c))
+                    _selection.Add((rr, c));
+        }
+        SelectionChanged();
+    }
+
+    private static bool IsMeasureIndex(ResultSetViewModel result, int c)
+        => CellStats.IsMeasureColumn(
+            result.Columns[c].ClrType, result.PrimaryKeyColumns.Contains(c), result.ForeignKeyColumns.Contains(c));
 
     private void ToggleCellSelection(ResultSetViewModel result, object?[] row, int index, bool extend)
     {
@@ -960,12 +1071,18 @@ public sealed class ResultView : UserControl
         if (_inspect is { } ins)
         {
             _inspectorHost.Content = BuildInspector(ins.Result, ins.Index, ins.Row);
-            _inspectorCol.Width = new GridLength(400);
+            _inspectorCol.Width = new GridLength(_inspectorWidth, GridUnitType.Pixel);
+            _inspectorCol.MinWidth = 240;
+            if (_inspectorSplitter is not null) _inspectorSplitter.IsVisible = true;
         }
         else
         {
+            // Remember the dragged width before collapsing so re-opening keeps it.
+            if (_inspectorCol.Width.IsAbsolute && _inspectorCol.Width.Value > 0) _inspectorWidth = _inspectorCol.Width.Value;
             _inspectorHost.Content = null;
+            _inspectorCol.MinWidth = 0;
             _inspectorCol.Width = new GridLength(0);
+            if (_inspectorSplitter is not null) _inspectorSplitter.IsVisible = false;
         }
     }
 
@@ -1093,8 +1210,7 @@ public sealed class ResultView : UserControl
             Background = Res("Bg.Editor"),
             BorderThickness = new Thickness(1, 0, 0, 0),
             BorderBrush = Separator,
-            Width = 400,
-            Child = panel,
+            Child = panel, // width comes from the resizable grid column
         };
     }
 

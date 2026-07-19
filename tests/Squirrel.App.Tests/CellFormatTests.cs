@@ -52,4 +52,23 @@ public class CellFormatTests
         Assert.Equal(new DateTime(2023, 12, 1), v);
         Assert.False(CellFormat.TryParseDate("not a date", typeof(DateTime), out _));
     }
+
+    [Fact]
+    public void Arrays_render_as_brace_lists_not_type_names()
+    {
+        Assert.Equal("{Trailers, Deleted Scenes}", CellFormat.Display(new[] { "Trailers", "Deleted Scenes" }));
+        Assert.Equal("{1, 2, 3}", CellFormat.Display(new[] { 1, 2, 3 }));
+        Assert.Equal("{}", CellFormat.Display(Array.Empty<string>()));
+        Assert.Equal("{a, (null), b}", CellFormat.Display(new string?[] { "a", null, "b" })); // element nulls
+    }
+
+    [Fact]
+    public void Bytea_renders_as_hex_and_truncates_when_long()
+    {
+        Assert.Equal(@"\xdeadbeef", CellFormat.Display(new byte[] { 0xDE, 0xAD, 0xBE, 0xEF }));
+        var long20 = new byte[20];
+        var display = CellFormat.Display(long20);
+        Assert.StartsWith(@"\x", display);
+        Assert.Contains("(20 bytes)", display);
+    }
 }

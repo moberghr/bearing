@@ -26,8 +26,28 @@ public static class CellFormat
         DateTimeOffset dto => dto.ToString(DateTimePattern, CultureInfo.InvariantCulture),
         DateOnly d => d.ToString(DatePattern, CultureInfo.InvariantCulture),
         TimeOnly t => t.ToString(TimePattern, CultureInfo.InvariantCulture),
+        byte[] bytes => FormatBytea(bytes),               // bytea → \x hex (truncated)
+        Array arr => FormatArray(arr),                     // text[]/int[]/… → {a, b, c}
         _ => value.ToString() ?? "",
     };
+
+    /// <summary>A Postgres array value as <c>{a, b, c}</c>, elements formatted via <see cref="Display"/>
+    /// (so nested arrays, dates and nulls render consistently).</summary>
+    private static string FormatArray(Array arr)
+    {
+        var parts = new string[arr.Length];
+        for (var i = 0; i < arr.Length; i++) parts[i] = Display(arr.GetValue(i));
+        return "{" + string.Join(", ", parts) + "}";
+    }
+
+    /// <summary>A byte[] (bytea) as a <c>\x</c> hex string, capped at 16 bytes with a length note.</summary>
+    private static string FormatBytea(byte[] bytes)
+    {
+        const int cap = 16;
+        var shown = Math.Min(bytes.Length, cap);
+        var hex = Convert.ToHexString(bytes, 0, shown).ToLowerInvariant();
+        return bytes.Length > cap ? $"\\x{hex}… ({bytes.Length} bytes)" : $"\\x{hex}";
+    }
 
     /// <summary>Whether an edited cell string means "set NULL" (the <see cref="NullToken"/>, trimmed).</summary>
     public static bool IsNullToken(string? s) => string.Equals(s?.Trim(), NullToken, StringComparison.OrdinalIgnoreCase);
