@@ -94,6 +94,15 @@ public sealed class ResultView : UserControl
     private static IBrush NullBrush => Res("Text.Faint");    // dimmed "(null)" marker
     private static IBrush Separator => Res("Border");        // 1px region separators
 
+    // Filled collapse-triangle geometries (drawn, not glyphs). Right = collapsed, down = expanded.
+    private const string ChevronRight = "M0,0 L5,4 L0,8 Z";
+    private const string ChevronDown = "M0,0 L8,0 L4,5 Z";
+
+    /// <summary>Faint zebra stripe for odd data rows (even rows keep the editor bg). Transparent for
+    /// even so the underlying grid surface shows through.</summary>
+    private static IBrush ZebraBackground(int rowIndex)
+        => rowIndex % 2 == 1 ? Tint("Text.Faint", 0x16) : Brushes.Transparent;
+
     // Editable grids currently rendered (grid + its result) — used to re-tint rows after an in-place save.
     private readonly List<(DataGrid Grid, ResultSetViewModel Result)> _editableGrids = new();
 
@@ -151,7 +160,8 @@ public sealed class ResultView : UserControl
     private static void ApplyRowStatus(DataGridRow dgr, ResultSetViewModel result)
     {
         var (tint, bar) = RowStatus(result, dgr.DataContext as object?[]);
-        dgr.Background = tint;
+        // No pending change → fall back to the zebra stripe rather than a flat transparent row.
+        dgr.Background = ReferenceEquals(tint, Brushes.Transparent) ? ZebraBackground(dgr.Index) : tint;
         dgr.BorderBrush = bar;
         dgr.BorderThickness = new Thickness(2, 0, 0, 0);
     }
@@ -325,12 +335,24 @@ public sealed class ResultView : UserControl
         if (capHeight)
             body = new Border { Child = body, MaxHeight = 360 };
 
-        var chevron = new TextBlock
+        // Drawn triangle (▸/▾ glyphs render clipped in the app font — same reason the FK/back/inspect
+        // icons are vector Paths). Right = collapsed, down = expanded; wrapped in a padded hit target.
+        var chevronPath = new Path
         {
-            Text = _collapsed.Contains(result) ? "▸" : "▾",
-            Foreground = Res("Text.Faint"),
+            Fill = Res("Text.Faint"),
+            Data = Geometry.Parse(_collapsed.Contains(result) ? ChevronRight : ChevronDown),
+            Stretch = Stretch.None,
+            HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 6, 0),
+        };
+        var chevron = new Border
+        {
+            Child = chevronPath,
+            Background = Brushes.Transparent,
+            Width = 16,
+            Height = 16,
+            Margin = new Thickness(0, 0, 4, 0),
+            VerticalAlignment = VerticalAlignment.Center,
             IsVisible = collapsible,
             Cursor = collapsible ? new Cursor(StandardCursorType.Hand) : Cursor.Default,
         };
@@ -384,7 +406,7 @@ public sealed class ResultView : UserControl
                 var collapsed = !_collapsed.Remove(result);
                 if (collapsed) _collapsed.Add(result);
                 body.IsVisible = !collapsed;
-                chevron.Text = collapsed ? "▸" : "▾";
+                chevronPath.Data = Geometry.Parse(collapsed ? ChevronRight : ChevronDown);
             };
 
         var bar = new Border
@@ -525,10 +547,13 @@ public sealed class ResultView : UserControl
         ScrollViewer.SetAllowAutoHide(grid, false); // keep the scrollbar visible
         SuppressRowSelectionHighlight(grid);        // cell-level selection only — no whole-row blue bar
         ReserveScrollbarSpace(grid);                // inset content so the scrollbars don't cover data
+        StyleGridChrome(grid);                      // tighter rows + a proper row-number gutter
         grid.LoadingRow += (_, e) =>
         {
             e.Row.Header = (e.Row.Index + 1).ToString();
+            // Editable rows carry pending-edit tints (which fold in the zebra); others just stripe.
             if (result.IsEditable) ApplyRowStatus(e.Row, result);
+            else e.Row.Background = ZebraBackground(e.Row.Index);
             // Infinite scroll: when a near-bottom row realizes and more rows exist, fetch the next page.
             if (result.HasMore && e.Row.Index >= result.Rows.Count - 8) TriggerAutoLoad(result);
         };
@@ -627,6 +652,35 @@ public sealed class ResultView : UserControl
         grid.Styles.Add(headers);
     }
 
+    /// <summary>Trim the Fluent DataGrid's generous vertical padding and turn the row-number header into a
+    /// proper right-aligned gutter (dim, padded, with a separator) instead of digits jammed against the
+    /// first cell. Applied per grid via the local style scope.</summary>
+    private static void StyleGridChrome(DataGrid grid)
+    {
+        // Tighter data rows: lower the row floor and zero the cell's vertical padding so a single
+        // line of text no longer sits in a tall box.
+        var row = new Style(x => x.OfType<DataGridRow>());
+        row.Setters.Add(new Setter(Layoutable.MinHeightProperty, 26.0));
+        grid.Styles.Add(row);
+
+        var cell = new Style(x => x.OfType<DataGridCell>());
+        cell.Setters.Add(new Setter(TemplatedControl.PaddingProperty, new Thickness(0)));
+        cell.Setters.Add(new Setter(Layoutable.MinHeightProperty, 26.0));
+        grid.Styles.Add(cell);
+
+        // Row-number gutter: right-align the digits, give them breathing room + a separator, and dim them.
+        var header = new Style(x => x.OfType<DataGridRowHeader>());
+        header.Setters.Add(new Setter(ContentControl.HorizontalContentAlignmentProperty, HorizontalAlignment.Right));
+        header.Setters.Add(new Setter(ContentControl.VerticalContentAlignmentProperty, VerticalAlignment.Center));
+        header.Setters.Add(new Setter(TemplatedControl.PaddingProperty, new Thickness(10, 0, 14, 0)));
+        header.Setters.Add(new Setter(TemplatedControl.ForegroundProperty, Res("Text.Faint")));
+        header.Setters.Add(new Setter(TemplatedControl.BackgroundProperty, Res("Bg.Chrome")));
+        header.Setters.Add(new Setter(TemplatedControl.BorderBrushProperty, Separator));
+        header.Setters.Add(new Setter(TemplatedControl.BorderThicknessProperty, new Thickness(0, 0, 1, 0)));
+        header.Setters.Add(new Setter(Layoutable.MinWidthProperty, 44.0)); // steady gutter for 2–3 digit counts
+        grid.Styles.Add(header);
+    }
+
     /// <summary>A value display cell: text (dimmed italic "(null)", numeric in code color), plus an
     /// inspect (⤢) affordance for jsonb/json and any long/multiline value. Every value cell is
     /// selectable (single/drag/modifier-click); numeric selections drive the quick-stats bar.</summary>
@@ -688,9 +742,29 @@ public sealed class ResultView : UserControl
         void Restyle()
         {
             var selected = ReferenceEquals(_selectionResult, result) && _selection.Contains((row, index));
-            border.Background = selected ? Tint("Syntax.Func", 0x2A) : Brushes.Transparent;
-            border.BorderBrush = selected ? Res("Syntax.Func") : Brushes.Transparent;
-            border.BorderThickness = new Thickness(selected ? 1 : 0);
+            if (!selected)
+            {
+                border.Background = Brushes.Transparent;
+                border.BorderThickness = new Thickness(0);
+                border.CornerRadius = new CornerRadius(2);
+                return;
+            }
+
+            // Merge adjacent selected cells: fill them all, but only stroke the block's outer edges —
+            // an edge shared with another selected cell gets no border, so the selection reads as one
+            // contiguous region instead of a grid of individually-ringed cells.
+            var rows = result.Rows;
+            var r = rows.IndexOf(row);
+            var up    = r > 0 && _selection.Contains((rows[r - 1], index));
+            var down   = r >= 0 && r + 1 < rows.Count && _selection.Contains((rows[r + 1], index));
+            var left  = _selection.Contains((row, index - 1));
+            var right = _selection.Contains((row, index + 1));
+
+            border.Background = Tint("Syntax.Func", 0x2A);
+            border.BorderBrush = Res("Syntax.Func");
+            border.BorderThickness = new Thickness(left ? 0 : 1, up ? 0 : 1, right ? 0 : 1, down ? 0 : 1);
+            // Round only a lone cell's corners; a cell inside a block stays square so the edges abut cleanly.
+            border.CornerRadius = new CornerRadius(up || down || left || right ? 0 : 2);
         }
         Restyle();
         _cellRestyle += Restyle;
