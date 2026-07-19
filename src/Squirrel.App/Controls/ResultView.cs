@@ -38,7 +38,7 @@ public sealed class ResultView : UserControl
     public IReadOnlyList<ResultSetViewModel>? Results
     {
         get => _results;
-        set { _results = value; _inspect = null; Rebuild(); } // a new run closes any open inspector
+        set { _results = value; _inspect = null; ClearSelection(); Rebuild(); } // a new run resets inspector + stats
     }
 
     private ResultsViewMode _viewMode = ResultsViewMode.Stacked;
@@ -109,6 +109,13 @@ public sealed class ResultView : UserControl
     private static readonly FuncValueConverter<bool, IBrush> MatchHighlight =
         new(m => m ? Tint("Accent.Orange", 0x55) : Brushes.Transparent);
 
+    // Numeric quick-stats: a set of selected measure cells keyed by (row reference, column index),
+    // the result they belong to, a per-cell restyle notifier, and the stats bars to toggle/update.
+    private readonly HashSet<(object?[] Row, int Col)> _selection = new();
+    private ResultSetViewModel? _selectionResult;
+    private Action? _cellRestyle; // each realized measure cell subscribes to re-apply its selection ring
+    private readonly List<(ResultSetViewModel Result, Border Bar)> _statsBars = new();
+
     /// <summary>Re-apply pending-change row highlights (call after an in-place save clears pending state).</summary>
     public void RefreshRowHighlights()
         => Dispatcher.UIThread.Post(() => { foreach (var (grid, result) in _editableGrids) RefreshRowColors(grid, result); });
@@ -142,6 +149,8 @@ public sealed class ResultView : UserControl
     private void Rebuild()
     {
         _editableGrids.Clear();
+        _statsBars.Clear();
+        _cellRestyle = null; // old cells are being discarded; they re-subscribe as they rebuild
         var results = _results;
         if (results is null || results.Count == 0) { Content = null; return; }
 
@@ -454,8 +463,21 @@ public sealed class ResultView : UserControl
             return new TextBlock { Text = result.Message ?? "Statement executed.", Margin = new Thickness(8) };
 
         var grid = BuildGrid(result);
-        Control content = result.IsPageable ? WithFooter(grid, result) : grid;
+        Control content = grid;
+        if (HasMeasureColumn(result)) content = WithStatsBar(content, result); // above the footer
+        if (result.IsPageable) content = WithFooter(content, result);
         return result.IsEditable ? WithEditToolbar(content, grid, result) : content;
+    }
+
+    private static bool HasMeasureColumn(ResultSetViewModel result)
+    {
+        for (var i = 0; i < result.Columns.Count; i++)
+            if (CellStats.IsMeasureColumn(
+                    result.Columns[i].ClrType,
+                    result.PrimaryKeyColumns.Contains(i),
+                    result.ForeignKeyColumns.Contains(i)))
+                return true;
+        return false;
     }
 
     private DataGrid BuildGrid(ResultSetViewModel result)
@@ -514,6 +536,13 @@ public sealed class ResultView : UserControl
     /// jsonb/json columns and any long/multiline value — clicking it opens the cell inspector pane.</summary>
     private IDataTemplate ValueCell(ResultSetViewModel result, int index)
     {
+        // Numeric measure columns (not PK/FK) are selectable for quick-stats instead of inspectable.
+        if (CellStats.IsMeasureColumn(
+                result.Columns[index].ClrType,
+                result.PrimaryKeyColumns.Contains(index),
+                result.ForeignKeyColumns.Contains(index)))
+            return MeasureCell(result, index);
+
         var isJsonCol = IsJsonType(result.Columns[index].DataTypeName);
         return new FuncDataTemplate<object?[]>((row, _) =>
         {
@@ -738,6 +767,156 @@ public sealed class ResultView : UserControl
                 return cell;
             }),
         };
+
+    // ---- Numeric quick-stats: measure-cell selection (design RESULTS_GRID §7) -----------------
+
+    /// <summary>A numeric measure cell: single-click selects it for quick-stats (blue ring + tint),
+    /// Ctrl/Cmd/Shift-click extends the selection; double-click still enters edit on editable grids.</summary>
+    private IDataTemplate MeasureCell(ResultSetViewModel result, int index)
+        => new FuncDataTemplate<object?[]>((row, _) =>
+        {
+            var text = new TextBlock
+            {
+                Text = CellText(row, index),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(4, 0),
+                Foreground = Res("Text.Code"),
+            };
+            if (row is null || index >= row.Length || row[index] is null)
+            {
+                text.FontStyle = FontStyle.Italic;
+                text.Foreground = NullBrush;
+                text.Text = CellText(row, index);
+                return text; // NULLs aren't selectable
+            }
+
+            var border = new Border
+            {
+                Child = text,
+                CornerRadius = new CornerRadius(2),
+                BorderThickness = new Thickness(0),
+                Cursor = new Cursor(StandardCursorType.Cross),
+            };
+
+            void Restyle()
+            {
+                var selected = _selectionResult == result && _selection.Contains((row, index));
+                border.Background = selected ? Tint("Syntax.Func", 0x2A) : Brushes.Transparent;
+                border.BorderBrush = selected ? Res("Syntax.Func") : Brushes.Transparent;
+                border.BorderThickness = new Thickness(selected ? 1 : 0);
+            }
+            Restyle();
+
+            _cellRestyle += Restyle; // re-apply whenever the selection changes
+            border.DetachedFromVisualTree += (_, _) => _cellRestyle -= Restyle;
+
+            border.PointerPressed += (_, e) =>
+            {
+                if (e.ClickCount >= 2) return; // let the grid start editing on double-click
+                var extend = e.KeyModifiers.HasFlag(KeyModifiers.Control)
+                    || e.KeyModifiers.HasFlag(KeyModifiers.Meta)
+                    || e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+                ToggleCellSelection(result, row, index, extend);
+            };
+            return border;
+        });
+
+    private void ToggleCellSelection(ResultSetViewModel result, object?[] row, int index, bool extend)
+    {
+        if (!ReferenceEquals(_selectionResult, result)) { _selection.Clear(); _selectionResult = result; }
+        var key = (row, index);
+        if (extend) { if (!_selection.Remove(key)) _selection.Add(key); }
+        else { _selection.Clear(); _selection.Add(key); }
+        SelectionChanged();
+    }
+
+    private void ClearSelection()
+    {
+        _selection.Clear();
+        _selectionResult = null;
+    }
+
+    /// <summary>Recompute the stats bars and re-apply every realized cell's selection ring.</summary>
+    private void SelectionChanged()
+    {
+        foreach (var (result, bar) in _statsBars)
+        {
+            var show = ReferenceEquals(result, _selectionResult) && _selection.Count >= 2;
+            if (show && CellStats.Aggregate(SelectedValues(result)) is { } stats)
+            {
+                bar.Child = BuildStatsContent(result, _selection.Count, stats);
+                bar.IsVisible = true;
+            }
+            else
+            {
+                bar.IsVisible = false;
+            }
+        }
+        _cellRestyle?.Invoke();
+    }
+
+    private IEnumerable<object?> SelectedValues(ResultSetViewModel result)
+    {
+        if (!ReferenceEquals(result, _selectionResult)) yield break;
+        foreach (var (row, col) in _selection)
+            if (col < row.Length) yield return row[col];
+    }
+
+    /// <summary>Wrap content with a bottom quick-stats bar (hidden until ≥2 measure cells are selected).</summary>
+    private Control WithStatsBar(Control content, ResultSetViewModel result)
+    {
+        var bar = new Border
+        {
+            Background = Res("Bg.Hover"),
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            BorderBrush = Separator,
+            Padding = new Thickness(8, 4),
+            IsVisible = false,
+        };
+        _statsBars.Add((result, bar));
+        DockPanel.SetDock(bar, Dock.Bottom);
+
+        var panel = new DockPanel();
+        panel.Children.Add(bar);
+        panel.Children.Add(content);
+        return panel;
+    }
+
+    private Control BuildStatsContent(ResultSetViewModel result, int count, CellStatistics stats)
+    {
+        var stack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        stack.Children.Add(Stat($"{count} cells", "Text.Dim"));
+        stack.Children.Add(Sep());
+        stack.Children.Add(Stat($"count {stats.Count}", "Text.Primary"));
+        stack.Children.Add(Sep());
+        stack.Children.Add(Stat($"sum {CellStats.Format(stats.Sum)}", "Ok.Green")); // sum highlighted green
+        stack.Children.Add(Sep());
+        stack.Children.Add(Stat($"avg {CellStats.Format(stats.Avg)}", "Text.Primary"));
+        stack.Children.Add(Sep());
+        stack.Children.Add(Stat($"min {CellStats.Format(stats.Min)}", "Text.Primary"));
+        stack.Children.Add(Sep());
+        stack.Children.Add(Stat($"max {CellStats.Format(stats.Max)}", "Text.Primary"));
+
+        var clear = IconTextButton("Clear", "Clear selection");
+        clear.Margin = new Thickness(12, 0, 0, 0);
+        clear.Click += (_, _) => { if (ReferenceEquals(_selectionResult, result)) { ClearSelection(); SelectionChanged(); } };
+
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        Grid.SetColumn(stack, 0);
+        Grid.SetColumn(clear, 1);
+        grid.Children.Add(stack);
+        grid.Children.Add(clear);
+        return grid;
+
+        static Control Stat(string text, string colorKey) => new TextBlock
+        {
+            Text = text, Foreground = Res(colorKey), VerticalAlignment = VerticalAlignment.Center, FontSize = 12,
+        };
+        static Control Sep() => new TextBlock
+        {
+            Text = " · ", Foreground = Res("Text.Faint"), VerticalAlignment = VerticalAlignment.Center,
+        };
+    }
 
     // ---- Cell inspector (large-value / JSON viewer, design RESULTS_GRID §6) -------------------
 
