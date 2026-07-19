@@ -661,35 +661,56 @@ public sealed class ResultView : UserControl
     /// changes — a count plus Save / Discard.</summary>
     private Control WithEditToolbar(Control content, DataGrid grid, ResultSetViewModel result)
     {
-        var add = new Button { Content = "+ Add row", Margin = new Thickness(0, 0, 6, 0) };
+        var add = new Button { Content = "＋ Add row", Margin = new Thickness(0, 0, 6, 0) };
         add.Click += (_, _) => { var row = result.AddRow(); grid.ScrollIntoView(row, null); RefreshRowColors(grid, result); };
 
-        var delete = new Button { Content = "Delete row", Margin = new Thickness(0, 0, 12, 0) };
+        var delete = new Button { Content = "Delete row", Margin = new Thickness(0, 0, 6, 0) };
         delete.Click += (_, _) => { if (grid.SelectedItem is object?[] row) { result.ToggleDelete(row); RefreshRowColors(grid, result); } };
 
-        var pending = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+        // Export is rendered to match the design but wired later (per decision).
+        var export = new Button { Content = "⭳ Export", Margin = new Thickness(0, 0, 12, 0) };
+        ToolTip.SetTip(export, "Export — coming soon");
+
+        // Pending commit group: "● N pending" · ‹ › Script · Discard (red outline) · ✓ Save (green fill).
+        var dot = new TextBlock { Text = "●", Foreground = Res("Accent.Orange"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) };
+        var pending = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0), Foreground = Res("Text.Primary") };
         pending.Bind(TextBlock.TextProperty, new Binding(nameof(ResultSetViewModel.PendingText)));
 
-        var preview = new Button { Content = "Preview SQL", Margin = new Thickness(0, 0, 6, 0) };
-        preview.Click += (_, _) => PreviewSql?.Invoke(result);
+        var script = new Button { Content = "‹ › Script", Margin = new Thickness(0, 0, 6, 0) };
+        script.Click += (_, _) => PreviewSql?.Invoke(result);
 
-        var save = new Button { Content = "Save changes", Margin = new Thickness(0, 0, 6, 0) };
-        save.Click += async (_, _) => { if (SaveChanges is { } f) await f(result); };
-
-        var discard = new Button { Content = "Discard" };
+        var discard = new Button
+        {
+            Content = "Discard",
+            Margin = new Thickness(0, 0, 6, 0),
+            Background = Brushes.Transparent,
+            BorderBrush = Res("Error.Red"),
+            BorderThickness = new Thickness(1),
+            Foreground = Res("Error.Red"),
+        };
         discard.Click += async (_, _) => { if (DiscardChanges is { } f) await f(result); };
+
+        var save = new Button
+        {
+            Content = "✓ Save changes",
+            Background = Res("Ok.Green"),
+            Foreground = Res("Bg.Editor"),
+        };
+        save.Click += async (_, _) => { if (SaveChanges is { } f) await f(result); };
 
         // The pending group only shows once there's something to save.
         var pendingGroup = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        pendingGroup.Children.Add(dot);
         pendingGroup.Children.Add(pending);
-        pendingGroup.Children.Add(preview);
-        pendingGroup.Children.Add(save);
+        pendingGroup.Children.Add(script);
         pendingGroup.Children.Add(discard);
+        pendingGroup.Children.Add(save);
         pendingGroup.Bind(IsVisibleProperty, new Binding(nameof(ResultSetViewModel.HasPendingChanges)));
 
         var bar = new StackPanel { Orientation = Orientation.Horizontal };
         bar.Children.Add(add);
         bar.Children.Add(delete);
+        bar.Children.Add(export);
         bar.Children.Add(pendingGroup);
 
         var toolbar = new Border

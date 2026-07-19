@@ -1011,6 +1011,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
         return sb.ToString();
     }
 
+    /// <summary>One generated write statement, tagged INSERT/UPDATE/DELETE for the floating script panel.</summary>
+    public sealed record PendingStatement(string Kind, string Sql);
+
+    /// <summary>The pending write statements, one per dirty row, values inlined and kind-tagged (for the
+    /// color-coded pending-changes script panel). Empty when there's nothing pending. Preview only.</summary>
+    public IReadOnlyList<PendingStatement> PreviewChangeStatements(ResultSetViewModel rs)
+    {
+        if (rs.EditTarget is not { } target || !rs.HasPendingChanges) return Array.Empty<PendingStatement>();
+        return BuildPendingChanges(rs, target)
+            .Select(c => new PendingStatement(c.Kind.ToString().ToUpperInvariant(), InlineParameters(c.Command) + ";"))
+            .ToList();
+    }
+
     /// <summary>Substitute a command's @pN parameters with SQL literals in a single pass (so neither
     /// overlapping names nor a value that contains "@pN" corrupts the rendered SQL).</summary>
     private static string InlineParameters(SqlWriteCommand c)
