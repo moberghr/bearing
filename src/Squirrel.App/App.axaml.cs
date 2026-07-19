@@ -36,6 +36,7 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            LogStartup("framework init done");
             var providers = new ProviderRegistry();
             IProjectStore projectStore = new JsonProjectStore();
             ISessionStore sessionStore = new JsonSessionStore();
@@ -43,7 +44,9 @@ public partial class App : Application
             IRecentProjects recentProjects = new FileRecentProjects();
 
             var vm = new MainWindowViewModel(providers, projectStore, sessionStore, queryLog, recentProjects);
+            LogStartup("vm created");
             var window = new MainWindow { DataContext = vm };
+            LogStartup("window constructed");
 
             // Persist the session on every exit path, exactly once. A window close fires Closing on
             // the UI thread; a killed process (Ctrl+C in the terminal, IDE stop) shuts the runtime
@@ -65,6 +68,11 @@ public partial class App : Application
 
             desktop.MainWindow = window;
 
+            // Optional startup timing (set SQUIRREL_STARTUP_TIMING=1) — measures process start → first
+            // window shown, and → project/demo restore complete (the off-thread work).
+            if (Environment.GetEnvironmentVariable("SQUIRREL_STARTUP_TIMING") is { Length: > 0 })
+                window.Opened += (_, _) => LogStartup("window shown");
+
             // Resolve the keychain and restore the project OFF the UI thread — never block startup.
             _ = InitializeAsync(vm);
         }
@@ -79,6 +87,19 @@ public partial class App : Application
         await vm.InitializeAsync(DefaultProjectDirectory());
         // First-run convenience: point the default project at the local pagila demo container.
         await vm.SeedDemoConnectionAsync("localhost", 5434, "pagila", "postgres", "squirrel");
+        LogStartup("project + demo ready");
+    }
+
+    /// <summary>Write a startup milestone (ms since process start) when SQUIRREL_STARTUP_TIMING is set.</summary>
+    internal static void LogStartup(string milestone)
+    {
+        if (Environment.GetEnvironmentVariable("SQUIRREL_STARTUP_TIMING") is not { Length: > 0 }) return;
+        try
+        {
+            var since = DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime;
+            Console.Error.WriteLine($"[startup] {milestone}: {since.TotalMilliseconds:F0} ms");
+        }
+        catch { /* best-effort diagnostic */ }
     }
 
     private static string DefaultProjectDirectory()

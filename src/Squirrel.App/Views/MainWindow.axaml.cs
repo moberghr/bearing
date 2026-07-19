@@ -31,8 +31,12 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        App.LogStartup("MainWindow ctor start");
         InitializeComponent();
+        App.LogStartup("XAML loaded");
+        ApplyEditorChrome(Editor);
         InstallSqlHighlighting();
+        App.LogStartup("TextMate installed");
 
         _completion = new CompletionController(Editor, new CompletionEngine(), () => Vm?.SnapshotForSelectedTab());
         _folding = new SqlFoldingController(Editor); // installs the fold margin (left of the text)
@@ -124,27 +128,30 @@ public partial class MainWindow : Window
         if (e.PropertyName == nameof(ViewModels.HistoryPanelViewModel.SelectedRow)) UpdateHistoryPreviewRow();
     }
 
-    private void InstallSqlHighlighting() => SetupEditorChrome(Editor);
-
-    private void SetupEditorChrome(AvaloniaEdit.TextEditor editor)
+    /// <summary>Apply the (cheap) editor chrome synchronously so first paint is already dark; the
+    /// (expensive) TextMate grammar registry is installed later via <see cref="InstallSqlHighlighting"/>.</summary>
+    private void ApplyEditorChrome(AvaloniaEdit.TextEditor editor)
     {
-        // DarkPlus supplies the grammar token colors. Exact Kanagawa syntax hues are deferred (a
-        // custom TextMate theme needs internal TextMateSharp APIs; the handoff flags syntax colors
-        // as its one deliberately-loose area — docs/design/editor-4a/README.md §Fidelity).
-        var options = new RegistryOptions(ThemeName.DarkPlus);
-        var installation = editor.InstallTextMate(options);
-        var sql = options.GetLanguageByExtension(".sql");
-        if (sql is not null)
-            installation.SetGrammar(options.GetScopeByLanguageId(sql.Id));
-
-        // Editor chrome the TextMate theme doesn't drive to spec: Kanagawa surface (#1F1F28),
-        // current-line highlight (#252535), and faint line numbers (#54546D).
+        // Kanagawa surface (#1F1F28), current-line highlight (#252535), faint line numbers (#54546D).
         editor.Background = ThemeBrush("Bg.Editor");
         editor.LineNumbersForeground = ThemeBrush("Text.Faint");
         editor.Options.HighlightCurrentLine = true;
         var lineActive = ((SolidColorBrush)ThemeBrush("Bg.LineActive")).Color;
         editor.TextArea.TextView.CurrentLineBackground = new SolidColorBrush(lineActive);
         editor.TextArea.TextView.CurrentLineBorder = new Pen(new SolidColorBrush(lineActive)); // no contrasting box
+    }
+
+    /// <summary>Install TextMate SQL syntax highlighting. Deferred off first paint — building the
+    /// grammar/theme registry is ~100ms+ and the editor renders plain (already dark) until it lands.
+    /// DarkPlus supplies token colors; exact Kanagawa hues are deferred (needs internal TextMateSharp
+    /// APIs — docs/design/editor-4a/README.md §Fidelity).</summary>
+    private void InstallSqlHighlighting()
+    {
+        var options = new RegistryOptions(ThemeName.DarkPlus);
+        var installation = Editor.InstallTextMate(options);
+        var sql = options.GetLanguageByExtension(".sql");
+        if (sql is not null)
+            installation.SetGrammar(options.GetScopeByLanguageId(sql.Id));
     }
 
     /// <summary>Resolve a token brush from app resources (falls back to transparent if missing).</summary>
