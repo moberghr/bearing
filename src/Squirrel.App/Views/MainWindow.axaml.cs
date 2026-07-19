@@ -29,6 +29,8 @@ public partial class MainWindow : Window
     private readonly StatementMargin _statementHighlight = new();
     private readonly CommandRegistry _commands = new();
     private readonly KeyDispatcher _dispatcher;
+    private readonly System.Collections.Generic.IReadOnlyList<string> _keymapWarnings;
+    private bool _keymapWarningsShown;
     private bool _loadingEditor;          // guards editor<->tab sync while swapping tabs
     private bool _suppressProjectChange;   // guards the project combo during programmatic updates
 
@@ -49,7 +51,9 @@ public partial class MainWindow : Window
         // maps gestures to command ids, the dispatcher resolves keystrokes per scope. Global + Editor
         // commands register here; the results grid registers its own into the shared registry.
         RegisterCommands(_commands);
-        _dispatcher = new KeyDispatcher(KeymapDefaults.Build(), _commands);
+        var keymap = KeymapLoader.LoadFromConfig(KeymapDefaults.Build()); // user keybindings.json layered over defaults
+        _dispatcher = new KeyDispatcher(keymap.Keymap, _commands);
+        _keymapWarnings = keymap.Warnings;
         ResultsView.CommandDispatcher = _dispatcher;
         SyncMenuGestures();
 
@@ -164,6 +168,15 @@ public partial class MainWindow : Window
         SyncProjectCombo();
         SyncDbPicker();
         App.SetConnectionAccent(Vm.ActiveConnectionColor); // seed the accent for the initial tab
+
+        // Surface any keybindings.json problems once, in the status bar (non-fatal — defaults still applied).
+        if (!_keymapWarningsShown && _keymapWarnings.Count > 0)
+        {
+            _keymapWarningsShown = true;
+            Vm.StatusText = _keymapWarnings.Count == 1
+                ? _keymapWarnings[0]
+                : $"{_keymapWarnings.Count} keybinding issues — {_keymapWarnings[0]}";
+        }
     }
 
     private void OnTabDatabasesChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)

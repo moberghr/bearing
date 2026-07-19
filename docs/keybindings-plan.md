@@ -165,11 +165,37 @@ Desktop builds, app launches clean). **Awaiting user live QA** (Wayland blocks s
 - **`Key.Enter` stringifies as `Return`** (shared enum value) — `GestureParser` has an `Enter` alias so
   config text and the menu show the friendly form.
 
-### Phase 2 — Configurability
+### Phase 2 — Configurability  — DONE 2026-07-20
 `JsonKeymapStore` reads `<ConfigDir>/keybindings.json` and layers over defaults (add / rebind /
 `"unbind"`). Conflict detection **within a scope** (two commands, same gesture → last-wins + a
 surfaced warning in status bar). Round-trip: unknown command ids and unparseable gestures are skipped
 with a warning, never crash. Tests in `Squirrel.Persistence.Tests` + `Squirrel.App.Tests`.
+
+**What shipped** (`src/Squirrel.App/Input/`): `KeymapConfig.cs` (`KeyBindingEntry` DTO +
+`KeymapLoadResult`) and `KeymapLoader.cs`. `keybindings.json` is a **top-level JSON array** of
+`{ key, command, scope? }` (VS Code style), layered over `KeymapDefaults` at startup in
+`MainWindow` (`KeymapLoader.LoadFromConfig`), feeding the dispatcher. Warnings surface once in the
+status bar via `HookViewModel`. 12 new tests (`KeymapLoaderTests.cs`; 115 App green, 11 Persistence,
+full solution builds, app launches clean with a valid+invalid test config). **Awaiting user live QA.**
+
+**Format / behavior:**
+- `{ "key": "F8", "command": "run" }` — add a gesture (scope **inferred** from the command's default
+  binding, so scope is usually omitted). `"scope": "Grid"` overrides inference / is required for a
+  command that has no default binding.
+- `{ "key": "F5", "command": "-run" }` — unbind one gesture (`-` prefix).
+- `{ "command": "-editor.foldAll" }` — **keyless unbind** drops all of a command's gestures.
+- Rebind = unbind + bind. Binding a taken gesture **displaces** the old command (one command per
+  (scope, gesture)) and warns.
+- **Deviation from the sketch:** the loader lives in `Squirrel.App/Input/`, not
+  `Squirrel.Persistence` — `SquirrelJson.Options` is `internal` and the config is about App-layer
+  command ids / `Gesture` / `KeyScope`, so it belongs with them. It still writes under
+  `SquirrelPaths.ConfigDir`. Tests are therefore all in `Squirrel.App.Tests`. `Apply` and
+  `LoadFromJson` are pure (no file IO) → fully unit-tested; only the thin `File.ReadAllText` in
+  `LoadFromConfig` isn't.
+- Everything is best-effort: unreadable file / malformed JSON / unknown command / unparseable gesture
+  → skipped with a status-bar warning, defaults still apply. Never throws.
+- **Not yet built:** no auto-written template/example file (absence = defaults); no hot-reload (config
+  read once at startup); no settings UI (that's Phase 4).
 
 ### Phase 3 — Command palette + fill the flow gaps
 - Palette overlay (`Ctrl+Shift+P`): fuzzy list of every registered command, grouped, each row showing
