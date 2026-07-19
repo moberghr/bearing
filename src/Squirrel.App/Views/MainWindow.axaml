@@ -236,27 +236,29 @@
     <!-- Alt-toggled menu bar (design §Interactions): hidden by default. Open/Save live only here. -->
     <Menu DockPanel.Dock="Top" IsVisible="{Binding IsMenuVisible}" Background="{DynamicResource Bg.Window}"
           BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
+      <!-- InputGesture text is set in code from the active keymap (see SyncMenuGestures) so the menu
+           can never drift from the real bindings. -->
       <MenuItem Header="_File">
-        <MenuItem Header="New Query" InputGesture="Ctrl+N" Click="OnNewTabClick"/>
-        <MenuItem Header="Open…" InputGesture="Ctrl+O" Click="OnOpenClick"/>
+        <MenuItem x:Name="MenuNewQuery" Header="New Query" Click="OnNewTabClick"/>
+        <MenuItem x:Name="MenuOpen" Header="Open…" Click="OnOpenClick"/>
         <Separator/>
-        <MenuItem Header="Save" InputGesture="Ctrl+S" Click="OnSaveClick"/>
-        <MenuItem Header="Save As…" InputGesture="Ctrl+Shift+S" Click="OnSaveAsClick"/>
+        <MenuItem x:Name="MenuSave" Header="Save" Click="OnSaveClick"/>
+        <MenuItem x:Name="MenuSaveAs" Header="Save As…" Click="OnSaveAsClick"/>
         <Separator/>
-        <MenuItem Header="Close Tab" InputGesture="Ctrl+W" Click="OnCloseCurrentTabClick"/>
+        <MenuItem x:Name="MenuCloseTab" Header="Close Tab" Click="OnCloseCurrentTabClick"/>
       </MenuItem>
       <MenuItem Header="_Edit">
-        <MenuItem Header="Rename Tab…" InputGesture="F2" Click="OnMenuRenameTabClick"/>
+        <MenuItem x:Name="MenuRenameTab" Header="Rename Tab…" Click="OnMenuRenameTabClick"/>
       </MenuItem>
       <MenuItem Header="_View">
-        <MenuItem Header="Toggle Side Pane" InputGesture="Ctrl+B" Click="OnToggleSidePane"/>
+        <MenuItem x:Name="MenuToggleSidePane" Header="Toggle Side Pane" Click="OnToggleSidePane"/>
         <Separator/>
         <MenuItem Header="Schema" Click="OnMenuSchemaClick"/>
         <MenuItem Header="Scripts" Click="OnMenuScriptsClick"/>
         <MenuItem Header="History" Click="OnHistoryClick"/>
       </MenuItem>
       <MenuItem Header="_Query">
-        <MenuItem Header="Run" InputGesture="Ctrl+Enter" Click="OnRunClick"/>
+        <MenuItem x:Name="MenuRun" Header="Run" Click="OnRunClick"/>
       </MenuItem>
       <MenuItem Header="_Help">
         <MenuItem Header="About Squirrel" Click="OnAboutClick"/>

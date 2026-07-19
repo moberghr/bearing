@@ -1,0 +1,204 @@
+# Keybindings overhaul — implementation plan
+
+Written 2026-07-19. Goal: replace the three hand-rolled key dispatchers with **one unified
+keybinding system**, make every binding **user-configurable**, and add a **command palette** that
+doubles as the discoverability surface. The auto-memory has the broader project state; this file is
+the executable plan.
+
+## How to work / verify
+
+- Build app: `dotnet build src/Squirrel.Desktop/Squirrel.Desktop.csproj`
+- Run app: `dotnet run --project src/Squirrel.Desktop`
+- Tests (fish shell): `set -x SQUIRREL_TEST_PG_PORT 5434; dotnet test tests/Squirrel.<Proj>.Tests/Squirrel.<Proj>.Tests.csproj`
+  - Projects: `Sql`, `App`, `Data`, `Persistence`.
+- **Bash tool runs bash, not fish** — use `SQUIRREL_TEST_PG_PORT=5434 dotnet test ...` there.
+- GUI can't be driven headlessly (Wayland blocks synthetic input); key *resolution* is unit-testable
+  without a UI — that's the whole point of the design below. User does live QA of actual keystrokes.
+
+## Why (the problem being solved)
+
+Today key handling lives in **three unrelated places**, each with its own ad-hoc matching:
+
+1. `MainWindow.OnKeyDown` — a long `if/else` chain of `e.Key == … && ctrl` (app-global: Run, Save, tabs…).
+2. `MainWindow.OnEditorKeyDown` — a `switch` in the tunnel phase (editor: fold, comment, open-line…),
+   with **layout-aware `PhysicalKey`** matching for brackets/comment (works on the Croatian layout).
+3. `ResultView.OnGridKey` — another `switch` in the tunnel phase (grid: copy, nav, edit, delete…).
+
+Plus menu `InputGesture` strings in `MainWindow.axaml` that are **display-only** and have already
+**drifted** from reality:
+
+- `Ctrl+N` "New Query" — advertised, **no handler** (the real new-tab is `Ctrl+T`).
+- `Ctrl+Shift+S` "Save As…" — advertised, **dead**.
+
+Consequences: no configurability, near-zero discoverability (menu is Alt-tap-hidden and lists ~8 of
+~30 shortcuts), no single source of truth, and no keyboard path for whole flows (tab switching,
+region focus, FK jump, back-nav, connection/db switch).
+
+## Decisions (to confirm with user before Phase 1)
+
+1. **One command registry + one dispatcher.** Every keyboard-triggerable action is a `Command` with a
+   stable string id. A single resolver maps a keystroke (in the current scope) to a command id and
+   invokes it. The three dispatchers collapse into thin per-control adapters that all call the same
+   resolver.
+2. **Scopes, not one flat map.** A keystroke resolves against the **focused scope** first, then falls
+   back to `Global`. Scopes: `Global`, `Editor`, `Grid`, `Tree`, `Palette`. This preserves today's
+   "editor/grid handle it in tunnel phase, app-level in bubble" behavior declaratively.
+3. **Gestures carry logical OR physical keys.** The config format must express both `Ctrl+/` (logical)
+   and `Ctrl+Shift+PhysBracketLeft` (physical) — otherwise we lose the Croatian-layout handling. This
+   is the non-obvious constraint; naive `"Ctrl+Shift+BracketLeft"` won't reproduce today's behavior.
+4. **Config layered over defaults.** Built-in defaults live in code (a `KeymapDefaults` table). A user
+   `keybindings.json` in `SquirrelPaths.ConfigDir` overrides/adds/removes on top. Missing file =
+   defaults only. This mirrors the existing JSON-store pattern (`JsonSessionStore`, atomic tmp+move).
+5. **The menu is generated from the keymap.** `InputGesture` text is looked up from the active keymap,
+   never hardcoded — kills the drift bug class permanently.
+6. **Command palette is the discoverability surface.** `Ctrl+Shift+P` (and/or `Ctrl+P`) opens a
+   fuzzy-searchable list of every command with its current binding shown. Reuse the tree's existing
+   fuzzy-find + match-highlight logic.
+7. **AvaloniaEdit built-ins stay as-is** (undo/redo/word-nav/etc.) — not ours to own; the registry
+   only covers commands we currently hand-roll. Document this boundary; revisit later if users ask.
+
+## Target architecture
+
+New project area: `src/Squirrel.App/Input/` (pure-ish, unit-testable), plus a small persistence type.
+
+```
+Input/
+  Command.cs            // { Id, Title, Scope, Group, Func<CommandContext,bool> Run, bool CanRun }
+  CommandRegistry.cs    // id -> Command; enumerable for the palette; grouped by Scope/Group
+  Gesture.cs            // normalized keystroke: modifiers + (LogicalKey? | PhysicalKey?)
+  GestureParser.cs      // "Ctrl+Shift+PhysBracketLeft" <-> Gesture  (round-trips for JSON + display)
+  Keymap.cs             // (Scope, Gesture) -> commandId ; layered defaults + user overrides
+  KeymapDefaults.cs     // the built-in table (everything in "Current shortcuts" below)
+  KeyDispatcher.cs      // Resolve(KeyEventArgs, Scope) -> commandId?; the ONE matcher
+  CommandContext.cs     // handle passed to Run(): Vm, Editor, active grid/result, etc.
+```
+
+Persistence: `src/Squirrel.Persistence/JsonKeymapStore.cs` → `<ConfigDir>/keybindings.json`
+(global, not per-project — bindings are a user preference, like an editor config).
+
+### Dispatch flow (replaces all three today)
+
+- `MainWindow` and `ResultView` keep their `AddHandler(KeyDownEvent, …, Tunnel)` registrations, but the
+  handler body becomes: `var scope = ScopeFor(sender/focus); if (dispatcher.TryResolve(e, scope) is {} id
+  && registry.Run(id, ctx)) e.Handled = true;`
+- The **tunnel-vs-bubble** split is expressed by which scopes a given control's tunnel handler asks for
+  (Editor/Grid resolve their scope in tunnel so they win over the built-in control; Global resolves at
+  the window bubble handler as today).
+- `Escape`'s cascade (overlay → menu → cancel) becomes an ordered set of commands each with a `CanRun`
+  guard, tried in priority order — or stays as one `escape.contextual` command that runs the cascade
+  internally. Keep it one command; the cascade is intrinsic, not user-orderable.
+
+### Gesture model detail
+
+```csharp
+readonly record struct Gesture(
+    KeyModifiers Modifiers,
+    Key? Logical,          // e.g. Key.OemQuestion for Ctrl+/
+    PhysicalKey? Physical);// e.g. PhysicalKey.BracketLeft for layout-independent fold
+```
+
+Matching precedence in `TryResolve`: a Physical-based binding matches on `e.PhysicalKey`; a
+Logical-based binding matches on `e.Key`. When both a physical and logical binding could apply to one
+scope, physical wins (that's today's behavior for brackets/comment). Serialize physical keys with a
+`Phys` prefix (`PhysBracketLeft`) so JSON and the palette can show the distinction.
+
+## Current shortcuts (the default keymap to encode)
+
+These become `KeymapDefaults`. Scope in brackets. `*` = new (see gaps) — not part of "current", listed
+so Phase 3 has a target.
+
+**Global:** `F5`/`Ctrl+Enter` Run · `Ctrl+Space` Complete · `Ctrl+S` Save · `Ctrl+O` Open ·
+`Ctrl+T` New tab · `Ctrl+W` Close tab · `Ctrl+B` Toggle side pane · `Ctrl+R` Toggle results ·
+`F2` Rename tab · `Alt+Up`/`Alt+Down` Prev/next statement · `Alt`(tap) Toggle menu · `Escape` cascade.
+
+**Editor:** `Shift+Enter`/`Ctrl+Shift+Enter` Open line below/above · `Ctrl+/`(+`Ctrl+-` HR) Toggle
+comment · `Ctrl+Shift+A` Select statement · `Ctrl+Shift+[`/`]` Fold/unfold current (physical) ·
+`Ctrl+Shift+-`/`Ctrl+Shift+=` Fold/unfold all.
+
+**Grid:** `Ctrl+C`/`Ctrl+Insert` Copy · `Ctrl+A` Select all · `Delete` Delete rows · `Enter`/`F2`
+Begin edit · `Escape` Clear selection · arrows/Home/End/PageUp/Down (+`Ctrl` edges, +`Shift` extend).
+
+**Tree:** type-ahead find · `Esc` clear · `Backspace` del char · `Up`/`Down` next/prev match ·
+`Enter` open (scripts).
+
+**Dialogs:** `Enter` accept · `Esc` cancel (TextPromptDialog only today).
+
+## Phased plan
+
+### Phase 1 — Unify onto the registry (no behavior change, no config yet)  — DONE 2026-07-20
+Build `Command`, `CommandRegistry`, `Gesture`, `GestureParser`, `Keymap`, `KeymapDefaults`,
+`KeyDispatcher`, `CommandContext`. Port **all** current shortcuts into `KeymapDefaults`. Rewrite the
+three handlers to delegate to the dispatcher. Generate menu `InputGesture` text from the keymap.
+**Outcome:** identical behavior, one code path, and the two dead menu entries either work or are
+removed. Heavily unit-tested: parser round-trips, physical-vs-logical precedence, scope fallback,
+Escape cascade ordering. This is the load-bearing phase; do it cleanly before anything else.
+
+**What shipped** (`src/Squirrel.App/Input/`): `KeyScope`, `Gesture`, `GestureParser`, `KeyCommand`,
+`CommandRegistry`, `Keymap` (+ `KeyBinding`), `KeymapDefaults`, `KeyDispatcher`, `CommandIds`. The
+three dispatchers now delegate: `MainWindow.OnKeyDown` → `TryHandle(e, Global)`, `OnEditorKeyDown` →
+`TryHandle(e, Editor)`, `ResultView.OnGridKey` → `TryHandle(e, Grid)`. Global+Editor commands register
+in `MainWindow.RegisterCommands`; Grid commands in `ResultView.RegisterGridCommands` (into the shared
+registry, via `ResultsView.CommandDispatcher`). Menu gestures set in `MainWindow.SyncMenuGestures` from
+`Keymap.DisplayGesture`. The dead `Ctrl+N` / `Ctrl+Shift+S` are now real (bound to `tab.new` /
+`file.saveAs`). 20 new tests in `tests/Squirrel.App.Tests/KeybindingTests.cs` (103 App green, 70 Sql,
+Desktop builds, app launches clean). **Awaiting user live QA** (Wayland blocks synthetic-input tests).
+
+**Design notes / deviations from the sketch above:**
+- **Scope fallback is achieved by event bubbling, not by the resolver.** Each control's tunnel handler
+  resolves ONLY its own scope; unclaimed keys bubble to the window, which resolves `Global`. This
+  matches the old tunnel(editor/grid)+bubble(window) split exactly, so no cross-scope fallback logic
+  was needed. `KeyScope.Tree`/`Palette` are declared but unused until later phases.
+- **Grid spatial navigation stayed local** (arrows/Home/End/PageUp-Down, Shift-extend, Ctrl-edges).
+  It's cell-cursor *motion*, not a rebindable command — the same line we already draw around
+  AvaloniaEdit's caret motion. Only the grid's discrete commands (copy/select-all/delete/begin-edit/
+  clear) go through the registry. `OnGridKey` still exists but its head now just does
+  `TryHandle(e, Grid)` then falls to nav.
+- **`CommandContext` wasn't needed.** Command delegates close over `MainWindow`/`ResultView`, so they
+  reach `Editor`/`Vm`/`_folding` directly. Grid commands read a transient `_keyTarget` (grid+result)
+  set at the top of `OnGridKey` so they act on the grid that received the key.
+- **`CanRun` replaces the old contextual guards.** Escape only claims the key when there's something
+  to dismiss (overlay/menu/busy); Grid delete/begin-edit only when the set is editable; clear-selection
+  only when a selection exists. When `CanRun` is false the dispatcher leaves the key unhandled so it
+  falls through / bubbles — reproducing the old behavior precisely.
+- **Meta folds to Control** in `Gesture` normalization (macOS Cmd ≡ Ctrl; also preserves the grid's
+  old `ctrl || meta` copy behavior).
+- **`Key.Enter` stringifies as `Return`** (shared enum value) — `GestureParser` has an `Enter` alias so
+  config text and the menu show the friendly form.
+
+### Phase 2 — Configurability
+`JsonKeymapStore` reads `<ConfigDir>/keybindings.json` and layers over defaults (add / rebind /
+`"unbind"`). Conflict detection **within a scope** (two commands, same gesture → last-wins + a
+surfaced warning in status bar). Round-trip: unknown command ids and unparseable gestures are skipped
+with a warning, never crash. Tests in `Squirrel.Persistence.Tests` + `Squirrel.App.Tests`.
+
+### Phase 3 — Command palette + fill the flow gaps
+- Palette overlay (`Ctrl+Shift+P`): fuzzy list of every registered command, grouped, each row showing
+  its current gesture; Enter runs it. Reuse tree fuzzy-find + `MatchHighlightConverter`. New `Palette`
+  scope (`Up`/`Down`/`Enter`/`Esc`).
+- Add the missing commands (all now trivial — just registry entries + defaults):
+  **tab switching** (`Ctrl+Tab`/`Ctrl+Shift+Tab`, `Ctrl+PageUp/Down`, `Ctrl+1..9`),
+  **region focus** (`F6` cycle editor↔results↔sidebar; `Ctrl+1/2/3` direct),
+  **FK jump** from active cell, **back-nav** (`Alt+Left`),
+  **panel select** (Connections/Scripts/History),
+  **connection/db switch** + open connection dialog,
+  **run variants** (run-all, run-and-advance),
+  **Save As** (`Ctrl+Shift+S` — finally real), **New Query** consistency (`Ctrl+N` = `Ctrl+T`).
+- Fix `ConnectionDialog`: `IsCancel` on Cancel so `Esc` closes it.
+
+### Phase 4 (optional, later) — Settings UI
+A keybindings pane listing commands by scope with inline rebind capture ("press a key…"), reset, and
+live conflict highlighting. Writes through `JsonKeymapStore`. The palette already covers 90% of daily
+need, so this is genuinely optional.
+
+## Risks / watch-items
+
+- **Physical-vs-logical is the subtle part.** Get `Gesture`/`GestureParser`/precedence right in Phase 1
+  or the Croatian-layout fold/comment regresses silently (can't catch headlessly). Add explicit tests
+  feeding both `Key` and `PhysicalKey`.
+- **Tunnel vs bubble ordering** must be preserved so editor/grid still win over the built-in controls.
+  Keep the existing `AddHandler(..., Tunnel)` registrations; only the body changes.
+- **Alt-tap menu toggle** isn't a normal gesture (it's key-up with no other key). Keep its bespoke
+  `OnKeyUp` logic; model it as a command the toggle invokes, not as a resolvable gesture.
+- **Don't over-scope AvaloniaEdit.** Leave its built-ins alone; document the boundary in the palette
+  (e.g. a non-rebindable "Editor built-ins" note) so users aren't confused about why Ctrl+Z isn't listed.
+```

@@ -14,6 +14,7 @@ using Avalonia.Platform.Storage;
 using AvaloniaEdit.TextMate;
 using Squirrel.App.Completion;
 using Squirrel.App.Editing;
+using Squirrel.App.Input;
 using Squirrel.App.ViewModels;
 using Squirrel.Core.Data;
 using Squirrel.Sql;
@@ -26,6 +27,8 @@ public partial class MainWindow : Window
     private readonly CompletionController _completion;
     private readonly SqlFoldingController _folding;
     private readonly StatementMargin _statementHighlight = new();
+    private readonly CommandRegistry _commands = new();
+    private readonly KeyDispatcher _dispatcher;
     private bool _loadingEditor;          // guards editor<->tab sync while swapping tabs
     private bool _suppressProjectChange;   // guards the project combo during programmatic updates
 
@@ -41,6 +44,14 @@ public partial class MainWindow : Window
         _completion = new CompletionController(Editor, new CompletionEngine(), () => Vm?.SnapshotForSelectedTab());
         _folding = new SqlFoldingController(Editor); // installs the fold margin (left of the text)
         Editor.TextArea.LeftMargins.Add(_statementHighlight); // its own column, right of the line numbers
+
+        // One keybinding pipeline for the whole app: the registry holds command delegates, the keymap
+        // maps gestures to command ids, the dispatcher resolves keystrokes per scope. Global + Editor
+        // commands register here; the results grid registers its own into the shared registry.
+        RegisterCommands(_commands);
+        _dispatcher = new KeyDispatcher(KeymapDefaults.Build(), _commands);
+        ResultsView.CommandDispatcher = _dispatcher;
+        SyncMenuGestures();
 
         // Editor-editing shortcuts must pre-empt AvaloniaEdit, which consumes Enter/'/'/brackets on
         // its own KeyDown — so handle them during the tunnel phase, before the editor sees them.
@@ -752,36 +763,63 @@ public partial class MainWindow : Window
     /// Editor-scoped editing shortcuts, handled in the tunnel phase so they win over AvaloniaEdit's
     /// own handling of Enter / '/' / brackets. App-level shortcuts (Run, Save, …) stay in <see cref="OnKeyDown"/>.
     /// </summary>
-    private void OnEditorKeyDown(object? sender, KeyEventArgs e)
+    private void OnEditorKeyDown(object? sender, KeyEventArgs e) => _dispatcher.TryHandle(e, KeyScope.Editor);
+
+    /// <summary>Set each menu item's shown gesture from the active keymap, so the menu can never drift
+    /// from the real bindings (the dead Ctrl+N / Ctrl+Shift+S entries that started this overhaul).</summary>
+    private void SyncMenuGestures()
     {
-        var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
-        var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-        var alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
-        if (alt) return;
+        MenuNewQuery.InputGesture = MenuGesture(CommandIds.TabNew);
+        MenuOpen.InputGesture = MenuGesture(CommandIds.FileOpen);
+        MenuSave.InputGesture = MenuGesture(CommandIds.FileSave);
+        MenuSaveAs.InputGesture = MenuGesture(CommandIds.FileSaveAs);
+        MenuCloseTab.InputGesture = MenuGesture(CommandIds.TabClose);
+        MenuRenameTab.InputGesture = MenuGesture(CommandIds.TabRename);
+        MenuToggleSidePane.InputGesture = MenuGesture(CommandIds.ViewToggleSidePane);
+        MenuRun.InputGesture = MenuGesture(CommandIds.Run);
+    }
 
-        // Fold / unfold the current query. Match the physical [ ] keys so it works on any layout —
-        // on the Croatian keyboard those same physical keys type š / đ.
-        if (ctrl && shift && e.PhysicalKey is PhysicalKey.BracketLeft or PhysicalKey.BracketRight)
-        {
-            if (e.PhysicalKey == PhysicalKey.BracketLeft) _folding.FoldCurrent();
-            else _folding.UnfoldCurrent();
-            e.Handled = true;
-            return;
-        }
+    private KeyGesture? MenuGesture(string commandId)
+    {
+        var text = _dispatcher.Keymap.DisplayGesture(commandId);
+        if (text is null) return null;
+        try { return KeyGesture.Parse(text); } catch { return null; } // display-only; a physical-key binding has no KeyGesture form
+    }
 
-        switch (e.Key)
-        {
-            case Key.Enter when shift && !ctrl: OpenLine(below: true); break;
-            case Key.Enter when shift && ctrl: OpenLine(below: false); break;
-            // Ctrl+/ on US, Ctrl+- on the HR layout (that physical key reports as OemMinus there).
-            case Key.OemQuestion when ctrl && !shift: ToggleLineComment(); break;
-            case Key.OemMinus when ctrl && !shift: ToggleLineComment(); break;
-            case Key.A when ctrl && shift: SelectCurrentQuery(); break;
-            case Key.OemMinus when ctrl && shift: _folding.FoldAll(); break;
-            case Key.OemPlus when ctrl && shift: _folding.UnfoldAll(); break;
-            default: return;
-        }
-        e.Handled = true;
+    /// <summary>Register every Global and Editor command. Ids and default gestures live in
+    /// <see cref="KeymapDefaults"/>; this is where each id gets its behavior and applicability guard.</summary>
+    private void RegisterCommands(CommandRegistry r)
+    {
+        // ---- Global ----
+        r.Register(new KeyCommand(CommandIds.Run, "Run", KeyScope.Global, "Query", async () => await RunAsync()));
+        r.Register(KeyCommand.Sync(CommandIds.CompletionTrigger, "Trigger completion", KeyScope.Global, "Editor", () => _completion.TriggerExplicit()));
+        r.Register(new KeyCommand(CommandIds.FileSave, "Save", KeyScope.Global, "File", async () => await SaveAsync()));
+        r.Register(new KeyCommand(CommandIds.FileSaveAs, "Save As…", KeyScope.Global, "File", async () => await SaveAsAsync()));
+        r.Register(new KeyCommand(CommandIds.FileOpen, "Open…", KeyScope.Global, "File", async () => await OpenAsync()));
+        r.Register(KeyCommand.Sync(CommandIds.TabNew, "New tab", KeyScope.Global, "File", () => Vm?.NewTab()));
+        r.Register(KeyCommand.Sync(CommandIds.TabClose, "Close tab", KeyScope.Global, "File",
+            () => { if (Vm?.SelectedTab is { } tab) Vm.CloseTab(tab); }, canRun: () => Vm?.SelectedTab is not null));
+        r.Register(new KeyCommand(CommandIds.TabRename, "Rename tab…", KeyScope.Global, "File",
+            async () => { if (Vm?.SelectedTab is { } tab) await RenameTabAsync(tab); }, canRun: () => Vm?.SelectedTab is not null));
+        r.Register(KeyCommand.Sync(CommandIds.ViewToggleSidePane, "Toggle side pane", KeyScope.Global, "View",
+            () => { if (Vm is not null) Vm.SidePaneOpen = !Vm.SidePaneOpen; }));
+        r.Register(KeyCommand.Sync(CommandIds.ViewToggleResults, "Toggle results", KeyScope.Global, "View", ToggleResultsVisible));
+        r.Register(KeyCommand.Sync(CommandIds.StatementPrev, "Previous statement", KeyScope.Global, "Editor", () => MoveToAdjacentStatement(-1)));
+        r.Register(KeyCommand.Sync(CommandIds.StatementNext, "Next statement", KeyScope.Global, "Editor", () => MoveToAdjacentStatement(+1)));
+        // Escape only claims the key when there's something to dismiss; otherwise it falls through.
+        r.Register(KeyCommand.Sync(CommandIds.AppEscape, "Escape / cancel", KeyScope.Global, "View",
+            () => HandleEscape(),
+            canRun: () => Vm is not null && (_pendingScriptOverlay is not null || Vm.IsMenuVisible || Vm.IsBusy)));
+
+        // ---- Editor ----
+        r.Register(KeyCommand.Sync(CommandIds.EditorOpenLineBelow, "Open line below", KeyScope.Editor, "Editor", () => OpenLine(below: true)));
+        r.Register(KeyCommand.Sync(CommandIds.EditorOpenLineAbove, "Open line above", KeyScope.Editor, "Editor", () => OpenLine(below: false)));
+        r.Register(KeyCommand.Sync(CommandIds.EditorToggleComment, "Toggle comment", KeyScope.Editor, "Editor", ToggleLineComment));
+        r.Register(KeyCommand.Sync(CommandIds.EditorSelectStatement, "Select statement", KeyScope.Editor, "Editor", SelectCurrentQuery));
+        r.Register(KeyCommand.Sync(CommandIds.EditorFoldCurrent, "Fold current", KeyScope.Editor, "Editor", () => _folding.FoldCurrent()));
+        r.Register(KeyCommand.Sync(CommandIds.EditorUnfoldCurrent, "Unfold current", KeyScope.Editor, "Editor", () => _folding.UnfoldCurrent()));
+        r.Register(KeyCommand.Sync(CommandIds.EditorFoldAll, "Fold all", KeyScope.Editor, "Editor", () => _folding.FoldAll()));
+        r.Register(KeyCommand.Sync(CommandIds.EditorUnfoldAll, "Unfold all", KeyScope.Editor, "Editor", () => _folding.UnfoldAll()));
     }
 
     /// <summary>Insert a blank line below (or above) the caret's line, matching its indentation.</summary>
@@ -841,26 +879,12 @@ public partial class MainWindow : Window
         }
     }
 
-    protected override async void OnKeyDown(KeyEventArgs e)
+    protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        // Alt-tap tracking: a lone Alt press arms the toggle; any other key cancels it.
+        // Alt-tap tracking: a lone Alt press arms the menu toggle (fired on key-up); any other key cancels it.
         _altAlone = e.Key is Key.LeftAlt or Key.RightAlt;
-
-        var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
-        var alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
-        if (e.Key == Key.F5 || (e.Key == Key.Enter && ctrl)) { e.Handled = true; await RunAsync(); }
-        else if (e.Key == Key.Escape) { e.Handled = HandleEscape(); }
-        else if (e.Key == Key.Up && alt) { e.Handled = true; MoveToAdjacentStatement(-1); }
-        else if (e.Key == Key.Down && alt) { e.Handled = true; MoveToAdjacentStatement(+1); }
-        else if (e.Key == Key.Space && ctrl) { e.Handled = true; _completion.TriggerExplicit(); }
-        else if (e.Key == Key.S && ctrl) { e.Handled = true; await SaveAsync(); }
-        else if (e.Key == Key.O && ctrl) { e.Handled = true; await OpenAsync(); }
-        else if (e.Key == Key.T && ctrl) { e.Handled = true; Vm?.NewTab(); }
-        else if (e.Key == Key.B && ctrl) { e.Handled = true; if (Vm is not null) Vm.SidePaneOpen = !Vm.SidePaneOpen; }
-        else if (e.Key == Key.R && ctrl) { e.Handled = true; ToggleResultsVisible(); }
-        else if (e.Key == Key.W && ctrl && Vm?.SelectedTab is { } tab) { e.Handled = true; Vm.CloseTab(tab); }
-        else if (e.Key == Key.F2 && Vm?.SelectedTab is { } rt) { e.Handled = true; await RenameTabAsync(rt); }
+        _dispatcher.TryHandle(e, KeyScope.Global); // Global scope; Editor/Grid scopes are handled in their tunnels
     }
 
     private async Task RunAsync()

@@ -16,6 +16,7 @@ using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Squirrel.App.Formatting;
+using Squirrel.App.Input;
 using Squirrel.App.Results;
 using Squirrel.App.ViewModels;
 using Squirrel.Core.Workspace;
@@ -77,6 +78,37 @@ public sealed class ResultView : UserControl
 
     /// <summary>Invoked to preview the SQL a save would run (the [Preview SQL] button).</summary>
     public Action<ResultSetViewModel>? PreviewSql { get; set; }
+
+    /// <summary>The shared keybinding pipeline (set once by the window). On assignment the grid's discrete
+    /// commands register into the shared registry so the same matcher drives them; spatial cell navigation
+    /// stays local (see <see cref="OnGridKey"/>).</summary>
+    public KeyDispatcher? CommandDispatcher
+    {
+        get => _dispatcher;
+        set { _dispatcher = value; if (value is not null) RegisterGridCommands(value.Registry); }
+    }
+    private KeyDispatcher? _dispatcher;
+
+    // The grid+result the current keystroke targets — set at the top of OnGridKey so grid commands
+    // (which run via the shared registry) act on the grid that received the key.
+    private (DataGrid Grid, ResultSetViewModel Result)? _keyTarget;
+
+    private void RegisterGridCommands(CommandRegistry r)
+    {
+        r.Register(KeyCommand.Sync(CommandIds.GridCopy, "Copy", KeyScope.Grid, "Grid",
+            () => { if (_keyTarget is { } t) CopySelection(t.Result); }));
+        r.Register(KeyCommand.Sync(CommandIds.GridSelectAll, "Select all", KeyScope.Grid, "Grid",
+            () => { if (_keyTarget is { } t) SelectAll(t.Result); }));
+        r.Register(KeyCommand.Sync(CommandIds.GridDelete, "Delete rows", KeyScope.Grid, "Grid",
+            () => { if (_keyTarget is { } t) DeleteSelectedRows(t.Grid, t.Result); },
+            canRun: () => _keyTarget?.Result.IsEditable == true));
+        r.Register(KeyCommand.Sync(CommandIds.GridBeginEdit, "Edit cell", KeyScope.Grid, "Grid",
+            () => { if (_keyTarget is { } t) BeginEditActive(t.Grid, t.Result); },
+            canRun: () => _keyTarget?.Result.IsEditable == true));
+        r.Register(KeyCommand.Sync(CommandIds.GridClearSelection, "Clear selection", KeyScope.Grid, "Grid",
+            () => { ClearSelection(); SelectionChanged(); },
+            canRun: () => _selection.Count > 0));
+    }
 
     // ---- Token brush helpers (resolve from Themes/Tokens.axaml at build time) ----------------
 
@@ -1181,27 +1213,19 @@ public sealed class ResultView : UserControl
         if (e.Source is TextBox) return;                 // a cell editor is focused — let it have the keys
         if (!result.HasGrid || result.Rows.Count == 0) return;
 
+        // Discrete grid commands (copy, select-all, delete, begin-edit, clear) go through the shared
+        // dispatcher; _keyTarget tells those commands which grid received the key. A command whose guard
+        // is false (Delete on a read-only set, Escape with no selection) leaves the key unhandled so it
+        // falls through to navigation below or bubbles to the window.
+        _keyTarget = (grid, result);
+        if (_dispatcher?.TryHandle(e, KeyScope.Grid) == true) return;
+
+        // Everything below is spatial cell-cursor motion — intrinsic grid navigation, not a rebindable
+        // command (mirrors how the editor's caret motion isn't in the keymap).
+        if (!IsNavKey(e.Key)) return;
+
         var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);
         var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-
-        switch (e.Key)
-        {
-            case Key.C when ctrl:
-            case Key.Insert when ctrl:
-                CopySelection(result); e.Handled = true; return;
-            case Key.A when ctrl:
-                SelectAll(result); e.Handled = true; return;
-            case Key.Delete when result.IsEditable:
-                DeleteSelectedRows(grid, result); e.Handled = true; return;
-            case Key.Enter or Key.F2:
-                if (result.IsEditable) { BeginEditActive(grid, result); e.Handled = true; }
-                return;
-            case Key.Escape:
-                if (_selection.Count > 0) { ClearSelection(); SelectionChanged(); e.Handled = true; }
-                return;
-        }
-
-        if (!IsNavKey(e.Key)) return;
 
         // First arrow into a grid that isn't the active one: seed the active cell at the top-left.
         if (!ReferenceEquals(_selectionResult, result) || _active is not { } active)
