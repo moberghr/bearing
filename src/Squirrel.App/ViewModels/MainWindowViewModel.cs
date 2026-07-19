@@ -74,6 +74,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty] private bool _sidePaneOpen = true;
     [ObservableProperty] private double _sidePaneWidth = 262;
 
+    /// <summary>How a run's result sets are laid out in the dock (stacked vs tabbed). Persisted.</summary>
+    [ObservableProperty] private Squirrel.Core.Workspace.ResultsViewMode _resultsViewMode = Squirrel.Core.Workspace.ResultsViewMode.Stacked;
+
     /// <summary>Which side panel the 262px column shows (driven by the left rail). The connection tree
     /// serves as both the Connections and Schema view, so it maps to <see cref="SidePanel.Schema"/>.</summary>
     [ObservableProperty] private SidePanel _activePanel = SidePanel.Schema;
@@ -159,6 +162,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             var session = await _sessionStore.LoadAsync(_project.Directory, CancellationToken.None);
             SidePaneOpen = session?.SidePaneOpen ?? true;
             SidePaneWidth = session?.SidePaneWidth ?? 260;
+            ResultsViewMode = session?.ResultsViewMode ?? Squirrel.Core.Workspace.ResultsViewMode.Stacked;
             DefaultConnectionId = session?.ActiveConnectionId
                                   ?? _project.Manifest.Connections.FirstOrDefault()?.Id;
 
@@ -1188,6 +1192,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             LastOpenedUtc = DateTime.UtcNow.ToString("o"),
             SidePaneOpen = SidePaneOpen,
             SidePaneWidth = SidePaneWidth,
+            ResultsViewMode = ResultsViewMode,
         };
     }
 

@@ -52,4 +52,7 @@ public sealed record SessionState
 
     /// <summary>Persisted width of the side pane, in pixels.</summary>
     public double SidePaneWidth { get; init; } = 260;
+
+    /// <summary>How multiple result sets are presented in the results dock (stacked vs tabbed).</summary>
+    public ResultsViewMode ResultsViewMode { get; init; } = ResultsViewMode.Stacked;
 }

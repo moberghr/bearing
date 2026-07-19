@@ -76,7 +76,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
     public bool CanCount => IsPageable && TotalCount is null;
 
     public string FooterText =>
-        $"Loaded {Loaded}{(HasMore ? "+" : "")}{(TotalCount is { } t ? $" of {t}" : "")} rows";
+        $"Showing {Loaded:N0}{(TotalCount is { } t ? $" of {t:N0}" : "")} rows";
 
     /// <summary>Append a freshly-fetched page and update whether more remain.</summary>
     public void AppendPage(IReadOnlyList<object?[]> rows, bool hasMore)

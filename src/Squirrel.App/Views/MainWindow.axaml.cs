@@ -44,6 +44,9 @@ public partial class MainWindow : Window
         // built-in node navigation, so a search cycles matches instead of walking every row.
         SchemaTree.AddHandler(KeyDownEvent, OnSchemaTreeKeyDown, Avalonia.Interactivity.RoutingStrategies.Tunnel);
 
+        // Stacked/Tabbed toggle persists on the VM (which round-trips it into the session).
+        ResultsView.ViewModeChanged = mode => { if (Vm is not null) Vm.ResultsViewMode = mode; };
+
         // Paging footer buttons call back into the shell VM (Vm is resolved lazily at click time).
         ResultsView.LoadMore = rs => Vm?.LoadMoreAsync(rs) ?? Task.CompletedTask;
         ResultsView.CountTotal = rs => Vm?.CountTotalAsync(rs) ?? Task.CompletedTask;
@@ -107,6 +110,7 @@ public partial class MainWindow : Window
         Vm.TabDatabases.CollectionChanged += OnTabDatabasesChanged;
         Vm.History.PropertyChanged -= OnHistoryPropertyChanged;
         Vm.History.PropertyChanged += OnHistoryPropertyChanged;
+        ResultsView.ViewMode = Vm.ResultsViewMode; // seed before the first results render
         LoadEditorFromSelectedTab();
         SyncProjectCombo();
         SyncDbPicker();
@@ -156,6 +160,8 @@ public partial class MainWindow : Window
             App.SetConnectionAccent(Vm?.ActiveConnectionColor); // recolor tab accent, dots, results, status line
         else if (e.PropertyName == nameof(MainWindowViewModel.SelectedTabDatabase))
             SyncDbPicker();
+        else if (e.PropertyName == nameof(MainWindowViewModel.ResultsViewMode))
+            ResultsView.ViewMode = Vm?.ResultsViewMode ?? Squirrel.Core.Workspace.ResultsViewMode.Stacked;
         else if (e.PropertyName is nameof(MainWindowViewModel.Title) or nameof(MainWindowViewModel.ProjectDirectory))
             SyncProjectCombo();
     }

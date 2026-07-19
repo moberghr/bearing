@@ -85,6 +85,7 @@ public class WorkspacePersistenceTests : IDisposable
             OpenEditors = { new OpenEditor { ScratchText = "select 1", ScratchName = "My scratch", ConnectionId = connId } },
             SidePaneOpen = false,
             SidePaneWidth = 320,
+            ResultsViewMode = ResultsViewMode.Tabbed,
         };
         await store.SaveAsync(dir, state, CancellationToken.None);
 
@@ -94,6 +95,7 @@ public class WorkspacePersistenceTests : IDisposable
         Assert.Equal(connId, loaded.OpenEditors[0].ConnectionId);
         Assert.False(loaded.SidePaneOpen);
         Assert.Equal(320, loaded.SidePaneWidth);
+        Assert.Equal(ResultsViewMode.Tabbed, loaded.ResultsViewMode);
     }
 
     [Fact]
@@ -109,6 +111,7 @@ public class WorkspacePersistenceTests : IDisposable
         Assert.NotNull(loaded);
         Assert.True(loaded!.SidePaneOpen);   // default
         Assert.Equal(260, loaded.SidePaneWidth);
+        Assert.Equal(ResultsViewMode.Stacked, loaded.ResultsViewMode); // default
         Assert.Null(loaded.OpenEditors[0].ScratchName);
     }
 
