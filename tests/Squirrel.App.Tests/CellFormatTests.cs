@@ -56,10 +56,10 @@ public class CellFormatTests
     [Fact]
     public void Arrays_render_as_brace_lists_not_type_names()
     {
-        Assert.Equal("{Trailers, Deleted Scenes}", CellFormat.Display(new[] { "Trailers", "Deleted Scenes" }));
-        Assert.Equal("{1, 2, 3}", CellFormat.Display(new[] { 1, 2, 3 }));
-        Assert.Equal("{}", CellFormat.Display(Array.Empty<string>()));
-        Assert.Equal("{a, (null), b}", CellFormat.Display(new string?[] { "a", null, "b" })); // element nulls
+        Assert.Equal("[Trailers, Deleted Scenes]", CellFormat.Display(new[] { "Trailers", "Deleted Scenes" }));
+        Assert.Equal("[1, 2, 3]", CellFormat.Display(new[] { 1, 2, 3 }));
+        Assert.Equal("[]", CellFormat.Display(Array.Empty<string>()));
+        Assert.Equal("[a, (null), b]", CellFormat.Display(new string?[] { "a", null, "b" })); // element nulls
     }
 
     [Fact]

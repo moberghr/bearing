@@ -9,6 +9,7 @@ using Avalonia.Data;
 using Avalonia.Data.Converters;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Styling;
@@ -486,8 +487,9 @@ public sealed class ResultView : UserControl
         return false;
     }
 
-    // A column is capped so long-text values (description, tsvector…) show partially but stay resizable.
-    private const double MaxColumnWidth = 360;
+    // Long-text/array/json columns start capped so they show partially, but stay freely resizable
+    // (no MaxWidth) and can be double-clicked (on the header) to auto-fit.
+    private const double WideColumnInitial = 280;
 
     private DataGrid BuildGrid(ResultSetViewModel result)
     {
@@ -500,7 +502,8 @@ public sealed class ResultView : UserControl
             GridLinesVisibility = DataGridGridLinesVisibility.All,
             HeadersVisibility = DataGridHeadersVisibility.All, // row-number gutter + column headers
         };
-        ScrollViewer.SetAllowAutoHide(grid, false); // keep the scrollbar visible so it never covers cell content
+        ScrollViewer.SetAllowAutoHide(grid, false); // keep the scrollbar visible
+        SuppressRowSelectionHighlight(grid);        // cell-level selection only — no whole-row blue bar
         grid.LoadingRow += (_, e) =>
         {
             e.Row.Header = (e.Row.Index + 1).ToString();
@@ -526,14 +529,19 @@ public sealed class ResultView : UserControl
             else
                 col = new DataGridTemplateColumn { CellTemplate = ValueCell(result, i, grid) };
             col.Header = BuildColumnHeader(result, i); // name + PK/FK/type badges
-            col.MaxWidth = MaxColumnWidth;
+            if (IsWideType(result.Columns[i])) col.Width = new DataGridLength(WideColumnInitial); // capped, resizable
             grid.Columns.Add(col);
         }
         grid.ItemsSource = result.Rows; // ObservableCollection → paged rows append without a rebuild
 
-        // Drag-select across measure cells (pointer is captured on the grid by the anchor cell).
-        grid.PointerMoved += (_, e) => DragSelectTo(grid, result, e);
-        grid.PointerReleased += (_, e) => { if (_dragging) { _dragging = false; e.Pointer.Capture(null); } };
+        // Double-tap a column header (incl. its resize gripper) → auto-fit that column to its content.
+        grid.DoubleTapped += (_, e) => AutoFitColumn(grid, e);
+
+        // Cell selection + drag are handled on the TUNNEL so they win over the DataGrid's own row
+        // selection (which otherwise highlights the whole row and swallows the drag).
+        grid.AddHandler(PointerPressedEvent, (_, e) => OnGridPointerPressed(grid, result, e), RoutingStrategies.Tunnel);
+        grid.AddHandler(PointerMovedEvent, (_, e) => { if (_dragging) DragSelectTo(grid, result, e); }, RoutingStrategies.Tunnel);
+        grid.AddHandler(PointerReleasedEvent, (_, e) => { if (_dragging) { _dragging = false; e.Pointer.Capture(null); } }, RoutingStrategies.Tunnel);
 
         if (result.IsEditable)
         {
@@ -548,6 +556,77 @@ public sealed class ResultView : UserControl
             };
         }
         return grid;
+    }
+
+    /// <summary>Zero out the DataGrid's built-in whole-row selection highlight so only cell-level
+    /// selection shows (the row-selected background is opacity-driven in the theme).</summary>
+    private static void SuppressRowSelectionHighlight(DataGrid grid)
+    {
+        grid.Resources["DataGridRowSelectedBackgroundOpacity"] = 0.0;
+        grid.Resources["DataGridRowSelectedHoveredBackgroundOpacity"] = 0.0;
+        grid.Resources["DataGridRowSelectedUnfocusedBackgroundOpacity"] = 0.0;
+        grid.Resources["DataGridRowSelectedHoveredUnfocusedBackgroundOpacity"] = 0.0;
+        grid.Resources["DataGridCellFocusVisualPrimaryBrush"] = Brushes.Transparent;
+        grid.Resources["DataGridCellFocusVisualSecondaryBrush"] = Brushes.Transparent;
+    }
+
+    /// <summary>Long-text/array/json/tsvector columns get a capped initial width (still resizable).</summary>
+    private static bool IsWideType(Squirrel.Core.Data.ColumnDescriptor c)
+    {
+        var t = Nullable.GetUnderlyingType(c.ClrType) ?? c.ClrType;
+        return t == typeof(string) || t.IsArray || IsJsonType(c.DataTypeName)
+            || string.Equals(c.DataTypeName, "tsvector", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Double-tap a column header (or its resize gripper) → auto-fit the column to its content.</summary>
+    private static void AutoFitColumn(DataGrid grid, TappedEventArgs e)
+    {
+        if ((e.Source as Visual)?.GetSelfAndVisualAncestors().OfType<DataGridColumnHeader>().FirstOrDefault() is not { } header)
+            return;
+        var col = grid.Columns.FirstOrDefault(c => ReferenceEquals(c.Header, header.Content));
+        if (col is not null) col.Width = DataGridLength.Auto; // recomputes to fit content
+    }
+
+    // ---- Cell selection pointer handling (tunnel, so it wins over the DataGrid's row selection) ----
+
+    private void OnGridPointerPressed(DataGrid grid, ResultSetViewModel result, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(grid).Properties.IsLeftButtonPressed) return;
+        if (MeasureCellAt(grid, e.GetPosition(grid)) is not { } cell)
+        {
+            // Clicking a non-measure cell clears any active stat selection, then lets the grid proceed.
+            if (_selection.Count > 0) { ClearSelection(); SelectionChanged(); }
+            return;
+        }
+        if (e.ClickCount >= 2) return; // double-click → let the grid edit
+
+        var extend = e.KeyModifiers.HasFlag(KeyModifiers.Control)
+            || e.KeyModifiers.HasFlag(KeyModifiers.Meta)
+            || e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        if (extend)
+        {
+            ToggleCellSelection(result, cell.Row, cell.Col, extend: true);
+        }
+        else
+        {
+            _selectionResult = result;
+            _selection.Clear();
+            _selection.Add(cell);
+            _dragging = true;
+            _dragAnchor = cell;
+            SelectionChanged();
+        }
+        e.Pointer.Capture(grid);
+        e.Handled = true; // suppress the DataGrid's own row selection / single-click edit
+    }
+
+    /// <summary>The (row, col) of the measure cell under a point, or null if none is there.</summary>
+    private static (object?[] Row, int Col)? MeasureCellAt(DataGrid grid, Point p)
+    {
+        if (grid.InputHitTest(p) is not Visual v) return null;
+        var border = v.GetSelfAndVisualAncestors().OfType<Border>()
+            .FirstOrDefault(b => b.Tag is ValueTuple<object?[], int>);
+        return border?.Tag is ValueTuple<object?[], int> t ? (t.Item1, t.Item2) : null;
     }
 
     /// <summary>A value display cell: text (dimmed italic "(null)"), plus an inspect (⤢) affordance for
@@ -584,7 +663,7 @@ public sealed class ResultView : UserControl
 
             var expand = InspectAffordance();
             expand.PointerPressed += (_, _) => ShowInspector(result, index, row);
-            var cell = new DockPanel { Margin = new Thickness(0, 0, 8, 0) }; // keep ⤢ clear of the scrollbar
+            var cell = new DockPanel { Margin = new Thickness(0, 0, 18, 0) }; // keep ⤢ clear of the scrollbar
             DockPanel.SetDock(expand, Dock.Right);
             cell.Children.Add(expand);
             cell.Children.Add(text);
@@ -843,7 +922,7 @@ public sealed class ResultView : UserControl
                     if (hasValue && NavigateForeignKey is { } nav) await nav(result, index, row);
                 };
 
-                var cell = new DockPanel { Margin = new Thickness(0, 0, 8, 0) }; // keep ↗ clear of the scrollbar
+                var cell = new DockPanel { Margin = new Thickness(0, 0, 18, 0) }; // keep ↗ clear of the scrollbar
                 DockPanel.SetDock(jump, Dock.Right);
                 cell.Children.Add(jump);
                 cell.Children.Add(value);
@@ -894,31 +973,8 @@ public sealed class ResultView : UserControl
 
             _cellRestyle += Restyle; // re-apply whenever the selection changes
             border.DetachedFromVisualTree += (_, _) => _cellRestyle -= Restyle;
-
-            border.PointerPressed += (_, e) =>
-            {
-                if (e.ClickCount >= 2) return; // let the grid start editing on double-click
-                if (!e.GetCurrentPoint(border).Properties.IsLeftButtonPressed) return;
-                var extend = e.KeyModifiers.HasFlag(KeyModifiers.Control)
-                    || e.KeyModifiers.HasFlag(KeyModifiers.Meta)
-                    || e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-                if (extend)
-                {
-                    ToggleCellSelection(result, row, index, extend: true);
-                }
-                else
-                {
-                    // Start a fresh selection + drag anchored here.
-                    if (!ReferenceEquals(_selectionResult, result)) _selectionResult = result;
-                    _selection.Clear();
-                    _selection.Add((row, index));
-                    _dragging = true;
-                    _dragAnchor = (row, index);
-                    e.Pointer.Capture(grid);
-                    SelectionChanged();
-                }
-                e.Handled = true; // don't let the grid select the whole row
-            };
+            // Selection/drag is driven by the grid's tunnel handlers (OnGridPointerPressed); this cell
+            // only supplies its (row, col) via Tag and restyles itself when the selection changes.
             return border;
         });
 

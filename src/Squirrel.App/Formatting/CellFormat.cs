@@ -31,13 +31,13 @@ public static class CellFormat
         _ => value.ToString() ?? "",
     };
 
-    /// <summary>A Postgres array value as <c>{a, b, c}</c>, elements formatted via <see cref="Display"/>
+    /// <summary>A Postgres array value as <c>[a, b, c]</c>, elements formatted via <see cref="Display"/>
     /// (so nested arrays, dates and nulls render consistently).</summary>
     private static string FormatArray(Array arr)
     {
         var parts = new string[arr.Length];
         for (var i = 0; i < arr.Length; i++) parts[i] = Display(arr.GetValue(i));
-        return "{" + string.Join(", ", parts) + "}";
+        return "[" + string.Join(", ", parts) + "]";
     }
 
     /// <summary>A byte[] (bytea) as a <c>\x</c> hex string, capped at 16 bytes with a length note.</summary>
