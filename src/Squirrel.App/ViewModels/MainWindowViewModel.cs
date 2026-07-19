@@ -793,8 +793,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             var page = await session.Executor.ExecutePageAsync(rs.SourceSql, rs.Loaded, PageSize, ct);
             rs.AppendPage(page.Rows, page.RowCount == PageSize);
-            StatusText = $"Loaded {rs.Loaded} row(s)"
-                         + (rs.TotalCount is { } t ? $" of {t}." : (rs.HasMore ? " (more available)." : "."));
+            StatusText = $"Showing {rs.RowCountText}"; // same phrasing as the meta row + footer
         }
         catch (OperationCanceledException) { StatusText = "Load cancelled."; }
         catch (Exception ex) { StatusText = $"Load more failed: {ex.Message}"; }
@@ -813,7 +812,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         try
         {
             rs.TotalCount = await session.Executor.CountAsync(rs.SourceSql, ct);
-            StatusText = rs.TotalCount is { } t ? $"Total: {t} row(s)." : "Count unavailable for this query.";
+            StatusText = rs.TotalCount is not null ? $"Showing {rs.RowCountText}" : "Count unavailable for this query.";
         }
         catch (OperationCanceledException) { StatusText = "Count cancelled."; }
         catch (Exception ex) { StatusText = $"Count failed: {ex.Message}"; }
@@ -1171,8 +1170,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (results.Count == 1)
         {
             var r = results[0];
-            return $"{r.RowCount} row(s) in {r.Duration.TotalMilliseconds:0} ms"
-                   + (r.Truncated ? " (truncated)" : "");
+            // Row-returning: "Showing N rows · ms" (matches the meta row + footer). Non-query: the message.
+            if (r.Columns.Count == 0) return r.Message ?? "Statement executed.";
+            return $"Showing {r.RowCount:N0} rows · {r.Duration.TotalMilliseconds:0} ms";
         }
 
         var totalRows = results.Sum(r => r.RowCount);

@@ -335,17 +335,21 @@ public sealed class ResultView : UserControl
             Cursor = collapsible ? new Cursor(StandardCursorType.Hand) : Cursor.Default,
         };
 
-        var meta = new TextBlock
-        {
-            Text = MetaText(label, result),
-            Foreground = Res("Text.Dim"),
-            FontSize = 12,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-
         var left = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         left.Children.Add(chevron);
-        left.Children.Add(meta);
+        if (result.HasGrid)
+        {
+            // "Result · " (static) + live "N rows · ms" bound to MetaDetail so the header count tracks
+            // infinite-scroll loads / count-on-demand, matching the footer and status bar.
+            left.Children.Add(new TextBlock { Text = $"{label ?? "Result"} · ", Foreground = Res("Text.Dim"), FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+            var detail = new TextBlock { Foreground = Res("Text.Dim"), FontSize = 12, VerticalAlignment = VerticalAlignment.Center, DataContext = result };
+            detail.Bind(TextBlock.TextProperty, new Binding(nameof(ResultSetViewModel.MetaDetail)));
+            left.Children.Add(detail);
+        }
+        else
+        {
+            left.Children.Add(new TextBlock { Text = MetaText(label, result), Foreground = Res("Text.Dim"), FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+        }
 
         // Right of the meta row: subtle edit controls for an editable result, or a read-only lock chip
         // + reason for a locked one (design RESULTS_GRID §8). Undetermined results show neither.

@@ -74,6 +74,8 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// <summary>Total row count of the source query; null until the user asks for it.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(FooterText))]
+    [NotifyPropertyChangedFor(nameof(RowCountText))]
+    [NotifyPropertyChangedFor(nameof(MetaDetail))]
     [NotifyPropertyChangedFor(nameof(CanCount))]
     private long? _totalCount;
 
@@ -83,8 +85,15 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// <summary>The [Count] button is offered only while the total is still unknown.</summary>
     public bool CanCount => IsPageable && TotalCount is null;
 
-    public string FooterText =>
-        $"Showing {Loaded:N0}{(TotalCount is { } t ? $" of {t:N0}" : "")} rows";
+    /// <summary>Canonical live row-count phrase, e.g. "100 rows" or "200 of 1,000 rows". Every surface
+    /// (meta row, footer, status bar) derives from this so the counts never drift out of sync.</summary>
+    public string RowCountText =>
+        $"{Loaded:N0}{(TotalCount is { } t ? $" of {t:N0}" : "")} rows";
+
+    /// <summary>Meta-row detail: live row count + the query time ("200 of 1,000 rows · 88 ms").</summary>
+    public string MetaDetail => $"{RowCountText} · {(long)System.Math.Round(Duration.TotalMilliseconds)} ms";
+
+    public string FooterText => $"Showing {RowCountText}";
 
     /// <summary>Append a freshly-fetched page and update whether more remain.</summary>
     public void AppendPage(IReadOnlyList<object?[]> rows, bool hasMore)
@@ -95,7 +104,15 @@ public sealed partial class ResultSetViewModel : ObservableObject
             if (IsEditable) _originals[row] = (object?[])row.Clone();
         }
         HasMore = hasMore;
+        RaiseRowCount();
+    }
+
+    /// <summary>Notify every live row-count surface (meta row, footer) after the loaded count changes.</summary>
+    private void RaiseRowCount()
+    {
         OnPropertyChanged(nameof(Loaded));
+        OnPropertyChanged(nameof(RowCountText));
+        OnPropertyChanged(nameof(MetaDetail));
         OnPropertyChanged(nameof(FooterText));
     }
 
@@ -149,8 +166,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
         var row = new object?[Columns.Count];
         Rows.Add(row);
         _newRows.Add(row);
-        OnPropertyChanged(nameof(Loaded));
-        OnPropertyChanged(nameof(FooterText));
+        RaiseRowCount();
         RaisePending();
         return row;
     }
@@ -163,8 +179,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
         {
             _newRows.Remove(row);
             Rows.Remove(row);
-            OnPropertyChanged(nameof(Loaded));
-            OnPropertyChanged(nameof(FooterText));
+            RaiseRowCount();
             RaisePending();
             return;
         }
@@ -191,8 +206,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
     {
         Rows.Remove(row);
         _originals.Remove(row);
-        OnPropertyChanged(nameof(Loaded));
-        OnPropertyChanged(nameof(FooterText));
+        RaiseRowCount();
     }
 
     /// <summary>Revert all pending changes in place: restore edited cells, drop new rows, un-mark deletes.</summary>
@@ -207,8 +221,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
             _originals.Remove(row);
         }
         ClearPending();
-        OnPropertyChanged(nameof(Loaded));
-        OnPropertyChanged(nameof(FooterText));
+        RaiseRowCount();
     }
 
     /// <summary>Clear all pending marks after a save (rows were already updated in place).</summary>
