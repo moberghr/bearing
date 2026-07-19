@@ -120,6 +120,18 @@ public sealed class ResultView : UserControl
     private readonly List<(ResultSetViewModel Result, Border Bar)> _statsBars = new();
     private bool _dragging;                              // a click-drag cell selection is in progress
     private (object?[] Row, int Col)? _dragAnchor;       // the cell the drag started from
+    private readonly HashSet<ResultSetViewModel> _autoLoading = new(); // paging fetch in flight (infinite scroll)
+
+    /// <summary>Fetch the next page when scrolled near the bottom (single-flight per result set).</summary>
+    private void TriggerAutoLoad(ResultSetViewModel result)
+    {
+        if (LoadMore is not { } f || !result.HasMore || !_autoLoading.Add(result)) return;
+        _ = LoadThenClear();
+        async System.Threading.Tasks.Task LoadThenClear()
+        {
+            try { await f(result); } finally { _autoLoading.Remove(result); }
+        }
+    }
 
     /// <summary>Re-apply pending-change row highlights (call after an in-place save clears pending state).</summary>
     public void RefreshRowHighlights()
@@ -309,7 +321,7 @@ public sealed class ResultView : UserControl
     /// <summary>A result set = meta row (Result · N rows · ms, optional collapse chevron) + its body.</summary>
     private Control BuildSetContainer(ResultSetViewModel result, string? label, bool collapsible, bool capHeight)
     {
-        var body = BuildResultSet(result);
+        var body = BuildResultSet(result, out var grid);
         if (capHeight)
             body = new Border { Child = body, MaxHeight = 360 };
 
@@ -335,16 +347,18 @@ public sealed class ResultView : UserControl
         left.Children.Add(chevron);
         left.Children.Add(meta);
 
-        // Read-only results surface an explicit lock chip + reason (design RESULTS_GRID §8) instead of
-        // silently rejecting edits. Editable results (and undetermined ones) show nothing here.
+        // Right of the meta row: subtle edit controls for an editable result, or a read-only lock chip
+        // + reason for a locked one (design RESULTS_GRID §8). Undetermined results show neither.
         var metaRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         Grid.SetColumn(left, 0);
         metaRow.Children.Add(left);
-        if (result.LockReason is { } lockReason)
+        Control? right = result.IsEditable && grid is not null ? EditControls(result, grid)
+            : result.LockReason is { } lockReason ? LockChip(lockReason)
+            : null;
+        if (right is not null)
         {
-            var chip = LockChip(lockReason);
-            Grid.SetColumn(chip, 1);
-            metaRow.Children.Add(chip);
+            Grid.SetColumn(right, 1);
+            metaRow.Children.Add(right);
         }
 
         if (_collapsed.Contains(result)) body.IsVisible = false;
@@ -461,19 +475,22 @@ public sealed class ResultView : UserControl
         return $"Result {index + 1} ({result.RowCount})";
     }
 
-    private Control BuildResultSet(ResultSetViewModel result)
+    /// <summary>Build a result set's body (grid + stats bar + paging footer) and hand back the grid so
+    /// the caller can put the (subtle) edit controls on the meta row. Non-grid results return null grid.</summary>
+    private Control BuildResultSet(ResultSetViewModel result, out DataGrid? grid)
     {
+        grid = null;
         if (!result.Success)
             return new TextBlock { Text = $"Error: {result.Error?.Message}", Margin = new Thickness(8), TextWrapping = TextWrapping.Wrap };
 
         if (result.Columns.Count == 0)
             return new TextBlock { Text = result.Message ?? "Statement executed.", Margin = new Thickness(8) };
 
-        var grid = BuildGrid(result);
+        grid = BuildGrid(result);
         // Any cell is selectable; the stats bar surfaces itself only when ≥2 selected cells are numeric.
         Control content = WithStatsBar(grid, result); // above the footer
         if (result.IsPageable) content = WithFooter(content, result);
-        return result.IsEditable ? WithEditToolbar(content, grid, result) : content;
+        return content; // edit controls now live on the meta row (see BuildSetContainer)
     }
 
     // Long-text/array/json columns start capped so they show partially, but stay freely resizable
@@ -498,6 +515,8 @@ public sealed class ResultView : UserControl
         {
             e.Row.Header = (e.Row.Index + 1).ToString();
             if (result.IsEditable) ApplyRowStatus(e.Row, result);
+            // Infinite scroll: when a near-bottom row realizes and more rows exist, fetch the next page.
+            if (result.HasMore && e.Row.Index >= result.Rows.Count - 8) TriggerAutoLoad(result);
         };
         for (var i = 0; i < result.Columns.Count; i++)
         {
@@ -816,49 +835,43 @@ public sealed class ResultView : UserControl
     private static string CellText(object?[]? row, int index)
         => row is not null && index < row.Length ? CellFormat.Display(row[index]) : "";
 
-    /// <summary>Add an edit toolbar above the grid: Add row / Delete row, and — when there are pending
-    /// changes — a count plus Save / Discard.</summary>
-    private Control WithEditToolbar(Control content, DataGrid grid, ResultSetViewModel result)
+    /// <summary>Subtle edit controls for the right of a result's meta row: ＋ Add / Delete / ⭳ Export
+    /// (borderless), plus a pending commit group (● N pending · Script · Discard · Save) that appears
+    /// only when there are unsaved changes.</summary>
+    private Control EditControls(ResultSetViewModel result, DataGrid grid)
     {
-        var add = new Button { Content = "＋ Add row", Margin = new Thickness(0, 0, 6, 0) };
+        var add = SubtleButton("＋ Add", "Add row");
         add.Click += (_, _) => { var row = result.AddRow(); grid.ScrollIntoView(row, null); RefreshRowColors(grid, result); };
 
-        var delete = new Button { Content = "Delete row", Margin = new Thickness(0, 0, 6, 0) };
+        var delete = SubtleButton("Delete", "Delete selected row");
         delete.Click += (_, _) => { if (grid.SelectedItem is object?[] row) { result.ToggleDelete(row); RefreshRowColors(grid, result); } };
 
-        // Export is rendered to match the design but wired later (per decision).
-        var export = new Button { Content = "⭳ Export", Margin = new Thickness(0, 0, 12, 0) };
-        ToolTip.SetTip(export, "Export — coming soon");
+        var export = SubtleButton("⭳ Export", "Export — coming soon"); // rendered; wired later (per decision)
 
-        // Pending commit group: "● N pending" · ‹ › Script · Discard (red outline) · ✓ Save (green fill).
-        var dot = new TextBlock { Text = "●", Foreground = Res("Accent.Orange"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) };
-        var pending = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0), Foreground = Res("Text.Primary") };
+        // Pending commit group: ● N pending · ‹ › Script · Discard (red outline) · ✓ Save (green fill).
+        var dot = new TextBlock { Text = "●", Foreground = Res("Accent.Orange"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 4, 0) };
+        var pending = new TextBlock { VerticalAlignment = VerticalAlignment.Center, FontSize = 12, Margin = new Thickness(0, 0, 6, 0), Foreground = Res("Text.Primary") };
         pending.Bind(TextBlock.TextProperty, new Binding(nameof(ResultSetViewModel.PendingText)));
 
-        var script = new Button { Content = "‹ › Script", Margin = new Thickness(0, 0, 6, 0) };
+        var script = SubtleButton("‹ › Script", "Preview the SQL a save would run");
         script.Click += (_, _) => PreviewSql?.Invoke(result);
 
         var discard = new Button
         {
-            Content = "Discard",
-            Margin = new Thickness(0, 0, 6, 0),
-            Background = Brushes.Transparent,
-            BorderBrush = Res("Error.Red"),
-            BorderThickness = new Thickness(1),
-            Foreground = Res("Error.Red"),
+            Content = "Discard", FontSize = 12, Padding = new Thickness(8, 2), Margin = new Thickness(0, 0, 6, 0),
+            Background = Brushes.Transparent, BorderBrush = Res("Error.Red"), BorderThickness = new Thickness(1),
+            Foreground = Res("Error.Red"), Cursor = new Cursor(StandardCursorType.Hand),
         };
         discard.Click += async (_, _) => { if (DiscardChanges is { } f) await f(result); };
 
         var save = new Button
         {
-            Content = "✓ Save changes",
-            Background = Res("Ok.Green"),
-            Foreground = Res("Bg.Editor"),
+            Content = "✓ Save", FontSize = 12, Padding = new Thickness(8, 2),
+            Background = Res("Ok.Green"), Foreground = Res("Bg.Editor"), Cursor = new Cursor(StandardCursorType.Hand),
         };
         save.Click += async (_, _) => { if (SaveChanges is { } f) await f(result); };
 
-        // The pending group only shows once there's something to save.
-        var pendingGroup = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        var pendingGroup = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, DataContext = result };
         pendingGroup.Children.Add(dot);
         pendingGroup.Children.Add(pending);
         pendingGroup.Children.Add(script);
@@ -866,27 +879,30 @@ public sealed class ResultView : UserControl
         pendingGroup.Children.Add(save);
         pendingGroup.Bind(IsVisibleProperty, new Binding(nameof(ResultSetViewModel.HasPendingChanges)));
 
-        var bar = new StackPanel { Orientation = Orientation.Horizontal };
+        var bar = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         bar.Children.Add(add);
         bar.Children.Add(delete);
         bar.Children.Add(export);
         bar.Children.Add(pendingGroup);
+        return bar;
+    }
 
-        var toolbar = new Border
+    /// <summary>A borderless, dim, hand-cursor button for subtle inline actions.</summary>
+    private static Button SubtleButton(string content, string tip)
+    {
+        var b = new Button
         {
-            DataContext = result,
-            Background = Res("Bg.Chrome"),
-            BorderThickness = new Thickness(0, 0, 0, 1),
-            BorderBrush = Separator,
-            Padding = new Thickness(6, 4),
-            Child = bar,
+            Content = content,
+            FontSize = 12,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(6, 2),
+            Foreground = Res("Text.Dim"),
+            Cursor = new Cursor(StandardCursorType.Hand),
+            VerticalAlignment = VerticalAlignment.Center,
         };
-        DockPanel.SetDock(toolbar, Dock.Top);
-
-        var panel = new DockPanel();
-        panel.Children.Add(toolbar);
-        panel.Children.Add(content);
-        return panel;
+        ToolTip.SetTip(b, tip);
+        return b;
     }
 
     /// <summary>A foreign-key column: the value shows as plain text with a clickable jump-icon on the
@@ -1312,7 +1328,9 @@ public sealed class ResultView : UserControl
         return b;
     }
 
-    /// <summary>Wrap a grid in a DockPanel with a bottom footer: loaded-row text + Load more / Count.</summary>
+    /// <summary>Wrap a grid in a DockPanel with a bottom footer: loaded-row text + Count-on-demand.
+    /// The next page loads automatically on scroll-to-bottom (see <see cref="TriggerAutoLoad"/>), so
+    /// there's no "Load more" button.</summary>
     private Control WithFooter(Control grid, ResultSetViewModel result)
     {
         var text = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0), Foreground = Res("Text.Dim") };
@@ -1322,14 +1340,9 @@ public sealed class ResultView : UserControl
         count.Bind(IsVisibleProperty, new Binding(nameof(ResultSetViewModel.CanCount)));
         count.Click += async (_, _) => { if (CountTotal is { } f) await f(result); };
 
-        var loadMore = new Button { Content = "↓ Load more", Margin = new Thickness(6, 0, 0, 0) };
-        loadMore.Bind(IsVisibleProperty, new Binding(nameof(ResultSetViewModel.HasMore)));
-        loadMore.Click += async (_, _) => { if (LoadMore is { } f) await f(result); };
-
         var bar = new StackPanel { Orientation = Orientation.Horizontal };
         bar.Children.Add(text);
         bar.Children.Add(count);
-        bar.Children.Add(loadMore);
 
         var footer = new Border
         {
