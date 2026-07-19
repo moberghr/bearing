@@ -755,7 +755,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
             var results = await session.Executor.ExecuteAsync(sql, new QueryOptions { MaxRows = PageSize }, ct);
             tab.SetFreshResults(BuildResultSets(results, sql, session.Snapshot));
             LogExecution(info, sql, results);
-            StatusText = DescribeResults(results);
+            var summary = DescribeResults(results);
+            // On success, lead with the connection so the status bar reads e.g. "pagila (local) · 88 ms".
+            StatusText = results.Any(r => !r.Success) ? summary : $"{info.Name} · {summary}";
         }
         catch (OperationCanceledException)
         {
@@ -793,7 +795,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             var page = await session.Executor.ExecutePageAsync(rs.SourceSql, rs.Loaded, PageSize, ct);
             rs.AppendPage(page.Rows, page.RowCount == PageSize);
-            StatusText = $"Showing {rs.RowCountText}"; // same phrasing as the meta row + footer
+            // No status update: auto-load fires on scroll and the count lives on the meta row.
         }
         catch (OperationCanceledException) { StatusText = "Load cancelled."; }
         catch (Exception ex) { StatusText = $"Load more failed: {ex.Message}"; }
@@ -812,7 +814,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         try
         {
             rs.TotalCount = await session.Executor.CountAsync(rs.SourceSql, ct);
-            StatusText = rs.TotalCount is not null ? $"Showing {rs.RowCountText}" : "Count unavailable for this query.";
+            StatusText = rs.TotalCount is not null ? "Counted total." : "Count unavailable for this query.";
         }
         catch (OperationCanceledException) { StatusText = "Count cancelled."; }
         catch (Exception ex) { StatusText = $"Count failed: {ex.Message}"; }
@@ -1167,18 +1169,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (firstError is not null)
             return $"Error{(firstError.Error?.SqlState is { } s ? $" [{s}]" : "")}: {firstError.Error?.Message}";
 
+        // Status bar is timing-focused — the row count lives on the result's meta row, not here.
         if (results.Count == 1)
         {
             var r = results[0];
-            // Row-returning: "Showing N rows · ms" (matches the meta row + footer). Non-query: the message.
             if (r.Columns.Count == 0) return r.Message ?? "Statement executed.";
-            return $"Showing {r.RowCount:N0} rows · {r.Duration.TotalMilliseconds:0} ms";
+            return $"Done · {r.Duration.TotalMilliseconds:0} ms";
         }
 
-        var totalRows = results.Sum(r => r.RowCount);
         var elapsed = results[^1].Duration.TotalMilliseconds;
-        var truncated = results.Any(r => r.Truncated) ? " (truncated)" : "";
-        return $"{results.Count} result sets · {totalRows} row(s) in {elapsed:0} ms{truncated}";
+        return $"{results.Count} result sets · {elapsed:0} ms";
     }
 
     // History logs one entry per submitted run; a multi-statement run aggregates its sets.

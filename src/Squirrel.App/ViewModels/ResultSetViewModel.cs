@@ -68,12 +68,10 @@ public sealed partial class ResultSetViewModel : ObservableObject
 
     /// <summary>Last page came back full — more rows likely exist beyond what's loaded.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(FooterText))]
     private bool _hasMore;
 
     /// <summary>Total row count of the source query; null until the user asks for it.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(FooterText))]
     [NotifyPropertyChangedFor(nameof(RowCountText))]
     [NotifyPropertyChangedFor(nameof(MetaDetail))]
     [NotifyPropertyChangedFor(nameof(CanCount))]
@@ -93,8 +91,6 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// <summary>Meta-row detail: live row count + the query time ("200 of 1,000 rows · 88 ms").</summary>
     public string MetaDetail => $"{RowCountText} · {(long)System.Math.Round(Duration.TotalMilliseconds)} ms";
 
-    public string FooterText => $"Showing {RowCountText}";
-
     /// <summary>Append a freshly-fetched page and update whether more remain.</summary>
     public void AppendPage(IReadOnlyList<object?[]> rows, bool hasMore)
     {
@@ -107,13 +103,12 @@ public sealed partial class ResultSetViewModel : ObservableObject
         RaiseRowCount();
     }
 
-    /// <summary>Notify every live row-count surface (meta row, footer) after the loaded count changes.</summary>
+    /// <summary>Notify the live row-count surfaces (meta row count + count-on-demand) after a change.</summary>
     private void RaiseRowCount()
     {
         OnPropertyChanged(nameof(Loaded));
         OnPropertyChanged(nameof(RowCountText));
         OnPropertyChanged(nameof(MetaDetail));
-        OnPropertyChanged(nameof(FooterText));
     }
 
     // ---- Inline editing (Phase 3) ------------------------------------------------------------

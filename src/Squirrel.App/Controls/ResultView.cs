@@ -345,6 +345,17 @@ public sealed class ResultView : UserControl
             var detail = new TextBlock { Foreground = Res("Text.Dim"), FontSize = 12, VerticalAlignment = VerticalAlignment.Center, DataContext = result };
             detail.Bind(TextBlock.TextProperty, new Binding(nameof(ResultSetViewModel.MetaDetail)));
             left.Children.Add(detail);
+
+            // Count-on-demand (was the footer's ∑ Count): shown only while the total is unknown.
+            if (result.IsPageable)
+            {
+                var countBtn = SubtleButton("∑ count", "Count all rows");
+                countBtn.Margin = new Thickness(6, 0, 0, 0);
+                countBtn.DataContext = result;
+                countBtn.Bind(IsVisibleProperty, new Binding(nameof(ResultSetViewModel.CanCount)));
+                countBtn.Click += async (_, _) => { if (CountTotal is { } f) await f(result); };
+                left.Children.Add(countBtn);
+            }
         }
         else
         {
@@ -492,9 +503,8 @@ public sealed class ResultView : UserControl
 
         grid = BuildGrid(result);
         // Any cell is selectable; the stats bar surfaces itself only when ≥2 selected cells are numeric.
-        Control content = WithStatsBar(grid, result); // above the footer
-        if (result.IsPageable) content = WithFooter(content, result);
-        return content; // edit controls now live on the meta row (see BuildSetContainer)
+        // Row count + count-on-demand + edit controls all live on the meta row now (no footer).
+        return WithStatsBar(grid, result);
     }
 
     // Long-text/array/json columns start capped so they show partially, but stay freely resizable
@@ -1332,36 +1342,4 @@ public sealed class ResultView : UserControl
         return b;
     }
 
-    /// <summary>Wrap a grid in a DockPanel with a bottom footer: loaded-row text + Count-on-demand.
-    /// The next page loads automatically on scroll-to-bottom (see <see cref="TriggerAutoLoad"/>), so
-    /// there's no "Load more" button.</summary>
-    private Control WithFooter(Control grid, ResultSetViewModel result)
-    {
-        var text = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0), Foreground = Res("Text.Dim") };
-        text.Bind(TextBlock.TextProperty, new Binding(nameof(ResultSetViewModel.FooterText)));
-
-        var count = new Button { Content = "∑ Count", Margin = new Thickness(8, 0, 0, 0) };
-        count.Bind(IsVisibleProperty, new Binding(nameof(ResultSetViewModel.CanCount)));
-        count.Click += async (_, _) => { if (CountTotal is { } f) await f(result); };
-
-        var bar = new StackPanel { Orientation = Orientation.Horizontal };
-        bar.Children.Add(text);
-        bar.Children.Add(count);
-
-        var footer = new Border
-        {
-            DataContext = result,
-            Background = Res("Bg.Window"),
-            BorderThickness = new Thickness(0, 1, 0, 0),
-            BorderBrush = Separator,
-            Padding = new Thickness(6, 4),
-            Child = bar,
-        };
-        DockPanel.SetDock(footer, Dock.Bottom);
-
-        var panel = new DockPanel();
-        panel.Children.Add(footer);
-        panel.Children.Add(grid);
-        return panel;
-    }
 }
