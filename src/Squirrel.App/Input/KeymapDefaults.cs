@@ -29,6 +29,14 @@ public static class KeymapDefaults
         yield return G(CommandIds.StatementPrev, "Alt+Up");
         yield return G(CommandIds.StatementNext, "Alt+Down");
         yield return G(CommandIds.AppEscape, "Escape");
+        yield return G(CommandIds.PaletteOpen, "Ctrl+Shift+P");
+        yield return G(CommandIds.TabNext, "Ctrl+Tab");
+        yield return G(CommandIds.TabNext, "Ctrl+PageDown");
+        yield return G(CommandIds.TabPrev, "Ctrl+Shift+Tab");
+        yield return G(CommandIds.TabPrev, "Ctrl+PageUp");
+        yield return G(CommandIds.FocusCycle, "F6");
+        // panel.*, connection.new, query.runAll ship unbound — reachable via the command palette
+        // (and the rail for panels); users can bind them in keybindings.json.
 
         // ---- Editor (resolved in the editor's tunnel handler) ----
         yield return E(CommandIds.EditorOpenLineBelow, "Shift+Enter");
@@ -49,6 +57,8 @@ public static class KeymapDefaults
         yield return R(CommandIds.GridBeginEdit, "Enter");
         yield return R(CommandIds.GridBeginEdit, "F2");
         yield return R(CommandIds.GridClearSelection, "Escape");
+        yield return R(CommandIds.GridFollowFk, "Alt+Right"); // drill into the FK the active cell points to
+        yield return R(CommandIds.GridBack, "Alt+Left");      // return to the pre-navigation result
     }
 
     private static KeyBinding G(string id, string gesture) => new(KeyScope.Global, GestureParser.Parse(gesture), id);

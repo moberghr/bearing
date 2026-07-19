@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Templates;
 using Avalonia.Layout;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
@@ -312,7 +313,10 @@ public partial class MainWindow : Window
 
     // ---- connections ----
 
-    private async void OnAddConnectionClick(object? sender, RoutedEventArgs e)
+    private async void OnAddConnectionClick(object? sender, RoutedEventArgs e) => await AddConnectionAsync();
+
+    /// <summary>connection.new: open the connection dialog for a brand-new connection.</summary>
+    private async Task AddConnectionAsync()
     {
         if (Vm is null) return;
         var dialog = new ConnectionDialog(null, null, (i, p, ct) => Vm.TestConnectionAsync(i, p, ct));
@@ -743,6 +747,7 @@ public partial class MainWindow : Window
     private bool HandleEscape()
     {
         if (Vm is null) return false;
+        if (_paletteOverlay is not null) { HidePalette(); return true; }
         if (_pendingScriptOverlay is not null) { HidePendingScript(); return true; }
         if (Vm.IsMenuVisible) { Vm.IsMenuVisible = false; return true; }
         if (Vm.IsBusy) { Vm.CancelExecution(); return true; }
@@ -822,7 +827,19 @@ public partial class MainWindow : Window
         // Escape only claims the key when there's something to dismiss; otherwise it falls through.
         r.Register(KeyCommand.Sync(CommandIds.AppEscape, "Escape / cancel", KeyScope.Global, "View",
             () => HandleEscape(),
-            canRun: () => Vm is not null && (_pendingScriptOverlay is not null || Vm.IsMenuVisible || Vm.IsBusy)));
+            canRun: () => Vm is not null && (_paletteOverlay is not null || _pendingScriptOverlay is not null || Vm.IsMenuVisible || Vm.IsBusy)));
+        r.Register(KeyCommand.Sync(CommandIds.PaletteOpen, "Command palette", KeyScope.Global, "View", ShowPalette));
+        r.Register(KeyCommand.Sync(CommandIds.TabNext, "Next tab", KeyScope.Global, "File", () => SelectAdjacentTab(+1)));
+        r.Register(KeyCommand.Sync(CommandIds.TabPrev, "Previous tab", KeyScope.Global, "File", () => SelectAdjacentTab(-1)));
+        r.Register(KeyCommand.Sync(CommandIds.FocusCycle, "Cycle focus (editor / results / sidebar)", KeyScope.Global, "View", CycleFocus));
+        r.Register(KeyCommand.Sync(CommandIds.PanelConnections, "Show Connections panel", KeyScope.Global, "View",
+            () => { if (Vm is not null) Vm.ActivePanel = SidePanel.Schema; }));
+        r.Register(KeyCommand.Sync(CommandIds.PanelScripts, "Show Scripts panel", KeyScope.Global, "View",
+            () => { if (Vm is not null) Vm.ActivePanel = SidePanel.Scripts; }));
+        r.Register(KeyCommand.Sync(CommandIds.PanelHistory, "Show History panel", KeyScope.Global, "View",
+            () => { if (Vm is not null) Vm.ActivePanel = SidePanel.History; }));
+        r.Register(new KeyCommand(CommandIds.ConnectionNew, "New connection…", KeyScope.Global, "Connection", async () => await AddConnectionAsync()));
+        r.Register(new KeyCommand(CommandIds.QueryRunAll, "Run entire script", KeyScope.Global, "Query", async () => await RunAllAsync()));
 
         // ---- Editor ----
         r.Register(KeyCommand.Sync(CommandIds.EditorOpenLineBelow, "Open line below", KeyScope.Editor, "Editor", () => OpenLine(below: true)));
@@ -895,6 +912,8 @@ public partial class MainWindow : Window
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+        // While the command palette is up it owns the keyboard — don't fire global shortcuts underneath it.
+        if (_paletteOverlay is not null) return;
         // Alt-tap tracking: a lone Alt press arms the menu toggle (fired on key-up); any other key cancels it.
         _altAlone = e.Key is Key.LeftAlt or Key.RightAlt;
         _dispatcher.TryHandle(e, KeyScope.Global); // Global scope; Editor/Grid scopes are handled in their tunnels
@@ -912,6 +931,46 @@ public partial class MainWindow : Window
         sql = Squirrel.Sql.StatementSplitter.EnsureSeparated(sql);
         await Vm.ExecuteAsync(sql);
         RebuildResults(Vm.SelectedTab);
+    }
+
+    /// <summary>query.runAll: run the entire buffer as a batch, ignoring caret/selection.</summary>
+    private async Task RunAllAsync()
+    {
+        if (Vm is null) return;
+        await Vm.ExecuteAsync(Squirrel.Sql.StatementSplitter.EnsureSeparated(Editor.Text));
+        RebuildResults(Vm.SelectedTab);
+    }
+
+    /// <summary>tab.next / tab.prev: move to the adjacent tab, wrapping around.</summary>
+    private void SelectAdjacentTab(int dir)
+    {
+        if (Vm is null || Vm.Tabs.Count == 0) return;
+        var i = Vm.SelectedTab is { } t ? Vm.Tabs.IndexOf(t) : 0;
+        Vm.SelectedTab = Vm.Tabs[(i + dir + Vm.Tabs.Count) % Vm.Tabs.Count];
+    }
+
+    /// <summary>focus.cycle (F6): move keyboard focus editor → results grid → sidebar → editor,
+    /// skipping regions that aren't currently shown.</summary>
+    private void CycleFocus()
+    {
+        var sidebar = SidebarFocusTarget();
+        Control? target;
+        if (Editor.IsKeyboardFocusWithin)
+            target = (ResultsView.IsVisible ? ResultsView.FocusableGrid : null) ?? sidebar ?? Editor;
+        else if (ResultsView.IsKeyboardFocusWithin)
+            target = sidebar ?? Editor;
+        else
+            target = Editor;
+        target?.Focus();
+    }
+
+    /// <summary>The active side panel's primary control, or null when the sidebar is collapsed.</summary>
+    private Control? SidebarFocusTarget()
+    {
+        if (Vm?.SidePaneOpen != true) return null;
+        if (SchemaTree.IsVisible) return SchemaTree;
+        if (ScriptsTree.IsVisible) return ScriptsTree;
+        return null;
     }
 
     private async void OnOpenClick(object? sender, RoutedEventArgs e) => await OpenAsync();
@@ -1020,6 +1079,145 @@ public partial class MainWindow : Window
             OverlayLayer.GetOverlayLayer(this)?.Children.Remove(o);
             _pendingScriptOverlay = null;
         }
+    }
+
+    // ---- command palette (Ctrl+Shift+P) ----
+    private Control? _paletteOverlay;
+    private TextBox? _paletteSearch;
+    private ListBox? _paletteList;
+
+    /// <summary>Open the command palette: a fuzzy-searchable list of every applicable command with its
+    /// current gesture. Re-invoking while open closes it (toggle). Self-handles its own keys, so global
+    /// shortcuts are suppressed while it's up (see <see cref="OnKeyDown"/>).</summary>
+    private void ShowPalette()
+    {
+        if (Vm is null) return;
+        if (_paletteOverlay is not null) { HidePalette(); return; }
+        if (OverlayLayer.GetOverlayLayer(this) is not { } layer) return;
+
+        var backdrop = new Border { Background = new SolidColorBrush(Color.FromArgb(0x80, 0, 0, 0)) };
+        backdrop.PointerPressed += (_, _) => HidePalette();
+
+        _paletteSearch = new TextBox { Watermark = "Type a command…" };
+        _paletteSearch.TextChanged += (_, _) => RefreshPaletteList();
+
+        _paletteList = new ListBox
+        {
+            MaxHeight = 380,
+            SelectionMode = SelectionMode.Single,
+            ItemTemplate = new FuncDataTemplate<PaletteRow>((row, _) => BuildPaletteRow(row), supportsRecycling: true),
+        };
+        _paletteList.DoubleTapped += (_, _) => RunSelectedPaletteCommand();
+
+        var content = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(_paletteSearch, Dock.Top);
+        _paletteSearch.Margin = new Thickness(0, 0, 0, 6);
+        content.Children.Add(_paletteSearch);
+        content.Children.Add(_paletteList);
+
+        var panel = new Border
+        {
+            Width = 560,
+            Padding = new Thickness(10),
+            Background = ThemeBrush("Bg.Chrome"),
+            BorderBrush = ThemeBrush("Border"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 120, 0, 0),
+            Child = content,
+        };
+
+        var host = new Grid();
+        host.Children.Add(backdrop);
+        host.Children.Add(panel);
+        host.AddHandler(KeyDownEvent, OnPaletteKeyDown, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        _paletteOverlay = host;
+        layer.Children.Add(host);
+
+        RefreshPaletteList();
+        _paletteSearch.Focus();
+    }
+
+    private void HidePalette()
+    {
+        if (_paletteOverlay is { } o)
+        {
+            OverlayLayer.GetOverlayLayer(this)?.Children.Remove(o);
+            _paletteOverlay = null;
+            _paletteSearch = null;
+            _paletteList = null;
+        }
+    }
+
+    private void RefreshPaletteList()
+    {
+        if (_paletteList is null) return;
+        var query = _paletteSearch?.Text ?? "";
+        var rows = PaletteFilter.Rank(_commands.All.Where(c => c.CanRun()), query)
+            .Select(c => new PaletteRow(c, _dispatcher.Keymap.DisplayGesture(c.Id)))
+            .ToList();
+        _paletteList.ItemsSource = rows;
+        if (rows.Count > 0) _paletteList.SelectedIndex = 0;
+    }
+
+    private void MovePaletteSelection(int dir)
+    {
+        if (_paletteList is null || _paletteList.ItemCount == 0) return;
+        var n = _paletteList.ItemCount;
+        _paletteList.SelectedIndex = (_paletteList.SelectedIndex + dir + n) % n;
+        _paletteList.ScrollIntoView(_paletteList.SelectedIndex);
+    }
+
+    private void RunSelectedPaletteCommand()
+    {
+        if (_paletteList?.SelectedItem is not PaletteRow row) return;
+        HidePalette();
+        if (row.Command.CanRun()) _ = row.Command.Run();
+    }
+
+    private void OnPaletteKeyDown(object? sender, KeyEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Key.Escape: HidePalette(); e.Handled = true; break;
+            case Key.Enter: RunSelectedPaletteCommand(); e.Handled = true; break;
+            case Key.Down: MovePaletteSelection(+1); e.Handled = true; break;
+            case Key.Up: MovePaletteSelection(-1); e.Handled = true; break;
+        }
+    }
+
+    /// <summary>A palette row: the command plus its current gesture text (may be null when unbound).</summary>
+    private sealed record PaletteRow(KeyCommand Command, string? Gesture);
+
+    private Control BuildPaletteRow(PaletteRow row)
+    {
+        var title = new TextBlock { Text = row.Command.Title, VerticalAlignment = VerticalAlignment.Center };
+        var group = new TextBlock
+        {
+            Text = row.Command.Group,
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = ThemeBrush("Text.Faint"),
+            FontSize = 11,
+        };
+        var gesture = new TextBlock
+        {
+            Text = row.Gesture ?? "",
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = ThemeBrush("Text.Dim"),
+            FontSize = 11,
+        };
+        var dock = new DockPanel { LastChildFill = false };
+        DockPanel.SetDock(gesture, Dock.Right);
+        DockPanel.SetDock(title, Dock.Left);
+        DockPanel.SetDock(group, Dock.Left);
+        dock.Children.Add(gesture);
+        dock.Children.Add(title);
+        dock.Children.Add(group);
+        return dock;
     }
 
     private Control BuildPendingScriptPanel(ViewModels.ResultSetViewModel rs, System.Collections.Generic.IReadOnlyList<MainWindowViewModel.PendingStatement> statements)

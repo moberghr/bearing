@@ -49,7 +49,7 @@
       <Button Grid.Column="0" x:Name="DeleteButton" Content="Delete" Click="OnDeleteClick"
               Foreground="#E5484D" IsVisible="False"/>
       <Button Grid.Column="2" x:Name="TestButton" Content="Test" Click="OnTestClick" Margin="0,0,8,0"/>
-      <Button Grid.Column="3" Content="Cancel" Click="OnCancelClick" Margin="0,0,8,0"/>
+      <Button Grid.Column="3" Content="Cancel" Click="OnCancelClick" Margin="0,0,8,0" IsCancel="True"/>
       <Button Grid.Column="4" Content="Save" Click="OnSaveClick" IsDefault="True"/>
     </Grid>
 

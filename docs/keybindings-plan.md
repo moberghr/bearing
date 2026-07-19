@@ -197,7 +197,7 @@ full solution builds, app launches clean with a valid+invalid test config). **Aw
 - **Not yet built:** no auto-written template/example file (absence = defaults); no hot-reload (config
   read once at startup); no settings UI (that's Phase 4).
 
-### Phase 3 — Command palette + fill the flow gaps
+### Phase 3 — Command palette + fill the flow gaps  — DONE 2026-07-20
 - Palette overlay (`Ctrl+Shift+P`): fuzzy list of every registered command, grouped, each row showing
   its current gesture; Enter runs it. Reuse tree fuzzy-find + `MatchHighlightConverter`. New `Palette`
   scope (`Up`/`Down`/`Enter`/`Esc`).
@@ -210,6 +210,36 @@ full solution builds, app launches clean with a valid+invalid test config). **Aw
   **run variants** (run-all, run-and-advance),
   **Save As** (`Ctrl+Shift+S` — finally real), **New Query** consistency (`Ctrl+N` = `Ctrl+T`).
 - Fix `ConnectionDialog`: `IsCancel` on Cancel so `Esc` closes it.
+
+**What shipped:**
+- **Command palette** — `Input/PaletteFilter.cs` (pure fuzzy ranking: subsequence match on title,
+  contiguous-run + word-boundary bonuses, earlier-first; empty query = grouped/alphabetical) +
+  an overlay built in `MainWindow` (`ShowPalette`/`HidePalette`/`RefreshPaletteList`/`OnPaletteKeyDown`,
+  reusing the `OverlayLayer` + dim-backdrop pattern from the pending-script panel). Search box + ranked
+  `ListBox` showing **title · group · current gesture**; `Up`/`Down`/`Enter`/`Esc`, double-click runs.
+  Lists `_commands.All.Where(CanRun())`. While open it owns the keyboard — `OnKeyDown` short-circuits so
+  no global shortcut fires underneath, and `HandleEscape` closes it first.
+- **New commands + defaults:** `palette.open` (`Ctrl+Shift+P`); `tab.next`/`tab.prev`
+  (`Ctrl+Tab`/`Ctrl+Shift+Tab`, `Ctrl+PageDown`/`Ctrl+PageUp`, wrap-around); `focus.cycle` (`F6`,
+  editor→results→sidebar, skipping hidden regions — `ResultView.FocusableGrid` exposes the grid target);
+  `grid.followFk` (`Alt+Right`, drills the active FK cell) + `grid.back` (`Alt+Left`, `CanGoBack`-gated);
+  `panel.connections`/`panel.scripts`/`panel.history`, `connection.new`, `query.runAll` — all
+  **palette-only** (unbound by default, bind in `keybindings.json`).
+- **ConnectionDialog** Cancel is now `IsCancel="True"` → `Esc` closes it.
+- 11 new tests (`PaletteFilterTests.cs`: ranking + the Phase-3 default bindings). 123 App green, app
+  launches clean. **Awaiting user live QA** (palette focus/overlay + keystrokes need eyeballs on Wayland).
+
+**Deviations / deferrals (from the sketch above):**
+- **Palette self-handles its keys** rather than routing through a `Palette` `KeyScope` — the overlay's
+  Up/Down/Enter/Esc are modal navigation (like the tree type-ahead / grid cell motion), so `KeyScope.Palette`
+  stays declared-but-unused. Match highlighting inside rows was **not** wired (the reused
+  `MatchHighlightConverter` idea) — rows show plain title + gesture; can add later.
+- **`Ctrl+1..9` (go-to-tab-N) deferred** — would be 9 noisy palette entries and it collides with the
+  sketch's `Ctrl+1/2/3` region-focus idea. Chose `F6` cycle for regions + `Ctrl+Tab` cycling for tabs.
+  Direct-region `Ctrl+1/2/3` also deferred.
+- **DB/server keyboard switching deferred** (needs combo/popup interaction); only *open connection
+  dialog* (`connection.new`) shipped. **Run-and-advance deferred**; only `query.runAll` shipped.
+- Save As (`Ctrl+Shift+S`) and New Query (`Ctrl+N`) were already made real in Phase 1.
 
 ### Phase 4 (optional, later) — Settings UI
 A keybindings pane listing commands by scope with inline rebind capture ("press a key…"), reset, and

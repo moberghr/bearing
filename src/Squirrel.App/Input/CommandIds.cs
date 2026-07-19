@@ -18,6 +18,15 @@ public static class CommandIds
     public const string StatementPrev = "statement.prev";
     public const string StatementNext = "statement.next";
     public const string AppEscape = "app.escape";
+    public const string PaletteOpen = "palette.open";
+    public const string TabNext = "tab.next";
+    public const string TabPrev = "tab.prev";
+    public const string FocusCycle = "focus.cycle";
+    public const string QueryRunAll = "query.runAll";
+    public const string PanelConnections = "panel.connections";
+    public const string PanelScripts = "panel.scripts";
+    public const string PanelHistory = "panel.history";
+    public const string ConnectionNew = "connection.new";
 
     // Editor
     public const string EditorOpenLineBelow = "editor.openLineBelow";
@@ -35,4 +44,6 @@ public static class CommandIds
     public const string GridDelete = "grid.delete";
     public const string GridBeginEdit = "grid.beginEdit";
     public const string GridClearSelection = "grid.clearSelection";
+    public const string GridFollowFk = "grid.followFk";
+    public const string GridBack = "grid.back";
 }

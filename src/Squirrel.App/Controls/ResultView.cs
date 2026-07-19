@@ -108,6 +108,25 @@ public sealed class ResultView : UserControl
         r.Register(KeyCommand.Sync(CommandIds.GridClearSelection, "Clear selection", KeyScope.Grid, "Grid",
             () => { ClearSelection(); SelectionChanged(); },
             canRun: () => _selection.Count > 0));
+        r.Register(KeyCommand.Sync(CommandIds.GridFollowFk, "Follow foreign key", KeyScope.Grid, "Grid",
+            FollowActiveFk, canRun: ActiveCellIsFk));
+        r.Register(KeyCommand.Sync(CommandIds.GridBack, "Back (foreign-key navigation)", KeyScope.Grid, "Grid",
+            () => GoBack?.Invoke(), canRun: () => CanGoBack));
+    }
+
+    /// <summary>The grid to hand keyboard focus to (region cycling); null when no results are shown.</summary>
+    public Control? FocusableGrid => _firstGrid;
+    private DataGrid? _firstGrid;
+
+    private bool ActiveCellIsFk()
+        => _selectionResult is { } r && _active is { } cell && r.ForeignKeyColumns.Contains(cell.Col);
+
+    /// <summary>grid.followFk: drill into the row the active FK cell points to (same as clicking its ↗).</summary>
+    private void FollowActiveFk()
+    {
+        if (_selectionResult is not { } result || _active is not { } cell) return;
+        if (!result.ForeignKeyColumns.Contains(cell.Col)) return;
+        _ = NavigateForeignKey?.Invoke(result, cell.Col, cell.Row);
     }
 
     // ---- Token brush helpers (resolve from Themes/Tokens.axaml at build time) ----------------
@@ -218,6 +237,7 @@ public sealed class ResultView : UserControl
     {
         _editableGrids.Clear();
         _statsBars.Clear();
+        _firstGrid = null; // re-captured as grids are built below (region-focus target)
         _cellRestyle = null; // old cells are being discarded; they re-subscribe as they rebuild
         var results = _results;
         if (results is null || results.Count == 0) { Content = null; return; }
@@ -588,6 +608,7 @@ public sealed class ResultView : UserControl
             HorizontalGridLinesBrush = GridLine,               // subtle #252531 row/column dividers
             VerticalGridLinesBrush = GridLine,
         };
+        _firstGrid ??= grid; // first grid of this render → region-focus target
         ScrollViewer.SetAllowAutoHide(grid, false); // keep the scrollbar visible
         SuppressRowSelectionHighlight(grid);        // cell-level selection only — no whole-row blue bar
         ReserveScrollbarSpace(grid);                // inset content so the scrollbars don't cover data
