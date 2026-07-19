@@ -241,10 +241,39 @@ full solution builds, app launches clean with a valid+invalid test config). **Aw
   dialog* (`connection.new`) shipped. **Run-and-advance deferred**; only `query.runAll` shipped.
 - Save As (`Ctrl+Shift+S`) and New Query (`Ctrl+N`) were already made real in Phase 1.
 
-### Phase 4 (optional, later) — Settings UI
+### Phase 4 (optional, later) — Settings UI  — DONE 2026-07-20
 A keybindings pane listing commands by scope with inline rebind capture ("press a key…"), reset, and
 live conflict highlighting. Writes through `JsonKeymapStore`. The palette already covers 90% of daily
 need, so this is genuinely optional.
+
+**What shipped:**
+- **`KeymapDiff.ComputeOverrides(defaults, edited)`** (`Input/KeymapDiff.cs`) — the correctness core.
+  Diffs the edited keymap against defaults into the **minimal** `KeyBindingEntry` list (unbinds for
+  removed defaults, binds for additions), ordered unbinds-first so a reassigned gesture applies without
+  a displacement warning. Scope is emitted only for commands that ship unbound (nothing to infer from).
+  Round-trip guaranteed: `Apply(defaults, ComputeOverrides(defaults, edited)) == edited`, tested.
+- **`KeymapLoader.SaveOverrides`** — atomic write of the entry list to `keybindings.json`; an empty
+  diff **deletes** the file (back to pure defaults).
+- **`KeymapLoader.Apply/LoadFromConfig/LoadFromJson` gained a `knownCommands` param** — the registry's
+  ids, so config/settings can bind **palette-only** commands (which have no default to infer from and
+  must carry an explicit scope). `MainWindow` passes `_commands.All` ids at load.
+- **`KeyDispatcher.Keymap` is now settable** → the edited map applies live (the grid shares the same
+  dispatcher, so it updates too); `SyncMenuGestures` refreshes the menu.
+- **`KeybindingsWindow`** (`Views/KeybindingsWindow.cs`, code-built like `ResultView`): commands grouped
+  by scope; each shows its gestures as removable chips + an **"+ Add"** that captures the next keystroke
+  ("press keys…", Esc cancels, tunnel handler so a captured Enter isn't eaten by the Save button);
+  adding a taken gesture **displaces** the old and notes the reassignment; **Reset all**; Save/Cancel.
+  Opened via the `settings.keybindings` command (palette) and **Edit ▸ Keyboard Shortcuts…**.
+- 6 new tests (`KeymapDiffTests.cs`); 128 App green, Desktop builds, app launches clean. **Awaiting
+  user live QA** (the window's capture/chips/live-apply can't be driven headlessly).
+
+**Deviations / limits:**
+- **Capture is logical-key only.** Physical bindings (the layout-independent fold keys) can't be
+  captured in the UI — edit `keybindings.json` for those. The UI shows/removes existing physical chips
+  fine (formatted as `Ctrl+Shift+PhysBracketLeft`).
+- **No live cross-row conflict highlighting** beyond displace-on-add (the invariant is one command per
+  (scope, gesture), so a conflict can't persist — the reassignment is surfaced as a status note instead).
+- Changes apply on **Save** (no per-edit live preview); no per-command "reset to default" (only reset-all).
 
 ## Risks / watch-items
 

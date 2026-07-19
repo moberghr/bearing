@@ -249,6 +249,8 @@
       </MenuItem>
       <MenuItem Header="_Edit">
         <MenuItem x:Name="MenuRenameTab" Header="Rename Tab…" Click="OnMenuRenameTabClick"/>
+        <Separator/>
+        <MenuItem x:Name="MenuKeybindings" Header="Keyboard Shortcuts…" Click="OnEditKeybindingsClick"/>
       </MenuItem>
       <MenuItem Header="_View">
         <MenuItem x:Name="MenuToggleSidePane" Header="Toggle Side Pane" Click="OnToggleSidePane"/>

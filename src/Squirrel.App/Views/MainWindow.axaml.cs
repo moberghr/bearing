@@ -52,7 +52,9 @@ public partial class MainWindow : Window
         // maps gestures to command ids, the dispatcher resolves keystrokes per scope. Global + Editor
         // commands register here; the results grid registers its own into the shared registry.
         RegisterCommands(_commands);
-        var keymap = KeymapLoader.LoadFromConfig(KeymapDefaults.Build()); // user keybindings.json layered over defaults
+        // user keybindings.json layered over defaults; pass the registered ids so config can bind
+        // palette-only commands (grid commands all have defaults, so they're known either way).
+        var keymap = KeymapLoader.LoadFromConfig(KeymapDefaults.Build(), _commands.All.Select(c => c.Id).ToHashSet());
         _dispatcher = new KeyDispatcher(keymap.Keymap, _commands);
         _keymapWarnings = keymap.Warnings;
         ResultsView.CommandDispatcher = _dispatcher;
@@ -314,6 +316,21 @@ public partial class MainWindow : Window
     // ---- connections ----
 
     private async void OnAddConnectionClick(object? sender, RoutedEventArgs e) => await AddConnectionAsync();
+
+    private async void OnEditKeybindingsClick(object? sender, RoutedEventArgs e) => await EditKeybindingsAsync();
+
+    /// <summary>settings.keybindings: edit the keymap, then persist the minimal diff, apply it live to the
+    /// dispatcher, and refresh the menu gestures.</summary>
+    private async Task EditKeybindingsAsync()
+    {
+        var defaults = KeymapDefaults.Build();
+        var edited = await new KeybindingsWindow(_dispatcher.Keymap, defaults, _commands.All).ShowDialog<Keymap?>(this);
+        if (edited is null) return;
+        KeymapLoader.SaveOverrides(KeymapDiff.ComputeOverrides(defaults, edited.Bindings));
+        _dispatcher.Keymap = edited;   // ResultView shares this dispatcher, so the grid picks it up too
+        SyncMenuGestures();
+        if (Vm is not null) Vm.StatusText = "Keyboard shortcuts updated.";
+    }
 
     /// <summary>connection.new: open the connection dialog for a brand-new connection.</summary>
     private async Task AddConnectionAsync()
@@ -840,6 +857,7 @@ public partial class MainWindow : Window
             () => { if (Vm is not null) Vm.ActivePanel = SidePanel.History; }));
         r.Register(new KeyCommand(CommandIds.ConnectionNew, "New connection…", KeyScope.Global, "Connection", async () => await AddConnectionAsync()));
         r.Register(new KeyCommand(CommandIds.QueryRunAll, "Run entire script", KeyScope.Global, "Query", async () => await RunAllAsync()));
+        r.Register(new KeyCommand(CommandIds.SettingsKeybindings, "Keyboard shortcuts…", KeyScope.Global, "View", async () => await EditKeybindingsAsync()));
 
         // ---- Editor ----
         r.Register(KeyCommand.Sync(CommandIds.EditorOpenLineBelow, "Open line below", KeyScope.Editor, "Editor", () => OpenLine(below: true)));

@@ -10,7 +10,8 @@ namespace Squirrel.App.Input;
 /// </summary>
 public sealed class KeyDispatcher
 {
-    public Keymap Keymap { get; }
+    /// <summary>The active keymap. Settable so the settings UI can swap in an edited map live.</summary>
+    public Keymap Keymap { get; set; }
     public CommandRegistry Registry { get; }
 
     public KeyDispatcher(Keymap keymap, CommandRegistry registry)

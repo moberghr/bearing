@@ -23,9 +23,31 @@ public static class KeymapLoader
         AllowTrailingCommas = true,
     };
 
+    private static readonly JsonSerializerOptions WriteOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    /// <summary>Persist override entries to <see cref="ConfigPath"/> (atomic write). An empty set removes
+    /// the file entirely, so the app falls back to pure defaults.</summary>
+    public static void SaveOverrides(IReadOnlyList<KeyBindingEntry> entries)
+    {
+        if (entries.Count == 0)
+        {
+            if (File.Exists(ConfigPath)) File.Delete(ConfigPath);
+            return;
+        }
+        var tmp = ConfigPath + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(entries, WriteOptions));
+        File.Move(tmp, ConfigPath, overwrite: true);
+    }
+
     /// <summary>Load overrides from <see cref="ConfigPath"/> (if present) and layer them over
-    /// <paramref name="defaults"/>. A missing file yields the defaults unchanged.</summary>
-    public static KeymapLoadResult LoadFromConfig(Keymap defaults)
+    /// <paramref name="defaults"/>. A missing file yields the defaults unchanged. <paramref name="knownCommands"/>
+    /// (the registry's ids) lets config bind commands that ship unbound; null = only commands with defaults.</summary>
+    public static KeymapLoadResult LoadFromConfig(Keymap defaults, IReadOnlySet<string>? knownCommands = null)
     {
         string json;
         try
@@ -37,12 +59,12 @@ public static class KeymapLoader
         {
             return new KeymapLoadResult(defaults, new[] { $"keybindings.json unreadable — {ex.Message}" });
         }
-        return LoadFromJson(defaults, json);
+        return LoadFromJson(defaults, json, knownCommands);
     }
 
     /// <summary>Deserialize override entries from a JSON string and layer them over the defaults.
     /// Malformed JSON is non-fatal — the defaults come back with a warning.</summary>
-    public static KeymapLoadResult LoadFromJson(Keymap defaults, string json)
+    public static KeymapLoadResult LoadFromJson(Keymap defaults, string json, IReadOnlySet<string>? knownCommands = null)
     {
         List<KeyBindingEntry>? entries;
         try
@@ -53,20 +75,26 @@ public static class KeymapLoader
         {
             return new KeymapLoadResult(defaults, new[] { $"keybindings.json ignored — {ex.Message}" });
         }
-        return entries is null ? new KeymapLoadResult(defaults, Array.Empty<string>()) : Apply(defaults, entries);
+        return entries is null ? new KeymapLoadResult(defaults, Array.Empty<string>()) : Apply(defaults, entries, knownCommands);
     }
 
-    /// <summary>Pure layering — no file IO, so it's unit-testable. Applies each override in order.</summary>
-    public static KeymapLoadResult Apply(Keymap defaults, IEnumerable<KeyBindingEntry> overrides)
+    /// <summary>Pure layering — no file IO, so it's unit-testable. Applies each override in order.
+    /// <paramref name="knownCommands"/> augments the typo-guard so commands that ship unbound (palette-only)
+    /// can still be bound; they must carry an explicit scope since there's no default to infer from.</summary>
+    public static KeymapLoadResult Apply(Keymap defaults, IEnumerable<KeyBindingEntry> overrides, IReadOnlySet<string>? knownCommands = null)
     {
         var bindings = defaults.Bindings.ToList();
         var warnings = new List<string>();
 
         // A command's scope is intrinsic (it's the scope of its default binding), so config entries can
-        // omit scope and we infer it. This also gives us the set of "known" command ids for typo-guarding.
+        // omit scope and we infer it.
         var scopeByCommand = defaults.Bindings
             .GroupBy(b => b.CommandId)
             .ToDictionary(g => g.Key, g => g.First().Scope);
+
+        // Valid command ids for the typo-guard: every command with a default, plus any registered extras.
+        var known = new HashSet<string>(scopeByCommand.Keys);
+        if (knownCommands is not null) known.UnionWith(knownCommands);
 
         foreach (var entry in overrides)
         {
@@ -102,7 +130,7 @@ public static class KeymapLoader
                 continue;
             }
 
-            if (!scopeByCommand.ContainsKey(command))
+            if (!known.Contains(command))
             {
                 warnings.Add($"keybindings.json: unknown command '{command}' — skipped");
                 continue;
