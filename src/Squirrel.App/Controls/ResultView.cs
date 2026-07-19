@@ -504,6 +504,7 @@ public sealed class ResultView : UserControl
         };
         ScrollViewer.SetAllowAutoHide(grid, false); // keep the scrollbar visible
         SuppressRowSelectionHighlight(grid);        // cell-level selection only — no whole-row blue bar
+        ReserveScrollbarSpace(grid);                // inset content so the scrollbars don't cover data
         grid.LoadingRow += (_, e) =>
         {
             e.Row.Header = (e.Row.Index + 1).ToString();
@@ -537,11 +538,13 @@ public sealed class ResultView : UserControl
         // Double-tap a column header (incl. its resize gripper) → auto-fit that column to its content.
         grid.DoubleTapped += (_, e) => AutoFitColumn(grid, e);
 
-        // Cell selection + drag are handled on the TUNNEL so they win over the DataGrid's own row
-        // selection (which otherwise highlights the whole row and swallows the drag).
-        grid.AddHandler(PointerPressedEvent, (_, e) => OnGridPointerPressed(grid, result, e), RoutingStrategies.Tunnel);
-        grid.AddHandler(PointerMovedEvent, (_, e) => { if (_dragging) DragSelectTo(grid, result, e); }, RoutingStrategies.Tunnel);
-        grid.AddHandler(PointerReleasedEvent, (_, e) => { if (_dragging) { _dragging = false; e.Pointer.Capture(null); } }, RoutingStrategies.Tunnel);
+        // Measure cells drive their own selection (per-cell PointerPressed, below). The grid only
+        // needs to extend a drag and clear the selection when the click missed a measure cell. The
+        // whole-row highlight is already invisible (SuppressRowSelectionHighlight), so no need to
+        // fight the DataGrid's own selection here.
+        grid.PointerMoved += (_, e) => { if (_dragging) DragSelectTo(grid, result, e); };
+        grid.PointerReleased += (_, e) => { if (_dragging) { _dragging = false; e.Pointer.Capture(null); } };
+        grid.PointerPressed += (_, _) => { if (_selection.Count > 0) { ClearSelection(); SelectionChanged(); } };
 
         if (result.IsEditable)
         {
@@ -587,46 +590,17 @@ public sealed class ResultView : UserControl
         if (col is not null) col.Width = DataGridLength.Auto; // recomputes to fit content
     }
 
-    // ---- Cell selection pointer handling (tunnel, so it wins over the DataGrid's row selection) ----
-
-    private void OnGridPointerPressed(DataGrid grid, ResultSetViewModel result, PointerPressedEventArgs e)
+    /// <summary>Inset the rows/headers presenters so the always-visible overlay scrollbars (which the
+    /// DataGrid template lets the rows span under) no longer cover cell content.</summary>
+    private static void ReserveScrollbarSpace(DataGrid grid)
     {
-        if (!e.GetCurrentPoint(grid).Properties.IsLeftButtonPressed) return;
-        if (MeasureCellAt(grid, e.GetPosition(grid)) is not { } cell)
-        {
-            // Clicking a non-measure cell clears any active stat selection, then lets the grid proceed.
-            if (_selection.Count > 0) { ClearSelection(); SelectionChanged(); }
-            return;
-        }
-        if (e.ClickCount >= 2) return; // double-click → let the grid edit
-
-        var extend = e.KeyModifiers.HasFlag(KeyModifiers.Control)
-            || e.KeyModifiers.HasFlag(KeyModifiers.Meta)
-            || e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-        if (extend)
-        {
-            ToggleCellSelection(result, cell.Row, cell.Col, extend: true);
-        }
-        else
-        {
-            _selectionResult = result;
-            _selection.Clear();
-            _selection.Add(cell);
-            _dragging = true;
-            _dragAnchor = cell;
-            SelectionChanged();
-        }
-        e.Pointer.Capture(grid);
-        e.Handled = true; // suppress the DataGrid's own row selection / single-click edit
-    }
-
-    /// <summary>The (row, col) of the measure cell under a point, or null if none is there.</summary>
-    private static (object?[] Row, int Col)? MeasureCellAt(DataGrid grid, Point p)
-    {
-        if (grid.InputHitTest(p) is not Visual v) return null;
-        var border = v.GetSelfAndVisualAncestors().OfType<Border>()
-            .FirstOrDefault(b => b.Tag is ValueTuple<object?[], int>);
-        return border?.Tag is ValueTuple<object?[], int> t ? (t.Item1, t.Item2) : null;
+        const double bar = 14; // approximate always-visible scrollbar thickness
+        var rows = new Style(x => x.Name("PART_RowsPresenter"));
+        rows.Setters.Add(new Setter(MarginProperty, new Thickness(0, 0, bar, bar)));
+        grid.Styles.Add(rows);
+        var headers = new Style(x => x.Name("PART_ColumnHeadersPresenter"));
+        headers.Setters.Add(new Setter(MarginProperty, new Thickness(0, 0, bar, 0)));
+        grid.Styles.Add(headers);
     }
 
     /// <summary>A value display cell: text (dimmed italic "(null)"), plus an inspect (⤢) affordance for
@@ -958,6 +932,9 @@ public sealed class ResultView : UserControl
                 Child = text,
                 CornerRadius = new CornerRadius(2),
                 BorderThickness = new Thickness(0),
+                Background = Brushes.Transparent, // hit-testable across the whole cell
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
                 Cursor = new Cursor(StandardCursorType.Cross),
                 Tag = (row, index), // read back when a drag hit-tests the cell under the pointer
             };
@@ -973,8 +950,33 @@ public sealed class ResultView : UserControl
 
             _cellRestyle += Restyle; // re-apply whenever the selection changes
             border.DetachedFromVisualTree += (_, _) => _cellRestyle -= Restyle;
-            // Selection/drag is driven by the grid's tunnel handlers (OnGridPointerPressed); this cell
-            // only supplies its (row, col) via Tag and restyles itself when the selection changes.
+
+            // Per-cell selection: single-click selects + starts a drag (captures pointer on the grid so
+            // the grid's PointerMoved can extend the rectangle); modifier-click toggles; the row
+            // highlight is already invisible so the DataGrid's own selection underneath doesn't show.
+            border.PointerPressed += (_, e) =>
+            {
+                if (e.ClickCount >= 2) return; // let the grid start editing on double-click
+                if (!e.GetCurrentPoint(border).Properties.IsLeftButtonPressed) return;
+                var extend = e.KeyModifiers.HasFlag(KeyModifiers.Control)
+                    || e.KeyModifiers.HasFlag(KeyModifiers.Meta)
+                    || e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+                if (extend)
+                {
+                    ToggleCellSelection(result, row, index, extend: true);
+                }
+                else
+                {
+                    _selectionResult = result;
+                    _selection.Clear();
+                    _selection.Add((row, index));
+                    _dragging = true;
+                    _dragAnchor = (row, index);
+                    e.Pointer.Capture(grid);
+                    SelectionChanged();
+                }
+                e.Handled = true; // don't fall through to the grid's clear-selection handler
+            };
             return border;
         });
 
