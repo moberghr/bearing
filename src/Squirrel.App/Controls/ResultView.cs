@@ -88,9 +88,6 @@ public sealed class ResultView : UserControl
     private static IBrush LinkBrush => Res("Syntax.Func");   // FK jump-icon / back arrow
     private static IBrush NullBrush => Res("Text.Faint");    // dimmed "(null)" marker
     private static IBrush Separator => Res("Border");        // 1px region separators
-    // Green for new/edited rows, red for rows pending deletion (kept visible until save).
-    private static IBrush ChangedRowBrush => Tint("Ok.Green", 0x2E);
-    private static IBrush DeletedRowBrush => Tint("Error.Red", 0x2E);
 
     // Editable grids currently rendered (grid + its result) — used to re-tint rows after an in-place save.
     private readonly List<(DataGrid Grid, ResultSetViewModel Result)> _editableGrids = new();
@@ -102,19 +99,30 @@ public sealed class ResultView : UserControl
     public void RefreshRowHighlights()
         => Dispatcher.UIThread.Post(() => { foreach (var (grid, result) in _editableGrids) RefreshRowColors(grid, result); });
 
-    private static IBrush RowBrush(ResultSetViewModel result, object?[]? row)
+    /// <summary>Pending-edit visuals for a row: a faint tint + a 2px left status bar
+    /// (amber edited / green new / red deleted). Transparent when the row has no pending change.</summary>
+    private static (IBrush Tint, IBrush Bar) RowStatus(ResultSetViewModel result, object?[]? row)
     {
-        if (row is null) return Brushes.Transparent;
-        if (result.IsRowDeleted(row)) return DeletedRowBrush;
-        if (result.IsNewRow(row) || result.IsRowEdited(row)) return ChangedRowBrush;
-        return Brushes.Transparent;
+        if (row is null) return (Brushes.Transparent, Brushes.Transparent);
+        if (result.IsRowDeleted(row)) return (Tint("Error.Red", 0x2E), Res("Error.Red"));
+        if (result.IsNewRow(row)) return (Tint("Ok.Green", 0x2E), Res("Ok.Green"));
+        if (result.IsRowEdited(row)) return (Tint("Accent.Orange", 0x24), Res("Accent.Orange"));
+        return (Brushes.Transparent, Brushes.Transparent);
+    }
+
+    private static void ApplyRowStatus(DataGridRow dgr, ResultSetViewModel result)
+    {
+        var (tint, bar) = RowStatus(result, dgr.DataContext as object?[]);
+        dgr.Background = tint;
+        dgr.BorderBrush = bar;
+        dgr.BorderThickness = new Thickness(2, 0, 0, 0);
     }
 
     /// <summary>Re-tint the currently-realized rows to reflect pending edit/new/delete state.</summary>
     private static void RefreshRowColors(DataGrid grid, ResultSetViewModel result)
     {
         foreach (var dgr in grid.GetVisualDescendants().OfType<DataGridRow>())
-            dgr.Background = RowBrush(result, dgr.DataContext as object?[]);
+            ApplyRowStatus(dgr, result);
     }
 
     private void Rebuild()
@@ -272,9 +280,21 @@ public sealed class ResultView : UserControl
             VerticalAlignment = VerticalAlignment.Center,
         };
 
-        var metaRow = new StackPanel { Orientation = Orientation.Horizontal };
-        metaRow.Children.Add(chevron);
-        metaRow.Children.Add(meta);
+        var left = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        left.Children.Add(chevron);
+        left.Children.Add(meta);
+
+        // Read-only results surface an explicit lock chip + reason (design RESULTS_GRID §8) instead of
+        // silently rejecting edits. Editable results (and undetermined ones) show nothing here.
+        var metaRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        Grid.SetColumn(left, 0);
+        metaRow.Children.Add(left);
+        if (result.LockReason is { } lockReason)
+        {
+            var chip = LockChip(lockReason);
+            Grid.SetColumn(chip, 1);
+            metaRow.Children.Add(chip);
+        }
 
         if (_collapsed.Contains(result)) body.IsVisible = false;
 
@@ -301,6 +321,45 @@ public sealed class ResultView : UserControl
         dock.Children.Add(bar);
         dock.Children.Add(body);
         return dock;
+    }
+
+    /// <summary>An amber "🔒 Read-only — reason" chip for a locked result (drawn padlock, not a glyph).</summary>
+    private static Control LockChip(string reason)
+    {
+        var amber = Res("Accent.Orange");
+        // A small padlock: rounded body + shackle arc (vector, to avoid emoji/glyph rendering issues).
+        var body = new Path
+        {
+            Data = Geometry.Parse("M2,5 h7 v6 h-7 z M3.5,5 v-1.5 a2,2 0 0 1 4,0 v1.5"),
+            Stroke = amber,
+            StrokeThickness = 1.2,
+            StrokeLineCap = PenLineCap.Round,
+            StrokeJoin = PenLineJoin.Round,
+            Stretch = Stretch.None,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 5, 0),
+        };
+        var text = new TextBlock
+        {
+            Text = $"Read-only — {reason}",
+            Foreground = amber,
+            FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var inner = new StackPanel { Orientation = Orientation.Horizontal };
+        inner.Children.Add(body);
+        inner.Children.Add(text);
+
+        var chip = new Border
+        {
+            Background = Tint("Accent.Orange", 0x1E),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(7, 1),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = inner,
+        };
+        ToolTip.SetTip(chip, reason);
+        return chip;
     }
 
     /// <summary>Meta-row text: "Result · 10 rows · 88 ms", or the message/error for non-grid results.</summary>
@@ -387,22 +446,21 @@ public sealed class ResultView : UserControl
         grid.LoadingRow += (_, e) =>
         {
             e.Row.Header = (e.Row.Index + 1).ToString();
-            if (result.IsEditable) e.Row.Background = RowBrush(result, e.Row.DataContext as object?[]);
+            if (result.IsEditable) ApplyRowStatus(e.Row, result);
         };
         for (var i = 0; i < result.Columns.Count; i++)
         {
             // FK columns keep their (read-only) jump-icon template; other columns are editable text
             // (an explicit template-column editor — indexer-bound DataGridTextColumns don't edit reliably).
+            DataGridColumn col;
             if (result.ForeignKeyColumns.Contains(i))
-                grid.Columns.Add(ForeignKeyColumn(result, i));
+                col = ForeignKeyColumn(result, i);
             else if (result.IsEditable)
-                grid.Columns.Add(EditableColumn(result, i));
+                col = EditableColumn(result, i);
             else
-                grid.Columns.Add(new DataGridTemplateColumn
-                {
-                    Header = result.Columns[i].Name,
-                    CellTemplate = DisplayCell(i),
-                });
+                col = new DataGridTemplateColumn { CellTemplate = DisplayCell(i) };
+            col.Header = BuildColumnHeader(result, i); // name + PK/FK/type badges
+            grid.Columns.Add(col);
         }
         grid.ItemsSource = result.Rows; // ObservableCollection → paged rows append without a rebuild
 
@@ -415,7 +473,7 @@ public sealed class ResultView : UserControl
                 if (e.Row.DataContext is not object?[] row || e.Column.Tag is not int idx) return;
                 if (e.EditingElement is TextBox tb && idx < row.Length) row[idx] = tb.Text;
                 result.MarkEdited(row);
-                e.Row.Background = RowBrush(result, row); // tint the edited row immediately
+                ApplyRowStatus(e.Row, result); // tint + status bar on the edited row immediately
             };
         }
         return grid;
@@ -426,10 +484,44 @@ public sealed class ResultView : UserControl
     private static DataGridColumn EditableColumn(ResultSetViewModel result, int index)
         => new DataGridTemplateColumn
         {
-            Header = result.Columns[index].Name,
             Tag = index, // column index, read back in CellEditEnding
             CellTemplate = DisplayCell(index),
             CellEditingTemplate = CellEditor(index),
+        };
+
+    /// <summary>Column header = the name plus inline type badges: orange PK, purple FK, teal jsonb/json
+    /// (design RESULTS_GRID §3). Badges are 9px/700 tinted chips after the name.</summary>
+    private static Control BuildColumnHeader(ResultSetViewModel result, int index)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        row.Children.Add(new TextBlock { Text = result.Columns[index].Name, VerticalAlignment = VerticalAlignment.Center });
+
+        if (result.PrimaryKeyColumns.Contains(index)) row.Children.Add(Badge("PK", "Accent.Orange"));
+        if (result.ForeignKeyColumns.Contains(index)) row.Children.Add(Badge("FK", "Syntax.Keyword"));
+
+        var type = result.Columns[index].DataTypeName;
+        if (string.Equals(type, "jsonb", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(type, "json", StringComparison.OrdinalIgnoreCase))
+            row.Children.Add(Badge(type.ToLowerInvariant(), "Syntax.Table"));
+
+        return row;
+    }
+
+    private static Control Badge(string text, string colorKey)
+        => new Border
+        {
+            Background = Tint(colorKey, 0x33),
+            CornerRadius = new CornerRadius(3),
+            Padding = new Thickness(4, 0),
+            Margin = new Thickness(5, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = new TextBlock
+            {
+                Text = text,
+                FontSize = 9,
+                FontWeight = FontWeight.Bold,
+                Foreground = Res(colorKey),
+            },
         };
 
     /// <summary>Read-only display template for a value cell: plain text with a dimmed italic "(null)"
@@ -527,7 +619,6 @@ public sealed class ResultView : UserControl
     private DataGridColumn ForeignKeyColumn(ResultSetViewModel result, int index)
         => new DataGridTemplateColumn
         {
-            Header = result.Columns[index].Name,
             Tag = index, // enables CellEditEnding capture when the grid is editable
             CellEditingTemplate = result.IsEditable ? CellEditor(index) : null,
             CellTemplate = new FuncDataTemplate<object?[]>((row, _) =>

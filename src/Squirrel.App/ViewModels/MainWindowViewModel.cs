@@ -839,17 +839,37 @@ public sealed partial class MainWindowViewModel : ObservableObject
         return results
             .Select(r =>
             {
+                // Resolve editability (with a lock reason) only for row-returning results with a schema.
+                var (target, reason) = snapshot is null || r.Columns.Count == 0
+                    ? (null, null)
+                    : EditabilityResolver.ResolveWithReason(snapshot, r.Columns);
                 var vm = new ResultSetViewModel(r, sql, pageable)
                 {
                     ForeignKeyColumns = DetectForeignKeyColumns(snapshot, r.Columns),
-                    EditTarget = snapshot is null || r.Columns.Count == 0
-                        ? null
-                        : EditabilityResolver.Resolve(snapshot, r.Columns),
+                    PrimaryKeyColumns = DetectPrimaryKeyColumns(snapshot, r.Columns),
+                    EditTarget = target,
+                    LockReason = target is null ? reason : null,
                 };
                 if (vm.IsEditable) vm.CaptureOriginals();
                 return vm;
             })
             .ToList();
+    }
+
+    /// <summary>Result-column indices that are the primary key of their base table (for the PK badge).</summary>
+    private static IReadOnlyCollection<int> DetectPrimaryKeyColumns(
+        ISchemaSnapshot? snapshot, IReadOnlyList<ColumnDescriptor> columns)
+    {
+        if (snapshot is null || columns.Count == 0) return Array.Empty<int>();
+        var pks = new List<int>();
+        for (var i = 0; i < columns.Count; i++)
+        {
+            var c = columns[i];
+            if (!c.HasBaseColumn) continue;
+            if (snapshot.ColumnsOf(c.BaseTableOid).Any(pc => pc.AttNum == c.BaseColumnAttNum && pc.IsPrimaryKey))
+                pks.Add(i);
+        }
+        return pks;
     }
 
     /// <summary>Result-column indices that are foreign keys (structural, value-independent).</summary>

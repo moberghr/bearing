@@ -78,4 +78,56 @@ public class EditabilityResolverTests
         };
         Assert.Null(EditabilityResolver.Resolve(Schema, cols));
     }
+
+    [Fact]
+    public void Reason_is_null_when_editable()
+    {
+        var cols = new[]
+        {
+            new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersOid, 1),
+            new ColumnDescriptor("total", "numeric", typeof(decimal), TestSchema.OrdersOid, 3),
+        };
+        var (target, reason) = EditabilityResolver.ResolveWithReason(Schema, cols);
+        Assert.NotNull(target);
+        Assert.Null(reason);
+    }
+
+    [Fact]
+    public void Reason_reports_missing_primary_key()
+    {
+        var cols = new[]
+        {
+            new ColumnDescriptor("name", "text", typeof(string), TestSchema.UsersOid, 2),
+            new ColumnDescriptor("email", "text", typeof(string), TestSchema.UsersOid, 3),
+        };
+        var (target, reason) = EditabilityResolver.ResolveWithReason(Schema, cols);
+        Assert.Null(target);
+        Assert.Contains("primary-key", reason);
+    }
+
+    [Fact]
+    public void Reason_reports_join_across_tables()
+    {
+        var cols = new[]
+        {
+            new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersOid, 1),
+            new ColumnDescriptor("name", "text", typeof(string), TestSchema.UsersOid, 2),
+        };
+        var (target, reason) = EditabilityResolver.ResolveWithReason(Schema, cols);
+        Assert.Null(target);
+        Assert.Contains("join", reason);
+    }
+
+    [Fact]
+    public void Reason_reports_computed_expression()
+    {
+        var cols = new[]
+        {
+            new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersOid, 1),
+            new ColumnDescriptor("doubled", "numeric", typeof(decimal)), // no base origin
+        };
+        var (target, reason) = EditabilityResolver.ResolveWithReason(Schema, cols);
+        Assert.Null(target);
+        Assert.Contains("expression", reason);
+    }
 }

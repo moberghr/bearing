@@ -58,6 +58,14 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// Computed by the shell from the schema snapshot; empty when the connection has no snapshot yet.</summary>
     public IReadOnlyCollection<int> ForeignKeyColumns { get; init; } = System.Array.Empty<int>();
 
+    /// <summary>Column indices that are primary keys of their base table (for the header PK badge).
+    /// Independent of editability, so a locked/join result can still flag its key columns.</summary>
+    public IReadOnlyCollection<int> PrimaryKeyColumns { get; init; } = System.Array.Empty<int>();
+
+    /// <summary>When the grid is read-only, a short reason for the lock affordance; null when editable
+    /// (or when editability couldn't be determined, e.g. no schema loaded).</summary>
+    public string? LockReason { get; init; }
+
     /// <summary>Last page came back full — more rows likely exist beyond what's loaded.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(FooterText))]
