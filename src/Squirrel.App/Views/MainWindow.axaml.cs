@@ -100,9 +100,44 @@ public partial class MainWindow : Window
 
         DataContextChanged += (_, _) => HookViewModel();
         Loaded += (_, _) => HookViewModel();
+
+        SetResultsVisible(false); // no results yet → editor fills; the pane appears on the first run
     }
 
     private MainWindowViewModel? Vm => DataContext as MainWindowViewModel;
+
+    // Remembered editor/results split proportions, so hiding then re-showing the results pane (Ctrl+R)
+    // restores the user's dragged sizes rather than snapping back to the 2:3 default.
+    private GridLength _savedEditorRow = new(2, GridUnitType.Star);
+    private GridLength _savedResultsRow = new(3, GridUnitType.Star);
+
+    /// <summary>Show or collapse the results pane (grid row + splitter). When collapsed the editor
+    /// fills the whole workspace; there's no empty split. Called on every run/tab-switch and by Ctrl+R.</summary>
+    private void SetResultsVisible(bool visible)
+    {
+        var rows = WorkspaceGrid.RowDefinitions;
+        if (visible)
+        {
+            rows[0].Height = _savedEditorRow;
+            rows[1].Height = GridLength.Auto;
+            rows[2].Height = _savedResultsRow;
+        }
+        else
+        {
+            if (rows[2].Height.Value > 0) { _savedEditorRow = rows[0].Height; _savedResultsRow = rows[2].Height; }
+            rows[0].Height = new GridLength(1, GridUnitType.Star); // editor fills
+            rows[1].Height = new GridLength(0);
+            rows[2].Height = new GridLength(0);
+        }
+        ResultsSplitter.IsVisible = visible;
+        ResultsView.IsVisible = visible;
+    }
+
+    /// <summary>Ctrl+R: toggle the results pane, but only when there's actually a result to show.</summary>
+    private void ToggleResultsVisible()
+    {
+        if (ResultsView.Results is { Count: > 0 }) SetResultsVisible(!ResultsView.IsVisible);
+    }
 
     private void HookViewModel()
     {
@@ -823,6 +858,7 @@ public partial class MainWindow : Window
         else if (e.Key == Key.O && ctrl) { e.Handled = true; await OpenAsync(); }
         else if (e.Key == Key.T && ctrl) { e.Handled = true; Vm?.NewTab(); }
         else if (e.Key == Key.B && ctrl) { e.Handled = true; if (Vm is not null) Vm.SidePaneOpen = !Vm.SidePaneOpen; }
+        else if (e.Key == Key.R && ctrl) { e.Handled = true; ToggleResultsVisible(); }
         else if (e.Key == Key.W && ctrl && Vm?.SelectedTab is { } tab) { e.Handled = true; Vm.CloseTab(tab); }
         else if (e.Key == Key.F2 && Vm?.SelectedTab is { } rt) { e.Handled = true; await RenameTabAsync(rt); }
     }
@@ -909,6 +945,7 @@ public partial class MainWindow : Window
         HidePendingScript(); // a new run / tab switch invalidates the pending-changes panel
         ResultsView.CanGoBack = tab?.CanGoBack ?? false;
         ResultsView.Results = tab?.Results; // assignment triggers the rebuild (reads CanGoBack)
+        SetResultsVisible(tab?.Results is { Count: > 0 }); // reveal on results, collapse when none
     }
 
     // ---- Floating pending-changes script panel (design RESULTS_GRID §5) ----------------------

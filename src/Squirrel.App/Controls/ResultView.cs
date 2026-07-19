@@ -285,13 +285,13 @@ public sealed class ResultView : UserControl
             Text = text,
             FontSize = 11,
             FontWeight = active ? FontWeight.SemiBold : FontWeight.Normal,
-            Foreground = active ? Res("Bg.Editor") : Res("Text.Dim"),
+            Foreground = active ? Res("Text.Primary") : Res("Text.Dim"),
             VerticalAlignment = VerticalAlignment.Center,
         };
         var seg = new Border
         {
             Child = tb,
-            Background = active ? Res("Accent.Orange") : Brushes.Transparent,
+            Background = active ? Res("Bg.TileActive") : Brushes.Transparent,
             CornerRadius = new CornerRadius(6),
             Padding = new Thickness(9, 2),
             Cursor = new Cursor(StandardCursorType.Hand),
