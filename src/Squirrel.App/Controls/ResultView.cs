@@ -538,12 +538,14 @@ public sealed class ResultView : UserControl
         // Double-tap a column header (incl. its resize gripper) → auto-fit that column to its content.
         grid.DoubleTapped += (_, e) => AutoFitColumn(grid, e);
 
-        // Measure cells drive their own selection (per-cell PointerPressed, below). The grid only
-        // needs to extend a drag and clear the selection when the click missed a measure cell. The
-        // whole-row highlight is already invisible (SuppressRowSelectionHighlight), so no need to
-        // fight the DataGrid's own selection here.
-        grid.PointerMoved += (_, e) => { if (_dragging) DragSelectTo(grid, result, e); };
-        grid.PointerReleased += (_, e) => { if (_dragging) { _dragging = false; e.Pointer.Capture(null); } };
+        // Measure cells drive their own selection (per-cell PointerPressed, below). The grid extends a
+        // drag and clears the selection when a click missed a measure cell. handledEventsToo:true is
+        // required because the DataGrid marks these pointer events handled in the tunnel phase.
+        grid.AddHandler(PointerMovedEvent, (_, e) => { if (_dragging) DragSelectTo(grid, result, e); },
+            RoutingStrategies.Bubble, handledEventsToo: true);
+        grid.AddHandler(PointerReleasedEvent, (_, e) => { if (_dragging) { _dragging = false; e.Pointer.Capture(null); } },
+            RoutingStrategies.Bubble, handledEventsToo: true);
+        // Clear on click-away: plain handler (skipped when a measure cell already handled the press).
         grid.PointerPressed += (_, _) => { if (_selection.Count > 0) { ClearSelection(); SelectionChanged(); } };
 
         if (result.IsEditable)
@@ -952,9 +954,11 @@ public sealed class ResultView : UserControl
             border.DetachedFromVisualTree += (_, _) => _cellRestyle -= Restyle;
 
             // Per-cell selection: single-click selects + starts a drag (captures pointer on the grid so
-            // the grid's PointerMoved can extend the rectangle); modifier-click toggles; the row
-            // highlight is already invisible so the DataGrid's own selection underneath doesn't show.
-            border.PointerPressed += (_, e) =>
+            // the grid's PointerMoved can extend the rectangle); modifier-click toggles. Registered with
+            // handledEventsToo:true because the DataGrid marks the press handled in the tunnel phase — a
+            // plain handler would never fire. The row highlight is already invisible, so the DataGrid's
+            // own selection underneath doesn't show.
+            border.AddHandler(PointerPressedEvent, (_, e) =>
             {
                 if (e.ClickCount >= 2) return; // let the grid start editing on double-click
                 if (!e.GetCurrentPoint(border).Properties.IsLeftButtonPressed) return;
@@ -975,8 +979,8 @@ public sealed class ResultView : UserControl
                     e.Pointer.Capture(grid);
                     SelectionChanged();
                 }
-                e.Handled = true; // don't fall through to the grid's clear-selection handler
-            };
+                e.Handled = true;
+            }, RoutingStrategies.Bubble, handledEventsToo: true);
             return border;
         });
 
