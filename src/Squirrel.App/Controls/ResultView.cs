@@ -665,6 +665,14 @@ public sealed class ResultView : UserControl
         grid.Focusable = true;
         grid.AddHandler(KeyDownEvent, (_, e) => OnGridKey(grid, result, e), RoutingStrategies.Tunnel);
 
+        // When the grid takes focus (e.g. via F6) with no active cell yet, seed the top-left cell so the
+        // focus is visible instead of the caller having to press an arrow first.
+        grid.GotFocus += (_, _) =>
+        {
+            if (result.Rows.Count > 0 && (_active is null || !ReferenceEquals(_selectionResult, result)))
+                MoveActive(grid, result, result.Rows[0], FirstSelectableColumn(result), extend: false);
+        };
+
         if (result.IsEditable)
         {
             _editableGrids.Add((grid, result));

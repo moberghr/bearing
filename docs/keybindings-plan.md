@@ -326,6 +326,19 @@ need, so this is genuinely optional.
   arranges children at their desired size, not stretched. New `FillHost()` binds the host Grid to the
   window `Bounds`, so the centered panel now sits **top-center**.
 
+### Post-QA round 4 (2026-07-20)
+
+- **F6 into a focused grid fixed** — `CycleFocus` now classifies the current region by the actually-focused
+  element's ancestry (via the `FocusManager`) against each region's container (`Editor` / whole
+  `ResultsView` / the sidebar tree), and advances to the next region that *accepts* focus (`Focus()` true),
+  skipping ones that can't. The old `IsKeyboardFocusWithin` check on the exact target control could miss
+  when focus sat on a grid inner element.
+- **Grid focus is now visible** — a grid's `GotFocus` seeds the top-left cell (`MoveActive` first row /
+  first selectable column) when it has no active cell yet, so focusing the grid shows a highlighted cell
+  instead of nothing-until-you-press-an-arrow. Clicking a cell still wins (it sets the active cell first).
+- **Ctrl+R hiding results returns focus to the editor** (`ToggleResultsVisible` calls
+  `Editor.TextArea.Focus()` when collapsing, since focus may have been in the now-hidden grid).
+
 ## Risks / watch-items
 
 - **Physical-vs-logical is the subtle part.** Get `Gesture`/`GestureParser`/precedence right in Phase 1

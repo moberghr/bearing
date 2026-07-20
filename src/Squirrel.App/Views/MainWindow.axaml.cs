@@ -167,10 +167,14 @@ public partial class MainWindow : Window
         ResultsView.IsVisible = visible;
     }
 
-    /// <summary>Ctrl+R: toggle the results pane, but only when there's actually a result to show.</summary>
+    /// <summary>Ctrl+R: toggle the results pane, but only when there's actually a result to show. Hiding
+    /// the pane drops focus back to the editor (it may have been in the now-collapsed grid).</summary>
     private void ToggleResultsVisible()
     {
-        if (ResultsView.Results is { Count: > 0 }) SetResultsVisible(!ResultsView.IsVisible);
+        if (ResultsView.Results is not { Count: > 0 }) return;
+        var show = !ResultsView.IsVisible;
+        SetResultsVisible(show);
+        if (!show) Editor.TextArea.Focus();
     }
 
     private void HookViewModel()
@@ -1098,13 +1102,23 @@ public partial class MainWindow : Window
     /// skipping regions that aren't currently shown.</summary>
     private void CycleFocus()
     {
-        // The regions available to focus, in cycle order (editor is always present; the others only when shown).
-        var targets = new System.Collections.Generic.List<Control> { Editor.TextArea };
-        if (ResultsView.IsVisible && ResultsView.FocusableGrid is { } grid) targets.Add(grid);
-        if (SidebarFocusTarget() is { } side) targets.Add(side);
+        // Regions in cycle order: (control to focus, container used to detect "currently here"). Editor is
+        // always present; results/sidebar only when shown. Detection uses the whole ResultsView/tree so a
+        // focused inner element (a grid cell presenter) still classifies correctly.
+        var regions = new System.Collections.Generic.List<(Control Focus, Visual Container)>
+        {
+            (Editor.TextArea, Editor),
+        };
+        if (ResultsView.IsVisible && ResultsView.FocusableGrid is { } grid) regions.Add((grid, ResultsView));
+        if (SidebarFocusTarget() is { } side) regions.Add((side, side));
+        if (regions.Count < 2) { regions[0].Focus.Focus(); return; }
 
-        var cur = targets.FindIndex(t => t.IsKeyboardFocusWithin);
-        targets[cur < 0 ? 0 : (cur + 1) % targets.Count].Focus();
+        var focused = TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement() as Visual;
+        var cur = focused is null ? -1 : regions.FindIndex(r => IsWithin(focused, r.Container));
+        var start = cur < 0 ? 0 : cur;
+        for (var step = 1; step <= regions.Count; step++)      // move to the next region that can take focus
+            if (regions[(start + step) % regions.Count].Focus.Focus())
+                return;
     }
 
     /// <summary>The active side panel's primary control, or null when the sidebar is collapsed.</summary>
