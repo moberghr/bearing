@@ -313,6 +313,19 @@ need, so this is genuinely optional.
   and its `LostFocus` hides it (deferred, and only when `!IsOpen && !IsKeyboardFocusWithin` so navigating
   a submenu popup doesn't dismiss it).
 
+### Post-QA round 3 (2026-07-20)
+
+- **F6 cycle rewritten** — the old branchy version could land back on the already-focused editor (no
+  visible change). Now builds the ordered list of *visible* regions (editor TextArea, results grid,
+  sidebar tree) and focuses the next one after whichever currently holds focus.
+- **Menu auto-hide reworked** — `LostFocus` was unreliable (the bar often never held focus, so it never
+  "lost" it). Replaced with: a window tunnel `PointerPressed` that hides on any click outside `MainMenu`
+  (submenu-popup clicks are on a separate top-level and never reach this handler), plus a
+  `MenuItem.ClickEvent` class handler that hides once a **leaf** item (`ItemCount == 0`) is invoked.
+- **Overlays center** — the palette and the picker quick-pick were pinned top-left because `OverlayLayer`
+  arranges children at their desired size, not stretched. New `FillHost()` binds the host Grid to the
+  window `Bounds`, so the centered panel now sits **top-center**.
+
 ## Risks / watch-items
 
 - **Physical-vs-logical is the subtle part.** Get `Gesture`/`GestureParser`/precedence right in Phase 1

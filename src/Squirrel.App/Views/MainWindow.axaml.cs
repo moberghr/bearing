@@ -6,6 +6,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
+using Avalonia.Data;
 using Avalonia.Layout;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
@@ -13,6 +14,7 @@ using Avalonia.Media;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using AvaloniaEdit.TextMate;
 using Squirrel.App.Completion;
 using Squirrel.App.Editing;
@@ -69,8 +71,10 @@ public partial class MainWindow : Window
         // tab traversal and the editor/grid don't consume them first.
         AddHandler(KeyDownEvent, OnWindowNavKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
 
-        // The Alt-toggled menu behaves like a real menu bar: auto-hide once focus leaves it.
-        MainMenu.LostFocus += OnMenuLostFocus;
+        // The Alt-toggled menu behaves like a real menu bar: auto-hide on a click outside it or once a
+        // (leaf) menu item is invoked.
+        AddHandler(PointerPressedEvent, OnWindowPointerPressed, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        MainMenu.AddHandler(MenuItem.ClickEvent, OnMenuItemInvoked);
 
         // Editor-editing shortcuts must pre-empt AvaloniaEdit, which consumes Enter/'/'/brackets on
         // its own KeyDown — so handle them during the tunnel phase, before the editor sees them.
@@ -971,18 +975,30 @@ public partial class MainWindow : Window
         {
             _altAlone = false;
             Vm.IsMenuVisible = !Vm.IsMenuVisible;
-            if (Vm.IsMenuVisible) Dispatcher.UIThread.Post(() => MainMenu.Focus()); // so LostFocus can auto-hide it
+            if (Vm.IsMenuVisible) Dispatcher.UIThread.Post(() => MainMenu.Focus()); // enable keyboard menu nav
         }
     }
 
-    /// <summary>Auto-hide the Alt menu once focus leaves it — but not while a submenu is open (that
-    /// pulls focus into a popup that isn't a visual child of the bar).</summary>
-    private void OnMenuLostFocus(object? sender, RoutedEventArgs e)
-        => Dispatcher.UIThread.Post(() =>
-        {
-            if (Vm?.IsMenuVisible == true && !MainMenu.IsOpen && !MainMenu.IsKeyboardFocusWithin)
-                Vm.IsMenuVisible = false;
-        });
+    /// <summary>A press anywhere outside the menu bar dismisses it. Clicks on an open submenu land on a
+    /// separate popup top-level, so they never reach this window handler — only genuine outside clicks do.</summary>
+    private void OnWindowPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (Vm?.IsMenuVisible == true && e.Source is Visual v && !IsWithin(v, MainMenu))
+            Vm.IsMenuVisible = false;
+    }
+
+    /// <summary>Invoking a leaf menu item (one that does something, not a submenu header) closes the bar.</summary>
+    private void OnMenuItemInvoked(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is not null && e.Source is MenuItem { ItemCount: 0 }) Vm.IsMenuVisible = false;
+    }
+
+    private static bool IsWithin(Visual? node, Visual root)
+    {
+        for (; node is not null; node = node.GetVisualParent())
+            if (ReferenceEquals(node, root)) return true;
+        return false;
+    }
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
@@ -1082,15 +1098,13 @@ public partial class MainWindow : Window
     /// skipping regions that aren't currently shown.</summary>
     private void CycleFocus()
     {
-        var sidebar = SidebarFocusTarget();
-        Control? target;
-        if (Editor.IsKeyboardFocusWithin)
-            target = (ResultsView.IsVisible ? ResultsView.FocusableGrid : null) ?? sidebar ?? Editor.TextArea;
-        else if (ResultsView.IsKeyboardFocusWithin)
-            target = sidebar ?? Editor.TextArea;
-        else
-            target = Editor.TextArea; // AvaloniaEdit's focusable element is the TextArea, not the container
-        target?.Focus();
+        // The regions available to focus, in cycle order (editor is always present; the others only when shown).
+        var targets = new System.Collections.Generic.List<Control> { Editor.TextArea };
+        if (ResultsView.IsVisible && ResultsView.FocusableGrid is { } grid) targets.Add(grid);
+        if (SidebarFocusTarget() is { } side) targets.Add(side);
+
+        var cur = targets.FindIndex(t => t.IsKeyboardFocusWithin);
+        targets[cur < 0 ? 0 : (cur + 1) % targets.Count].Focus();
     }
 
     /// <summary>The active side panel's primary control, or null when the sidebar is collapsed.</summary>
@@ -1215,6 +1229,16 @@ public partial class MainWindow : Window
     private TextBox? _paletteSearch;
     private ListBox? _paletteList;
 
+    /// <summary>A Grid sized to the whole window, so an overlay's centered panel actually centers — the
+    /// OverlayLayer otherwise arranges children at their desired size, which pins them to the top-left.</summary>
+    private Grid FillHost()
+    {
+        var host = new Grid();
+        host[!Layoutable.WidthProperty] = new Binding { Source = this, Path = "Bounds.Width" };
+        host[!Layoutable.HeightProperty] = new Binding { Source = this, Path = "Bounds.Height" };
+        return host;
+    }
+
     /// <summary>Open the command palette: a fuzzy-searchable list of every applicable command with its
     /// current gesture. Re-invoking while open closes it (toggle). Self-handles its own keys, so global
     /// shortcuts are suppressed while it's up (see <see cref="OnKeyDown"/>).</summary>
@@ -1258,7 +1282,7 @@ public partial class MainWindow : Window
             Child = content,
         };
 
-        var host = new Grid();
+        var host = FillHost();
         host.Children.Add(backdrop);
         host.Children.Add(panel);
         host.AddHandler(KeyDownEvent, OnPaletteKeyDown, Avalonia.Interactivity.RoutingStrategies.Tunnel);
@@ -1333,7 +1357,7 @@ public partial class MainWindow : Window
             Child = content,
         };
 
-        var host = new Grid();
+        var host = FillHost();
         host.Children.Add(backdrop);
         host.Children.Add(panel);
         host.AddHandler(KeyDownEvent, OnQuickPickKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
