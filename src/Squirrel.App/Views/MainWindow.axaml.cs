@@ -822,10 +822,7 @@ public partial class MainWindow : Window
     }
     private void OnMenuSchemaClick(object? sender, RoutedEventArgs e) { if (Vm is not null) Vm.ActivePanel = SidePanel.Schema; }
     private void OnMenuScriptsClick(object? sender, RoutedEventArgs e) { if (Vm is not null) Vm.ActivePanel = SidePanel.Scripts; }
-    private void OnAboutClick(object? sender, RoutedEventArgs e)
-    {
-        if (Vm is not null) Vm.StatusText = "Squirrel — SQL query editor.";
-    }
+    private void OnAboutClick(object? sender, RoutedEventArgs e) => AboutDialog.Open(this);
 
     /// <summary>
     /// Editor-scoped editing shortcuts, handled in the tunnel phase so they win over AvaloniaEdit's

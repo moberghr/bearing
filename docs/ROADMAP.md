@@ -37,6 +37,17 @@ project switches + a completion toast (**no** background-jobs panel), per-tab ca
 
 ## 🟢 Open — features & UX requests
 
+- [ ] **P2** Rename the product to **Bearing**. Cross-cutting: window titles, About dialog, menu labels
+  and any user-facing "Squirrel" strings; brand assets (logo/mark, `.ico`/`.icns`/favicons, in-app mark,
+  window icon); config/data dir names and any persisted paths (migrate or accept a reset); docs/README.
+  Decide separately whether to also rename the `Squirrel.*` assemblies/namespaces and the repo (larger,
+  code-only churn — can lag the user-facing rename).
+- [ ] **P2** Settings screen + framework. Build a real settings window (the `Settings…` menu is still a
+  "coming soon" stub) backed by a general settings framework: a typed settings model, load/save via
+  `AppSettingsStore`, and a UI that groups options by category. First tenants already have homes elsewhere
+  in this roadmap — query-log retention, the 30-min idle timeout, TLS/`sslmode` preference, restore-window-size —
+  which should migrate into this screen rather than staying file-edit-only or hard-coded constants. Model the
+  UI after the existing code-built `KeybindingsWindow` (Keyboard Shortcuts already lives under Edit ▸).
 - [ ] **P2** Manual connect / disconnect + connection status. Let the user explicitly connect and disconnect a session (not only lazily on Run), with a visible status indicator (connected / connecting / disconnected / failed) per connection and/or tab. Builds on the `SessionLease` model — a manual disconnect must respect a running query's lease.
 - [ ] **P2** Remove / delete projects. Delete a project from the recent list, and optionally from disk (with confirm). Also prune stale/missing entries from the recent list (see the P3 recent-projects item below).
 - [ ] **P3** Restore last window size on startup; persist size only and let the window manager handle placement/position. (Add to session or app-settings state; apply in `App`/`MainWindow`.)
@@ -70,7 +81,7 @@ project switches + a completion toast (**no** background-jobs panel), per-tab ca
 
 - [ ] **P2** Decompose the god objects: `Controls/ResultView.cs` (1716), `Views/MainWindow.axaml.cs` (1615), `MainWindowViewModel.cs` (1014). Overlay builders + tree-search are the most separable.
 - [ ] **P3** Remove dead `Views/HistoryWindow.axaml(.cs)` (replaced by the inline History panel).
-- [ ] **P3** Implement or hide the `Settings…` / `About` menu stubs ("coming soon").
+- [~] **P3** Implement or hide the `Settings…` / `About` menu stubs ("coming soon"). *(About done — `Views/AboutDialog.cs` shows name/tagline/version; version comes from `<Version>` in `Directory.Build.props`. Settings still a stub.)* *(live QA)*
 - [ ] **P3** Clear build warnings: `CS0108` `StatementMargin.Width` hides `Layoutable.Width`; obsolete `TextBox.Watermark` → `PlaceholderText` (×3); `xUnit2013` in `HistoryPanelTests` (×2).
 
 ---
