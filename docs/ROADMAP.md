@@ -1,0 +1,94 @@
+# Squirrel roadmap
+
+Single tracking list for outstanding work. Grouped by status, then priority (**P1** correctness/security ·
+**P2** UX/robustness · **P3** cleanup). Check items off as they land. Sources: the 2026-07-20 whole-codebase
+review, the earlier hardening review, and feature requests.
+
+Legend: `[ ]` open · `[~]` in progress · `[x]` done. "(uncommitted)" = in the working tree on `main`, not yet committed.
+
+---
+
+## ✅ Done this session — uncommitted, needs commit + live QA
+
+- [x] **Resume last-used project on startup** — `App.ResumeLastProjectAsync`; skips deleted/unreadable recent entries. (+2 tests)
+- [x] **Server-side first-page `LIMIT`** — `Squirrel.Sql/FirstPageLimiter.cs`; remote SELECT fetches one page instead of streaming the whole set; edit/FK-nav preserved. (+23 tests, 10 live)
+- [x] **Honest query timer** — status bar shows wall-clock (`DescribeResults(results, wallClock)`).
+- [x] **WriteGuard extended** — CREATE/CTAS, COPY, CALL, DO, GRANT/REVOKE, REFRESH, top-level `SELECT … INTO`. (+15 tests)
+- [x] **Connection lease + 30-min idle eviction** — `SessionLease` + `ConnectionSessionManager` rewrite; running query can't be disposed under; idle connections reclaimed. Fixes the disposal-mid-query race. (+4 tests)
+- [x] **Global error handling** — `CrashLog`, `CrashReporter`, `Views/ErrorDialog`, `Dispatcher.UnhandledException` (kept alive) + AppDomain/TaskScheduler backstops + guarded command dispatch.
+
+> Verified: Sql 119 · App 142 (10 live pagila) · Persistence 13, all green; clean build + boot.
+> **Suggested:** commit this batch as one reviewable unit before starting Stage E.
+
+---
+
+## 🚧 Next feature — Stage E: background execution
+
+Design: `docs/background-execution-plan.md`. Scope (confirmed): concurrent per-tab queries that survive
+project switches + a completion toast (**no** background-jobs panel), per-tab cancel, quit-confirm.
+
+- [ ] **P2** App-lifetime sessions — stop disposing `_sessions`/`_schemaBrowser` on project switch.
+- [ ] **P2** Per-tab run state + concurrent `ExecuteAsync` (remove the global `IsBusy` gate).
+- [ ] **P2** Completion routing — results to originating tab if open, else a toast (`WindowNotificationManager`). *(live QA)*
+- [ ] **P2** Per-tab cancel (Esc / stop button) — repoint the existing cancel at the selected tab's CTS.
+- [ ] **P2** Quit/tab-close confirm-then-cancel when a query is running. *(live QA)*
+
+---
+
+## 🟢 Open — features & UX requests
+
+- [ ] **P2** Manual connect / disconnect + connection status. Let the user explicitly connect and disconnect a session (not only lazily on Run), with a visible status indicator (connected / connecting / disconnected / failed) per connection and/or tab. Builds on the `SessionLease` model — a manual disconnect must respect a running query's lease.
+- [ ] **P2** Remove / delete projects. Delete a project from the recent list, and optionally from disk (with confirm). Also prune stale/missing entries from the recent list (see the P3 recent-projects item below).
+- [ ] **P3** Restore last window size on startup; persist size only and let the window manager handle placement/position. (Add to session or app-settings state; apply in `App`/`MainWindow`.)
+
+---
+
+## 🔴 Open — correctness & security (from review)
+
+- [ ] **P1** `FileFallbackSecretStore` non-atomic write can corrupt/lose a stored password; `chmod 600` happens *after* a world-readable write (TOCTOU). `FileFallbackSecretStore.cs:25-31`.
+- [ ] **P1** `CountAsync` swallows all errors as "uncountable" → paging hides totals on real DB failure. `PostgresQueryExecutor.cs:84`.
+- [ ] **P1** `StatementSplitter`: trailing `-- line comment` swallows the auto-appended `;` (merges statements → syntax error); blank-line heuristic mis-splits a single statement with a blank line at paren depth 0. `StatementSplitter.cs`.
+- [ ] **P1** `CellFormat.FormatArray` throws on multi-dimensional Postgres arrays (uses `arr.Length` with single-index `GetValue`). `Formatting/CellFormat.cs:36-41`.
+- [ ] **P2** `EnsureSchemaAsync` inflight keyed by ConnectionId not (id, database) → wrong-DB snapshot across a rebuild. `ConnectionSessionManager.cs`.
+- [ ] **P2** Missing `ConfigureAwait(false)` throughout the data layer (deadlock risk for any sync-over-async caller). `PostgresQueryExecutor.cs`, `PostgresMetadataReader.cs`, `NpgsqlConnectionFactory.cs`.
+- [ ] **P2** `ForeignKeyResolver` assumes equal-length parent/referenced attnum lists → `IndexOutOfRange` on a malformed composite FK. `Core/Schema/ForeignKeyResolver.cs:45-52`.
+- [ ] **P3** `NpgsqlConnectionFactory` applies persisted options verbatim — unknown key throws unwrapped at connect; an `Options["Password"]` overrides the secret. `NpgsqlConnectionFactory.cs:37`.
+- [ ] **P3** Raw `ex.Message` surfaced to the UI on generic catch paths (host/endpoint info leak). `PostgresQueryExecutor.cs:45,70,120`.
+- [ ] **P3** `SchemaBrowser.BuildAsync` catch removes the key unconditionally → can evict a concurrent replacement (pool leak). `SchemaBrowser.cs:85-90`.
+- [ ] **P3** `JsonSessionStore.Save` non-atomic + `LoadAsync` has no try/catch (a crash during shutdown-save bricks the next open; inconsistent with `AppSettingsStore`). `JsonSessionStore.cs`.
+- [ ] **P3** `secret-tool` delete ignores exit code → a failed clear leaves a stale credential after "delete". `SecretToolSecretStore.cs:35`.
+- [ ] **P3** `ResultSetViewModel.ToggleDelete` un-delete drops a prior pending edit. `ResultSetViewModel.cs:181`.
+- [ ] **P3** `ChangedAssignments` compares edited string vs typed original → emits no-op UPDATE assignments. `ResultEditModel.cs:140`.
+- [ ] **P3** `GestureParser` accepts numeric/undefined enum values (`Ctrl+16` binds `(Key)16`). `Input/GestureParser.cs:51,59`.
+- [ ] **P3** MRU tab-cycle state hard-coupled to the Ctrl key — rebinding `tab.mruNext` freezes MRU ordering. `MainWindow.axaml.cs:979`.
+- [ ] **P3** `StreamAsync` ignores `QueryOptions.MaxRows` — but has **no production caller**; decide: implement the cap or delete the dead API. `PostgresQueryExecutor.cs:158`.
+- [ ] **P3** Recent-projects dropdown isn't pruned of missing/empty dirs (resume skips them, but the list still shows them). `MainWindowViewModel.RefreshRecentAsync`.
+
+---
+
+## 🟡 Open — quality & maintainability
+
+- [ ] **P2** Decompose the god objects: `Controls/ResultView.cs` (1716), `Views/MainWindow.axaml.cs` (1615), `MainWindowViewModel.cs` (1014). Overlay builders + tree-search are the most separable.
+- [ ] **P3** Remove dead `Views/HistoryWindow.axaml(.cs)` (replaced by the inline History panel).
+- [ ] **P3** Implement or hide the `Settings…` / `About` menu stubs ("coming soon").
+- [ ] **P3** Clear build warnings: `CS0108` `StatementMargin.Width` hides `Layoutable.Width`; obsolete `TextBox.Watermark` → `PlaceholderText` (×3); `xUnit2013` in `HistoryPanelTests` (×2).
+
+---
+
+## 🔵 Open — hardening backlog (pre-existing)
+
+- [ ] **P1** Encrypt the fallback secret store and/or add platform keychains (DPAPI / macOS Keychain). Today: base64 fallback, libsecret on Linux only. (documented, warned in UI)
+- [ ] **P2** Query-log privacy: file perms (0600), optional encryption, and/or PII/literal stripping. Retention exists (default 180d); no stripping. `SqliteQueryLog.cs`.
+- [ ] **P2** Enforce/prompt TLS (`sslmode`) — currently only set if the user adds the option manually.
+- [ ] **P3** Settings UI for query-log retention (file-edit only today) and the 30-min idle timeout (currently a fixed constant).
+- [ ] **P3** CI pipeline (build + `dotnet test`). Previously skipped.
+- [ ] **P3** Deeper VM decomposition: stateful coordinators (connections/execution/tabs/panels) out of `MainWindowViewModel`; overlay code-behind out of `MainWindow.axaml.cs`.
+
+---
+
+## Notes
+
+- GUI can't be driven headlessly here (Wayland) — items tagged *(live QA)* need a manual pass.
+- Nothing is committed yet. The "Done this session" batch is a clean unit to commit first.
+- The `SELECT … INTO` write-guard case and the recent-project pruning were partially informed by, and
+  partially close, review findings — cross-check before re-doing.
