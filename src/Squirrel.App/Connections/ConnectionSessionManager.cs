@@ -14,11 +14,20 @@ namespace Squirrel.App.Connections;
 /// are guarded by a single lock; each id is connected at most once concurrently (single-flight), and
 /// a session whose settings changed is disposed and rebuilt on next use. The secret store is read
 /// lazily (it is attached after construction), so a password is fetched fresh at connect time.
+///
+/// Disposal is lease-aware: a running query holds a <see cref="SessionLease"/>, and a session is only
+/// torn down once it is no longer live AND has no outstanding leases — so evicting, editing, switching
+/// database on, or idle-sweeping a connection never pulls the pool out from under an in-flight query.
+/// Sessions with no lease that have been idle past <see cref="_idleTimeout"/> are closed by a periodic
+/// sweep so connections don't stay open indefinitely.
 /// </summary>
 public sealed class ConnectionSessionManager : IConnectionSessionManager
 {
     private readonly IProviderRegistry _providers;
     private readonly Func<ISecretStore?> _secretStore;
+    private readonly TimeSpan _idleTimeout;
+    private readonly Func<DateTime> _clock;
+    private readonly Timer? _sweepTimer;
 
     private readonly object _gate = new();
     private readonly Dictionary<Guid, ConnectionSession> _live = new();
@@ -27,10 +36,24 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     private readonly Dictionary<Guid, (ConnectionInfo Info, Task<ConnectionSession> Task)> _inflight = new();
     private readonly Dictionary<Guid, Task<ISchemaSnapshot?>> _schemaInflight = new();
 
-    public ConnectionSessionManager(IProviderRegistry providers, Func<ISecretStore?> secretStore)
+    /// <summary>Default idle timeout before an unused connection is closed.</summary>
+    public static readonly TimeSpan DefaultIdleTimeout = TimeSpan.FromMinutes(30);
+
+    public ConnectionSessionManager(
+        IProviderRegistry providers, Func<ISecretStore?> secretStore,
+        TimeSpan? idleTimeout = null, Func<DateTime>? clock = null, bool runSweepTimer = true)
     {
         _providers = providers;
         _secretStore = secretStore;
+        _idleTimeout = idleTimeout ?? DefaultIdleTimeout;
+        _clock = clock ?? (() => DateTime.UtcNow);
+        // Sweep roughly every minute (never more often than needed to catch the timeout). Tests pass
+        // runSweepTimer:false and drive SweepIdleAsync directly.
+        if (runSweepTimer)
+        {
+            var period = TimeSpan.FromMilliseconds(Math.Clamp(_idleTimeout.TotalMilliseconds / 4, 15_000, 60_000));
+            _sweepTimer = new Timer(_ => _ = SweepIdleAsync(), null, period, period);
+        }
     }
 
     public Task<ConnectionSession> GetOrConnectAsync(ConnectionInfo info, CancellationToken ct)
@@ -38,18 +61,62 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         lock (_gate)
         {
             if (_live.TryGetValue(info.Id, out var existing) && SameConnection(existing.Info, info))
+            {
+                existing.LastUsedUtc = _clock();
                 return Task.FromResult(existing);
+            }
             if (_inflight.TryGetValue(info.Id, out var pending))
             {
                 if (SameConnection(pending.Info, info)) return pending.Task;
                 // A connect is in flight for a different database on this id — wait for it to settle,
-                // then connect the requested database (BuildAsync will dispose the stale session).
+                // then connect the requested database (BuildAsync will retire the stale session).
                 return WaitThenConnectAsync(pending.Task, info, ct);
             }
             var task = BuildAsync(info, ct);
             _inflight[info.Id] = (info, task);
             return task;
         }
+    }
+
+    public async Task<SessionLease> AcquireAsync(ConnectionInfo info, CancellationToken ct)
+    {
+        // Connect (or reuse) then lease atomically. If the session got retired in the tiny window
+        // between connect and lease, rebuild rather than lease a stale/soon-to-die session.
+        for (var attempt = 0; ; attempt++)
+        {
+            var session = await GetOrConnectAsync(info, ct);
+            lock (_gate)
+            {
+                if (!session.Retired || attempt >= 3)
+                {
+                    session.LeaseCount++;
+                    session.LastUsedUtc = _clock();
+                    return new SessionLease(this, session);
+                }
+            }
+        }
+    }
+
+    public SessionLease Lease(ConnectionSession session)
+    {
+        lock (_gate)
+        {
+            session.LeaseCount++;
+            session.LastUsedUtc = _clock();
+        }
+        return new SessionLease(this, session);
+    }
+
+    internal void ReleaseLease(ConnectionSession session)
+    {
+        bool disposeNow;
+        lock (_gate)
+        {
+            if (session.LeaseCount > 0) session.LeaseCount--;
+            session.LastUsedUtc = _clock();
+            disposeNow = session.Retired && session.LeaseCount == 0;
+        }
+        if (disposeNow) _ = SafeDisposeAsync(session); // retired-in-use session freed at its last release
     }
 
     private async Task<ConnectionSession> WaitThenConnectAsync(
@@ -80,16 +147,42 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     public async Task EvictAsync(Guid connectionId)
     {
         ConnectionSession? session;
+        var disposeNow = false;
         lock (_gate)
         {
-            _live.TryGetValue(connectionId, out session);
-            if (session is not null) _live.Remove(connectionId);
+            if (_live.TryGetValue(connectionId, out session))
+            {
+                _live.Remove(connectionId);
+                if (session.LeaseCount == 0) disposeNow = true; else session.Retired = true;
+            }
         }
-        if (session is not null) await SafeDisposeAsync(session);
+        if (session is not null && disposeNow) await SafeDisposeAsync(session);
+    }
+
+    /// <summary>Close sessions that hold no lease and have been idle past the timeout. Safe to call anytime.</summary>
+    internal async Task SweepIdleAsync()
+    {
+        List<ConnectionSession> toDispose = new();
+        try
+        {
+            var now = _clock();
+            lock (_gate)
+            {
+                foreach (var (id, session) in _live.ToArray())
+                    if (session.LeaseCount == 0 && now - session.LastUsedUtc >= _idleTimeout)
+                    {
+                        _live.Remove(id);
+                        toDispose.Add(session);
+                    }
+            }
+        }
+        catch { /* sweep is best-effort; never surface */ }
+        foreach (var s in toDispose) await SafeDisposeAsync(s);
     }
 
     public async ValueTask DisposeAsync()
     {
+        _sweepTimer?.Dispose();
         ConnectionSession[] all;
         lock (_gate)
         {
@@ -98,6 +191,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             _inflight.Clear();
             _schemaInflight.Clear();
         }
+        // Shutdown: dispose everything regardless of leases (in-flight queries are cancelled first).
         foreach (var s in all) await SafeDisposeAsync(s);
     }
 
@@ -108,15 +202,21 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         await Task.Yield();
         try
         {
-            // A live session may exist but be stale (settings edited) — dispose it before rebuilding.
+            // A live session may exist but be stale (settings edited) — retire it before rebuilding,
+            // deferring its disposal if a query still holds a lease on it.
             ConnectionSession? stale;
+            var disposeStale = false;
             lock (_gate)
             {
                 _live.TryGetValue(info.Id, out stale);
-                if (stale is not null && SameConnection(stale.Info, info)) return stale;
-                if (stale is not null) _live.Remove(info.Id);
+                if (stale is not null && SameConnection(stale.Info, info)) { stale.LastUsedUtc = _clock(); return stale; }
+                if (stale is not null)
+                {
+                    _live.Remove(info.Id);
+                    if (stale.LeaseCount == 0) disposeStale = true; else stale.Retired = true;
+                }
             }
-            if (stale is not null) await SafeDisposeAsync(stale);
+            if (stale is not null && disposeStale) await SafeDisposeAsync(stale);
 
             var store = _secretStore();
             var password = store is null ? null : await store.GetPasswordAsync(info.Id, ct);
@@ -138,7 +238,8 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             }
 
             var session = new ConnectionSession(
-                info, factory, provider.CreateQueryExecutor(factory), provider.CreateMetadataReader(factory));
+                info, factory, provider.CreateQueryExecutor(factory), provider.CreateMetadataReader(factory))
+            { LastUsedUtc = _clock() };
             lock (_gate) _live[info.Id] = session;
             return session;
         }

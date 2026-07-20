@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Avalonia.Threading;
 using Squirrel.App.ViewModels;
 using Squirrel.App.Views;
 using Squirrel.Core.Logging;
@@ -37,6 +38,18 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             LogStartup("framework init done");
+
+            // Resilience: catch UI-thread exceptions (including those escaping async void handlers),
+            // log + show them, and keep the app alive. AppDomain/TaskScheduler backstops live in
+            // Program.Main. Surface presents the error dialog on the UI thread, owned by the main window.
+            Dispatcher.UIThread.UnhandledException += (_, e) =>
+            {
+                CrashReporter.Report("UI thread", e.Exception);
+                e.Handled = true;
+            };
+            CrashReporter.Surface = (context, ex) =>
+                Dispatcher.UIThread.Post(() => Views.ErrorDialog.Show(desktop.MainWindow, context, ex));
+
             var providers = new ProviderRegistry();
             IProjectStore projectStore = new JsonProjectStore();
             ISessionStore sessionStore = new JsonSessionStore();
@@ -75,7 +88,8 @@ public partial class App : Application
                 window.Opened += (_, _) => LogStartup("window shown");
 
             // Resolve the keychain and restore the project OFF the UI thread — never block startup.
-            _ = InitializeAsync(vm);
+            // Observed so a failure to restore is logged + surfaced rather than lost.
+            CrashReporter.Observe(InitializeAsync(vm), "startup initialize");
         }
 
         base.OnFrameworkInitializationCompleted();
@@ -85,7 +99,8 @@ public partial class App : Application
     {
         var secretStore = await SecretStoreFactory.CreateAsync();
         vm.AttachSecretStore(secretStore);
-        await vm.InitializeAsync(DefaultProjectDirectory());
+        // Reopen the last-used project; fall back to the default project on first run (or if it's gone).
+        await vm.ResumeLastProjectAsync(DefaultProjectDirectory());
         // Opt-in convenience: seed the local pagila demo connection only when SQUIRREL_SEED_DEMO is set.
         // By default a fresh profile starts as an empty project — no connections, no history.
         if (Environment.GetEnvironmentVariable("SQUIRREL_SEED_DEMO") is { Length: > 0 })

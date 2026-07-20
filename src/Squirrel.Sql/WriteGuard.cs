@@ -14,10 +14,14 @@ public static class WriteGuard
 {
     private static readonly HashSet<string> Risky = new(StringComparer.OrdinalIgnoreCase)
     {
-        // Writes.
-        "INSERT", "UPDATE", "DELETE", "MERGE",
-        // Destructive DDL.
-        "DROP", "TRUNCATE", "ALTER",
+        // Data writes.
+        "INSERT", "UPDATE", "DELETE", "MERGE", "COPY",
+        // Schema / object DDL (CREATE covers CREATE TABLE … AS SELECT; REFRESH covers materialized views).
+        "CREATE", "DROP", "TRUNCATE", "ALTER", "REFRESH",
+        // Privilege changes.
+        "GRANT", "REVOKE",
+        // Procedural blocks that can write arbitrarily.
+        "CALL", "DO",
     };
 
     // A statement whose first meaningful keyword is one of these may still hide a risky verb further
@@ -47,8 +51,31 @@ public static class WriteGuard
             if (Preambles.Contains(first))
                 foreach (var kw in keywords)
                     if (Risky.Contains(kw)) { Add(found, kw); break; }
+
+            // `SELECT … INTO tbl` (and `WITH … SELECT … INTO`) creates a table — a write that no
+            // leading verb reveals. Detect a top-level INTO for select-shaped statements only, so a
+            // subquery's `INTO` (PL/pgSQL, not top-level SQL) or nested selects don't false-positive.
+            if ((first.Equals("SELECT", StringComparison.OrdinalIgnoreCase) || Preambles.Contains(first))
+                && HasTopLevelInto(span.Text))
+                Add(found, "SELECT INTO");
         }
         return found;
+    }
+
+    /// <summary>True if the statement has an <c>INTO</c> keyword at paren depth 0 (the SELECT-INTO target).</summary>
+    private static bool HasTopLevelInto(string statement)
+    {
+        var depth = 0;
+        foreach (var t in PgParsing.LexAll(statement))
+        {
+            if (t.Type == TokenConstants.EOF || t.Channel != TokenConstants.DefaultChannel) continue;
+            if (t.Type == PostgreSQLLexer.OPEN_PAREN) depth++;
+            else if (t.Type == PostgreSQLLexer.CLOSE_PAREN && depth > 0) depth--;
+            else if (depth == 0 && t.Text is { Length: > 0 } text
+                     && text.Equals("INTO", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>True when the batch contains at least one write or destructive-DDL statement.</summary>

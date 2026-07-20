@@ -33,5 +33,14 @@ public sealed class ConnectionSession : IAsyncDisposable
     /// <summary>Schema for completion; null until the first <see cref="IConnectionSessionManager.EnsureSchemaAsync"/>.</summary>
     public ISchemaSnapshot? Snapshot { get; internal set; }
 
+    // Lifetime bookkeeping — all mutated only under the manager's lock. A session is disposed only
+    // when it is no longer live AND has no active leases, so a running query is never pulled out from
+    // under. LeaseCount > 0 also exempts it from idle eviction.
+    internal int LeaseCount;
+    internal DateTime LastUsedUtc;
+    /// <summary>Removed from the live map (evicted / rebuilt / swept) but kept alive until its last lease
+    /// releases; disposed then. New requests build a fresh session rather than reuse a retired one.</summary>
+    internal bool Retired;
+
     public ValueTask DisposeAsync() => Factory.DisposeAsync();
 }

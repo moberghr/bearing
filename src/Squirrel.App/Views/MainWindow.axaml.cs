@@ -1463,7 +1463,7 @@ public partial class MainWindow : Window
     {
         if (_paletteList?.SelectedItem is not PaletteRow row) return;
         HidePalette();
-        if (row.Command.CanRun()) _ = row.Command.Run();
+        if (row.Command.CanRun()) CrashReporter.Observe(row.Command.Run(), $"command '{row.Command.Id}'");
     }
 
     private void OnPaletteKeyDown(object? sender, KeyEventArgs e)

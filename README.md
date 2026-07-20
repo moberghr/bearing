@@ -43,8 +43,9 @@ dotnet build
 dotnet run --project src/Squirrel.Desktop
 ```
 
-On first run, Squirrel opens a default project at `$XDG_DATA_HOME/squirrel/projects/default` and seeds a
-demo connection pointing at a local `pagila` database.
+On startup Squirrel reopens the project you last used. On first run (or if that project is gone) it opens a
+default project at `$XDG_DATA_HOME/squirrel/projects/default` and seeds a demo connection pointing at a local
+`pagila` database.
 
 ## Tests
 

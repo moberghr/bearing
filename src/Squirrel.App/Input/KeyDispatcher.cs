@@ -36,7 +36,7 @@ public sealed class KeyDispatcher
         // Mark handled synchronously BEFORE awaiting anything — the async command body may yield, and
         // Avalonia reads Handled the moment this returns.
         e.Handled = true;
-        _ = command.Run();
+        CrashReporter.Observe(command.Run(), $"command '{command.Id}'");
         return true;
     }
 }

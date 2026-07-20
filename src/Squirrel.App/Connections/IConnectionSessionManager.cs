@@ -20,6 +20,17 @@ public interface IConnectionSessionManager : IAsyncDisposable
     /// </summary>
     Task<ConnectionSession> GetOrConnectAsync(ConnectionInfo info, CancellationToken ct);
 
+    /// <summary>
+    /// Connect (or reuse) as <see cref="GetOrConnectAsync"/> does, and atomically take a lease that keeps
+    /// the session from being disposed while the returned lease is held. Dispose the lease when the query
+    /// finishes. Use this around any execution so an idle sweep / evict / database switch can't tear the
+    /// pool down mid-query.
+    /// </summary>
+    Task<SessionLease> AcquireAsync(ConnectionInfo info, CancellationToken ct);
+
+    /// <summary>Take a lease on an already-live session (for follow-up work like paging/count on a result).</summary>
+    SessionLease Lease(ConnectionSession session);
+
     /// <summary>The already-live session for an id, or null. Never connects.</summary>
     ConnectionSession? TryGet(Guid connectionId);
 

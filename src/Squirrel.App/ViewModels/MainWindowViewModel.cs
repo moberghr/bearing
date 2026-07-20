@@ -188,6 +188,27 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Startup entry: reopen the most-recently-used project that still exists on disk, falling back to
+    /// <paramref name="fallbackDir"/> (the default project, created if absent) when the recent list is
+    /// empty or every entry is missing/unreadable. Skips stale entries (a deleted or corrupt project)
+    /// rather than resurrecting them.
+    /// </summary>
+    public async Task ResumeLastProjectAsync(string fallbackDir)
+    {
+        var recent = await _recentProjects.ListAsync(CancellationToken.None);
+        foreach (var dir in recent)
+        {
+            // Probe: only resume a project whose manifest is actually openable; OpenOrCreate would
+            // otherwise recreate a since-deleted directory, which isn't "the last project I used".
+            try { await _projectStore.OpenAsync(dir, CancellationToken.None); }
+            catch { continue; }
+            await InitializeAsync(dir);
+            return;
+        }
+        await InitializeAsync(fallbackDir);
+    }
+
     /// <summary>Save the current session, dispose live connections, then switch project directory.</summary>
     public async Task OpenProjectAsync(string projectDirectory)
     {
@@ -763,25 +784,41 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IsBusy = true;
         _executionCts = new CancellationTokenSource();
         var ct = _executionCts.Token;
+        var wall = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            ConnectionSession session;
-            try { session = await _sessions.GetOrConnectAsync(info, ct); }
+            // Acquire a lease so an idle sweep / evict / database switch can't dispose the pool from
+            // under this query while it runs (the lease is held for the whole read).
+            SessionLease lease;
+            try { lease = await _sessions.AcquireAsync(info, ct); }
             catch (ConnectionFailedException ex) { IsConnected = false; StatusText = ex.Message; return; }
 
-            IsConnected = true;
-            _ = _sessions.EnsureSchemaAsync(session, CancellationToken.None); // warm completion, don't block Run
+            using (lease)
+            {
+                var session = lease.Session;
+                IsConnected = true;
+                _ = _sessions.EnsureSchemaAsync(session, CancellationToken.None); // warm completion, don't block Run
 
-            StatusText = "Running…";
-            // Fetch only the first page; a single row-returning statement is then pageable and
-            // "load more"/"count" run against the original sql. Multi-statement runs are capped
-            // per set at PageSize and shown truncated (no paging — see the pageable gate below).
-            var results = await session.Executor.ExecuteAsync(sql, new QueryOptions { MaxRows = PageSize }, ct);
-            tab.SetFreshResults(ResultSetBuilder.BuildResultSets(results, sql, session.Snapshot));
-            LogExecution(info, sql, results);
-            var summary = ResultSetBuilder.DescribeResults(results);
-            // On success, lead with the connection so the status bar reads e.g. "pagila (local) · 88 ms".
-            StatusText = results.Any(r => !r.Success) ? summary : $"{info.Name} · {summary}";
+                StatusText = "Running…";
+                // Fetch only the first page; a single row-returning statement is then pageable and
+                // "load more"/"count" run against the original sql. Multi-statement runs are capped
+                // per set at PageSize and shown truncated (no paging — see the pageable gate below).
+                //
+                // Push a server-side LIMIT for a single read-only SELECT so a remote server produces only
+                // ~one page instead of computing/streaming the whole result for us to read 100 rows of and
+                // discard. Fetch one extra row (PageSize+1) so the executor's Truncated flag still signals
+                // "more rows exist" for load-more. Writes / multi-statement / already-limited queries return
+                // null here and run unbounded (capped client-side), exactly as before. The result set still
+                // pages/counts against the original sql, so SourceSql is unchanged.
+                var fetchSql = Squirrel.Sql.FirstPageLimiter.TryAppendLimit(sql, PageSize + 1) ?? sql;
+                var results = await session.Executor.ExecuteAsync(fetchSql, new QueryOptions { MaxRows = PageSize }, ct);
+                wall.Stop();
+                tab.SetFreshResults(ResultSetBuilder.BuildResultSets(results, sql, session.Snapshot));
+                LogExecution(info, sql, results);
+                var summary = ResultSetBuilder.DescribeResults(results, wall.Elapsed);
+                // On success, lead with the connection so the status bar reads e.g. "pagila (local) · 88 ms".
+                StatusText = results.Any(r => !r.Success) ? summary : $"{info.Name} · {summary}";
+            }
         }
         catch (OperationCanceledException)
         {
@@ -810,7 +847,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public async Task LoadMoreAsync(ResultSetViewModel rs)
     {
         if (IsBusy || !rs.IsPageable || rs.SourceSql is null || !rs.HasMore) return;
-        if (ResolveLiveSession() is not { } session) return;
+        using var lease = ResolveLiveLease();
+        if (lease is null) return;
+        var session = lease.Session;
 
         IsBusy = true;
         _executionCts = new CancellationTokenSource();
@@ -830,7 +869,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public async Task CountTotalAsync(ResultSetViewModel rs)
     {
         if (IsBusy || !rs.IsPageable || rs.SourceSql is null) return;
-        if (ResolveLiveSession() is not { } session) return;
+        using var lease = ResolveLiveLease();
+        if (lease is null) return;
+        var session = lease.Session;
 
         IsBusy = true;
         _executionCts = new CancellationTokenSource();
@@ -845,11 +886,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
         finally { _executionCts.Dispose(); _executionCts = null; IsBusy = false; }
     }
 
-    /// <summary>The already-connected session for the selected tab (paging runs post-execute, so
-    /// the connection is live). Null — with a status set — if the tab lost its connection.</summary>
-    private ConnectionSession? ResolveLiveSession()
+    /// <summary>A lease on the already-connected session for the selected tab (paging/count/nav/save run
+    /// post-execute, so the connection is live). The lease keeps the session from being disposed by an
+    /// idle sweep / evict while the follow-up runs — dispose it when done. Null — with a status set —
+    /// if the tab lost its connection.</summary>
+    private SessionLease? ResolveLiveLease()
     {
-        if (SelectedTab?.ConnectionId is { } id && _sessions.TryGet(id) is { } session) return session;
+        if (SelectedTab?.ConnectionId is { } id && _sessions.TryGet(id) is { } session)
+            return _sessions.Lease(session);
         StatusText = "Not connected.";
         return null;
     }
@@ -868,7 +912,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (SnapshotForSelectedTab() is not { } snapshot) { StatusText = "Schema not loaded yet."; return; }
         if (ForeignKeyResolver.Resolve(snapshot, rs.Columns, columnIndex) is not { } target)
         { StatusText = "Not a foreign key."; return; }
-        if (ResolveLiveSession() is not { } session) return;
+        using var lease = ResolveLiveLease();
+        if (lease is null) return;
+        var session = lease.Session;
 
         var sql = ResultEditModel.BuildForeignKeySelect(target, row);
         IsBusy = true;
@@ -896,7 +942,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         if (IsBusy) return;
         if (rs.EditTarget is not { } target || !rs.HasPendingChanges) return;
-        if (ResolveLiveSession() is not { } session) return;
+        using var lease = ResolveLiveLease();
+        if (lease is null) return;
+        var session = lease.Session;
 
         var changes = ResultEditModel.BuildPendingChanges(rs, target);
         if (changes.Count == 0) { rs.ClearPending(); return; }

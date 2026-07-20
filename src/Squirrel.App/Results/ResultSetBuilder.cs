@@ -66,22 +66,26 @@ internal static class ResultSetBuilder
         return fks;
     }
 
-    /// <summary>One-line status for a run: the single set's shape, or an N-set summary.</summary>
-    public static string DescribeResults(IReadOnlyList<QueryResult> results)
+    /// <summary>One-line status for a run: the single set's shape, or an N-set summary. When
+    /// <paramref name="wallClock"/> is supplied it is the honest end-to-end time the caller measured
+    /// (connect-from-pool + execute + read), which is what the user actually waited for — preferred over
+    /// the per-set server duration so the status bar never under-reports a slow run.</summary>
+    public static string DescribeResults(IReadOnlyList<QueryResult> results, TimeSpan? wallClock = null)
     {
         var firstError = results.FirstOrDefault(r => !r.Success);
         if (firstError is not null)
             return $"Error{(firstError.Error?.SqlState is { } s ? $" [{s}]" : "")}: {firstError.Error?.Message}";
 
         // Status bar is timing-focused — the row count lives on the result's meta row, not here.
-        if (results.Count == 1)
-        {
-            var r = results[0];
-            if (r.Columns.Count == 0) return r.Message ?? "Statement executed.";
-            return $"Done · {r.Duration.TotalMilliseconds:0} ms";
-        }
+        if (results.Count == 1 && results[0].Columns.Count == 0)
+            return results[0].Message ?? "Statement executed.";
 
-        var elapsed = results[^1].Duration.TotalMilliseconds;
-        return $"{results.Count} result sets · {elapsed:0} ms";
+        var ms = (wallClock?.TotalMilliseconds) ?? results[^1].Duration.TotalMilliseconds;
+        var elapsed = FormatElapsed(ms);
+        return results.Count == 1 ? $"Done · {elapsed}" : $"{results.Count} result sets · {elapsed}";
     }
+
+    /// <summary>Human-friendly elapsed: "88 ms" under a second, "8.4 s" above — so a slow run reads honestly.</summary>
+    private static string FormatElapsed(double ms) =>
+        ms >= 1000 ? $"{ms / 1000:0.0} s" : $"{ms:0} ms";
 }
