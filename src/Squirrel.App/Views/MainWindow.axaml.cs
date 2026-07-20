@@ -12,6 +12,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Media;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using AvaloniaEdit.TextMate;
 using Squirrel.App.Completion;
 using Squirrel.App.Editing;
@@ -67,6 +68,9 @@ public partial class MainWindow : Window
         // Claim navigation keys (tab switching, focus, pickers) in the tunnel phase so the framework's
         // tab traversal and the editor/grid don't consume them first.
         AddHandler(KeyDownEvent, OnWindowNavKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+
+        // The Alt-toggled menu behaves like a real menu bar: auto-hide once focus leaves it.
+        MainMenu.LostFocus += OnMenuLostFocus;
 
         // Editor-editing shortcuts must pre-empt AvaloniaEdit, which consumes Enter/'/'/brackets on
         // its own KeyDown — so handle them during the tunnel phase, before the editor sees them.
@@ -778,6 +782,7 @@ public partial class MainWindow : Window
     private bool HandleEscape()
     {
         if (Vm is null) return false;
+        if (_quickPickOverlay is not null) { HideQuickPick(); return true; }
         if (_paletteOverlay is not null) { HidePalette(); return true; }
         if (_pendingScriptOverlay is not null) { HidePendingScript(); return true; }
         if (Vm.IsMenuVisible) { Vm.IsMenuVisible = false; return true; }
@@ -858,7 +863,7 @@ public partial class MainWindow : Window
         // Escape only claims the key when there's something to dismiss; otherwise it falls through.
         r.Register(KeyCommand.Sync(CommandIds.AppEscape, "Escape / cancel", KeyScope.Global, "View",
             () => HandleEscape(),
-            canRun: () => Vm is not null && (_paletteOverlay is not null || _pendingScriptOverlay is not null || Vm.IsMenuVisible || Vm.IsBusy)));
+            canRun: () => Vm is not null && (AnyOverlayOpen || _pendingScriptOverlay is not null || Vm.IsMenuVisible || Vm.IsBusy)));
         r.Register(KeyCommand.Sync(CommandIds.PaletteOpen, "Command palette", KeyScope.Global, "View", ShowPalette));
         r.Register(KeyCommand.Sync(CommandIds.TabNext, "Next tab (visual order)", KeyScope.Global, "Tabs", () => SelectAdjacentTab(+1)));
         r.Register(KeyCommand.Sync(CommandIds.TabPrev, "Previous tab (visual order)", KeyScope.Global, "Tabs", () => SelectAdjacentTab(-1)));
@@ -870,11 +875,11 @@ public partial class MainWindow : Window
             r.Register(KeyCommand.Sync(CommandIds.TabGoto(i), i == 9 ? "Go to last tab" : $"Go to tab {i}", KeyScope.Global, "Tabs", () => SelectTabByIndex(i)));
         }
         r.Register(KeyCommand.Sync(CommandIds.FocusCycle, "Cycle focus (editor / results / sidebar)", KeyScope.Global, "View", CycleFocus));
-        r.Register(KeyCommand.Sync(CommandIds.FocusEditor, "Focus editor", KeyScope.Global, "View", () => Editor.Focus()));
+        r.Register(KeyCommand.Sync(CommandIds.FocusEditor, "Focus editor", KeyScope.Global, "View", () => Editor.TextArea.Focus()));
         r.Register(KeyCommand.Sync(CommandIds.FocusResults, "Focus results", KeyScope.Global, "View", FocusResultsPane));
-        r.Register(KeyCommand.Sync(CommandIds.SelectProject, "Select project…", KeyScope.Global, "Connection", () => OpenPicker(ProjectCombo)));
-        r.Register(KeyCommand.Sync(CommandIds.SelectConnection, "Select connection…", KeyScope.Global, "Connection", () => OpenPicker(ConnectionPicker)));
-        r.Register(KeyCommand.Sync(CommandIds.SelectDatabase, "Select database…", KeyScope.Global, "Connection", () => OpenPicker(DatabasePicker)));
+        r.Register(KeyCommand.Sync(CommandIds.SelectProject, "Select project…", KeyScope.Global, "Connection", OpenProjectPicker));
+        r.Register(KeyCommand.Sync(CommandIds.SelectConnection, "Select connection…", KeyScope.Global, "Connection", OpenConnectionPicker));
+        r.Register(KeyCommand.Sync(CommandIds.SelectDatabase, "Select database…", KeyScope.Global, "Connection", OpenDatabasePicker));
         r.Register(KeyCommand.Sync(CommandIds.PanelConnections, "Show Connections panel", KeyScope.Global, "View",
             () => { if (Vm is not null) Vm.ActivePanel = SidePanel.Schema; }));
         r.Register(KeyCommand.Sync(CommandIds.PanelScripts, "Show Scripts panel", KeyScope.Global, "View",
@@ -966,14 +971,24 @@ public partial class MainWindow : Window
         {
             _altAlone = false;
             Vm.IsMenuVisible = !Vm.IsMenuVisible;
+            if (Vm.IsMenuVisible) Dispatcher.UIThread.Post(() => MainMenu.Focus()); // so LostFocus can auto-hide it
         }
     }
+
+    /// <summary>Auto-hide the Alt menu once focus leaves it — but not while a submenu is open (that
+    /// pulls focus into a popup that isn't a visual child of the bar).</summary>
+    private void OnMenuLostFocus(object? sender, RoutedEventArgs e)
+        => Dispatcher.UIThread.Post(() =>
+        {
+            if (Vm?.IsMenuVisible == true && !MainMenu.IsOpen && !MainMenu.IsKeyboardFocusWithin)
+                Vm.IsMenuVisible = false;
+        });
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        // While the command palette is up it owns the keyboard — don't fire global shortcuts underneath it.
-        if (_paletteOverlay is not null) return;
+        // While an overlay (palette / quick-pick) is up it owns the keyboard — don't fire globals under it.
+        if (AnyOverlayOpen) return;
         // Alt-tap tracking: a lone Alt press arms the menu toggle (fired on key-up); any other key cancels it.
         _altAlone = e.Key is Key.LeftAlt or Key.RightAlt;
         _dispatcher.TryHandle(e, KeyScope.Global); // Global scope; Editor/Grid scopes are handled in their tunnels
@@ -1035,16 +1050,31 @@ public partial class MainWindow : Window
         if (ResultsView.IsVisible) ResultsView.FocusableGrid?.Focus();
     }
 
-    /// <summary>select.project / connection / database: focus a toolbar picker and drop its list open.</summary>
-    private static void OpenPicker(ComboBox combo)
+    // select.project / connection / database: open a filterable quick-pick (type to filter, ↑/↓, Enter).
+    private void OpenProjectPicker()
     {
-        combo.Focus();
-        combo.IsDropDownOpen = true;
+        if (Vm is null) return;
+        ShowQuickPick("Select project…", Vm.RecentProjects.Select(p =>
+            (p.Name, (Action)(() => ProjectCombo.SelectedItem = p))).ToList());
+    }
+
+    private void OpenConnectionPicker()
+    {
+        if (Vm is null) return;
+        ShowQuickPick("Select connection…", Vm.Connections.Select(c =>
+            (c.Name, (Action)(() => Vm.SelectedTabConnection = c))).ToList());
+    }
+
+    private void OpenDatabasePicker()
+    {
+        if (Vm is null) return;
+        ShowQuickPick("Select database…", Vm.TabDatabases.Select(d =>
+            (d, (Action)(() => DatabasePicker.SelectedItem = d))).ToList());
     }
 
     private void OnWindowNavKey(object? sender, KeyEventArgs e)
     {
-        if (_paletteOverlay is not null) return;            // palette owns the keyboard while open
+        if (AnyOverlayOpen) return;                         // an overlay owns the keyboard while open
         _dispatcher.TryHandle(e, KeyScope.Global, _navCommands);
     }
 
@@ -1055,11 +1085,11 @@ public partial class MainWindow : Window
         var sidebar = SidebarFocusTarget();
         Control? target;
         if (Editor.IsKeyboardFocusWithin)
-            target = (ResultsView.IsVisible ? ResultsView.FocusableGrid : null) ?? sidebar ?? Editor;
+            target = (ResultsView.IsVisible ? ResultsView.FocusableGrid : null) ?? sidebar ?? Editor.TextArea;
         else if (ResultsView.IsKeyboardFocusWithin)
-            target = sidebar ?? Editor;
+            target = sidebar ?? Editor.TextArea;
         else
-            target = Editor;
+            target = Editor.TextArea; // AvaloniaEdit's focusable element is the TextArea, not the container
         target?.Focus();
     }
 
@@ -1247,6 +1277,122 @@ public partial class MainWindow : Window
             _paletteOverlay = null;
             _paletteSearch = null;
             _paletteList = null;
+        }
+    }
+
+    // ---- generic filterable quick-pick (project / connection / database) ----
+    private bool AnyOverlayOpen => _paletteOverlay is not null || _quickPickOverlay is not null;
+    private Control? _quickPickOverlay;
+    private TextBox? _quickPickSearch;
+    private ListBox? _quickPickList;
+    private System.Collections.Generic.IReadOnlyList<(string Label, Action Pick)> _quickPickItems = System.Array.Empty<(string, Action)>();
+
+    private sealed record QuickPickRow(string Label, Action Pick);
+
+    /// <summary>A single filterable list overlay (type to filter, ↑/↓, Enter). Opening one replaces any
+    /// other, so only one picker is ever active.</summary>
+    private void ShowQuickPick(string placeholder, System.Collections.Generic.IReadOnlyList<(string Label, Action Pick)> items)
+    {
+        if (Vm is null || items.Count == 0) return;
+        HidePalette();
+        HideQuickPick();
+        if (OverlayLayer.GetOverlayLayer(this) is not { } layer) return;
+        _quickPickItems = items;
+
+        var backdrop = new Border { Background = new SolidColorBrush(Color.FromArgb(0x80, 0, 0, 0)) };
+        backdrop.PointerPressed += (_, _) => HideQuickPick();
+
+        _quickPickSearch = new TextBox { Watermark = placeholder };
+        _quickPickSearch.TextChanged += (_, _) => RefreshQuickPick();
+        _quickPickList = new ListBox
+        {
+            MaxHeight = 380,
+            SelectionMode = SelectionMode.Single,
+            ItemTemplate = new FuncDataTemplate<QuickPickRow>((row, _) =>
+                new TextBlock { Text = row.Label, Margin = new Thickness(4, 2), Foreground = ThemeBrush("Text.Primary") }, supportsRecycling: true),
+        };
+        _quickPickList.DoubleTapped += (_, _) => RunSelectedQuickPick();
+
+        var content = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(_quickPickSearch, Dock.Top);
+        _quickPickSearch.Margin = new Thickness(0, 0, 0, 6);
+        content.Children.Add(_quickPickSearch);
+        content.Children.Add(_quickPickList);
+
+        var panel = new Border
+        {
+            Width = 460,
+            Padding = new Thickness(10),
+            Background = ThemeBrush("Bg.Chrome"),
+            BorderBrush = ThemeBrush("Border"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 120, 0, 0),
+            Child = content,
+        };
+
+        var host = new Grid();
+        host.Children.Add(backdrop);
+        host.Children.Add(panel);
+        host.AddHandler(KeyDownEvent, OnQuickPickKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        _quickPickOverlay = host;
+        layer.Children.Add(host);
+
+        RefreshQuickPick();
+        _quickPickSearch.Focus();
+    }
+
+    private void HideQuickPick()
+    {
+        if (_quickPickOverlay is { } o)
+        {
+            OverlayLayer.GetOverlayLayer(this)?.Children.Remove(o);
+            _quickPickOverlay = null;
+            _quickPickSearch = null;
+            _quickPickList = null;
+        }
+    }
+
+    private void RefreshQuickPick()
+    {
+        if (_quickPickList is null) return;
+        var query = _quickPickSearch?.Text ?? "";
+        System.Collections.Generic.IEnumerable<(string Label, Action Pick)> filtered = string.IsNullOrWhiteSpace(query)
+            ? _quickPickItems
+            : _quickPickItems
+                .Select(x => (x, score: PaletteFilter.Score(x.Label, query.Trim())))
+                .Where(t => t.score.HasValue)
+                .OrderByDescending(t => t.score!.Value)
+                .Select(t => t.x);
+        _quickPickList.ItemsSource = filtered.Select(x => new QuickPickRow(x.Label, x.Pick)).ToList();
+        if (_quickPickList.ItemCount > 0) _quickPickList.SelectedIndex = 0;
+    }
+
+    private void MoveQuickPickSelection(int dir)
+    {
+        if (_quickPickList is null || _quickPickList.ItemCount == 0) return;
+        var n = _quickPickList.ItemCount;
+        _quickPickList.SelectedIndex = (_quickPickList.SelectedIndex + dir + n) % n;
+        _quickPickList.ScrollIntoView(_quickPickList.SelectedIndex);
+    }
+
+    private void RunSelectedQuickPick()
+    {
+        if (_quickPickList?.SelectedItem is not QuickPickRow row) return;
+        HideQuickPick();
+        row.Pick();
+    }
+
+    private void OnQuickPickKey(object? sender, KeyEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Key.Escape: HideQuickPick(); e.Handled = true; break;
+            case Key.Enter: RunSelectedQuickPick(); e.Handled = true; break;
+            case Key.Down: MoveQuickPickSelection(+1); e.Handled = true; break;
+            case Key.Up: MoveQuickPickSelection(-1); e.Handled = true; break;
         }
     }
 

@@ -299,6 +299,20 @@ need, so this is genuinely optional.
   Editor/Grid binding, so preempting them in tunnel is safe.
 - Tests: `MruListTests.cs` + binding-resolution tests; 136 App green, app launches clean. Live QA pending.
 
+### Post-QA round 2 (2026-07-20)
+
+- **`focus.editor` (Ctrl+0) fixed** — was `Editor.Focus()`, which focuses the AvaloniaEdit container, not
+  the editable surface; now `Editor.TextArea.Focus()` (and `CycleFocus` too).
+- **Picker shortcuts now open a filterable quick-pick overlay** instead of the native combo dropdown:
+  type to fuzzy-filter (reuses `PaletteFilter.Score`), ↑/↓ to move, Enter to choose. It's a single
+  overlay, so only one picker is ever active at a time (the "only one active" ask). On choose it drives
+  the existing combo (`ProjectCombo`/`DatabasePicker` `SelectedItem`) or `Vm.SelectedTabConnection`, so
+  all the normal switch logic still fires. Overlay bookkeeping mirrors the palette; `AnyOverlayOpen`
+  gates global shortcuts and the nav tunnel while either overlay is up.
+- **Alt menu auto-hides on focus loss** — the `<Menu>` is named `MainMenu`, focused when Alt-toggled on,
+  and its `LostFocus` hides it (deferred, and only when `!IsOpen && !IsKeyboardFocusWithin` so navigating
+  a submenu popup doesn't dismiss it).
+
 ## Risks / watch-items
 
 - **Physical-vs-logical is the subtle part.** Get `Gesture`/`GestureParser`/precedence right in Phase 1

@@ -168,7 +168,7 @@
 
     <!-- Alt-toggled menu bar (design §Interactions): hidden by default. Docked above the toolbar so it
          sits at the very top when shown. Open/Save live only here. -->
-    <Menu DockPanel.Dock="Top" IsVisible="{Binding IsMenuVisible}" Background="{DynamicResource Bg.Window}"
+    <Menu x:Name="MainMenu" DockPanel.Dock="Top" IsVisible="{Binding IsMenuVisible}" Background="{DynamicResource Bg.Window}"
           BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
       <!-- InputGesture text is set in code from the active keymap (see SyncMenuGestures) so the menu
            can never drift from the real bindings. -->
