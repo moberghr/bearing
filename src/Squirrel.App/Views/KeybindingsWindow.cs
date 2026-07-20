@@ -8,6 +8,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Squirrel.App.Input;
 using KeyBinding = Squirrel.App.Input.KeyBinding; // disambiguate from Avalonia.Input.KeyBinding
+using Path = Avalonia.Controls.Shapes.Path;       // vector icons (the app font clips glyphs like ✕)
 
 namespace Squirrel.App.Views;
 
@@ -125,14 +126,22 @@ public sealed class KeybindingsWindow : Window
 
     private Control BuildChip(KeyCommand cmd, Gesture g)
     {
-        var text = new TextBlock { Text = GestureParser.Format(g), VerticalAlignment = VerticalAlignment.Center, Foreground = Brush("Text") };
+        var text = new TextBlock { Text = GestureParser.Format(g), VerticalAlignment = VerticalAlignment.Center, Foreground = Brush("Text.Primary") };
         var remove = new Button
         {
-            Content = "✕",
-            Padding = new Thickness(4, 0),
-            Margin = new Thickness(4, 0, 0, 0),
+            Content = new Path
+            {
+                Data = Geometry.Parse("M0,0 L7,7 M0,7 L7,0"), // drawn ✕ (glyph clips in the app font)
+                Stroke = Brush("Text.Dim"),
+                StrokeThickness = 1.4,
+                Width = 7,
+                Height = 7,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+            Padding = new Thickness(4, 2),
+            Margin = new Thickness(6, 0, 0, 0),
             Background = Brushes.Transparent,
-            Foreground = Brush("Text.Dim"),
+            VerticalAlignment = VerticalAlignment.Center,
         };
         remove.Click += (_, _) =>
         {
