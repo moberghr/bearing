@@ -5,6 +5,10 @@ obj/
 [Rr]elease/
 *.user
 
+# Release builder output (build/release.sh)
+artifacts/
+dist/
+
 # Antlr4BuildTasks downloads a JRE + antlr tool jar into these caches
 .antlr/
 **/fetched-*/

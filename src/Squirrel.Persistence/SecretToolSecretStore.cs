@@ -10,7 +10,9 @@ namespace Squirrel.Persistence;
 /// </summary>
 public sealed class SecretToolSecretStore : ISecretStore
 {
-    private const string App = "squirrel";
+    // Matches the app dir name so a dev profile (SQUIRREL_PROFILE) keeps its keychain entries
+    // separate from the installed app's — same isolation as config/data dirs.
+    private static string App => SquirrelPaths.AppDirName;
     public bool IsSecure => true;
 
     public async Task SetPasswordAsync(Guid connectionId, string password, CancellationToken ct)

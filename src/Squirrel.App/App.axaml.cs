@@ -86,9 +86,11 @@ public partial class App : Application
         var secretStore = await SecretStoreFactory.CreateAsync();
         vm.AttachSecretStore(secretStore);
         await vm.InitializeAsync(DefaultProjectDirectory());
-        // First-run convenience: point the default project at the local pagila demo container.
-        await vm.SeedDemoConnectionAsync("localhost", 5434, "pagila", "postgres", "squirrel");
-        LogStartup("project + demo ready");
+        // Opt-in convenience: seed the local pagila demo connection only when SQUIRREL_SEED_DEMO is set.
+        // By default a fresh profile starts as an empty project — no connections, no history.
+        if (Environment.GetEnvironmentVariable("SQUIRREL_SEED_DEMO") is { Length: > 0 })
+            await vm.SeedDemoConnectionAsync("localhost", 5434, "pagila", "postgres", "squirrel");
+        LogStartup("project ready");
     }
 
     /// <summary>Write a startup milestone (ms since process start) when SQUIRREL_STARTUP_TIMING is set.</summary>

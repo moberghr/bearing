@@ -317,7 +317,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
 
         if (Tabs.Count == 0)
-            NewTab("select 1;");
+            NewTab();
 
         var idx = session?.SelectedEditorIndex ?? 0;
         SelectedTab = Tabs[Math.Clamp(idx, 0, Tabs.Count - 1)];

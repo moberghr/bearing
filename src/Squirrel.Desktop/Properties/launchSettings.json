@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Squirrel (dev)": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "SQUIRREL_PROFILE": "dev"
+      }
+    }
+  }
+}

@@ -80,6 +80,16 @@ Squirrel separates data by *shareability*:
 | **App-global** | `$XDG_DATA_HOME/squirrel/` | `query-log.sqlite`, `secrets/`, default project | No |
 | | `$XDG_CONFIG_HOME/squirrel/` | recent projects, `keybindings.json`, `settings.json` | No |
 
+### Profiles — isolating dev from real data
+
+Set `SQUIRREL_PROFILE=<name>` and the app-global directory name becomes `squirrel-<name>` (e.g.
+`~/.config/squirrel-dev`, `~/.local/share/squirrel-dev`), plus a matching keychain namespace. This keeps
+one instance's connections, history, and secrets fully separate from another's.
+
+Running from source (`dotnet run`) automatically uses the **`dev`** profile via
+`src/Squirrel.Desktop/Properties/launchSettings.json`, so development never touches the installed app's real
+projects and settings. The published/installed binary has no profile and uses the plain `squirrel` dirs.
+
 ### Secrets
 
 Connection passwords are **never** written to `project.json`. They are stored keyed by the connection's GUID
