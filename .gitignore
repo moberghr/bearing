@@ -22,3 +22,5 @@ dist/
 
 # OS
 .DS_Store
+tasks/todo.md
+.mtk/

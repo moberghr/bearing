@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build:*)",
+      "Bash(dotnet test:*)",
+      "Bash(dotnet format:*)"
+    ],
+    "deny": [
+      "Read(**/appsettings.Production.json)",
+      "Bash(dotnet publish:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write(*.cs)|Edit(*.cs)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "dotnet format --include \"$CLAUDE_FILE\" --verbosity quiet 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}
