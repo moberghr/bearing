@@ -136,6 +136,93 @@ public class ConnectionSessionManagerTests
     }
 
     [Fact]
+    public async Task Evict_defers_disposal_while_a_lease_is_held_then_disposes_on_release()
+    {
+        var provider = new FakeProvider();
+        await using var mgr = new ConnectionSessionManager(provider, () => null, runSweepTimer: false);
+        var info = Conn(Guid.NewGuid());
+
+        var lease = await mgr.AcquireAsync(info, CancellationToken.None);
+        var factory = (FakeFactory)lease.Session.Factory;
+
+        // Evicting mid-query must NOT tear down the pool the running query is using.
+        await mgr.EvictAsync(info.Id);
+        Assert.Null(mgr.TryGet(info.Id));            // gone from the live map…
+        Assert.Equal(0, factory.DisposeCount);       // …but still alive under the lease
+
+        // Releasing the lease disposes the now-retired session.
+        lease.Dispose();
+        Assert.Equal(1, factory.DisposeCount);
+    }
+
+    [Fact]
+    public async Task Database_switch_rebuild_does_not_dispose_the_session_a_query_still_holds()
+    {
+        var provider = new FakeProvider();
+        await using var mgr = new ConnectionSessionManager(provider, () => null, runSweepTimer: false);
+        var id = Guid.NewGuid();
+
+        // Query running against db "old".
+        var running = await mgr.AcquireAsync(Conn(id, db: "old"), CancellationToken.None);
+        var oldFactory = (FakeFactory)running.Session.Factory;
+
+        // Switch to db "new" on the same id → rebuild. The old session must survive until the query ends.
+        var next = await mgr.GetOrConnectAsync(Conn(id, db: "new"), CancellationToken.None);
+        Assert.NotSame(running.Session, next);
+        Assert.Equal(0, oldFactory.DisposeCount);
+        Assert.Equal("old", running.Session.Info.Database); // query still sees its own db
+
+        running.Dispose();
+        Assert.Equal(1, oldFactory.DisposeCount);
+    }
+
+    [Fact]
+    public async Task Idle_sweep_closes_unleased_sessions_past_the_timeout_but_keeps_leased_ones()
+    {
+        var now = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var provider = new FakeProvider();
+        await using var mgr = new ConnectionSessionManager(
+            provider, () => null, idleTimeout: TimeSpan.FromMinutes(30), clock: () => now, runSweepTimer: false);
+
+        var idleInfo = Conn(Guid.NewGuid());
+        var busyInfo = Conn(Guid.NewGuid());
+        var idle = await mgr.GetOrConnectAsync(idleInfo, CancellationToken.None);
+        var busyLease = await mgr.AcquireAsync(busyInfo, CancellationToken.None);
+
+        // Not yet past the timeout → nothing swept.
+        now = now.AddMinutes(29);
+        await mgr.SweepIdleAsync();
+        Assert.NotNull(mgr.TryGet(idleInfo.Id));
+
+        // Past the timeout: the idle session is closed; the leased one is spared despite being idle.
+        now = now.AddMinutes(2);
+        await mgr.SweepIdleAsync();
+        Assert.Null(mgr.TryGet(idleInfo.Id));
+        Assert.Equal(1, ((FakeFactory)idle.Factory).DisposeCount);
+        Assert.NotNull(mgr.TryGet(busyInfo.Id));
+        Assert.Equal(0, ((FakeFactory)busyLease.Session.Factory).DisposeCount);
+
+        busyLease.Dispose();
+    }
+
+    [Fact]
+    public async Task Using_a_session_refreshes_its_idle_clock()
+    {
+        var now = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var provider = new FakeProvider();
+        await using var mgr = new ConnectionSessionManager(
+            provider, () => null, idleTimeout: TimeSpan.FromMinutes(30), clock: () => now, runSweepTimer: false);
+        var info = Conn(Guid.NewGuid());
+        await mgr.GetOrConnectAsync(info, CancellationToken.None);
+
+        now = now.AddMinutes(25);
+        await mgr.GetOrConnectAsync(info, CancellationToken.None); // reuse bumps LastUsed
+        now = now.AddMinutes(25);                                   // 25 min since last use (< 30)
+        await mgr.SweepIdleAsync();
+        Assert.NotNull(mgr.TryGet(info.Id));                        // not swept — activity kept it warm
+    }
+
+    [Fact]
     public async Task Dispose_disposes_all_sessions_exactly_once()
     {
         var provider = new FakeProvider();

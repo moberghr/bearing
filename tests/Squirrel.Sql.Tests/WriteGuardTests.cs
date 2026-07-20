@@ -21,6 +21,15 @@ public class WriteGuardTests
     [InlineData("truncate table rental", "TRUNCATE")]
     [InlineData("drop table film", "DROP")]
     [InlineData("alter table film add column note text", "ALTER")]
+    [InlineData("create table t (id int)", "CREATE")]
+    [InlineData("create table t as select * from film", "CREATE")]      // CTAS: data + schema write
+    [InlineData("copy film from '/tmp/f.csv'", "COPY")]                 // bulk load
+    [InlineData("call do_work()", "CALL")]
+    [InlineData("do $$ begin delete from film; end $$", "DO")]          // procedural write
+    [InlineData("grant select on film to bob", "GRANT")]
+    [InlineData("revoke select on film from bob", "REVOKE")]
+    [InlineData("refresh materialized view mv", "REFRESH")]
+    [InlineData("select * into backup from film", "SELECT INTO")]       // table-creating SELECT
     public void Single_risky_statement_is_flagged(string sql, string verb)
     {
         var risky = WriteGuard.FindRiskyStatements(sql);
@@ -54,5 +63,20 @@ public class WriteGuardTests
     {
         // "update" here is a column alias, not a statement verb — a plain SELECT is never scanned interior.
         Assert.Empty(WriteGuard.FindRiskyStatements("select modified_at as update from film"));
+    }
+
+    [Fact]
+    public void Plain_select_with_a_subquery_is_not_flagged_as_select_into()
+    {
+        // The only INTO is inside a subquery (not a top-level SELECT-INTO target) — must stay read-only.
+        Assert.Empty(WriteGuard.FindRiskyStatements(
+            "select * from film where film_id in (select film_id from inventory)"));
+    }
+
+    [Fact]
+    public void Cte_feeding_a_select_into_is_flagged()
+    {
+        Assert.Equal(new[] { "SELECT INTO" },
+            WriteGuard.FindRiskyStatements("with recent as (select * from rental) select * into snapshot from recent"));
     }
 }

@@ -333,6 +333,44 @@ public class WorkspaceFlowTests : IDisposable
         Assert.Equal("select 1; -- WIP", await File.ReadAllTextAsync(path));
     }
 
+    [Fact]
+    public async Task Resume_opens_most_recent_existing_project_and_skips_stale_entries()
+    {
+        var store = new JsonProjectStore();
+        var recent = new FileRecentProjects(Path.Combine(_root, "recent.json"));
+        var projA = Path.Combine(_root, "projA");
+        var projB = Path.Combine(_root, "projB");
+        var fallback = Path.Combine(_root, "default");
+        await store.CreateAsync(projA, "Alpha", CancellationToken.None);
+        await store.CreateAsync(projB, "Beta", CancellationToken.None);
+        await recent.AddAsync(projA, CancellationToken.None);
+        await recent.AddAsync(projB, CancellationToken.None);   // B is now most-recent
+
+        // Resume reopens the most-recently-used project, not the fallback.
+        var vm = NewVm();
+        await vm.ResumeLastProjectAsync(fallback);
+        Assert.Equal("Beta", vm.CurrentProjectName);
+        Assert.Equal(Path.GetFullPath(projB), Path.GetFullPath(vm.ProjectDirectory!));
+        Assert.False(Directory.Exists(fallback));               // fallback untouched when a resume succeeds
+
+        // A since-deleted most-recent entry is skipped in favour of the next existing one.
+        Directory.Delete(projB, recursive: true);
+        var vm2 = NewVm();
+        await vm2.ResumeLastProjectAsync(fallback);
+        Assert.Equal("Alpha", vm2.CurrentProjectName);
+        Assert.Equal(Path.GetFullPath(projA), Path.GetFullPath(vm2.ProjectDirectory!));
+    }
+
+    [Fact]
+    public async Task Resume_falls_back_to_default_when_recent_list_is_empty()
+    {
+        var fallback = Path.Combine(_root, "default");
+        var vm = NewVm();
+        await vm.ResumeLastProjectAsync(fallback);
+        Assert.Equal(Path.GetFullPath(fallback), Path.GetFullPath(vm.ProjectDirectory!));
+        Assert.True(Directory.Exists(fallback));                // fallback project created on first run
+    }
+
     [SkippableFact]
     public async Task Switching_database_runs_against_the_chosen_db_on_the_same_server()
     {
