@@ -275,6 +275,30 @@ need, so this is genuinely optional.
   (scope, gesture), so a conflict can't persist — the reassignment is surfaced as a status note instead).
 - Changes apply on **Save** (no per-edit live preview); no per-command "reset to default" (only reset-all).
 
+## Post-QA follow-ups (2026-07-20, after user live QA of Phases 1–4)
+
+- **Settings-window chip fix**: gesture text used a non-existent brush key (`Text` → transparent) so
+  chips looked empty; the `✕` remove glyph clips in the app font. Fixed to `Text.Primary` + a drawn
+  vector ✕ (matching how `ResultView` draws its icons).
+- **Menu now docks above the toolbar** (it was below): the `<Menu>` is the first `Dock="Top"` child.
+- **Tab switching split into MRU vs visual + go-to-N** (was a single visual next/prev on Ctrl+Tab):
+  - `tab.mruNext`/`tab.mruPrev` = **Ctrl+Tab** / **Ctrl+Shift+Tab**, most-recently-used order with the
+    Alt-Tab feel — cycles while Ctrl is held, commits the landed tab as most-recent on Ctrl release
+    (`OnKeyUp`). Backed by a testable `Input/MruList.cs`; cycle state (`_mruCycling`/`_mruIndex`) in the view.
+  - `tab.next`/`tab.prev` = **Ctrl+PageDown** / **Ctrl+PageUp**, visual (tab-strip) order.
+  - `tab.goto1..9` = **Ctrl+1..9** (9 = last tab, browser convention).
+- **Direct focus**: `focus.editor` = **Ctrl+0**, `focus.results` = **Ctrl+Shift+0** (plus the existing
+  `focus.cycle` = F6).
+- **Toolbar pickers**: `select.project` = **Ctrl+Shift+J**, `select.connection` = **Ctrl+Shift+C**,
+  `select.database` = **Ctrl+Shift+D** — focus the pill and drop its list open. (Gesture choices are
+  defaults; all rebindable in the settings UI. Project got J because P/O/S collide with palette/open/save.)
+- **Nav keys resolved in a window tunnel handler** (`OnWindowNavKey`) via a new
+  `KeyDispatcher.TryHandle(e, scope, only)` filter, so tab/focus/picker gestures win over the framework's
+  tab traversal and the editor/grid — without disturbing the tunnel(Editor/Grid)+bubble(Global) model for
+  every other key. The `only` set (`_navCommands`) is exactly these commands, which don't overlap any
+  Editor/Grid binding, so preempting them in tunnel is safe.
+- Tests: `MruListTests.cs` + binding-resolution tests; 136 App green, app launches clean. Live QA pending.
+
 ## Risks / watch-items
 
 - **Physical-vs-logical is the subtle part.** Get `Gesture`/`GestureParser`/precedence right in Phase 1

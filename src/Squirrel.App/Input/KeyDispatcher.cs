@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Avalonia.Input;
 
 namespace Squirrel.App.Input;
@@ -20,10 +21,14 @@ public sealed class KeyDispatcher
         Registry = registry;
     }
 
-    public bool TryHandle(KeyEventArgs e, KeyScope scope)
+    /// <param name="only">When given, only handle the keystroke if the resolved command id is in this set.
+    /// Used by the window's tunnel handler to claim navigation keys before the framework/editor, while
+    /// leaving every other key to the normal tunnel/bubble path.</param>
+    public bool TryHandle(KeyEventArgs e, KeyScope scope, ISet<string>? only = null)
     {
         var id = Keymap.Resolve(scope, e.KeyModifiers, e.Key, e.PhysicalKey);
         if (id is null) return false;
+        if (only is not null && !only.Contains(id)) return false;
 
         var command = Registry.Get(id);
         if (command is null || !command.CanRun()) return false;

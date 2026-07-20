@@ -30,11 +30,17 @@ public static class KeymapDefaults
         yield return G(CommandIds.StatementNext, "Alt+Down");
         yield return G(CommandIds.AppEscape, "Escape");
         yield return G(CommandIds.PaletteOpen, "Ctrl+Shift+P");
-        yield return G(CommandIds.TabNext, "Ctrl+Tab");
-        yield return G(CommandIds.TabNext, "Ctrl+PageDown");
-        yield return G(CommandIds.TabPrev, "Ctrl+Shift+Tab");
+        yield return G(CommandIds.TabNext, "Ctrl+PageDown");     // visual order (tab strip)
         yield return G(CommandIds.TabPrev, "Ctrl+PageUp");
+        yield return G(CommandIds.TabMruNext, "Ctrl+Tab");       // most-recently-used order
+        yield return G(CommandIds.TabMruPrev, "Ctrl+Shift+Tab");
+        for (var n = 1; n <= 9; n++) yield return G(CommandIds.TabGoto(n), $"Ctrl+{n}"); // Ctrl+1..9 → tab N (9 = last)
         yield return G(CommandIds.FocusCycle, "F6");
+        yield return G(CommandIds.FocusEditor, "Ctrl+0");
+        yield return G(CommandIds.FocusResults, "Ctrl+Shift+0");
+        yield return G(CommandIds.SelectProject, "Ctrl+Shift+J");
+        yield return G(CommandIds.SelectConnection, "Ctrl+Shift+C");
+        yield return G(CommandIds.SelectDatabase, "Ctrl+Shift+D");
         // panel.*, connection.new, query.runAll ship unbound — reachable via the command palette
         // (and the rail for panels); users can bind them in keybindings.json.
 

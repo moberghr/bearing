@@ -19,9 +19,19 @@ public static class CommandIds
     public const string StatementNext = "statement.next";
     public const string AppEscape = "app.escape";
     public const string PaletteOpen = "palette.open";
-    public const string TabNext = "tab.next";
+    public const string TabNext = "tab.next";          // visual order (tab strip)
     public const string TabPrev = "tab.prev";
+    public const string TabMruNext = "tab.mruNext";    // most-recently-used order (Ctrl+Tab)
+    public const string TabMruPrev = "tab.mruPrev";
     public const string FocusCycle = "focus.cycle";
+    public const string FocusEditor = "focus.editor";
+    public const string FocusResults = "focus.results";
+    public const string SelectProject = "select.project";
+    public const string SelectConnection = "select.connection";
+    public const string SelectDatabase = "select.database";
+
+    /// <summary>Command id for jumping to tab <paramref name="n"/> (1-based); n=0 means "last tab".</summary>
+    public static string TabGoto(int n) => $"tab.goto{n}";
     public const string QueryRunAll = "query.runAll";
     public const string PanelConnections = "panel.connections";
     public const string PanelScripts = "panel.scripts";

@@ -32,6 +32,10 @@ public partial class MainWindow : Window
     private readonly KeyDispatcher _dispatcher;
     private readonly System.Collections.Generic.IReadOnlyList<string> _keymapWarnings;
     private bool _keymapWarningsShown;
+    private readonly MruList<EditorTabViewModel> _tabMru = new();
+    private bool _mruCycling;   // true while Ctrl is held during a Ctrl+Tab cycle
+    private int _mruIndex;
+    private System.Collections.Generic.HashSet<string> _navCommands = new();
     private bool _loadingEditor;          // guards editor<->tab sync while swapping tabs
     private bool _suppressProjectChange;   // guards the project combo during programmatic updates
 
@@ -59,6 +63,10 @@ public partial class MainWindow : Window
         _keymapWarnings = keymap.Warnings;
         ResultsView.CommandDispatcher = _dispatcher;
         SyncMenuGestures();
+
+        // Claim navigation keys (tab switching, focus, pickers) in the tunnel phase so the framework's
+        // tab traversal and the editor/grid don't consume them first.
+        AddHandler(KeyDownEvent, OnWindowNavKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
 
         // Editor-editing shortcuts must pre-empt AvaloniaEdit, which consumes Enter/'/'/brackets on
         // its own KeyDown — so handle them during the tunnel phase, before the editor sees them.
@@ -171,6 +179,8 @@ public partial class MainWindow : Window
         SyncProjectCombo();
         SyncDbPicker();
         App.SetConnectionAccent(Vm.ActiveConnectionColor); // seed the accent for the initial tab
+        _tabMru.Sync(Vm.Tabs);
+        if (Vm.SelectedTab is { } seedTab) _tabMru.Use(seedTab);
 
         // Surface any keybindings.json problems once, in the status bar (non-fatal — defaults still applied).
         if (!_keymapWarningsShown && _keymapWarnings.Count > 0)
@@ -223,7 +233,11 @@ public partial class MainWindow : Window
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(MainWindowViewModel.SelectedTab))
+        {
             LoadEditorFromSelectedTab();
+            // Promote on a normal switch, but not while a Ctrl+Tab cycle is in flight (that commits on release).
+            if (!_mruCycling && Vm?.SelectedTab is { } t) _tabMru.Use(t);
+        }
         else if (e.PropertyName == nameof(MainWindowViewModel.ActiveConnectionColor))
             App.SetConnectionAccent(Vm?.ActiveConnectionColor); // recolor tab accent, dots, results, status line
         else if (e.PropertyName == nameof(MainWindowViewModel.SelectedTabDatabase))
@@ -846,9 +860,21 @@ public partial class MainWindow : Window
             () => HandleEscape(),
             canRun: () => Vm is not null && (_paletteOverlay is not null || _pendingScriptOverlay is not null || Vm.IsMenuVisible || Vm.IsBusy)));
         r.Register(KeyCommand.Sync(CommandIds.PaletteOpen, "Command palette", KeyScope.Global, "View", ShowPalette));
-        r.Register(KeyCommand.Sync(CommandIds.TabNext, "Next tab", KeyScope.Global, "File", () => SelectAdjacentTab(+1)));
-        r.Register(KeyCommand.Sync(CommandIds.TabPrev, "Previous tab", KeyScope.Global, "File", () => SelectAdjacentTab(-1)));
+        r.Register(KeyCommand.Sync(CommandIds.TabNext, "Next tab (visual order)", KeyScope.Global, "Tabs", () => SelectAdjacentTab(+1)));
+        r.Register(KeyCommand.Sync(CommandIds.TabPrev, "Previous tab (visual order)", KeyScope.Global, "Tabs", () => SelectAdjacentTab(-1)));
+        r.Register(KeyCommand.Sync(CommandIds.TabMruNext, "Next tab (recently used)", KeyScope.Global, "Tabs", () => CycleMru(+1)));
+        r.Register(KeyCommand.Sync(CommandIds.TabMruPrev, "Previous tab (recently used)", KeyScope.Global, "Tabs", () => CycleMru(-1)));
+        for (var n = 1; n <= 9; n++)
+        {
+            var i = n; // capture
+            r.Register(KeyCommand.Sync(CommandIds.TabGoto(i), i == 9 ? "Go to last tab" : $"Go to tab {i}", KeyScope.Global, "Tabs", () => SelectTabByIndex(i)));
+        }
         r.Register(KeyCommand.Sync(CommandIds.FocusCycle, "Cycle focus (editor / results / sidebar)", KeyScope.Global, "View", CycleFocus));
+        r.Register(KeyCommand.Sync(CommandIds.FocusEditor, "Focus editor", KeyScope.Global, "View", () => Editor.Focus()));
+        r.Register(KeyCommand.Sync(CommandIds.FocusResults, "Focus results", KeyScope.Global, "View", FocusResultsPane));
+        r.Register(KeyCommand.Sync(CommandIds.SelectProject, "Select project…", KeyScope.Global, "Connection", () => OpenPicker(ProjectCombo)));
+        r.Register(KeyCommand.Sync(CommandIds.SelectConnection, "Select connection…", KeyScope.Global, "Connection", () => OpenPicker(ConnectionPicker)));
+        r.Register(KeyCommand.Sync(CommandIds.SelectDatabase, "Select database…", KeyScope.Global, "Connection", () => OpenPicker(DatabasePicker)));
         r.Register(KeyCommand.Sync(CommandIds.PanelConnections, "Show Connections panel", KeyScope.Global, "View",
             () => { if (Vm is not null) Vm.ActivePanel = SidePanel.Schema; }));
         r.Register(KeyCommand.Sync(CommandIds.PanelScripts, "Show Scripts panel", KeyScope.Global, "View",
@@ -868,6 +894,16 @@ public partial class MainWindow : Window
         r.Register(KeyCommand.Sync(CommandIds.EditorUnfoldCurrent, "Unfold current", KeyScope.Editor, "Editor", () => _folding.UnfoldCurrent()));
         r.Register(KeyCommand.Sync(CommandIds.EditorFoldAll, "Fold all", KeyScope.Editor, "Editor", () => _folding.FoldAll()));
         r.Register(KeyCommand.Sync(CommandIds.EditorUnfoldAll, "Unfold all", KeyScope.Editor, "Editor", () => _folding.UnfoldAll()));
+
+        // Navigation/focus commands are claimed in a window tunnel handler so the framework's own tab
+        // traversal and the editor/grid don't swallow them first.
+        _navCommands = new System.Collections.Generic.HashSet<string>
+        {
+            CommandIds.TabNext, CommandIds.TabPrev, CommandIds.TabMruNext, CommandIds.TabMruPrev,
+            CommandIds.FocusCycle, CommandIds.FocusEditor, CommandIds.FocusResults,
+            CommandIds.SelectProject, CommandIds.SelectConnection, CommandIds.SelectDatabase,
+        };
+        for (var n = 1; n <= 9; n++) _navCommands.Add(CommandIds.TabGoto(n));
     }
 
     /// <summary>Insert a blank line below (or above) the caret's line, matching its indentation.</summary>
@@ -920,6 +956,12 @@ public partial class MainWindow : Window
     protected override void OnKeyUp(KeyEventArgs e)
     {
         base.OnKeyUp(e);
+        // Releasing Ctrl ends a Ctrl+Tab MRU cycle and commits the landed tab as most-recent.
+        if (e.Key is Key.LeftCtrl or Key.RightCtrl && _mruCycling)
+        {
+            _mruCycling = false;
+            if (Vm?.SelectedTab is { } t) _tabMru.Use(t);
+        }
         if (e.Key is Key.LeftAlt or Key.RightAlt && _altAlone && Vm is not null)
         {
             _altAlone = false;
@@ -959,12 +1001,51 @@ public partial class MainWindow : Window
         RebuildResults(Vm.SelectedTab);
     }
 
-    /// <summary>tab.next / tab.prev: move to the adjacent tab, wrapping around.</summary>
+    /// <summary>tab.next / tab.prev: move to the adjacent tab in visual (strip) order, wrapping around.</summary>
     private void SelectAdjacentTab(int dir)
     {
         if (Vm is null || Vm.Tabs.Count == 0) return;
         var i = Vm.SelectedTab is { } t ? Vm.Tabs.IndexOf(t) : 0;
         Vm.SelectedTab = Vm.Tabs[(i + dir + Vm.Tabs.Count) % Vm.Tabs.Count];
+    }
+
+    /// <summary>tab.mruNext / tab.mruPrev: cycle through tabs in most-recently-used order while Ctrl is
+    /// held; releasing Ctrl (see <see cref="OnKeyUp"/>) commits the landed tab as most-recent.</summary>
+    private void CycleMru(int dir)
+    {
+        if (Vm is null) return;
+        _tabMru.Sync(Vm.Tabs);
+        var items = _tabMru.Items;
+        if (items.Count < 2) return;
+        if (!_mruCycling) { _mruCycling = true; _mruIndex = 0; }
+        _mruIndex = (_mruIndex + dir + items.Count) % items.Count;
+        Vm.SelectedTab = items[_mruIndex];
+    }
+
+    /// <summary>tab.goto{n}: jump to tab n (1-based); n=9 is "last tab" (browser convention). Clamps.</summary>
+    private void SelectTabByIndex(int n)
+    {
+        if (Vm is null || Vm.Tabs.Count == 0) return;
+        var idx = n >= 9 ? Vm.Tabs.Count - 1 : System.Math.Min(n - 1, Vm.Tabs.Count - 1);
+        Vm.SelectedTab = Vm.Tabs[idx];
+    }
+
+    private void FocusResultsPane()
+    {
+        if (ResultsView.IsVisible) ResultsView.FocusableGrid?.Focus();
+    }
+
+    /// <summary>select.project / connection / database: focus a toolbar picker and drop its list open.</summary>
+    private static void OpenPicker(ComboBox combo)
+    {
+        combo.Focus();
+        combo.IsDropDownOpen = true;
+    }
+
+    private void OnWindowNavKey(object? sender, KeyEventArgs e)
+    {
+        if (_paletteOverlay is not null) return;            // palette owns the keyboard while open
+        _dispatcher.TryHandle(e, KeyScope.Global, _navCommands);
     }
 
     /// <summary>focus.cycle (F6): move keyboard focus editor → results grid → sidebar → editor,

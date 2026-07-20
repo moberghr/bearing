@@ -57,9 +57,9 @@ public class Phase3BindingTests
     public void Palette_and_tab_navigation_are_bound()
     {
         Assert.Equal(CommandIds.PaletteOpen, Defaults.Resolve(KeyScope.Global, KeyModifiers.Control | KeyModifiers.Shift, Key.P, NoPhys));
-        Assert.Equal(CommandIds.TabNext, Defaults.Resolve(KeyScope.Global, KeyModifiers.Control, Key.Tab, NoPhys));
-        Assert.Equal(CommandIds.TabNext, Defaults.Resolve(KeyScope.Global, KeyModifiers.Control, Key.PageDown, NoPhys));
-        Assert.Equal(CommandIds.TabPrev, Defaults.Resolve(KeyScope.Global, KeyModifiers.Control | KeyModifiers.Shift, Key.Tab, NoPhys));
+        Assert.Equal(CommandIds.TabMruNext, Defaults.Resolve(KeyScope.Global, KeyModifiers.Control, Key.Tab, NoPhys));      // Ctrl+Tab = MRU order
+        Assert.Equal(CommandIds.TabNext, Defaults.Resolve(KeyScope.Global, KeyModifiers.Control, Key.PageDown, NoPhys));   // Ctrl+PgDn = visual order
+        Assert.Equal(CommandIds.TabMruPrev, Defaults.Resolve(KeyScope.Global, KeyModifiers.Control | KeyModifiers.Shift, Key.Tab, NoPhys));
         Assert.Equal(CommandIds.TabPrev, Defaults.Resolve(KeyScope.Global, KeyModifiers.Control, Key.PageUp, NoPhys));
         Assert.Equal(CommandIds.FocusCycle, Defaults.Resolve(KeyScope.Global, KeyModifiers.None, Key.F6, NoPhys));
     }
