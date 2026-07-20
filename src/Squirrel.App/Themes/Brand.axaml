@@ -1,0 +1,54 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- Squirrel brand mark (1a) as multi-colour DrawingImage resources, mirroring the
+       vector source in assets/brand/squirrel-*.svg. Geometry is the 100×100 handoff
+       path data; use via <Image Source="{StaticResource SquirrelMark.Amber}"/>.
+       The acorn nut's 60% opacity is baked into the fill alpha (0x99). -->
+
+  <!-- Primary (amber), two-tone. -->
+  <DrawingImage x:Key="SquirrelMark.Amber">
+    <DrawingGroup>
+      <GeometryDrawing Brush="#E6883B" Geometry="M56 82 C 90 86 100 44 72 30 C 56 22 42 38 50 52 C 54 60 64 59 66 51 C 67 46 63 43 59 45 C 63 40 71 43 71 51 C 71 62 58 66 51 58 C 40 46 50 26 70 30 C 92 35 90 78 60 80 Z"/>
+      <GeometryDrawing Brush="#FF9E3B" Geometry="M52 80 C 42 82 31 78 31 65 C 31 57 35 53 35 46 C 30 42 30 33 37 28 C 42 22 51 23 54 30 C 59 28 64 33 62 41 C 64 51 63 66 57 76 C 56 79 54 80 52 80 Z"/>
+      <GeometryDrawing Brush="#FF9E3B" Geometry="M40 27 C 37 18 45 15 49 20 C 51 23 49 28 45 29 Z"/>
+      <GeometryDrawing Brush="#FF9E3B" Geometry="M35 76 C 30 80 40 84 47 79 Z"/>
+      <GeometryDrawing Brush="#16161D">
+        <GeometryDrawing.Geometry><EllipseGeometry Center="43,35" RadiusX="3.1" RadiusY="3.1"/></GeometryDrawing.Geometry>
+      </GeometryDrawing>
+      <GeometryDrawing Brush="#DCD7BA" Geometry="M22 60 a8 4.5 0 0 1 16 0 Z"/>
+      <GeometryDrawing Brush="#99DCD7BA" Geometry="M23.5 61 h13 a6.5 8.5 0 0 1 -13 0 Z"/>
+    </DrawingGroup>
+  </DrawingImage>
+
+  <!-- Ink (mono, on light). -->
+  <DrawingImage x:Key="SquirrelMark.Ink">
+    <DrawingGroup>
+      <GeometryDrawing Brush="#16161D" Geometry="M56 82 C 90 86 100 44 72 30 C 56 22 42 38 50 52 C 54 60 64 59 66 51 C 67 46 63 43 59 45 C 63 40 71 43 71 51 C 71 62 58 66 51 58 C 40 46 50 26 70 30 C 92 35 90 78 60 80 Z"/>
+      <GeometryDrawing Brush="#16161D" Geometry="M52 80 C 42 82 31 78 31 65 C 31 57 35 53 35 46 C 30 42 30 33 37 28 C 42 22 51 23 54 30 C 59 28 64 33 62 41 C 64 51 63 66 57 76 C 56 79 54 80 52 80 Z"/>
+      <GeometryDrawing Brush="#16161D" Geometry="M40 27 C 37 18 45 15 49 20 C 51 23 49 28 45 29 Z"/>
+      <GeometryDrawing Brush="#16161D" Geometry="M35 76 C 30 80 40 84 47 79 Z"/>
+      <GeometryDrawing Brush="#F2ECDC">
+        <GeometryDrawing.Geometry><EllipseGeometry Center="43,35" RadiusX="3.1" RadiusY="3.1"/></GeometryDrawing.Geometry>
+      </GeometryDrawing>
+      <GeometryDrawing Brush="#16161D" Geometry="M22 60 a8 4.5 0 0 1 16 0 Z"/>
+      <GeometryDrawing Brush="#9916161D" Geometry="M23.5 61 h13 a6.5 8.5 0 0 1 -13 0 Z"/>
+    </DrawingGroup>
+  </DrawingImage>
+
+  <!-- Light (mono, on dark). -->
+  <DrawingImage x:Key="SquirrelMark.Light">
+    <DrawingGroup>
+      <GeometryDrawing Brush="#DCD7BA" Geometry="M56 82 C 90 86 100 44 72 30 C 56 22 42 38 50 52 C 54 60 64 59 66 51 C 67 46 63 43 59 45 C 63 40 71 43 71 51 C 71 62 58 66 51 58 C 40 46 50 26 70 30 C 92 35 90 78 60 80 Z"/>
+      <GeometryDrawing Brush="#DCD7BA" Geometry="M52 80 C 42 82 31 78 31 65 C 31 57 35 53 35 46 C 30 42 30 33 37 28 C 42 22 51 23 54 30 C 59 28 64 33 62 41 C 64 51 63 66 57 76 C 56 79 54 80 52 80 Z"/>
+      <GeometryDrawing Brush="#DCD7BA" Geometry="M40 27 C 37 18 45 15 49 20 C 51 23 49 28 45 29 Z"/>
+      <GeometryDrawing Brush="#DCD7BA" Geometry="M35 76 C 30 80 40 84 47 79 Z"/>
+      <GeometryDrawing Brush="#16161D">
+        <GeometryDrawing.Geometry><EllipseGeometry Center="43,35" RadiusX="3.1" RadiusY="3.1"/></GeometryDrawing.Geometry>
+      </GeometryDrawing>
+      <GeometryDrawing Brush="#DCD7BA" Geometry="M22 60 a8 4.5 0 0 1 16 0 Z"/>
+      <GeometryDrawing Brush="#99DCD7BA" Geometry="M23.5 61 h13 a6.5 8.5 0 0 1 -13 0 Z"/>
+    </DrawingGroup>
+  </DrawingImage>
+
+</ResourceDictionary>

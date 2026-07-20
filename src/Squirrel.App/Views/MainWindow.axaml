@@ -9,6 +9,7 @@
         Width="1120" Height="760"
         Background="{DynamicResource Bg.Editor}"
         Foreground="{DynamicResource Text.Primary}"
+        Icon="/Assets/squirrel.ico"
         Title="{Binding Title}">
 
   <Window.Resources>
@@ -285,6 +286,9 @@
               BorderBrush="{DynamicResource Border}" BorderThickness="0,0,1,0">
         <Grid RowDefinitions="Auto,*,Auto">
           <StackPanel Grid.Row="0" HorizontalAlignment="Center" Margin="0,8,0,0">
+            <!-- App brand mark (non-interactive) pinned at the top of the rail. -->
+            <Image Source="{StaticResource SquirrelMark.Amber}" Width="30" Height="30"
+                   Margin="0,2,0,10" ToolTip.Tip="Squirrel — SQL Editor"/>
             <RadioButton Classes="rail" Theme="{StaticResource RailTile}" GroupName="rail" Tag="Schema"
                          ToolTip.Tip="Connections" Click="OnRailTileClick">
               <RadioButton.IsChecked>

@@ -7,6 +7,11 @@
     <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
   </PropertyGroup>
 
+  <!-- Brand/app icon assets (window icon, in-app mark) shipped as Avalonia resources. -->
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Squirrel.Core\Squirrel.Core.csproj" />
     <ProjectReference Include="..\Squirrel.Sql\Squirrel.Sql.csproj" />

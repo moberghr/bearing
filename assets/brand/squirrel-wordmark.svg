@@ -1,0 +1,23 @@
+<svg width="380" height="132" viewBox="0 0 380 132" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Horizontal lockup: amber mark + "Squirrel / SQL EDITOR" wordmark.
+       Text uses Space Grotesk (Google Fonts, weights 600/700); embed or install the
+       font when rasterizing this asset. -->
+  <rect x="0.5" y="0.5" width="379" height="131" rx="20" ry="20" fill="#16161D" stroke="#2A2A37" stroke-width="1"/>
+
+  <!-- Mark 64x64 at padding-left 44, vertically centered (translate 44,34; scale 0.64). -->
+  <g transform="translate(44 34) scale(0.64)">
+    <path fill="#E6883B" d="M56 82 C 90 86 100 44 72 30 C 56 22 42 38 50 52 C 54 60 64 59 66 51 C 67 46 63 43 59 45 C 63 40 71 43 71 51 C 71 62 58 66 51 58 C 40 46 50 26 70 30 C 92 35 90 78 60 80 Z"/>
+    <path fill="#FF9E3B" d="M52 80 C 42 82 31 78 31 65 C 31 57 35 53 35 46 C 30 42 30 33 37 28 C 42 22 51 23 54 30 C 59 28 64 33 62 41 C 64 51 63 66 57 76 C 56 79 54 80 52 80 Z"/>
+    <path fill="#FF9E3B" d="M40 27 C 37 18 45 15 49 20 C 51 23 49 28 45 29 Z"/>
+    <path fill="#FF9E3B" d="M35 76 C 30 80 40 84 47 79 Z"/>
+    <circle cx="43" cy="35" r="3.1" fill="#16161D"/>
+    <path fill="#DCD7BA" d="M22 60 a8 4.5 0 0 1 16 0 Z"/>
+    <path fill="#DCD7BA" opacity="0.6" d="M23.5 61 h13 a6.5 8.5 0 0 1 -13 0 Z"/>
+  </g>
+
+  <!-- Text block: left edge = 44 + 64 + 22 = 130. -->
+  <text x="130" y="70" font-family="Space Grotesk, sans-serif" font-weight="700"
+        font-size="40" letter-spacing="-0.8" fill="#DCD7BA">Squirrel</text>
+  <text x="130" y="92" font-family="Space Grotesk, sans-serif" font-weight="600"
+        font-size="13" letter-spacing="4.16" fill="#FF9E3B">SQL EDITOR</text>
+</svg>

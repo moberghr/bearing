@@ -11,6 +11,8 @@
         <ResourceInclude Source="avares://Squirrel.App/Themes/Tokens.axaml"/>
         <!-- Line-icon geometries for the rail + toolbar (Icon.*). -->
         <ResourceInclude Source="avares://Squirrel.App/Themes/Icons.axaml"/>
+        <!-- Squirrel brand mark (SquirrelMark.Amber/Ink/Light DrawingImages). -->
+        <ResourceInclude Source="avares://Squirrel.App/Themes/Brand.axaml"/>
       </ResourceDictionary.MergedDictionaries>
 
       <conv:HexBrushConverter x:Key="HexBrush"/>
