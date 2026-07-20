@@ -28,6 +28,13 @@
       <TextBox   Grid.Row="5" Grid.Column="1" x:Name="PasswordBox" PasswordChar="•" Margin="0,6,0,0"/>
     </Grid>
 
+    <Border x:Name="InsecureWarning" IsVisible="False"
+            Background="#332B1A" BorderBrush="#D29922" BorderThickness="1" CornerRadius="4"
+            Padding="8,6" Margin="0,4,0,0">
+      <TextBlock TextWrapping="Wrap" Foreground="#E6C384" FontSize="12"
+                 Text="⚠ No system keyring found — this password will be stored unencrypted on disk (base64) in your data directory. Anyone who can read your files can recover it."/>
+    </Border>
+
     <Separator Margin="0,4"/>
 
     <TextBlock Text="Environment" Opacity="0.8"/>
@@ -42,6 +49,9 @@
       <Button Content="Staging"    Tag="#D29922" Click="OnPresetColorClick" Background="#D29922" Foreground="White" Padding="8,2"/>
       <Button Content="Production" Tag="#E5484D" Click="OnPresetColorClick" Background="#E5484D" Foreground="White" Padding="8,2"/>
     </StackPanel>
+
+    <CheckBox x:Name="ConfirmWritesBox" Margin="0,4,0,0"
+              Content="Confirm before running writes / destructive DDL on this connection"/>
 
     <TextBlock x:Name="TestResult" Opacity="0.75" Margin="0,4,0,0" Text=" "/>
 

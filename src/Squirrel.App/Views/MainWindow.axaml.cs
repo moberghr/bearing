@@ -180,6 +180,7 @@ public partial class MainWindow : Window
     private void HookViewModel()
     {
         if (Vm is null) return;
+        Vm.ConfirmDangerousWrite = ConfirmDangerousWriteAsync;
         Vm.PropertyChanged -= OnViewModelPropertyChanged;
         Vm.PropertyChanged += OnViewModelPropertyChanged;
         Vm.TabDatabases.CollectionChanged -= OnTabDatabasesChanged;
@@ -362,10 +363,15 @@ public partial class MainWindow : Window
     private async Task AddConnectionAsync()
     {
         if (Vm is null) return;
-        var dialog = new ConnectionDialog(null, null, (i, p, ct) => Vm.TestConnectionAsync(i, p, ct));
+        var dialog = new ConnectionDialog(null, null, (i, p, ct) => Vm.TestConnectionAsync(i, p, ct), Vm.SecretStorageSecure);
         var result = await dialog.ShowDialog<ConnectionDialogResult?>(this);
         if (result is { Delete: false }) await Vm.AddOrUpdateConnectionAsync(result.Connection, result.Password);
     }
+
+    /// <summary>Write-guard prompt for the VM: confirm a risky batch against a guarded connection.</summary>
+    private Task<bool> ConfirmDangerousWriteAsync(
+        Squirrel.Core.Data.ConnectionInfo connection, System.Collections.Generic.IReadOnlyList<string> verbs)
+        => new ConfirmWriteDialog(connection, verbs).ShowDialog<bool>(this);
 
     /// <summary>The schema-tree node the clicked menu item / tapped row belongs to (via its DataContext).</summary>
     private static SchemaNodeViewModel? NodeOf(object? sender) => (sender as Control)?.DataContext as SchemaNodeViewModel;
@@ -474,7 +480,7 @@ public partial class MainWindow : Window
         if (Vm is null || NodeOf(sender) is not ServerNodeViewModel server) return;
         var existing = server.Connection;
         var password = await Vm.GetConnectionPasswordAsync(existing.Id);
-        var dialog = new ConnectionDialog(existing, password, (i, p, ct) => Vm.TestConnectionAsync(i, p, ct));
+        var dialog = new ConnectionDialog(existing, password, (i, p, ct) => Vm.TestConnectionAsync(i, p, ct), Vm.SecretStorageSecure);
         var result = await dialog.ShowDialog<ConnectionDialogResult?>(this);
         if (result is null) return;
         if (result.Delete) await Vm.DeleteConnectionAsync(existing.Id);

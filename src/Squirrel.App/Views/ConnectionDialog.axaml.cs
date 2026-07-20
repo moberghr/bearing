@@ -26,11 +26,15 @@ public partial class ConnectionDialog : Window
     public ConnectionDialog(
         ConnectionInfo? existing,
         string? existingPassword,
-        Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test)
+        Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
+        bool secretStorageSecure = true)
     {
         InitializeComponent();
         _test = test;
         _id = existing?.Id ?? Guid.NewGuid();
+
+        // Warn up front when there is no OS keyring: the password will land in a plaintext-equivalent file.
+        InsecureWarning.IsVisible = !secretStorageSecure;
 
         if (existing is not null)
         {
@@ -43,6 +47,7 @@ public partial class ConnectionDialog : Window
             PasswordBox.Text = existingPassword ?? "";
             EnvBox.Text = existing.Environment ?? "";
             EnvColorBox.Text = existing.EnvironmentColor ?? "";
+            ConfirmWritesBox.IsChecked = existing.RequireWriteConfirmation;
             DeleteButton.IsVisible = true;
         }
         else
@@ -58,7 +63,10 @@ public partial class ConnectionDialog : Window
         if (sender is Button { Tag: string hex } b)
         {
             EnvColorBox.Text = hex;
-            if (string.IsNullOrWhiteSpace(EnvBox.Text)) EnvBox.Text = b.Content?.ToString()?.ToLowerInvariant();
+            var label = b.Content?.ToString()?.ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(EnvBox.Text)) EnvBox.Text = label;
+            // Production defaults to guarded; the user can still uncheck it.
+            if (label == "production") ConfirmWritesBox.IsChecked = true;
         }
     }
 
@@ -73,6 +81,7 @@ public partial class ConnectionDialog : Window
         User = (UserBox.Text ?? "").Trim(),
         Environment = string.IsNullOrWhiteSpace(EnvBox.Text) ? null : EnvBox.Text!.Trim(),
         EnvironmentColor = string.IsNullOrWhiteSpace(EnvColorBox.Text) ? null : EnvColorBox.Text!.Trim(),
+        RequireWriteConfirmation = ConfirmWritesBox.IsChecked == true,
     };
 
     private string BuildFallbackName()

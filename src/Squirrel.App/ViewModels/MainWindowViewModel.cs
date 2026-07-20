@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Squirrel.App.Connections;
 using Squirrel.App.Formatting;
+using Squirrel.App.Results;
 using Squirrel.Core.Data;
 using Squirrel.Core.Logging;
 using Squirrel.Core.Schema;
@@ -139,6 +140,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public void AttachSecretStore(ISecretStore secretStore) => _secretStore = secretStore;
 
+    /// <summary>True when secrets go to a real OS keychain; false when they fall back to a plaintext-equivalent file.</summary>
+    public bool SecretStorageSecure => _secretStore?.IsSecure == true;
+
     /// <summary>Dispose all live connections (query sessions + schema-browser pools); safe to call fire-and-forget from the close path.</summary>
     public async ValueTask DisposeSessionsAsync()
     {
@@ -173,7 +177,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
             OnPropertyChanged(nameof(ProjectDirectory));
             OnPropertyChanged(nameof(CurrentProjectName));
             StatusText = $"Project '{_project.Manifest.Name}'. " +
-                         (_secretStore?.IsSecure == true ? "Secrets: OS keychain." : "Secrets: local file.");
+                         (_secretStore?.IsSecure == true
+                             ? "Secrets: OS keychain."
+                             : "⚠ No keyring — passwords stored unencrypted on disk.");
         }
         catch (Exception ex)
         {
@@ -725,6 +731,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// <summary>Default page size: first page and each "load more" fetch this many rows.</summary>
     public const int PageSize = 100;
 
+    /// <summary>
+    /// Confirm a write/destructive statement before it runs against a guarded connection. Set by the
+    /// view to show a dialog; args are the target connection and the risky verbs found. Returns true to
+    /// proceed. When unset, guarded writes proceed (headless/tests) — the guard is a UI affordance.
+    /// </summary>
+    public Func<ConnectionInfo, IReadOnlyList<string>, Task<bool>>? ConfirmDangerousWrite { get; set; }
+
     /// <summary>Execute SQL for the selected tab against that tab's connection; record it in the log.</summary>
     public async Task ExecuteAsync(string sql)
     {
@@ -735,6 +748,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (tab.ConnectionId is null) { StatusText = "This tab has no connection — pick one."; return; }
         var info = EffectiveConnection(tab);
         if (info is null) { StatusText = "Connection no longer exists."; return; }
+
+        // Production write-guard: confirm before writing data / altering schema on a guarded connection.
+        if (info.RequireWriteConfirmation && ConfirmDangerousWrite is { } confirm)
+        {
+            var risky = Squirrel.Sql.WriteGuard.FindRiskyStatements(sql);
+            if (risky.Count > 0 && !await confirm(info, risky))
+            {
+                StatusText = "Cancelled — write not confirmed.";
+                return;
+            }
+        }
 
         IsBusy = true;
         _executionCts = new CancellationTokenSource();
@@ -753,9 +777,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
             // "load more"/"count" run against the original sql. Multi-statement runs are capped
             // per set at PageSize and shown truncated (no paging — see the pageable gate below).
             var results = await session.Executor.ExecuteAsync(sql, new QueryOptions { MaxRows = PageSize }, ct);
-            tab.SetFreshResults(BuildResultSets(results, sql, session.Snapshot));
+            tab.SetFreshResults(ResultSetBuilder.BuildResultSets(results, sql, session.Snapshot));
             LogExecution(info, sql, results);
-            var summary = DescribeResults(results);
+            var summary = ResultSetBuilder.DescribeResults(results);
             // On success, lead with the connection so the status bar reads e.g. "pagila (local) · 88 ms".
             StatusText = results.Any(r => !r.Success) ? summary : $"{info.Name} · {summary}";
         }
@@ -832,58 +856,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     // ---- FK navigation -----------------------------------------------------------------------
 
-    /// <summary>Wrap raw query results into pageable/FK-aware/editable view models (shared by run + navigation).</summary>
-    private static List<ResultSetViewModel> BuildResultSets(
-        IReadOnlyList<QueryResult> results, string sql, ISchemaSnapshot? snapshot)
-    {
-        var pageable = results.Count == 1 && results[0].Success && results[0].Columns.Count > 0;
-        return results
-            .Select(r =>
-            {
-                // Resolve editability (with a lock reason) only for row-returning results with a schema.
-                var (target, reason) = snapshot is null || r.Columns.Count == 0
-                    ? (null, null)
-                    : EditabilityResolver.ResolveWithReason(snapshot, r.Columns);
-                var vm = new ResultSetViewModel(r, sql, pageable)
-                {
-                    ForeignKeyColumns = DetectForeignKeyColumns(snapshot, r.Columns),
-                    PrimaryKeyColumns = DetectPrimaryKeyColumns(snapshot, r.Columns),
-                    EditTarget = target,
-                    LockReason = target is null ? reason : null,
-                };
-                if (vm.IsEditable) vm.CaptureOriginals();
-                return vm;
-            })
-            .ToList();
-    }
-
-    /// <summary>Result-column indices that are the primary key of their base table (for the PK badge).</summary>
-    private static IReadOnlyCollection<int> DetectPrimaryKeyColumns(
-        ISchemaSnapshot? snapshot, IReadOnlyList<ColumnDescriptor> columns)
-    {
-        if (snapshot is null || columns.Count == 0) return Array.Empty<int>();
-        var pks = new List<int>();
-        for (var i = 0; i < columns.Count; i++)
-        {
-            var c = columns[i];
-            if (!c.HasBaseColumn) continue;
-            if (snapshot.ColumnsOf(c.BaseTableOid).Any(pc => pc.AttNum == c.BaseColumnAttNum && pc.IsPrimaryKey))
-                pks.Add(i);
-        }
-        return pks;
-    }
-
-    /// <summary>Result-column indices that are foreign keys (structural, value-independent).</summary>
-    private static IReadOnlyCollection<int> DetectForeignKeyColumns(
-        ISchemaSnapshot? snapshot, IReadOnlyList<ColumnDescriptor> columns)
-    {
-        if (snapshot is null || columns.Count == 0) return Array.Empty<int>();
-        var fks = new List<int>();
-        for (var i = 0; i < columns.Count; i++)
-            if (ForeignKeyResolver.Resolve(snapshot, columns, i) is not null) fks.Add(i);
-        return fks;
-    }
-
     /// <summary>Navigate a foreign-key cell in place: run the lookup on the current tab's connection
     /// and swap the displayed result for the referenced row, stacking the previous result so Back can
     /// return to it. The query is never surfaced in the editor.</summary>
@@ -898,7 +870,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         { StatusText = "Not a foreign key."; return; }
         if (ResolveLiveSession() is not { } session) return;
 
-        var sql = BuildForeignKeySelect(target, row);
+        var sql = ResultEditModel.BuildForeignKeySelect(target, row);
         IsBusy = true;
         _executionCts = new CancellationTokenSource();
         var ct = _executionCts.Token;
@@ -906,35 +878,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             StatusText = "Opening referenced row…";
             var results = await session.Executor.ExecuteAsync(sql, new QueryOptions { MaxRows = PageSize }, ct);
-            tab.PushResults(BuildResultSets(results, sql, session.Snapshot));
-            StatusText = DescribeResults(results);
+            tab.PushResults(ResultSetBuilder.BuildResultSets(results, sql, session.Snapshot));
+            StatusText = ResultSetBuilder.DescribeResults(results);
         }
         catch (OperationCanceledException) { StatusText = "Navigation cancelled."; }
         catch (Exception ex) { StatusText = $"Navigation failed: {ex.Message}"; }
         finally { _executionCts.Dispose(); _executionCts = null; IsBusy = false; }
     }
 
-    /// <summary>`select * from ref where refcol = &lt;value&gt; [and …]` with all key parts from the row.</summary>
-    private static string BuildForeignKeySelect(ForeignKeyTarget t, object?[] row)
-    {
-        var preds = new List<string>(t.RefColumns.Count);
-        for (var i = 0; i < t.RefColumns.Count; i++)
-        {
-            var value = row[t.SourceColumnIndices[i]];
-            preds.Add(value is null
-                ? $"{QuoteIdent(t.RefColumns[i])} is null"
-                : $"{QuoteIdent(t.RefColumns[i])} = {SqlLiteral(value)}");
-        }
-        return $"select * from {QuoteIdent(t.RefSchema)}.{QuoteIdent(t.RefTable)}\nwhere {string.Join("\n  and ", preds)};";
-    }
-
     // ---- Inline editing (Phase 3) ------------------------------------------------------------
-
-    private enum ChangeKind { Delete, Update, Insert }
-
-    /// <summary>A pending change tagged with the grid row it came from, so the saved result can be
-    /// applied back to that exact row (delete → remove, update → committed values, insert → RETURNING).</summary>
-    private sealed record PendingChange(ChangeKind Kind, object?[] Row, SqlWriteCommand Command);
+    // The pure DML/edit logic lives in Results/ResultEditModel; these methods own the connection,
+    // transaction, and status-bar concerns.
 
     /// <summary>Apply a result set's pending edits/inserts/deletes in one transaction, then update the
     /// affected rows in place (no reload — paged-in rows and scroll are preserved).</summary>
@@ -944,7 +898,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (rs.EditTarget is not { } target || !rs.HasPendingChanges) return;
         if (ResolveLiveSession() is not { } session) return;
 
-        var changes = BuildPendingChanges(rs, target);
+        var changes = ResultEditModel.BuildPendingChanges(rs, target);
         if (changes.Count == 0) { rs.ClearPending(); return; }
 
         IsBusy = true;
@@ -957,37 +911,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
             if (results.FirstOrDefault(r => !r.Success) is { } failed)
             { StatusText = $"Save failed: {failed.Error?.Message}"; return; } // rows/pending untouched
 
-            ApplySavedChanges(rs, target, changes, results);
+            ResultEditModel.ApplySavedChanges(rs, target, changes, results);
             StatusText = $"Saved {changes.Count} change(s).";
         }
         catch (OperationCanceledException) { StatusText = "Save cancelled."; }
         catch (Exception ex) { StatusText = $"Save failed: {ex.Message}"; }
         finally { _executionCts.Dispose(); _executionCts = null; IsBusy = false; }
-    }
-
-    /// <summary>Reflect a successful save back into the grid rows: remove deletes, swap updates for their
-    /// committed values, swap new rows for the INSERT … RETURNING result.</summary>
-    private static void ApplySavedChanges(
-        ResultSetViewModel rs, EditTarget target, List<PendingChange> changes, IReadOnlyList<QueryResult> results)
-    {
-        for (var i = 0; i < changes.Count; i++)
-        {
-            var ch = changes[i];
-            switch (ch.Kind)
-            {
-                case ChangeKind.Delete:
-                    rs.RemoveRow(ch.Row);
-                    break;
-                case ChangeKind.Update:
-                    rs.ReplaceRow(ch.Row, CommittedRow(rs, target, ch.Row));
-                    break;
-                case ChangeKind.Insert:
-                    var returned = i < results.Count ? MapReturnedRow(results[i], rs.Columns) : null;
-                    rs.ReplaceRow(ch.Row, returned ?? CommittedRow(rs, target, ch.Row));
-                    break;
-            }
-        }
-        rs.ClearPending();
     }
 
     /// <summary>Discard all pending changes in place (restore edited cells, drop new rows, un-mark deletes).</summary>
@@ -1002,12 +931,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public string? PreviewChanges(ResultSetViewModel rs)
     {
         if (rs.EditTarget is not { } target || !rs.HasPendingChanges) return null;
-        var changes = BuildPendingChanges(rs, target);
+        var changes = ResultEditModel.BuildPendingChanges(rs, target);
         if (changes.Count == 0) return null;
 
         var sb = new StringBuilder();
         sb.AppendLine("begin;");
-        foreach (var c in changes) sb.Append("  ").Append(InlineParameters(c.Command)).AppendLine(";");
+        foreach (var c in changes) sb.Append("  ").Append(ResultEditModel.InlineParameters(c.Command)).AppendLine(";");
         sb.Append("commit;");
         return sb.ToString();
     }
@@ -1020,140 +949,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public IReadOnlyList<PendingStatement> PreviewChangeStatements(ResultSetViewModel rs)
     {
         if (rs.EditTarget is not { } target || !rs.HasPendingChanges) return Array.Empty<PendingStatement>();
-        return BuildPendingChanges(rs, target)
-            .Select(c => new PendingStatement(c.Kind.ToString().ToUpperInvariant(), InlineParameters(c.Command) + ";"))
+        return ResultEditModel.BuildPendingChanges(rs, target)
+            .Select(c => new PendingStatement(c.Kind.ToString().ToUpperInvariant(), ResultEditModel.InlineParameters(c.Command) + ";"))
             .ToList();
     }
-
-    /// <summary>Substitute a command's @pN parameters with SQL literals in a single pass (so neither
-    /// overlapping names nor a value that contains "@pN" corrupts the rendered SQL).</summary>
-    private static string InlineParameters(SqlWriteCommand c)
-    {
-        var byName = c.Parameters.ToDictionary(p => p.Name, p => p.Value);
-        return System.Text.RegularExpressions.Regex.Replace(c.Sql, @"@p\d+", m =>
-            byName.TryGetValue(m.Value, out var v) ? (v is null ? "null" : SqlLiteral(v)) : m.Value);
-    }
-
-    /// <summary>Turn a result set's pending state into row-tagged, ordered changes (deletes, updates, inserts).</summary>
-    private static List<PendingChange> BuildPendingChanges(ResultSetViewModel rs, EditTarget t)
-    {
-        var changes = new List<PendingChange>();
-
-        foreach (var row in rs.DeletedRows)
-        {
-            var keys = KeyValues(t, rs.OriginalOf(row) ?? row);
-            if (keys.Count > 0) changes.Add(new PendingChange(ChangeKind.Delete, row, DmlGenerator.Delete(t.Schema, t.Table, keys)));
-        }
-        foreach (var row in rs.EditedRows)
-        {
-            if (rs.OriginalOf(row) is not { } original) continue;
-            var assignments = ChangedAssignments(rs, t, original, row);
-            var keys = KeyValues(t, original);
-            if (assignments.Count > 0 && keys.Count > 0)
-                changes.Add(new PendingChange(ChangeKind.Update, row, DmlGenerator.Update(t.Schema, t.Table, assignments, keys)));
-        }
-        foreach (var row in rs.NewRows)
-        {
-            var values = InsertValues(rs, t, row);
-            if (values.Count > 0) changes.Add(new PendingChange(ChangeKind.Insert, row, DmlGenerator.Insert(t.Schema, t.Table, values)));
-        }
-        return changes;
-    }
-
-    /// <summary>The committed form of an edited row: original values with the edited cells coerced to
-    /// their column type (so the grid shows canonical values after save).</summary>
-    private static object?[] CommittedRow(ResultSetViewModel rs, EditTarget t, object?[] row)
-    {
-        var committed = (object?[])row.Clone();
-        foreach (var c in t.Columns)
-            if (c.ResultIndex < committed.Length && committed[c.ResultIndex] is string s)
-                committed[c.ResultIndex] = Coerce(s, rs.Columns[c.ResultIndex].ClrType);
-        return committed;
-    }
-
-    /// <summary>Build a result-shaped row from an INSERT … RETURNING result, matching columns by name.</summary>
-    private static object?[]? MapReturnedRow(QueryResult res, IReadOnlyList<ColumnDescriptor> resultColumns)
-    {
-        if (!res.Success || res.Columns.Count == 0 || res.Rows.Count == 0) return null;
-        var byName = new Dictionary<string, int>();
-        for (var j = 0; j < res.Columns.Count; j++) byName[res.Columns[j].Name] = j;
-
-        var row = new object?[resultColumns.Count];
-        for (var k = 0; k < resultColumns.Count; k++)
-            row[k] = byName.TryGetValue(resultColumns[k].Name, out var j) ? res.Rows[0][j] : null;
-        return row;
-    }
-
-    /// <summary>Primary-key predicates from the row's original (typed) values.</summary>
-    private static List<ColumnValue> KeyValues(EditTarget t, object?[] source)
-        => t.KeyColumns
-            .Where(k => k.ResultIndex < source.Length)
-            .Select(k => new ColumnValue(k.BaseColumn, source[k.ResultIndex]))
-            .ToList();
-
-    /// <summary>Assignments for columns whose value differs from the original (coerced to the column type).</summary>
-    private static List<ColumnValue> ChangedAssignments(ResultSetViewModel rs, EditTarget t, object?[] original, object?[] row)
-    {
-        var list = new List<ColumnValue>();
-        foreach (var c in t.Columns)
-        {
-            if (c.ResultIndex >= row.Length || c.ResultIndex >= original.Length) continue;
-            if (Equals(row[c.ResultIndex], original[c.ResultIndex])) continue;
-            list.Add(new ColumnValue(c.BaseColumn, Coerce(row[c.ResultIndex], rs.Columns[c.ResultIndex].ClrType)));
-        }
-        return list;
-    }
-
-    /// <summary>Insert values for the user-filled (non-null) columns; null cells are left to DB defaults.</summary>
-    private static List<ColumnValue> InsertValues(ResultSetViewModel rs, EditTarget t, object?[] row)
-    {
-        var list = new List<ColumnValue>();
-        foreach (var c in t.Columns)
-        {
-            if (c.ResultIndex >= row.Length) continue;
-            var value = row[c.ResultIndex];
-            if (value is null) continue; // let serial/defaults fill it
-            list.Add(new ColumnValue(c.BaseColumn, Coerce(value, rs.Columns[c.ResultIndex].ClrType)));
-        }
-        return list;
-    }
-
-    /// <summary>Coerce a grid string back to the column's CLR type. The "(null)" token ⇒ NULL; an empty
-    /// string stays empty for text columns and ⇒ NULL for others. Falls back to the raw string (letting
-    /// the DB reject it) when parsing fails.</summary>
-    private static object? Coerce(object? value, Type clrType)
-    {
-        if (value is not string s) return value; // unchanged cells keep their typed value
-        if (CellFormat.IsNullToken(s)) return null;
-        var t = Nullable.GetUnderlyingType(clrType) ?? clrType;
-        if (s.Length == 0) return t == typeof(string) ? "" : null; // empty: keep for text, else NULL
-        try
-        {
-            if (t == typeof(string)) return s;
-            if (t == typeof(Guid)) return Guid.Parse(s);
-            if (t == typeof(bool)) return bool.Parse(s);
-            if (t.IsEnum) return Enum.Parse(t, s, ignoreCase: true);
-            // Dates: accept the display pattern (dd.MM.yyyy HH:mm:ss) the user sees, else a lenient parse.
-            if (CellFormat.TryParseDate(s, t, out var date)) return date;
-            return Convert.ChangeType(s, t, CultureInfo.InvariantCulture);
-        }
-        catch { return s; }
-    }
-
-    private static string QuoteIdent(string ident) => "\"" + ident.Replace("\"", "\"\"") + "\"";
-
-    /// <summary>Format a key value as a SQL literal. Values come from the DB (not user text); strings
-    /// and other types are single-quoted (with '' escaping) and left to Postgres to cast.</summary>
-    private static string SqlLiteral(object value) => value switch
-    {
-        bool b => b ? "true" : "false",
-        byte or sbyte or short or ushort or int or uint or long or ulong
-            => Convert.ToString(value, CultureInfo.InvariantCulture)!,
-        float f => f.ToString("R", CultureInfo.InvariantCulture),
-        double d => d.ToString("R", CultureInfo.InvariantCulture),
-        decimal m => m.ToString(CultureInfo.InvariantCulture),
-        _ => "'" + value.ToString()!.Replace("'", "''") + "'",
-    };
 
     /// <summary>Schema for the selected tab's connection (drives completion); null when not yet loaded.</summary>
     public ISchemaSnapshot? SnapshotForSelectedTab()
@@ -1161,25 +960,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public Task<IReadOnlyList<QueryLogEntry>> SearchHistoryAsync(string? text, CancellationToken ct)
         => _queryLog.SearchAsync(new QueryLogQuery { Text = text }, ct);
-
-    /// <summary>One-line status for a run: the single set's shape, or an N-set summary.</summary>
-    private static string DescribeResults(IReadOnlyList<QueryResult> results)
-    {
-        var firstError = results.FirstOrDefault(r => !r.Success);
-        if (firstError is not null)
-            return $"Error{(firstError.Error?.SqlState is { } s ? $" [{s}]" : "")}: {firstError.Error?.Message}";
-
-        // Status bar is timing-focused — the row count lives on the result's meta row, not here.
-        if (results.Count == 1)
-        {
-            var r = results[0];
-            if (r.Columns.Count == 0) return r.Message ?? "Statement executed.";
-            return $"Done · {r.Duration.TotalMilliseconds:0} ms";
-        }
-
-        var elapsed = results[^1].Duration.TotalMilliseconds;
-        return $"{results.Count} result sets · {elapsed:0} ms";
-    }
 
     // History logs one entry per submitted run; a multi-statement run aggregates its sets.
     private void LogExecution(ConnectionInfo info, string sql, IReadOnlyList<QueryResult> results) => _queryLog.Append(new QueryLogEntry

@@ -16,7 +16,7 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
     private readonly SqliteConnection _writeConnection;
     private readonly Task _writerLoop;
 
-    public SqliteQueryLog(string? dbPath = null)
+    public SqliteQueryLog(string? dbPath = null, int retentionDays = 0)
     {
         dbPath ??= Path.Combine(SquirrelPaths.DataDir, "query-log.sqlite");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
@@ -24,9 +24,28 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
 
         _writeConnection = Open();
         Migrate(_writeConnection);
+        Prune(_writeConnection, retentionDays);
 
         _channel = Channel.CreateUnbounded<QueryLogEntry>(new UnboundedChannelOptions { SingleReader = true });
         _writerLoop = Task.Run(WriteLoopAsync);
+    }
+
+    /// <summary>
+    /// Drop history older than <paramref name="retentionDays"/> (≤0 keeps everything). Compared with
+    /// <c>julianday()</c> so it's correct regardless of the stored timestamps' timezone offsets, then
+    /// the external-content FTS index is rebuilt to shed the deleted rows.
+    /// </summary>
+    private static void Prune(SqliteConnection conn, int retentionDays)
+    {
+        if (retentionDays <= 0) return;
+        var cutoff = DateTimeOffset.UtcNow.AddDays(-retentionDays).ToString("o", CultureInfo.InvariantCulture);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            DELETE FROM query_log WHERE julianday(executed_at) < julianday($cutoff);
+            INSERT INTO query_log_fts(query_log_fts) VALUES('rebuild');
+            """;
+        cmd.Parameters.AddWithValue("$cutoff", cutoff);
+        cmd.ExecuteNonQuery();
     }
 
     private SqliteConnection Open()

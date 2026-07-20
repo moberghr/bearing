@@ -40,7 +40,8 @@ public partial class App : Application
             var providers = new ProviderRegistry();
             IProjectStore projectStore = new JsonProjectStore();
             ISessionStore sessionStore = new JsonSessionStore();
-            IQueryLog queryLog = new SqliteQueryLog();
+            var settings = new AppSettingsStore().Load();
+            IQueryLog queryLog = new SqliteQueryLog(retentionDays: settings.QueryLogRetentionDays);
             IRecentProjects recentProjects = new FileRecentProjects();
 
             var vm = new MainWindowViewModel(providers, projectStore, sessionStore, queryLog, recentProjects);

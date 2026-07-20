@@ -25,6 +25,13 @@ public sealed record ConnectionInfo
     /// <summary>Hex color for the environment badge (e.g. "#E53935"); null = neutral.</summary>
     public string? EnvironmentColor { get; init; }
 
+    /// <summary>
+    /// When true, running a statement that writes data (INSERT/UPDATE/DELETE/MERGE) or alters schema
+    /// (DROP/TRUNCATE/ALTER) against this connection asks for confirmation first. Auto-enabled for the
+    /// "production" preset; a guard against fat-fingering a destructive query at prod.
+    /// </summary>
+    public bool RequireWriteConfirmation { get; init; }
+
     /// <summary>Provider-specific extra options (e.g. sslmode, search_path).</summary>
     public IReadOnlyDictionary<string, string> Options { get; init; }
         = new Dictionary<string, string>();

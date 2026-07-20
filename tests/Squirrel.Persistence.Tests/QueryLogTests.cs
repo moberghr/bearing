@@ -88,6 +88,42 @@ public class QueryLogTests : IDisposable
     }
 
     [Fact]
+    public async Task Prune_drops_history_older_than_retention_window_and_rebuilds_fts()
+    {
+        var path = Path.Combine(_dir, "prune.sqlite");
+        await using (var log = new SqliteQueryLog(path))
+        {
+            log.Append(Entry("select old_row") with { ExecutedAt = DateTimeOffset.UtcNow.AddDays(-400) });
+            log.Append(Entry("select recent_row"));
+            await SearchUntil(log, new QueryLogQuery(), expected: 2);
+        }
+
+        // Reopen with a 180-day window → the 400-day-old row is pruned on startup.
+        await using var pruned = new SqliteQueryLog(path, retentionDays: 180);
+        var all = await pruned.SearchAsync(new QueryLogQuery(), CancellationToken.None);
+        Assert.Single(all);
+        Assert.Equal("select recent_row", all[0].SqlText);
+
+        // FTS index was rebuilt after the delete: the pruned row's text no longer matches.
+        Assert.Empty(await pruned.SearchAsync(new QueryLogQuery { Text = "old_row" }, CancellationToken.None));
+        Assert.Single(await pruned.SearchAsync(new QueryLogQuery { Text = "recent_row" }, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Retention_of_zero_keeps_everything()
+    {
+        var path = Path.Combine(_dir, "keep-all.sqlite");
+        await using (var log = new SqliteQueryLog(path))
+        {
+            log.Append(Entry("select ancient") with { ExecutedAt = DateTimeOffset.UtcNow.AddYears(-5) });
+            await SearchUntil(log, new QueryLogQuery(), expected: 1);
+        }
+
+        await using var reopened = new SqliteQueryLog(path, retentionDays: 0);
+        Assert.Single(await reopened.SearchAsync(new QueryLogQuery(), CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Log_survives_reopen_so_history_is_persistent()
     {
         var path = Path.Combine(_dir, "persist.sqlite");

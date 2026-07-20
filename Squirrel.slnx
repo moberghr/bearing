@@ -8,6 +8,7 @@
     <Project Path="src/Squirrel.Sql/Squirrel.Sql.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Squirrel.App.Tests/Squirrel.App.Tests.csproj" />
     <Project Path="tests/Squirrel.Data.Tests/Squirrel.Data.Tests.csproj" />
     <Project Path="tests/Squirrel.Persistence.Tests/Squirrel.Persistence.Tests.csproj" />
     <Project Path="tests/Squirrel.Sql.Tests/Squirrel.Sql.Tests.csproj" />
