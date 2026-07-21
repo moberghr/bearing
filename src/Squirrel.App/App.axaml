@@ -28,6 +28,81 @@
            connection changes, so the tab accent, dots, results accent and status-bar line recolor
            together. Bind via {DynamicResource ConnectionBrush}. Default = neutral slate. -->
       <SolidColorBrush x:Key="ConnectionBrush" Color="#54546D"/>
+
+      <!-- Left-rail tile: a 36×36 rounded button with just an icon. Idle = dim glyph on transparent;
+           hover tints; the checked (active) tile fills Bg.TileActive and turns the glyph orange.
+           App-scoped so both the shell rail and the extracted SidebarView can resolve them. -->
+      <ControlTheme x:Key="RailTile" TargetType="RadioButton">
+        <Setter Property="Width" Value="36"/>
+        <Setter Property="Height" Value="36"/>
+        <Setter Property="Margin" Value="0,3"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource Text.Dim}"/>
+        <Setter Property="Template">
+          <ControlTemplate>
+            <Border Background="{TemplateBinding Background}" CornerRadius="9">
+              <ContentPresenter Content="{TemplateBinding Content}"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+          </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover">
+          <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
+          <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+        </Style>
+        <Style Selector="^:checked">
+          <Setter Property="Background" Value="{DynamicResource Bg.TileActive}"/>
+          <Setter Property="Foreground" Value="{DynamicResource Accent.Orange}"/>
+        </Style>
+      </ControlTheme>
+
+      <!-- Same tile as a plain Button (Settings / scripts new-folder) — hover only, no checked state. -->
+      <ControlTheme x:Key="RailButton" TargetType="Button">
+        <Setter Property="Width" Value="36"/>
+        <Setter Property="Height" Value="36"/>
+        <Setter Property="Margin" Value="0,3"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource Text.Dim}"/>
+        <Setter Property="Template">
+          <ControlTemplate>
+            <Border Background="{TemplateBinding Background}" CornerRadius="9">
+              <ContentPresenter Content="{TemplateBinding Content}"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+          </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover">
+          <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
+          <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+        </Style>
+      </ControlTheme>
+
+      <!-- History filter pill: small rounded toggle; active segment fills Bg.TileActive. -->
+      <ControlTheme x:Key="PillToggle" TargetType="RadioButton">
+        <Setter Property="Padding" Value="9,2"/>
+        <Setter Property="MinHeight" Value="0"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource Text.Dim}"/>
+        <Setter Property="Template">
+          <ControlTemplate>
+            <Border Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+              <ContentPresenter Content="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}"
+                                VerticalAlignment="Center"/>
+            </Border>
+          </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover">
+          <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
+        </Style>
+        <Style Selector="^:checked">
+          <Setter Property="Background" Value="{DynamicResource Bg.TileActive}"/>
+          <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+        </Style>
+      </ControlTheme>
     </ResourceDictionary>
   </Application.Resources>
 
