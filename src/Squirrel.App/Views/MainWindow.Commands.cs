@@ -38,7 +38,7 @@ public partial class MainWindow
         if (_paletteOverlay is not null) { HidePalette(); return true; }
         if (_pendingScriptOverlay is not null) { HidePendingScript(); return true; }
         if (Vm.IsMenuVisible) { Vm.IsMenuVisible = false; return true; }
-        if (Vm.IsBusy) { Vm.CancelExecution(); return true; }
+        if (Vm.Execution.IsBusy) { Vm.Execution.CancelExecution(); return true; }
         return false;
     }
 
@@ -52,11 +52,11 @@ public partial class MainWindow
     private async void OnSaveAsClick(object? sender, RoutedEventArgs e) => await SaveAsAsync();
     private void OnCloseCurrentTabClick(object? sender, RoutedEventArgs e)
     {
-        if (Vm?.SelectedTab is { } tab) Vm.CloseTab(tab);
+        if (Vm?.Workspace.SelectedTab is { } tab) Vm.Workspace.CloseTab(tab);
     }
     private async void OnMenuRenameTabClick(object? sender, RoutedEventArgs e)
     {
-        if (Vm?.SelectedTab is { } tab) await RenameTabAsync(tab);
+        if (Vm?.Workspace.SelectedTab is { } tab) await RenameTabAsync(tab);
     }
     private void OnMenuSchemaClick(object? sender, RoutedEventArgs e) { if (Vm is not null) Vm.ActivePanel = SidePanel.Schema; }
     private void OnMenuScriptsClick(object? sender, RoutedEventArgs e) { if (Vm is not null) Vm.ActivePanel = SidePanel.Scripts; }
@@ -99,11 +99,11 @@ public partial class MainWindow
         r.Register(new KeyCommand(CommandIds.FileSave, "Save", KeyScope.Global, "File", async () => await SaveAsync()));
         r.Register(new KeyCommand(CommandIds.FileSaveAs, "Save As…", KeyScope.Global, "File", async () => await SaveAsAsync()));
         r.Register(new KeyCommand(CommandIds.FileOpen, "Open…", KeyScope.Global, "File", async () => await OpenAsync()));
-        r.Register(KeyCommand.Sync(CommandIds.TabNew, "New tab", KeyScope.Global, "File", () => Vm?.NewTab()));
+        r.Register(KeyCommand.Sync(CommandIds.TabNew, "New tab", KeyScope.Global, "File", () => Vm?.Workspace.NewTab()));
         r.Register(KeyCommand.Sync(CommandIds.TabClose, "Close tab", KeyScope.Global, "File",
-            () => { if (Vm?.SelectedTab is { } tab) Vm.CloseTab(tab); }, canRun: () => Vm?.SelectedTab is not null));
+            () => { if (Vm?.Workspace.SelectedTab is { } tab) Vm.Workspace.CloseTab(tab); }, canRun: () => Vm?.Workspace.SelectedTab is not null));
         r.Register(new KeyCommand(CommandIds.TabRename, "Rename tab…", KeyScope.Global, "File",
-            async () => { if (Vm?.SelectedTab is { } tab) await RenameTabAsync(tab); }, canRun: () => Vm?.SelectedTab is not null));
+            async () => { if (Vm?.Workspace.SelectedTab is { } tab) await RenameTabAsync(tab); }, canRun: () => Vm?.Workspace.SelectedTab is not null));
         r.Register(KeyCommand.Sync(CommandIds.ViewToggleSidePane, "Toggle side pane", KeyScope.Global, "View",
             () => { if (Vm is not null) Vm.SidePaneOpen = !Vm.SidePaneOpen; }));
         r.Register(KeyCommand.Sync(CommandIds.ViewToggleResults, "Toggle results", KeyScope.Global, "View", ToggleResultsVisible));
@@ -112,7 +112,7 @@ public partial class MainWindow
         // Escape only claims the key when there's something to dismiss; otherwise it falls through.
         r.Register(KeyCommand.Sync(CommandIds.AppEscape, "Escape / cancel", KeyScope.Global, "View",
             () => HandleEscape(),
-            canRun: () => Vm is not null && (AnyOverlayOpen || _pendingScriptOverlay is not null || Vm.IsMenuVisible || Vm.IsBusy)));
+            canRun: () => Vm is not null && (AnyOverlayOpen || _pendingScriptOverlay is not null || Vm.IsMenuVisible || Vm.Execution.IsBusy)));
         r.Register(KeyCommand.Sync(CommandIds.PaletteOpen, "Command palette", KeyScope.Global, "View", ShowPalette));
         r.Register(KeyCommand.Sync(CommandIds.TabNext, "Next tab (visual order)", KeyScope.Global, "Tabs", () => SelectAdjacentTab(+1)));
         r.Register(KeyCommand.Sync(CommandIds.TabPrev, "Previous tab (visual order)", KeyScope.Global, "Tabs", () => SelectAdjacentTab(-1)));
@@ -214,7 +214,7 @@ public partial class MainWindow
         if (e.Key is Key.LeftCtrl or Key.RightCtrl && _mruCycling)
         {
             _mruCycling = false;
-            if (Vm?.SelectedTab is { } t) _tabMru.Use(t);
+            if (Vm?.Workspace.SelectedTab is { } t) _tabMru.Use(t);
         }
         if (e.Key is Key.LeftAlt or Key.RightAlt && _altAlone && Vm is not null)
         {
@@ -265,24 +265,24 @@ public partial class MainWindow
         // A selection (or whole buffer) may hold several blank-line-separated statements without
         // semicolons — normalize so they run as a batch instead of one malformed command.
         sql = Squirrel.Sql.StatementSplitter.EnsureSeparated(sql);
-        await Vm.ExecuteAsync(sql);
-        RebuildResults(Vm.SelectedTab);
+        await Vm.Execution.ExecuteAsync(sql);
+        RebuildResults(Vm.Workspace.SelectedTab);
     }
 
     /// <summary>query.runAll: run the entire buffer as a batch, ignoring caret/selection.</summary>
     private async Task RunAllAsync()
     {
         if (Vm is null) return;
-        await Vm.ExecuteAsync(Squirrel.Sql.StatementSplitter.EnsureSeparated(Editor.Text));
-        RebuildResults(Vm.SelectedTab);
+        await Vm.Execution.ExecuteAsync(Squirrel.Sql.StatementSplitter.EnsureSeparated(Editor.Text));
+        RebuildResults(Vm.Workspace.SelectedTab);
     }
 
     /// <summary>tab.next / tab.prev: move to the adjacent tab in visual (strip) order, wrapping around.</summary>
     private void SelectAdjacentTab(int dir)
     {
-        if (Vm is null || Vm.Tabs.Count == 0) return;
-        var i = Vm.SelectedTab is { } t ? Vm.Tabs.IndexOf(t) : 0;
-        Vm.SelectedTab = Vm.Tabs[(i + dir + Vm.Tabs.Count) % Vm.Tabs.Count];
+        if (Vm is null || Vm.Workspace.Tabs.Count == 0) return;
+        var i = Vm.Workspace.SelectedTab is { } t ? Vm.Workspace.Tabs.IndexOf(t) : 0;
+        Vm.Workspace.SelectedTab = Vm.Workspace.Tabs[(i + dir + Vm.Workspace.Tabs.Count) % Vm.Workspace.Tabs.Count];
     }
 
     /// <summary>tab.mruNext / tab.mruPrev: cycle through tabs in most-recently-used order while Ctrl is
@@ -290,20 +290,20 @@ public partial class MainWindow
     private void CycleMru(int dir)
     {
         if (Vm is null) return;
-        _tabMru.Sync(Vm.Tabs);
+        _tabMru.Sync(Vm.Workspace.Tabs);
         var items = _tabMru.Items;
         if (items.Count < 2) return;
         if (!_mruCycling) { _mruCycling = true; _mruIndex = 0; }
         _mruIndex = (_mruIndex + dir + items.Count) % items.Count;
-        Vm.SelectedTab = items[_mruIndex];
+        Vm.Workspace.SelectedTab = items[_mruIndex];
     }
 
     /// <summary>tab.goto{n}: jump to tab n (1-based); n=9 is "last tab" (browser convention). Clamps.</summary>
     private void SelectTabByIndex(int n)
     {
-        if (Vm is null || Vm.Tabs.Count == 0) return;
-        var idx = n >= 9 ? Vm.Tabs.Count - 1 : System.Math.Min(n - 1, Vm.Tabs.Count - 1);
-        Vm.SelectedTab = Vm.Tabs[idx];
+        if (Vm is null || Vm.Workspace.Tabs.Count == 0) return;
+        var idx = n >= 9 ? Vm.Workspace.Tabs.Count - 1 : System.Math.Min(n - 1, Vm.Workspace.Tabs.Count - 1);
+        Vm.Workspace.SelectedTab = Vm.Workspace.Tabs[idx];
     }
 
     private void FocusResultsPane()
@@ -322,14 +322,14 @@ public partial class MainWindow
     private void OpenConnectionPicker()
     {
         if (Vm is null) return;
-        ShowQuickPick("Select connection…", Vm.Connections.Select(c =>
-            (c.Name, (Action)(() => Vm.SelectedTabConnection = c))).ToList());
+        ShowQuickPick("Select connection…", Vm.Connections.Connections.Select(c =>
+            (c.Name, (Action)(() => Vm.Connections.SelectedTabConnection = c))).ToList());
     }
 
     private void OpenDatabasePicker()
     {
         if (Vm is null) return;
-        ShowQuickPick("Select database…", Vm.TabDatabases.Select(d =>
+        ShowQuickPick("Select database…", Vm.Connections.TabDatabases.Select(d =>
             (d, (Action)(() => DatabasePicker.SelectedItem = d))).ToList());
     }
 
@@ -371,16 +371,9 @@ public partial class MainWindow
     private async Task OpenAsync()
     {
         if (Vm is null) return;
-        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        if (await _dialogs.PickOpenScriptAsync(Vm.ScriptsDirectory) is { } path)
         {
-            Title = "Open SQL script",
-            AllowMultiple = false,
-            FileTypeFilter = new[] { SqlFileType },
-            SuggestedStartLocation = await StartFolder(),
-        });
-        if (files.Count > 0 && files[0].TryGetLocalPath() is { } path)
-        {
-            await Vm.LoadScriptIntoSelectedAsync(path);
+            await Vm.Workspace.LoadScriptIntoSelectedAsync(path);
             LoadEditorFromSelectedTab();
         }
     }
@@ -388,9 +381,9 @@ public partial class MainWindow
     private async Task SaveAsync()
     {
         if (Vm is null) return;
-        if (Vm.SelectedTab?.ScriptPath is { } existing)
+        if (Vm.Workspace.SelectedTab?.ScriptPath is { } existing)
         {
-            await Vm.SaveSelectedScriptAsync(existing, Editor.Text);
+            await Vm.Workspace.SaveSelectedScriptAsync(existing, Editor.Text);
             return;
         }
         await SaveAsAsync();
@@ -400,27 +393,15 @@ public partial class MainWindow
     private async Task SaveAsAsync()
     {
         if (Vm is null) return;
-        var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
-        {
-            Title = "Save SQL script",
-            DefaultExtension = "sql",
-            SuggestedFileName = System.IO.Path.GetFileName(Vm.SelectedTab?.ScriptPath ?? "query.sql"),
-            FileTypeChoices = new[] { SqlFileType },
-            SuggestedStartLocation = await StartFolder(),
-        });
-        if (file?.TryGetLocalPath() is { } path)
-            await Vm.SaveSelectedScriptAsync(path, Editor.Text);
+        var suggested = System.IO.Path.GetFileName(Vm.Workspace.SelectedTab?.ScriptPath ?? "query.sql");
+        if (await _dialogs.PickSaveScriptAsync(suggested, Vm.ScriptsDirectory) is { } path)
+            await Vm.Workspace.SaveSelectedScriptAsync(path, Editor.Text);
     }
-
-    private async Task<IStorageFolder?> StartFolder()
-        => Vm?.ScriptsDirectory is { } dir ? await StorageProvider.TryGetFolderFromPathAsync(dir) : null;
-
-    private static readonly FilePickerFileType SqlFileType = new("SQL scripts") { Patterns = new[] { "*.sql" } };
 
     /// <summary>Flush the live editor text/caret into the selected tab (called before close/save session).</summary>
     internal void FlushActiveEditor()
     {
-        if (Vm?.SelectedTab is { } tab)
+        if (Vm?.Workspace.SelectedTab is { } tab)
         {
             tab.Text = Editor.Text;
             tab.CaretOffset = Editor.CaretOffset;

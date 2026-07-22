@@ -30,7 +30,7 @@ public class WorkspaceFlowTests : IDisposable
     private static string User => Env("USER", "postgres");
     private static string Password => Env("PASSWORD", "squirrel");
 
-    private MainWindowViewModel NewVm() => new(
+    private ShellViewModel NewVm() => new(
         new ProviderRegistry(),
         new JsonProjectStore(),
         new JsonSessionStore(),
@@ -54,25 +54,25 @@ public class WorkspaceFlowTests : IDisposable
         var dir = Path.Combine(_root, "proj");
         var vm = NewVm();
         await vm.InitializeAsync(dir);
-        await vm.SeedDemoConnectionAsync(Host, Port, Db, User, Password);
+        await vm.Connections.SeedDemoConnectionAsync(Host, Port, Db, User, Password);
 
         // One named connection, assigned to the restored/seeded tab.
-        var conn = Assert.Single(vm.Connections);
+        var conn = Assert.Single(vm.Connections.Connections);
         Assert.Equal($"{Db} (local)", conn.Name);
         Assert.Equal("local", conn.Environment);
-        Assert.NotNull(vm.SelectedTab);
-        Assert.Equal(conn.Id, vm.SelectedTab!.ConnectionId);
+        Assert.NotNull(vm.Workspace.SelectedTab);
+        Assert.Equal(conn.Id, vm.Workspace.SelectedTab!.ConnectionId);
 
         // Execute against the tab's connection.
-        vm.SelectedTab.Text = "select count(*) from film;";
-        await vm.ExecuteAsync(vm.SelectedTab.Text);
-        Assert.True(vm.SelectedTab.LastResult?.Success, vm.StatusText);
-        Assert.Equal(1, vm.SelectedTab.LastResult!.RowCount);
+        vm.Workspace.SelectedTab.Text = "select count(*) from film;";
+        await vm.Execution.ExecuteAsync(vm.Workspace.SelectedTab.Text);
+        Assert.True(vm.Workspace.SelectedTab.LastResult?.Success, vm.StatusText);
+        Assert.Equal(1, vm.Workspace.SelectedTab.LastResult!.RowCount);
 
         // A new tab inherits the current tab's connection.
-        var t2 = vm.NewTab();
+        var t2 = vm.Workspace.NewTab();
         Assert.Equal(conn.Id, t2.ConnectionId);
-        await vm.ExecuteAsync("select 1;");
+        await vm.Execution.ExecuteAsync("select 1;");
         Assert.True(t2.LastResult?.Success, vm.StatusText);
 
         // Completion schema is available for the selected tab's connection after a run.
@@ -98,30 +98,30 @@ public class WorkspaceFlowTests : IDisposable
         var dir = Path.Combine(_root, "pageproj");
         var vm = NewVm();
         await vm.InitializeAsync(dir);
-        await vm.SeedDemoConnectionAsync(Host, Port, Db, User, Password);
+        await vm.Connections.SeedDemoConnectionAsync(Host, Port, Db, User, Password);
 
         // First page: a single row-returning SELECT is pageable and capped at PageSize.
-        await vm.ExecuteAsync("select * from film order by film_id;");
-        var rs = vm.SelectedTab!.LastResult!;
+        await vm.Execution.ExecuteAsync("select * from film order by film_id;");
+        var rs = vm.Workspace.SelectedTab!.LastResult!;
         Assert.True(rs.Success, vm.StatusText);
         Assert.True(rs.IsPageable);
-        Assert.Equal(MainWindowViewModel.PageSize, rs.Loaded);
+        Assert.Equal(ExecutionViewModel.PageSize, rs.Loaded);
         Assert.True(rs.HasMore);                       // pagila.film has 1000 rows
         Assert.Null(rs.TotalCount);
 
         // Load more appends the next page in place.
-        await vm.LoadMoreAsync(rs);
-        Assert.Equal(MainWindowViewModel.PageSize * 2, rs.Loaded);
+        await vm.Execution.LoadMoreAsync(rs);
+        Assert.Equal(ExecutionViewModel.PageSize * 2, rs.Loaded);
         Assert.True(rs.HasMore);
 
         // Count fills in the total and retires the [Count] affordance.
-        await vm.CountTotalAsync(rs);
+        await vm.Execution.CountTotalAsync(rs);
         Assert.Equal(1000, rs.TotalCount);
         Assert.False(rs.CanCount);
 
         // A multi-statement run is not pageable.
-        await vm.ExecuteAsync("select 1; select 2;");
-        Assert.All(vm.SelectedTab!.Results, r => Assert.False(r.IsPageable));
+        await vm.Execution.ExecuteAsync("select 1; select 2;");
+        Assert.All(vm.Workspace.SelectedTab!.Results, r => Assert.False(r.IsPageable));
 
         await vm.DisposeSessionsAsync();
     }
@@ -134,12 +134,12 @@ public class WorkspaceFlowTests : IDisposable
         var dir = Path.Combine(_root, "fkproj");
         var vm = NewVm();
         await vm.InitializeAsync(dir);
-        await vm.SeedDemoConnectionAsync(Host, Port, Db, User, Password);
+        await vm.Connections.SeedDemoConnectionAsync(Host, Port, Db, User, Password);
         await WaitForSnapshot(vm); // FK detection needs the schema snapshot loaded
 
         // film.language_id is a foreign key into language; film.title is not.
-        await vm.ExecuteAsync("select film_id, title, language_id from film order by film_id;");
-        var rs = vm.SelectedTab!.LastResult!;
+        await vm.Execution.ExecuteAsync("select film_id, title, language_id from film order by film_id;");
+        var rs = vm.Workspace.SelectedTab!.LastResult!;
         var names = rs.Columns.Select(c => c.Name).ToList();
         var langCol = names.IndexOf("language_id");
         Assert.True(langCol >= 0);
@@ -147,18 +147,18 @@ public class WorkspaceFlowTests : IDisposable
         Assert.DoesNotContain(names.IndexOf("title"), rs.ForeignKeyColumns);
 
         // Navigating the FK cell swaps the displayed result in place (no new tab) for the referenced row.
-        var tabsBefore = vm.Tabs.Count;
-        await vm.NavigateForeignKeyAsync(rs, langCol, rs.Rows[0]);
-        Assert.Equal(tabsBefore, vm.Tabs.Count);   // navigation is inline, not a new tab
-        Assert.True(vm.SelectedTab!.CanGoBack);     // the film result is stacked behind
-        var navResult = vm.SelectedTab.LastResult!;
+        var tabsBefore = vm.Workspace.Tabs.Count;
+        await vm.Execution.NavigateForeignKeyAsync(rs, langCol, rs.Rows[0]);
+        Assert.Equal(tabsBefore, vm.Workspace.Tabs.Count);   // navigation is inline, not a new tab
+        Assert.True(vm.Workspace.SelectedTab!.CanGoBack);     // the film result is stacked behind
+        var navResult = vm.Workspace.SelectedTab.LastResult!;
         Assert.True(navResult.Success, vm.StatusText);
         Assert.Equal(1, navResult.RowCount);        // language_id is a PK in language → exactly one row
 
         // Back discards the navigated result and restores the original film result set instance.
-        vm.SelectedTab.GoBack();
-        Assert.False(vm.SelectedTab.CanGoBack);
-        Assert.Same(rs, vm.SelectedTab.LastResult);
+        vm.Workspace.SelectedTab.GoBack();
+        Assert.False(vm.Workspace.SelectedTab.CanGoBack);
+        Assert.Same(rs, vm.Workspace.SelectedTab.LastResult);
 
         await vm.DisposeSessionsAsync();
     }
@@ -183,12 +183,12 @@ public class WorkspaceFlowTests : IDisposable
         {
             var vm = NewVm();
             await vm.InitializeAsync(Path.Combine(_root, "editproj"));
-            await vm.SeedDemoConnectionAsync(Host, Port, Db, User, Password);
+            await vm.Connections.SeedDemoConnectionAsync(Host, Port, Db, User, Password);
             await WaitForSnapshot(vm);
 
-            vm.SelectedTab!.Text = $"select id, name, qty from {tbl} order by id;";
-            await vm.ExecuteAsync(vm.SelectedTab.Text);
-            var rs = vm.SelectedTab.LastResult!;
+            vm.Workspace.SelectedTab!.Text = $"select id, name, qty from {tbl} order by id;";
+            await vm.Execution.ExecuteAsync(vm.Workspace.SelectedTab.Text);
+            var rs = vm.Workspace.SelectedTab.LastResult!;
             Assert.True(rs.IsEditable, vm.StatusText);
             Assert.Equal(2, rs.Rows.Count);
 
@@ -202,8 +202,8 @@ public class WorkspaceFlowTests : IDisposable
             Assert.True(rs.IsRowDeleted(row1));
             Assert.Contains(row1, rs.Rows);                    // still present, just marked
 
-            await vm.SaveChangesAsync(rs);
-            var reloaded = vm.SelectedTab.LastResult!;      // save swaps in a fresh, reloaded result set
+            await vm.Execution.SaveChangesAsync(rs);
+            var reloaded = vm.Workspace.SelectedTab.LastResult!;      // save swaps in a fresh, reloaded result set
             Assert.False(reloaded.HasPendingChanges, vm.StatusText);
             Assert.Equal(2, reloaded.Rows.Count);           // 2 original − 1 delete + 1 insert
 
@@ -240,19 +240,19 @@ public class WorkspaceFlowTests : IDisposable
         {
             var vm = NewVm();
             await vm.InitializeAsync(Path.Combine(_root, "nullproj"));
-            await vm.SeedDemoConnectionAsync(Host, Port, Db, User, Password);
+            await vm.Connections.SeedDemoConnectionAsync(Host, Port, Db, User, Password);
             await WaitForSnapshot(vm);
 
-            vm.SelectedTab!.Text = $"select id, name, qty from {tbl} order by id;";
-            await vm.ExecuteAsync(vm.SelectedTab.Text);
-            var rs = vm.SelectedTab.LastResult!;
+            vm.Workspace.SelectedTab!.Text = $"select id, name, qty from {tbl} order by id;";
+            await vm.Execution.ExecuteAsync(vm.Workspace.SelectedTab.Text);
+            var rs = vm.Workspace.SelectedTab.LastResult!;
             Assert.True(rs.IsEditable, vm.StatusText);
 
             // New row: empty text stays empty; the "(null)" token in an int column becomes SQL NULL.
             var added = rs.AddRow();
             added[1] = "";          // name (text) → empty string, NOT null
             added[2] = "(null)";    // qty (int)  → NULL
-            await vm.SaveChangesAsync(rs);
+            await vm.Execution.SaveChangesAsync(rs);
 
             var check = await raw.ExecuteAsync($"select name, qty from {tbl};", new QueryOptions(), CancellationToken.None);
             var row = Assert.Single(check[0].Rows);
@@ -260,9 +260,9 @@ public class WorkspaceFlowTests : IDisposable
             Assert.Null(row[1]);        // explicit NULL
 
             // Editing the text cell to the null token clears it to NULL.
-            var saved = vm.SelectedTab.LastResult!.Rows[0];
-            saved[1] = "(null)"; vm.SelectedTab.LastResult!.MarkEdited(saved);
-            await vm.SaveChangesAsync(vm.SelectedTab.LastResult!);
+            var saved = vm.Workspace.SelectedTab.LastResult!.Rows[0];
+            saved[1] = "(null)"; vm.Workspace.SelectedTab.LastResult!.MarkEdited(saved);
+            await vm.Execution.SaveChangesAsync(vm.Workspace.SelectedTab.LastResult!);
 
             var check2 = await raw.ExecuteAsync($"select name from {tbl};", new QueryOptions(), CancellationToken.None);
             Assert.Null(Assert.Single(check2[0].Rows)[0]);
@@ -283,22 +283,22 @@ public class WorkspaceFlowTests : IDisposable
         await vm.InitializeAsync(dir);
 
         // Scratch rename is a label only.
-        var tab = vm.SelectedTab!;
+        var tab = vm.Workspace.SelectedTab!;
         Assert.StartsWith("Scratch", tab.DisplayName);
-        await vm.RenameTabAsync(tab, "My analysis");
+        await vm.Workspace.RenameTabAsync(tab, "My analysis");
         Assert.Equal("My analysis", tab.Header);
 
         // Save it, then rename the file on disk.
         var path = Path.Combine(vm.ScriptsDirectory!, "daily.sql");
-        await vm.SaveSelectedScriptAsync(path, "select 1;");
-        Assert.Contains(vm.Scripts, s => s.Name == "daily.sql");
+        await vm.Workspace.SaveSelectedScriptAsync(path, "select 1;");
+        Assert.Contains(vm.Scripts.Scripts, s => s.Name == "daily.sql");
 
-        await vm.RenameScriptAsync(path, "weekly");
+        await vm.Scripts.RenameScriptAsync(path, "weekly");
         Assert.False(File.Exists(path));
         Assert.True(File.Exists(Path.Combine(vm.ScriptsDirectory!, "weekly.sql")));
         Assert.Equal("weekly.sql", tab.Header);
-        Assert.Contains(vm.Scripts, s => s.Name == "weekly.sql");
-        Assert.DoesNotContain(vm.Scripts, s => s.Name == "daily.sql");
+        Assert.Contains(vm.Scripts.Scripts, s => s.Name == "weekly.sql");
+        Assert.DoesNotContain(vm.Scripts.Scripts, s => s.Name == "daily.sql");
     }
 
     [Fact]
@@ -310,8 +310,8 @@ public class WorkspaceFlowTests : IDisposable
 
         // Save a script, then edit its buffer without saving.
         var path = Path.Combine(vm.ScriptsDirectory!, "report.sql");
-        await vm.SaveSelectedScriptAsync(path, "select 1;");
-        var tab = vm.SelectedTab!;
+        await vm.Workspace.SaveSelectedScriptAsync(path, "select 1;");
+        var tab = vm.Workspace.SelectedTab!;
         Assert.False(tab.IsDirty);
 
         tab.Text = "select 1; -- WIP";
@@ -322,13 +322,13 @@ public class WorkspaceFlowTests : IDisposable
         var vm2 = NewVm();
         await vm2.InitializeAsync(dir);
 
-        var restored = Assert.Single(vm2.Tabs, t => t.Header == "report.sql");
+        var restored = Assert.Single(vm2.Workspace.Tabs, t => t.Header == "report.sql");
         Assert.Equal("select 1; -- WIP", restored.Text);                 // unsaved edits preserved
         Assert.True(restored.IsDirty);                                   // still marked modified
         Assert.Equal("select 1;", await File.ReadAllTextAsync(path));    // disk untouched
 
         // Saving writes disk and clears the marker.
-        await vm2.SaveSelectedScriptAsync(path, restored.Text);
+        await vm2.Workspace.SaveSelectedScriptAsync(path, restored.Text);
         Assert.False(restored.IsDirty);
         Assert.Equal("select 1; -- WIP", await File.ReadAllTextAsync(path));
     }
@@ -378,34 +378,34 @@ public class WorkspaceFlowTests : IDisposable
 
         var vm = NewVm();
         await vm.InitializeAsync(Path.Combine(_root, "dbswitch"));
-        await vm.SeedDemoConnectionAsync(Host, Port, Db, User, Password);
-        var tab = vm.SelectedTab!;
+        await vm.Connections.SeedDemoConnectionAsync(Host, Port, Db, User, Password);
+        var tab = vm.Workspace.SelectedTab!;
 
         // Default DB is the connection's own.
         Assert.Equal(Db, tab.DatabaseName);
 
         // Switch to the always-present 'postgres' maintenance DB (same server, reused credentials).
-        vm.SetTabDatabase(tab, "postgres");
+        vm.Connections.SetTabDatabase(tab, "postgres");
         Assert.Equal("postgres", tab.DatabaseName);
 
-        await vm.ExecuteAsync("select current_database();");
+        await vm.Execution.ExecuteAsync("select current_database();");
         Assert.True(tab.LastResult?.Success, vm.StatusText);
         Assert.Equal("postgres", tab.LastResult!.Rows[0][0]?.ToString());
 
         // Switch back — the original database's tables resolve again.
-        vm.SetTabDatabase(tab, Db);
-        await vm.ExecuteAsync("select current_database();");
+        vm.Connections.SetTabDatabase(tab, Db);
+        await vm.Execution.ExecuteAsync("select current_database();");
         Assert.Equal(Db, tab.LastResult!.Rows[0][0]?.ToString());
     }
 
-    private static async Task<Core.Schema.ISchemaSnapshot?> WaitForSnapshot(MainWindowViewModel vm)
+    private static async Task<Core.Schema.ISchemaSnapshot?> WaitForSnapshot(ShellViewModel vm)
     {
         for (var i = 0; i < 50; i++)
         {
-            var snap = vm.SnapshotForSelectedTab();
+            var snap = vm.Execution.SnapshotForSelectedTab();
             if (snap is not null) return snap;
             await Task.Delay(100);
         }
-        return vm.SnapshotForSelectedTab();
+        return vm.Execution.SnapshotForSelectedTab();
     }
 }

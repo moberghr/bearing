@@ -30,13 +30,7 @@ public partial class MainWindow
     private async Task AddConnectionAsync()
     {
         if (Vm is null) return;
-        var dialog = new ConnectionDialog(null, null, (i, p, ct) => Vm.TestConnectionAsync(i, p, ct), Vm.SecretStorageSecure);
-        var result = await dialog.ShowDialog<ConnectionDialogResult?>(this);
-        if (result is { Delete: false }) await Vm.AddOrUpdateConnectionAsync(result.Connection, result.Password);
+        var result = await _dialogs.ShowConnectionDialogAsync(null, null, (i, p, ct) => Vm.Connections.TestConnectionAsync(i, p, ct), Vm.SecretStorageSecure);
+        if (result is { Delete: false }) await Vm.Connections.AddOrUpdateConnectionAsync(result.Connection, result.Password);
     }
-
-    /// <summary>Write-guard prompt for the VM: confirm a risky batch against a guarded connection.</summary>
-    private Task<bool> ConfirmDangerousWriteAsync(
-        Squirrel.Core.Data.ConnectionInfo connection, System.Collections.Generic.IReadOnlyList<string> verbs)
-        => new ConfirmWriteDialog(connection, verbs).ShowDialog<bool>(this);
 }

@@ -37,7 +37,7 @@ public partial class MainWindow
     {
         if (Vm is null) return;
         HidePendingScript();
-        var statements = Vm.PreviewChangeStatements(rs);
+        var statements = Vm.Execution.PreviewChangeStatements(rs);
         if (statements.Count == 0) return;
         if (OverlayLayer.GetOverlayLayer(this) is not { } layer) return;
 
@@ -65,7 +65,7 @@ public partial class MainWindow
         }
     }
 
-    private Control BuildPendingScriptPanel(ViewModels.ResultSetViewModel rs, System.Collections.Generic.IReadOnlyList<MainWindowViewModel.PendingStatement> statements)
+    private Control BuildPendingScriptPanel(ViewModels.ResultSetViewModel rs, System.Collections.Generic.IReadOnlyList<ViewModels.PendingStatement> statements)
     {
         // Header: "N statements" + copy.
         var count = new TextBlock
@@ -98,9 +98,9 @@ public partial class MainWindow
 
         // Footer: Discard + Run & save.
         var discard = new Button { Content = "Discard", Margin = new Thickness(0, 0, 8, 0), Background = Brushes.Transparent, BorderBrush = ThemeBrush("Error.Red"), BorderThickness = new Thickness(1), Foreground = ThemeBrush("Error.Red") };
-        discard.Click += async (_, _) => { HidePendingScript(); if (Vm is not null) { await Vm.DiscardChangesAsync(rs); RebuildResults(Vm.SelectedTab); } };
+        discard.Click += async (_, _) => { HidePendingScript(); if (Vm is not null) { await Vm.Execution.DiscardChangesAsync(rs); RebuildResults(Vm.Workspace.SelectedTab); } };
         var run = new Button { Content = "✓ Run & save", Background = ThemeBrush("Ok.Green"), Foreground = ThemeBrush("Bg.Editor") };
-        run.Click += async (_, _) => { HidePendingScript(); if (Vm is not null) { await Vm.SaveChangesAsync(rs); ResultsView.RefreshRowHighlights(); } };
+        run.Click += async (_, _) => { HidePendingScript(); if (Vm is not null) { await Vm.Execution.SaveChangesAsync(rs); ResultsView.RefreshRowHighlights(); } };
         var footerButtons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         footerButtons.Children.Add(discard);
         footerButtons.Children.Add(run);
@@ -135,37 +135,4 @@ public partial class MainWindow
         "DELETE" => ThemeBrush("Error.Red"),
         _ => ThemeBrush("Text.Primary"),
     };
-
-    /// <summary>Show SQL in a read-only, monospace preview window (selectable to copy).</summary>
-    private void ShowSqlPreview(string sql, string title = "SQL preview — changes to save")
-    {
-        var box = new AvaloniaEdit.TextEditor
-        {
-            Text = sql,
-            IsReadOnly = true,
-            FontFamily = new FontFamily("Cascadia Code,Cascadia Mono,Consolas,Menlo,monospace"),
-            FontSize = 13,
-            Margin = new Thickness(8),
-            ShowLineNumbers = false,
-            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
-            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
-        };
-
-        var win = new Window
-        {
-            Title = title,
-            Width = 720,
-            Height = 420,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-        };
-        var close = new Button { Content = "Close", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right, Margin = new Thickness(8, 0, 8, 8) };
-        close.Click += (_, _) => win.Close();
-        DockPanel.SetDock(close, Dock.Bottom);
-
-        var panel = new DockPanel();
-        panel.Children.Add(close);
-        panel.Children.Add(box);
-        win.Content = panel;
-        win.Show(this);
-    }
 }

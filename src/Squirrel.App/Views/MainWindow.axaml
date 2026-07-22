@@ -5,7 +5,7 @@
         xmlns:vm="using:Squirrel.App.ViewModels"
         xmlns:data="using:Squirrel.Core.Data"
         x:Class="Squirrel.App.Views.MainWindow"
-        x:DataType="vm:MainWindowViewModel"
+        x:DataType="vm:ShellViewModel"
         Width="1120" Height="760"
         Background="{DynamicResource Bg.Editor}"
         Foreground="{DynamicResource Text.Primary}"
@@ -154,7 +154,7 @@
 
         <!-- Server (connection) -->
         <ComboBox x:Name="ConnectionPicker" Classes="pill" Width="210"
-                  ItemsSource="{Binding Connections}" SelectedItem="{Binding SelectedTabConnection}"
+                  ItemsSource="{Binding Connections.Connections}" SelectedItem="{Binding Connections.SelectedTabConnection}"
                   PlaceholderText="— server —" ToolTip.Tip="Server / connection">
           <ComboBox.ItemTemplate>
             <DataTemplate x:DataType="data:ConnectionInfo">
@@ -175,12 +175,12 @@
              (SyncDbPicker) because TabDatabases is populated asynchronously, which defeats a plain
              SelectedItem binding's timing. -->
         <ComboBox x:Name="DatabasePicker" Classes="pill" Width="150"
-                  ItemsSource="{Binding TabDatabases}" SelectionChanged="OnDatabaseSelected"
+                  ItemsSource="{Binding Connections.TabDatabases}" SelectionChanged="OnDatabaseSelected"
                   PlaceholderText="— db —" ToolTip.Tip="Database (switch DB on this server)"/>
 
         <!-- Run: understated 30×30 icon button (doubles as Cancel while busy; Esc also cancels) -->
         <Button x:Name="RunButton" Classes="rail" Theme="{StaticResource RailButton}" Width="30" Height="30"
-                Click="OnRunClick" Margin="6,0,0,0" ToolTip.Tip="{Binding RunButtonText}">
+                Click="OnRunClick" Margin="6,0,0,0" ToolTip.Tip="{Binding Execution.RunButtonText}">
           <Path Data="{StaticResource Icon.Run}" Fill="{DynamicResource Ok.Green}" Stretch="Uniform"
                 Width="14" Height="14"/>
         </Button>
@@ -266,7 +266,7 @@
         <Border DockPanel.Dock="Top" Padding="4,4,4,0" Background="{DynamicResource Bg.Chrome}"
                 BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
           <StackPanel Orientation="Horizontal">
-            <TabStrip x:Name="TabStrip" ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab}">
+            <TabStrip x:Name="TabStrip" ItemsSource="{Binding Workspace.Tabs}" SelectedItem="{Binding Workspace.SelectedTab}">
               <TabStrip.Styles>
                 <!-- Compact, underline-style tabs. Retemplated so the only selected marker is a
                      bottom border at the tab's true bottom edge (Fluent's default draws an oversized

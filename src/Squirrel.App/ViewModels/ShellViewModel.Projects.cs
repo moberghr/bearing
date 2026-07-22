@@ -18,7 +18,7 @@ using Squirrel.Core.Workspace;
 using Squirrel.Sql;
 
 namespace Squirrel.App.ViewModels;
-public sealed partial class MainWindowViewModel
+public sealed partial class ShellViewModel
 {
     // ---- Project lifecycle -------------------------------------------------------------------
 
@@ -37,11 +37,11 @@ public sealed partial class MainWindowViewModel
             SidePaneOpen = session?.SidePaneOpen ?? true;
             SidePaneWidth = session?.SidePaneWidth ?? 260;
             ResultsViewMode = session?.ResultsViewMode ?? Squirrel.Core.Workspace.ResultsViewMode.Stacked;
-            DefaultConnectionId = session?.ActiveConnectionId
+            _ctx.DefaultConnectionId = session?.ActiveConnectionId
                                   ?? _project.Manifest.Connections.FirstOrDefault()?.Id;
 
-            await RestoreTabsAsync(session);
-            foreach (var tab in Tabs) ApplyConnectionDisplay(tab);
+            await _workspace.RestoreTabsAsync(session);
+            foreach (var tab in _workspace.Tabs) ApplyConnectionDisplay(tab);
 
             UpdateTitle();
             OnPropertyChanged(nameof(ProjectDirectory));
@@ -54,7 +54,7 @@ public sealed partial class MainWindowViewModel
         catch (Exception ex)
         {
             StatusText = $"Project load error: {ex.Message}";
-            if (Tabs.Count == 0) NewTab();
+            if (_workspace.Tabs.Count == 0) _workspace.NewTab();
         }
     }
 
@@ -88,9 +88,9 @@ public sealed partial class MainWindowViewModel
         SaveWorkspace();
         await _sessions.DisposeAsync();
         await _schemaBrowser.DisposeAsync();
-        IsConnected = false;
-        DefaultConnectionId = null;
-        Tabs.Clear();
+        _ctx.IsConnected = false;
+        _ctx.DefaultConnectionId = null;
+        _workspace.Tabs.Clear();
         await InitializeAsync(projectDirectory);
     }
 
@@ -99,15 +99,15 @@ public sealed partial class MainWindowViewModel
         SaveWorkspace();
         await _sessions.DisposeAsync();
         await _schemaBrowser.DisposeAsync();
-        IsConnected = false;
-        DefaultConnectionId = null;
-        Tabs.Clear();
+        _ctx.IsConnected = false;
+        _ctx.DefaultConnectionId = null;
+        _workspace.Tabs.Clear();
         _project = await _projectStore.CreateAsync(projectDirectory, name, CancellationToken.None);
         await _recentProjects.AddAsync(_project.Directory, CancellationToken.None);
         await RefreshRecentAsync();
         RefreshConnections();
         RefreshScripts();
-        NewTab();
+        _workspace.NewTab();
         UpdateTitle();
         OnPropertyChanged(nameof(ProjectDirectory));
         OnPropertyChanged(nameof(CurrentProjectName));

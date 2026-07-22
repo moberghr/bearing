@@ -4,7 +4,7 @@
        Squirrel.Desktop so this stays referenceable from tests without an entry-point clash. -->
   <PropertyGroup>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
-    <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
   </PropertyGroup>
 
   <!-- Brand/app icon assets (window icon, in-app mark) shipped as Avalonia resources. -->

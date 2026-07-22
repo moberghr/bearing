@@ -7,6 +7,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
+using Squirrel.App.Services;
 using Squirrel.App.ViewModels;
 using Squirrel.App.Views;
 
@@ -14,7 +15,7 @@ namespace Squirrel.App.Controls;
 
 /// <summary>
 /// The left side panel: the swappable Connections / Scripts / History views plus the pane resize grip.
-/// Its DataContext is the shell <see cref="MainWindowViewModel"/> (inherited from the window), so every
+/// Its DataContext is the shell <see cref="ShellViewModel"/> (inherited from the window), so every
 /// binding resolves against the same view-model the shell uses. Self-contained interactions (tree fuzzy
 /// jump, scripts drag &amp; drop, connection add/edit/delete dialogs, history preview) live here; the three
 /// callbacks below hand back the actions the shell still owns (the editor, the SQL-preview overlay).
@@ -39,8 +40,8 @@ public partial class SidebarView : UserControl
         DataContextChanged += OnDataContextChanged;
     }
 
-    private MainWindowViewModel? Vm => DataContext as MainWindowViewModel;
-    private Window? Host => TopLevel.GetTopLevel(this) as Window;
+    private ShellViewModel? Vm => DataContext as ShellViewModel;
+    private readonly IDialogService _dialogs = new DialogService(); // owns dialog construction (phase 5)
 
     /// <summary>The active panel's primary control for F6 focus cycling, or null when collapsed.</summary>
     public Control? FocusTarget
@@ -56,7 +57,7 @@ public partial class SidebarView : UserControl
 
     // The history preview row (row 2 of HistoryGrid) grows to show the selected query and collapses to 0
     // when nothing is selected. Subscribing follows the VM so it re-hooks if the shell swaps view-models.
-    private MainWindowViewModel? _hooked;
+    private ShellViewModel? _hooked;
 
     private void OnDataContextChanged(object? sender, System.EventArgs e)
     {
@@ -158,7 +159,7 @@ public partial class SidebarView : UserControl
                 if (n.IsExpanded) Walk(n.Children);
             }
         }
-        if (Vm is not null) Walk(Vm.ServerNodes);
+        if (Vm is not null) Walk(Vm.Connections.ServerNodes);
         return list;
     }
 
@@ -179,14 +180,13 @@ public partial class SidebarView : UserControl
 
     private async void OnEditServer(object? sender, RoutedEventArgs e)
     {
-        if (Vm is null || Host is not { } owner || NodeOf(sender) is not ServerNodeViewModel server) return;
+        if (Vm is null || NodeOf(sender) is not ServerNodeViewModel server) return;
         var existing = server.Connection;
-        var password = await Vm.GetConnectionPasswordAsync(existing.Id);
-        var dialog = new ConnectionDialog(existing, password, (i, p, ct) => Vm.TestConnectionAsync(i, p, ct), Vm.SecretStorageSecure);
-        var result = await dialog.ShowDialog<ConnectionDialogResult?>(owner);
+        var password = await Vm.Connections.GetConnectionPasswordAsync(existing.Id);
+        var result = await _dialogs.ShowConnectionDialogAsync(existing, password, (i, p, ct) => Vm.Connections.TestConnectionAsync(i, p, ct), Vm.SecretStorageSecure);
         if (result is null) return;
-        if (result.Delete) await Vm.DeleteConnectionAsync(existing.Id);
-        else await Vm.AddOrUpdateConnectionAsync(result.Connection, result.Password);
+        if (result.Delete) await Vm.Connections.DeleteConnectionAsync(existing.Id);
+        else await Vm.Connections.AddOrUpdateConnectionAsync(result.Connection, result.Password);
     }
 
     private void OnUseConnectionInTab(object? sender, RoutedEventArgs e) => AssignConnectionToTab(NodeOf(sender));
@@ -195,20 +195,20 @@ public partial class SidebarView : UserControl
 
     private void AssignConnectionToTab(SchemaNodeViewModel? node)
     {
-        if (Vm?.SelectedTab is { } tab && node is ServerNodeViewModel server)
-            Vm.SetTabConnection(tab, server.Connection.Id);
+        if (Vm?.Workspace.SelectedTab is { } tab && node is ServerNodeViewModel server)
+            Vm.Connections.SetTabConnection(tab, server.Connection.Id);
     }
 
     private async void OnDeleteServer(object? sender, RoutedEventArgs e)
     {
         if (Vm is not null && NodeOf(sender) is ServerNodeViewModel server)
-            await Vm.DeleteConnectionAsync(server.Connection.Id);
+            await Vm.Connections.DeleteConnectionAsync(server.Connection.Id);
     }
 
     private async void OnRefreshServer(object? sender, RoutedEventArgs e)
     {
         if (Vm is not null && NodeOf(sender) is ServerNodeViewModel server)
-            await Vm.RefreshServerMetadataAsync(server.Connection.Id);
+            await Vm.Connections.RefreshServerMetadataAsync(server.Connection.Id);
     }
 
     private async void OnShowDefinition(object? sender, RoutedEventArgs e)
@@ -233,7 +233,7 @@ public partial class SidebarView : UserControl
     // ---- scripts ----
 
     // Scripts panel ＋ button: a fresh scratch tab. The editor re-syncs reactively off the SelectedTab change.
-    private void OnNewTabClick(object? sender, RoutedEventArgs e) => Vm?.NewTab();
+    private void OnNewTabClick(object? sender, RoutedEventArgs e) => Vm?.Workspace.NewTab();
 
     private static ScriptItem? ScriptOf(object? sender) => (sender as Control)?.DataContext as ScriptItem;
 
@@ -244,46 +244,42 @@ public partial class SidebarView : UserControl
     {
         if (Vm is not null && script is not null)
         {
-            await Vm.OpenScriptInNewTabAsync(script.FullPath);
+            await Vm.Workspace.OpenScriptInNewTabAsync(script.FullPath);
             EditorSyncRequested?.Invoke();
         }
     }
 
     private async void OnRenameScriptClick(object? sender, RoutedEventArgs e)
     {
-        if (Vm is null || Host is not { } owner || ScriptOf(sender) is not { } script) return;
-        var prompt = new TextPromptDialog("Rename script file", script.Name);
-        var name = await prompt.ShowDialog<string?>(owner);
-        if (name is not null) await Vm.RenameScriptAsync(script.FullPath, name);
+        if (Vm is null || ScriptOf(sender) is not { } script) return;
+        var name = await _dialogs.ShowTextPromptAsync("Rename script file", script.Name);
+        if (name is not null) await Vm.Scripts.RenameScriptAsync(script.FullPath, name);
     }
 
     private async void OnNewScriptFolderClick(object? sender, RoutedEventArgs e)
     {
-        if (Vm is null || Host is not { } owner) return;
-        var prompt = new TextPromptDialog("New folder name", "");
-        var name = await prompt.ShowDialog<string?>(owner);
-        if (!string.IsNullOrWhiteSpace(name)) Vm.CreateScriptFolder(name);
+        if (Vm is null) return;
+        var name = await _dialogs.ShowTextPromptAsync("New folder name", "");
+        if (!string.IsNullOrWhiteSpace(name)) Vm.Scripts.CreateScriptFolder(name);
     }
 
     private static ScriptFolderViewModel? FolderOf(object? sender) => (sender as Control)?.DataContext as ScriptFolderViewModel;
 
     private async void OnNewSubfolderClick(object? sender, RoutedEventArgs e)
     {
-        if (Vm is null || Host is not { } owner || FolderOf(sender) is not { } folder) return;
-        var prompt = new TextPromptDialog("New subfolder name", "");
-        var name = await prompt.ShowDialog<string?>(owner);
-        if (!string.IsNullOrWhiteSpace(name)) Vm.CreateScriptFolder(name, folder.FullPath);
+        if (Vm is null || FolderOf(sender) is not { } folder) return;
+        var name = await _dialogs.ShowTextPromptAsync("New subfolder name", "");
+        if (!string.IsNullOrWhiteSpace(name)) Vm.Scripts.CreateScriptFolder(name, folder.FullPath);
     }
 
     private async void OnNewScriptInFolderClick(object? sender, RoutedEventArgs e)
     {
-        if (Vm is null || Host is not { } owner || FolderOf(sender) is not { } folder) return;
-        var prompt = new TextPromptDialog("New script name", "");
-        var name = await prompt.ShowDialog<string?>(owner);
+        if (Vm is null || FolderOf(sender) is not { } folder) return;
+        var name = await _dialogs.ShowTextPromptAsync("New script name", "");
         if (string.IsNullOrWhiteSpace(name)) return;
-        if (await Vm.CreateScriptFileAsync(folder.FullPath, name) is { } path)
+        if (await Vm.Scripts.CreateScriptFileAsync(folder.FullPath, name) is { } path)
         {
-            await Vm.OpenScriptInNewTabAsync(path);
+            await Vm.Workspace.OpenScriptInNewTabAsync(path);
             EditorSyncRequested?.Invoke();
         }
     }
@@ -339,7 +335,7 @@ public partial class SidebarView : UserControl
     {
         if (Vm is not null && FolderOf(sender) is { } folder && e.DataTransfer.TryGetValue(ScriptPathFormat) is string src)
         {
-            Vm.MoveScript(src, folder.FullPath);
+            Vm.Scripts.MoveScript(src, folder.FullPath);
             e.Handled = true;
         }
     }
@@ -348,7 +344,7 @@ public partial class SidebarView : UserControl
     {
         if (Vm?.ScriptsDirectory is { } root && e.DataTransfer.TryGetValue(ScriptPathFormat) is string src)
         {
-            Vm.MoveScript(src, root);
+            Vm.Scripts.MoveScript(src, root);
             e.Handled = true;
         }
     }
@@ -365,7 +361,7 @@ public partial class SidebarView : UserControl
     {
         if (Vm is not null && (sender as Control)?.DataContext is HistoryRowViewModel row && row.Sql.Length > 0)
         {
-            Vm.NewTab(row.Sql);
+            Vm.Workspace.NewTab(row.Sql);
             EditorSyncRequested?.Invoke();
         }
     }

@@ -57,7 +57,8 @@ public partial class App : Application
             IQueryLog queryLog = new SqliteQueryLog(retentionDays: settings.QueryLogRetentionDays);
             IRecentProjects recentProjects = new FileRecentProjects();
 
-            var vm = new MainWindowViewModel(providers, projectStore, sessionStore, queryLog, recentProjects);
+            var vm = new ShellViewModel(providers, projectStore, sessionStore, queryLog, recentProjects,
+                dialogs: new Views.DialogService());
             LogStartup("vm created");
             var window = new MainWindow { DataContext = vm };
             LogStartup("window constructed");
@@ -95,7 +96,7 @@ public partial class App : Application
         base.OnFrameworkInitializationCompleted();
     }
 
-    private static async Task InitializeAsync(MainWindowViewModel vm)
+    private static async Task InitializeAsync(ShellViewModel vm)
     {
         var secretStore = await SecretStoreFactory.CreateAsync();
         vm.AttachSecretStore(secretStore);
@@ -104,7 +105,7 @@ public partial class App : Application
         // Opt-in convenience: seed the local pagila demo connection only when SQUIRREL_SEED_DEMO is set.
         // By default a fresh profile starts as an empty project — no connections, no history.
         if (Environment.GetEnvironmentVariable("SQUIRREL_SEED_DEMO") is { Length: > 0 })
-            await vm.SeedDemoConnectionAsync("localhost", 5434, "pagila", "postgres", "squirrel");
+            await vm.Connections.SeedDemoConnectionAsync("localhost", 5434, "pagila", "postgres", "squirrel");
         LogStartup("project ready");
     }
 

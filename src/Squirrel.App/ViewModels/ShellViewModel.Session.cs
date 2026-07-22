@@ -18,7 +18,7 @@ using Squirrel.Core.Workspace;
 using Squirrel.Sql;
 
 namespace Squirrel.App.ViewModels;
-public sealed partial class MainWindowViewModel
+public sealed partial class ShellViewModel
 {
     // ---- Session persistence (synchronous; safe on the close path) ---------------------------
 
@@ -31,7 +31,7 @@ public sealed partial class MainWindowViewModel
 
     private SessionState BuildSession()
     {
-        var editors = Tabs.Select(t => new OpenEditor
+        var editors = _workspace.Tabs.Select(t => new OpenEditor
         {
             ScriptPath = t.ScriptPath is not null && _project is not null
                 ? Path.GetRelativePath(_project.Directory, t.ScriptPath)
@@ -44,9 +44,9 @@ public sealed partial class MainWindowViewModel
 
         return new SessionState
         {
-            ActiveConnectionId = SelectedTab?.ConnectionId ?? DefaultConnectionId,
+            ActiveConnectionId = _workspace.SelectedTab?.ConnectionId ?? _ctx.DefaultConnectionId,
             OpenEditors = editors,
-            SelectedEditorIndex = SelectedTab is null ? 0 : Math.Max(0, Tabs.IndexOf(SelectedTab)),
+            SelectedEditorIndex = _workspace.SelectedTab is null ? 0 : Math.Max(0, _workspace.Tabs.IndexOf(_workspace.SelectedTab)),
             LastOpenedUtc = DateTime.UtcNow.ToString("o"),
             SidePaneOpen = SidePaneOpen,
             SidePaneWidth = SidePaneWidth,

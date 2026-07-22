@@ -12,7 +12,7 @@ namespace Squirrel.App.ViewModels;
 /// One result set from a run, with its own mutable row buffer so paging can append in place.
 /// A grid result exposes <see cref="Columns"/> + <see cref="Rows"/>; non-query / error results
 /// carry <see cref="Message"/> / <see cref="Error"/> instead. When <see cref="IsPageable"/> the
-/// footer offers "load more" / "count", driven by <see cref="MainWindowViewModel"/> against
+/// footer offers "load more" / "count", driven by <see cref="ShellViewModel"/> against
 /// <see cref="SourceSql"/>. This is the seed of the per-result-set model Phases 2–3 build on
 /// (base-table mapping, editability, PK).
 /// </summary>

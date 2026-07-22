@@ -2,7 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Squirrel.App.ViewModels"
              x:Class="Squirrel.App.Controls.SidebarView"
-             x:DataType="vm:MainWindowViewModel">
+             x:DataType="vm:ShellViewModel">
         <DockPanel LastChildFill="True">
           <!-- Drag grip to resize the pane (updates SidePaneWidth → OpenPaneLength live). -->
           <Border DockPanel.Dock="Right" Width="5" Background="Transparent" Cursor="SizeWestEast"
@@ -23,12 +23,12 @@
                  cycles to the next match (handled in code-behind OnSchemaTreeTextInput/KeyDown). -->
             <!-- KeyDown is hooked in the tunnel phase (code-behind) so Up/Down can pre-empt the tree's
                  own node navigation and cycle matches instead. -->
-            <TreeView x:Name="SchemaTree" ItemsSource="{Binding ServerNodes}" Background="Transparent"
+            <TreeView x:Name="SchemaTree" ItemsSource="{Binding Connections.ServerNodes}" Background="Transparent"
                       TextInput="OnSchemaTreeTextInput">
               <TreeView.Styles>
                 <!-- Two-way bind each item's expansion to its node so children load lazily on first expand. -->
                 <Style Selector="TreeViewItem">
-                  <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+                  <Setter Property="IsExpanded" Value="{ReflectionBinding IsExpanded, Mode=TwoWay}"/>
                 </Style>
               </TreeView.Styles>
               <TreeView.DataTemplates>
@@ -82,15 +82,15 @@
               <Button Grid.Column="2" Content="＋" Padding="6,0" Click="OnNewTabClick"
                       ToolTip.Tip="New script (Ctrl+T)"/>
             </Grid>
-            <TextBox DockPanel.Dock="Top" Text="{Binding ScriptFilter, Mode=TwoWay}"
+            <TextBox DockPanel.Dock="Top" Text="{Binding Scripts.ScriptFilter, Mode=TwoWay}"
                      PlaceholderText="Filter scripts…" Margin="0,0,0,6"/>
             <!-- Enter opens the selected script; drag a script onto a folder to move it (OnScripts* handlers). -->
-            <TreeView x:Name="ScriptsTree" ItemsSource="{Binding ScriptNodes}" Background="Transparent"
+            <TreeView x:Name="ScriptsTree" ItemsSource="{Binding Scripts.ScriptNodes}" Background="Transparent"
                       KeyDown="OnScriptsTreeKeyDown" DragDrop.AllowDrop="True"
                       DragDrop.DragOver="OnScriptDragOver" DragDrop.Drop="OnScriptDropOnRoot">
               <TreeView.Styles>
                 <Style Selector="TreeViewItem">
-                  <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+                  <Setter Property="IsExpanded" Value="{ReflectionBinding IsExpanded, Mode=TwoWay}"/>
                 </Style>
               </TreeView.Styles>
               <TreeView.DataTemplates>
@@ -173,7 +173,7 @@
                                  Foreground="{DynamicResource Text.Faint}" Margin="2,2,2,3"/>
                       <ListBox Classes="history" ItemsSource="{Binding Rows}" Background="Transparent"
                                BorderThickness="0" Padding="0"
-                               SelectedItem="{Binding DataContext.History.SelectedRow, RelativeSource={RelativeSource AncestorType=Window}, Mode=TwoWay}">
+                               SelectedItem="{ReflectionBinding DataContext.History.SelectedRow, RelativeSource={RelativeSource AncestorType=Window}, Mode=TwoWay}">
                         <ListBox.ItemTemplate>
                           <DataTemplate x:DataType="vm:HistoryRowViewModel">
                             <Grid ColumnDefinitions="Auto,*,Auto" Background="Transparent"

@@ -39,7 +39,8 @@ public partial class MainWindow : Window
     private bool _mruCycling;   // true while Ctrl is held during a Ctrl+Tab cycle
     private int _mruIndex;
     private System.Collections.Generic.HashSet<string> _navCommands = new();
-    private bool _loadingEditor;          // guards editor<->tab sync while swapping tabs
+    private readonly EditorTextBehavior _editorText;   // editor <-> SelectedTab buffer/caret sync
+    private readonly Squirrel.App.Services.IDialogService _dialogs = new DialogService(); // owns dialog/picker construction
     private bool _suppressProjectChange;   // guards the project combo during programmatic updates
 
     public MainWindow()
@@ -51,7 +52,7 @@ public partial class MainWindow : Window
         InstallSqlHighlighting();
         App.LogStartup("TextMate installed");
 
-        _completion = new CompletionController(Editor, new CompletionEngine(), () => Vm?.SnapshotForSelectedTab());
+        _completion = new CompletionController(Editor, new CompletionEngine(), () => Vm?.Execution.SnapshotForSelectedTab());
         _folding = new SqlFoldingController(Editor); // installs the fold margin (left of the text)
         Editor.TextArea.LeftMargins.Add(_statementHighlight); // its own column, right of the line numbers
 
@@ -84,36 +85,36 @@ public partial class MainWindow : Window
         // interactions and hands back the three actions the shell still owns.
         Sidebar.AddConnectionRequested = () => _ = AddConnectionAsync();
         Sidebar.EditorSyncRequested = LoadEditorFromSelectedTab;
-        Sidebar.SqlPreviewRequested = ShowSqlPreview;
+        Sidebar.SqlPreviewRequested = _dialogs.ShowSqlPreview;
 
         // Stacked/Tabbed toggle persists on the VM (which round-trips it into the session).
         ResultsView.ViewModeChanged = mode => { if (Vm is not null) Vm.ResultsViewMode = mode; };
 
         // Paging footer buttons call back into the shell VM (Vm is resolved lazily at click time).
-        ResultsView.LoadMore = rs => Vm?.LoadMoreAsync(rs) ?? Task.CompletedTask;
-        ResultsView.CountTotal = rs => Vm?.CountTotalAsync(rs) ?? Task.CompletedTask;
+        ResultsView.LoadMore = rs => Vm?.Execution.LoadMoreAsync(rs) ?? Task.CompletedTask;
+        ResultsView.CountTotal = rs => Vm?.Execution.CountTotalAsync(rs) ?? Task.CompletedTask;
         ResultsView.NavigateForeignKey = async (rs, col, row) =>
         {
             if (Vm is null) return;
-            await Vm.NavigateForeignKeyAsync(rs, col, row); // runs inline, stacks the prior result
-            RebuildResults(Vm.SelectedTab);
+            await Vm.Execution.NavigateForeignKeyAsync(rs, col, row); // runs inline, stacks the prior result
+            RebuildResults(Vm.Workspace.SelectedTab);
         };
         ResultsView.GoBack = () =>
         {
-            Vm?.SelectedTab?.GoBack();
-            RebuildResults(Vm?.SelectedTab);
+            Vm?.Workspace.SelectedTab?.GoBack();
+            RebuildResults(Vm?.Workspace.SelectedTab);
         };
         ResultsView.SaveChanges = async rs =>
         {
             if (Vm is null) return;
-            await Vm.SaveChangesAsync(rs);      // applies in one tx, updating affected rows in place
+            await Vm.Execution.SaveChangesAsync(rs);      // applies in one tx, updating affected rows in place
             ResultsView.RefreshRowHighlights(); // clear the pending tints (no full rebuild → scroll kept)
         };
         ResultsView.DiscardChanges = async rs =>
         {
             if (Vm is null) return;
-            await Vm.DiscardChangesAsync(rs);   // reverts pending changes in place
-            RebuildResults(Vm.SelectedTab);     // re-render the restored rows
+            await Vm.Execution.DiscardChangesAsync(rs);   // reverts pending changes in place
+            RebuildResults(Vm.Workspace.SelectedTab);     // re-render the restored rows
         };
         ResultsView.PreviewSql = ShowPendingScript; // floating color-coded script panel (design §5)
 
@@ -121,17 +122,11 @@ public partial class MainWindow : Window
         // default paints solid over the colored text. Kanagawa wave-blue at ~40% alpha.
         Editor.TextArea.SelectionBrush = new SolidColorBrush(Color.FromArgb(0x66, 0x2D, 0x4F, 0x67));
 
-        Editor.TextChanged += (_, _) =>
-        {
-            if (!_loadingEditor && Vm?.SelectedTab is { } tab) tab.Text = Editor.Text;
-            UpdateStatementHighlight();
-            _folding.Refresh();
-        };
-        Editor.TextArea.Caret.PositionChanged += (_, _) =>
-        {
-            if (!_loadingEditor && Vm?.SelectedTab is { } tab) tab.CaretOffset = Editor.CaretOffset;
-            UpdateStatementHighlight();
-        };
+        // Editor buffer/caret ↔ SelectedTab sync (the documented AvaloniaEdit binding exception); this owns
+        // the load guard + write-back. The highlight/folding hooks below observe the same editor events.
+        _editorText = new EditorTextBehavior(Editor);
+        Editor.TextChanged += (_, _) => { UpdateStatementHighlight(); _folding.Refresh(); };
+        Editor.TextArea.Caret.PositionChanged += (_, _) => UpdateStatementHighlight();
         Editor.TextArea.SelectionChanged += (_, _) => UpdateStatementHighlight();
 
         DataContextChanged += (_, _) => HookViewModel();
@@ -140,7 +135,7 @@ public partial class MainWindow : Window
         SetResultsVisible(false); // no results yet → editor fills; the pane appears on the first run
     }
 
-    private MainWindowViewModel? Vm => DataContext as MainWindowViewModel;
+    private ShellViewModel? Vm => DataContext as ShellViewModel;
 
     // Remembered editor/results split proportions, so hiding then re-showing the results pane (Ctrl+R)
     // restores the user's dragged sizes rather than snapping back to the 2:3 default.
@@ -182,18 +177,24 @@ public partial class MainWindow : Window
     private void HookViewModel()
     {
         if (Vm is null) return;
-        Vm.ConfirmDangerousWrite = ConfirmDangerousWriteAsync;
+        // Shell chrome (Title/ProjectDirectory/ResultsViewMode) fires on the shell; SelectedTab on the
+        // workspace VM; the accent + DB pill on the connections VM — subscribe the one handler to all three
+        // (bindings now point straight at the child VMs, so the shell no longer forwards their changes).
         Vm.PropertyChanged -= OnViewModelPropertyChanged;
         Vm.PropertyChanged += OnViewModelPropertyChanged;
-        Vm.TabDatabases.CollectionChanged -= OnTabDatabasesChanged;
-        Vm.TabDatabases.CollectionChanged += OnTabDatabasesChanged;
+        Vm.Workspace.PropertyChanged -= OnViewModelPropertyChanged;
+        Vm.Workspace.PropertyChanged += OnViewModelPropertyChanged;
+        Vm.Connections.PropertyChanged -= OnViewModelPropertyChanged;
+        Vm.Connections.PropertyChanged += OnViewModelPropertyChanged;
+        Vm.Connections.TabDatabases.CollectionChanged -= OnTabDatabasesChanged;
+        Vm.Connections.TabDatabases.CollectionChanged += OnTabDatabasesChanged;
         ResultsView.ViewMode = Vm.ResultsViewMode; // seed before the first results render
         LoadEditorFromSelectedTab();
         SyncProjectCombo();
         SyncDbPicker();
-        App.SetConnectionAccent(Vm.ActiveConnectionColor); // seed the accent for the initial tab
-        _tabMru.Sync(Vm.Tabs);
-        if (Vm.SelectedTab is { } seedTab) _tabMru.Use(seedTab);
+        App.SetConnectionAccent(Vm.Connections.ActiveConnectionColor); // seed the accent for the initial tab
+        _tabMru.Sync(Vm.Workspace.Tabs);
+        if (Vm.Workspace.SelectedTab is { } seedTab) _tabMru.Use(seedTab);
 
         // Surface any keybindings.json problems once, in the status bar (non-fatal — defaults still applied).
         if (!_keymapWarningsShown && _keymapWarnings.Count > 0)
@@ -240,30 +241,26 @@ public partial class MainWindow : Window
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(MainWindowViewModel.SelectedTab))
+        if (e.PropertyName == nameof(WorkspaceViewModel.SelectedTab))
         {
             LoadEditorFromSelectedTab();
             // Promote on a normal switch, but not while a Ctrl+Tab cycle is in flight (that commits on release).
-            if (!_mruCycling && Vm?.SelectedTab is { } t) _tabMru.Use(t);
+            if (!_mruCycling && Vm?.Workspace.SelectedTab is { } t) _tabMru.Use(t);
         }
-        else if (e.PropertyName == nameof(MainWindowViewModel.ActiveConnectionColor))
-            App.SetConnectionAccent(Vm?.ActiveConnectionColor); // recolor tab accent, dots, results, status line
-        else if (e.PropertyName == nameof(MainWindowViewModel.SelectedTabDatabase))
+        else if (e.PropertyName == nameof(ConnectionsViewModel.ActiveConnectionColor))
+            App.SetConnectionAccent(Vm?.Connections.ActiveConnectionColor); // recolor tab accent, dots, results, status line
+        else if (e.PropertyName == nameof(ConnectionsViewModel.SelectedTabDatabase))
             SyncDbPicker();
-        else if (e.PropertyName == nameof(MainWindowViewModel.ResultsViewMode))
+        else if (e.PropertyName == nameof(ShellViewModel.ResultsViewMode))
             ResultsView.ViewMode = Vm?.ResultsViewMode ?? Squirrel.Core.Workspace.ResultsViewMode.Stacked;
-        else if (e.PropertyName is nameof(MainWindowViewModel.Title) or nameof(MainWindowViewModel.ProjectDirectory))
+        else if (e.PropertyName is nameof(ShellViewModel.Title) or nameof(ShellViewModel.ProjectDirectory))
             SyncProjectCombo();
     }
 
     private void LoadEditorFromSelectedTab()
     {
-        var tab = Vm?.SelectedTab;
-        _loadingEditor = true;
-        Editor.Text = tab?.Text ?? "";
-        if (tab is not null)
-            Editor.CaretOffset = System.Math.Clamp(tab.CaretOffset, 0, Editor.Text.Length);
-        _loadingEditor = false;
+        var tab = Vm?.Workspace.SelectedTab;
+        _editorText.Bind(tab);   // pushes text/caret into the editor under the load guard
         RebuildResults(tab);
         UpdateStatementHighlight();
     }

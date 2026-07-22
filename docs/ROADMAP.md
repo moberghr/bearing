@@ -51,6 +51,8 @@ project switches + a completion toast (**no** background-jobs panel), per-tab ca
 - [ ] **P2** Manual connect / disconnect + connection status. Let the user explicitly connect and disconnect a session (not only lazily on Run), with a visible status indicator (connected / connecting / disconnected / failed) per connection and/or tab. Builds on the `SessionLease` model — a manual disconnect must respect a running query's lease.
 - [ ] **P2** Remove / delete projects. Delete a project from the recent list, and optionally from disk (with confirm). Also prune stale/missing entries from the recent list (see the P3 recent-projects item below).
 - [ ] **P3** Restore last window size on startup; persist size only and let the window manager handle placement/position. (Add to session or app-settings state; apply in `App`/`MainWindow`.)
+- [ ] **P3** Selecting a script that's already open should focus its existing tab (not open a duplicate / no-op). `OpenScriptInNewTabAsync` already focuses an existing tab on open; verify the single-click/select path in the scripts tree does the same. `ShellViewModel.Scripts` / `SidebarView`.
+- [ ] **P2** Keyboard shortcuts for result-grid editing — save changes / discard / add row. Delete-row and begin-edit already have grid commands (`grid.delete`, `grid.beginEdit`); add `grid.save` / `grid.discard` / `grid.addRow` to `CommandIds` + `KeymapDefaults`, register them in `ResultView`'s grid scope (`RegisterGridCommands`), gated on `IsEditable`/`HasPendingChanges`.
 
 ---
 
@@ -63,6 +65,7 @@ project switches + a completion toast (**no** background-jobs panel), per-tab ca
 - [ ] **P2** `EnsureSchemaAsync` inflight keyed by ConnectionId not (id, database) → wrong-DB snapshot across a rebuild. `ConnectionSessionManager.cs`.
 - [ ] **P2** Missing `ConfigureAwait(false)` throughout the data layer (deadlock risk for any sync-over-async caller). `PostgresQueryExecutor.cs`, `PostgresMetadataReader.cs`, `NpgsqlConnectionFactory.cs`.
 - [ ] **P2** `ForeignKeyResolver` assumes equal-length parent/referenced attnum lists → `IndexOutOfRange` on a malformed composite FK. `Core/Schema/ForeignKeyResolver.cs:45-52`.
+- [ ] **P2** Write-guard gap: inline result-grid saves bypass the confirm dialog. `ExecuteAsync` now confirms risky writes on guarded connections (via `IDialogService.ConfirmWriteAsync`), but `SaveChangesAsync` (inline INSERT/UPDATE/DELETE from the grid) runs the batch with no confirmation. Route grid saves through the same `ConfirmWriteAsync` when the connection has `RequireWriteConfirmation`. `ShellViewModel.Execution.SaveChangesAsync`.
 - [ ] **P3** `NpgsqlConnectionFactory` applies persisted options verbatim — unknown key throws unwrapped at connect; an `Options["Password"]` overrides the secret. `NpgsqlConnectionFactory.cs:37`.
 - [ ] **P3** Raw `ex.Message` surfaced to the UI on generic catch paths (host/endpoint info leak). `PostgresQueryExecutor.cs:45,70,120`.
 - [ ] **P3** `SchemaBrowser.BuildAsync` catch removes the key unconditionally → can evict a concurrent replacement (pool leak). `SchemaBrowser.cs:85-90`.

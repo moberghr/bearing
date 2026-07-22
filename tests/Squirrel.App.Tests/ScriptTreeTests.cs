@@ -16,7 +16,7 @@ public class ScriptTreeTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "squirrel-scripts", Guid.NewGuid().ToString("N"));
     public void Dispose() { try { if (Directory.Exists(_root)) Directory.Delete(_root, true); } catch { } }
 
-    private MainWindowViewModel NewVm() => new(
+    private ShellViewModel NewVm() => new(
         new ProviderRegistry(), new JsonProjectStore(), new JsonSessionStore(),
         new SqliteQueryLog(Path.Combine(_root, "log.sqlite")),
         new FileRecentProjects(Path.Combine(_root, "recent.json")),
@@ -36,17 +36,17 @@ public class ScriptTreeTests : IDisposable
         await File.WriteAllTextAsync(Path.Combine(scripts, "root.sql"), "select 3;");
 
         // Trigger a refresh (filter setter re-reads the tree).
-        vm.ScriptFilter = "alpha";
-        var folder = Assert.IsType<ScriptFolderViewModel>(Assert.Single(vm.ScriptNodes)); // only Reports matches
+        vm.Scripts.ScriptFilter = "alpha";
+        var folder = Assert.IsType<ScriptFolderViewModel>(Assert.Single(vm.Scripts.ScriptNodes)); // only Reports matches
         Assert.Equal("Reports", folder.Name);
         Assert.Equal("alpha.sql", Assert.Single(folder.Children.OfType<ScriptItem>()).Name);
 
-        vm.ScriptFilter = "";
-        Assert.Equal(2, vm.ScriptNodes.Count);                                  // Reports folder + root.sql
-        var reports = vm.ScriptNodes.OfType<ScriptFolderViewModel>().Single();
+        vm.Scripts.ScriptFilter = "";
+        Assert.Equal(2, vm.Scripts.ScriptNodes.Count);                                  // Reports folder + root.sql
+        var reports = vm.Scripts.ScriptNodes.OfType<ScriptFolderViewModel>().Single();
         Assert.Equal(2, reports.Count);
-        Assert.Contains(vm.ScriptNodes.OfType<ScriptItem>(), s => s.Name == "root.sql");
-        Assert.Equal(3, vm.Scripts.Count);                                      // flat list has all three
+        Assert.Contains(vm.Scripts.ScriptNodes.OfType<ScriptItem>(), s => s.Name == "root.sql");
+        Assert.Equal(3, vm.Scripts.Scripts.Count);                                      // flat list has all three
     }
 
     [Fact]
@@ -62,13 +62,13 @@ public class ScriptTreeTests : IDisposable
         await File.WriteAllTextAsync(Path.Combine(scripts, "Reports", "top.sql"), "select 1;");
         await File.WriteAllTextAsync(Path.Combine(scripts, "Reports", "Monthly", "jan.sql"), "select 2;");
 
-        vm.ScriptFilter = "x"; vm.ScriptFilter = ""; // force refresh
+        vm.Scripts.ScriptFilter = "x"; vm.Scripts.ScriptFilter = ""; // force refresh
 
-        var reports = vm.ScriptNodes.OfType<ScriptFolderViewModel>().Single(f => f.Name == "Reports");
+        var reports = vm.Scripts.ScriptNodes.OfType<ScriptFolderViewModel>().Single(f => f.Name == "Reports");
         Assert.Equal(2, reports.Count);                                        // top.sql + Monthly/jan.sql
         var monthly = reports.Children.OfType<ScriptFolderViewModel>().Single(f => f.Name == "Monthly");
         Assert.Equal("jan.sql", Assert.Single(monthly.Children.OfType<ScriptItem>()).Name);
-        Assert.Contains(vm.ScriptNodes.OfType<ScriptFolderViewModel>(), f => f.Name == "Empty"); // empty folder kept
+        Assert.Contains(vm.Scripts.ScriptNodes.OfType<ScriptFolderViewModel>(), f => f.Name == "Empty"); // empty folder kept
     }
 
     [Fact]
@@ -82,7 +82,7 @@ public class ScriptTreeTests : IDisposable
         var src = Path.Combine(scripts, "loose.sql");
         await File.WriteAllTextAsync(src, "select 1;");
 
-        vm.MoveScript(src, Path.Combine(scripts, "Target"));
+        vm.Scripts.MoveScript(src, Path.Combine(scripts, "Target"));
 
         Assert.False(File.Exists(src));
         Assert.True(File.Exists(Path.Combine(scripts, "Target", "loose.sql")));

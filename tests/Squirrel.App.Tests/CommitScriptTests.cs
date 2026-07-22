@@ -18,7 +18,7 @@ public class CommitScriptTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "squirrel-commit", Guid.NewGuid().ToString("N"));
     public void Dispose() { try { if (Directory.Exists(_root)) Directory.Delete(_root, true); } catch { } }
 
-    private MainWindowViewModel NewVm() => new(
+    private ShellViewModel NewVm() => new(
         new ProviderRegistry(),
         new JsonProjectStore(),
         new JsonSessionStore(),
@@ -58,7 +58,7 @@ public class CommitScriptTests : IDisposable
             var added = rs.AddRow(); added[0] = "3"; added[1] = "7.50"; // insert
         });
 
-        var stmts = NewVm().PreviewChangeStatements(rs);
+        var stmts = NewVm().Execution.PreviewChangeStatements(rs);
 
         Assert.Equal(new[] { "DELETE", "UPDATE", "INSERT" }, stmts.Select(s => s.Kind));
         Assert.All(stmts, s => Assert.EndsWith(";", s.Sql));
@@ -69,5 +69,5 @@ public class CommitScriptTests : IDisposable
 
     [Fact]
     public void No_pending_changes_yields_no_statements()
-        => Assert.Empty(NewVm().PreviewChangeStatements(EditableResultWith(_ => { })));
+        => Assert.Empty(NewVm().Execution.PreviewChangeStatements(EditableResultWith(_ => { })));
 }
