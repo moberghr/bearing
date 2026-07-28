@@ -6,15 +6,15 @@ using Squirrel.App.ViewModels;
 using Squirrel.Core.Data;
 using Squirrel.Core.Logging;
 using Squirrel.Core.Workspace;
+using Squirrel.Persistence;
 
 namespace Squirrel.App.Workspace;
 
 /// <summary>
 /// The shared aggregate every workspace concern coordinates through: the injected stores, the live
 /// connection/schema services, the current project, a status sink, and connection resolution. It is the
-/// single owner of state that would otherwise force the concern view-models to depend on each other.
-/// Phase 0 of the MVVM refactor (docs/mvvm-refactor-plan.md): today only <see cref="ShellViewModel"/>
-/// uses it (delegating its former fields here); child VMs will bind to it in later phases.
+/// single owner of state that would otherwise force the concern view-models to depend on each other —
+/// the shell and every child VM (connections/scripts/workspace/execution) coordinate through it.
 /// </summary>
 public sealed class WorkspaceContext
 {
@@ -24,7 +24,8 @@ public sealed class WorkspaceContext
         ISessionStore sessionStore,
         IQueryLog queryLog,
         IRecentProjects recentProjects,
-        ISecretStore? secrets = null)
+        ISecretStore? secrets = null,
+        IScriptStore? scriptStore = null)
     {
         Providers = providers;
         ProjectStore = projectStore;
@@ -32,6 +33,7 @@ public sealed class WorkspaceContext
         QueryLog = queryLog;
         RecentProjects = recentProjects;
         Secrets = secrets;
+        ScriptStore = scriptStore ?? new FileScriptStore();
         // The session/schema services read the secret store lazily so a late AttachSecretStore still applies.
         Sessions = new ConnectionSessionManager(providers, () => Secrets);
         Schema = new SchemaBrowser(providers, () => Secrets);
@@ -44,6 +46,7 @@ public sealed class WorkspaceContext
     public IQueryLog QueryLog { get; }
     public IRecentProjects RecentProjects { get; }
     public ISecretStore? Secrets { get; set; }
+    public IScriptStore ScriptStore { get; }
     public IConnectionSessionManager Sessions { get; }
     public ISchemaBrowser Schema { get; }
 

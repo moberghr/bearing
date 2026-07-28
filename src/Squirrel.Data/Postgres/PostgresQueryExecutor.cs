@@ -46,15 +46,14 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         }
     }
 
-    public async Task<QueryResult> ExecutePageAsync(string sql, int offset, int limit, CancellationToken ct)
+    public async Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
     {
-        // offset/limit are ints (not user text) so interpolation is injection-safe.
-        var wrapped = $"select * from (\n{StripTrailingSemicolon(sql)}\n) as _sq offset {offset} limit {limit}";
+        // The caller (PageSql) already shaped the paging; we just run it as one uncapped result set.
         var sw = Stopwatch.StartNew();
         try
         {
             await using var conn = await _factory.DataSource.OpenConnectionAsync(ct);
-            await using var cmd = new NpgsqlCommand(wrapped, conn);
+            await using var cmd = new NpgsqlCommand(pageSql, conn);
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             return await ReadResultSetAsync(reader, new QueryOptions { MaxRows = null }, sw, ct);
         }
@@ -155,37 +154,6 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
             Message: null, Error: null, Truncated: truncated);
     }
 
-    public async IAsyncEnumerable<ResultBatch> StreamAsync(
-        string sql, QueryOptions options,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
-    {
-        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct);
-        await using var cmd = new NpgsqlCommand(sql, conn);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (reader.FieldCount == 0) yield break;
-
-        var columns = ReadColumns(reader);
-        const int batchSize = 500;
-        var batch = new List<object?[]>(batchSize);
-
-        while (await reader.ReadAsync(ct))
-        {
-            var row = new object?[reader.FieldCount];
-            for (var i = 0; i < reader.FieldCount; i++)
-                row[i] = await reader.IsDBNullAsync(i, ct) ? null : reader.GetValue(i);
-            batch.Add(row);
-
-            if (batch.Count >= batchSize)
-            {
-                yield return new ResultBatch(columns, batch);
-                batch = new List<object?[]>(batchSize);
-            }
-        }
-
-        if (batch.Count > 0)
-            yield return new ResultBatch(columns, batch);
-    }
-
     private static IReadOnlyList<ColumnDescriptor> ReadColumns(NpgsqlDataReader reader, bool withBaseTables = false)
     {
         // Column origin (table OID + attribute number) comes free from the wire RowDescription — no
@@ -199,8 +167,8 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
             var npg = schema?[i] as NpgsqlDbColumn;
             cols[i] = new ColumnDescriptor(
                 reader.GetName(i), reader.GetDataTypeName(i), reader.GetFieldType(i),
-                BaseTableOid: npg?.TableOID ?? 0,
-                BaseColumnAttNum: (short)(npg?.ColumnAttributeNumber ?? 0));
+                BaseTableId: npg?.TableOID ?? 0,
+                BaseColumnOrdinal: (short)(npg?.ColumnAttributeNumber ?? 0));
         }
         return cols;
     }

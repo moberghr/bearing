@@ -58,6 +58,9 @@ public sealed partial class ResultView
 
     // Editable grids currently rendered (grid + its result) — used to re-tint rows after an in-place save.
     private readonly List<(DataGrid Grid, ResultSetViewModel Result)> _editableGrids = new();
+    // Every rendered result set → its grid, so a grid command invoked without a keystroke (the command
+    // palette) can find the grid owning the current selection. Rebuilt on every render.
+    private readonly Dictionary<ResultSetViewModel, DataGrid> _gridsByResult = new();
 
     // Result sets the user has collapsed in stacked view (keyed by VM reference; new runs reset it).
     private readonly HashSet<ResultSetViewModel> _collapsed = new();
@@ -74,18 +77,11 @@ public sealed partial class ResultView
     private static readonly FuncValueConverter<bool, IBrush> MatchHighlight =
         new(m => m ? Tint("Accent.Orange", 0x55) : Brushes.Transparent);
 
-    // Numeric quick-stats: a set of selected measure cells keyed by (row reference, column index),
-    // the result they belong to, a per-cell restyle notifier, and the stats bars to toggle/update.
-    private readonly HashSet<(object?[] Row, int Col)> _selection = new();
-    private ResultSetViewModel? _selectionResult;
-    private Action? _cellRestyle; // each realized measure cell subscribes to re-apply its selection ring
+    // Cell selection + drag + keyboard-cursor state (selected cells, the owning result, the active/anchor
+    // cells, drag flags, and the per-cell restyle notifier) — owned by GridSelectionModel so it is not a
+    // loose field bag shared across the partials. The stats bars it feeds stay here (they are visuals).
+    private readonly GridSelectionModel _sel = new();
     private readonly List<(ResultSetViewModel Result, Border Bar)> _statsBars = new();
-    private bool _dragging;                              // a click-drag cell selection is in progress
-    private (object?[] Row, int Col)? _dragAnchor;       // the cell the drag started from
-    // Keyboard navigation: the active ("cursor") cell that arrow keys move, and the anchor a Shift-range
-    // extends from. Both belong to _selectionResult. Mouse clicks seed them; keys move them.
-    private (object?[] Row, int Col)? _active;
-    private (object?[] Row, int Col)? _selAnchor;
     private readonly HashSet<ResultSetViewModel> _autoLoading = new(); // paging fetch in flight (infinite scroll)
 
     /// <summary>Fetch the next page when scrolled near the bottom (single-flight per result set).</summary>
@@ -133,9 +129,10 @@ public sealed partial class ResultView
     private void Rebuild()
     {
         _editableGrids.Clear();
+        _gridsByResult.Clear();
         _statsBars.Clear();
         _firstGrid = null; // re-captured as grids are built below (region-focus target)
-        _cellRestyle = null; // old cells are being discarded; they re-subscribe as they rebuild
+        _sel.CellRestyle = null; // old cells are being discarded; they re-subscribe as they rebuild
         var results = _results;
         if (results is null || results.Count == 0) { Content = null; return; }
 

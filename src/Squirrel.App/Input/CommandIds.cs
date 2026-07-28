@@ -30,7 +30,7 @@ public static class CommandIds
     public const string SelectConnection = "select.connection";
     public const string SelectDatabase = "select.database";
 
-    /// <summary>Command id for jumping to tab <paramref name="n"/> (1-based); n=0 means "last tab".</summary>
+    /// <summary>Command id for jumping to tab <paramref name="n"/> (1-based); n=9 is "last tab" (browser convention).</summary>
     public static string TabGoto(int n) => $"tab.goto{n}";
     public const string QueryRunAll = "query.runAll";
     public const string PanelConnections = "panel.connections";

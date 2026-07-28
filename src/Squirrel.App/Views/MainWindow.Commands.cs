@@ -34,9 +34,9 @@ public partial class MainWindow
     private bool HandleEscape()
     {
         if (Vm is null) return false;
-        if (_quickPickOverlay is not null) { HideQuickPick(); return true; }
-        if (_paletteOverlay is not null) { HidePalette(); return true; }
-        if (_pendingScriptOverlay is not null) { HidePendingScript(); return true; }
+        if (QuickPickOpen) { HideQuickPick(); return true; }
+        if (PaletteOpen) { HidePalette(); return true; }
+        if (_pendingPanel.IsOpen) { _pendingPanel.Hide(); return true; }
         if (Vm.IsMenuVisible) { Vm.IsMenuVisible = false; return true; }
         if (Vm.Execution.IsBusy) { Vm.Execution.CancelExecution(); return true; }
         return false;
@@ -112,7 +112,7 @@ public partial class MainWindow
         // Escape only claims the key when there's something to dismiss; otherwise it falls through.
         r.Register(KeyCommand.Sync(CommandIds.AppEscape, "Escape / cancel", KeyScope.Global, "View",
             () => HandleEscape(),
-            canRun: () => Vm is not null && (AnyOverlayOpen || _pendingScriptOverlay is not null || Vm.IsMenuVisible || Vm.Execution.IsBusy)));
+            canRun: () => Vm is not null && (AnyOverlayOpen || _pendingPanel.IsOpen || Vm.IsMenuVisible || Vm.Execution.IsBusy)));
         r.Register(KeyCommand.Sync(CommandIds.PaletteOpen, "Command palette", KeyScope.Global, "View", ShowPalette));
         r.Register(KeyCommand.Sync(CommandIds.TabNext, "Next tab (visual order)", KeyScope.Global, "Tabs", () => SelectAdjacentTab(+1)));
         r.Register(KeyCommand.Sync(CommandIds.TabPrev, "Previous tab (visual order)", KeyScope.Global, "Tabs", () => SelectAdjacentTab(-1)));
@@ -250,6 +250,9 @@ public partial class MainWindow
         base.OnKeyDown(e);
         // While an overlay (palette / quick-pick) is up it owns the keyboard — don't fire globals under it.
         if (AnyOverlayOpen) return;
+        // The pending-changes panel is modal too, but has no local key handler: swallow every global
+        // shortcut under it EXCEPT Escape, which must reach the dispatcher so HandleEscape can close it.
+        if (_pendingPanel.IsOpen && e.Key is not Key.Escape) return;
         // Alt-tap tracking: a lone Alt press arms the menu toggle (fired on key-up); any other key cancels it.
         _altAlone = e.Key is Key.LeftAlt or Key.RightAlt;
         _dispatcher.TryHandle(e, KeyScope.Global); // Global scope; Editor/Grid scopes are handled in their tunnels
@@ -265,16 +268,21 @@ public partial class MainWindow
         // A selection (or whole buffer) may hold several blank-line-separated statements without
         // semicolons — normalize so they run as a batch instead of one malformed command.
         sql = Squirrel.Sql.StatementSplitter.EnsureSeparated(sql);
+        // Capture the tab the run belongs to: execution is per-tab, so the user may switch tabs while it
+        // runs. Only refresh the visible grid if that tab is still selected — otherwise its results are
+        // stored on its own VM and render when the user switches back.
+        var ran = Vm.Workspace.SelectedTab;
         await Vm.Execution.ExecuteAsync(sql);
-        RebuildResults(Vm.Workspace.SelectedTab);
+        if (ReferenceEquals(ran, Vm.Workspace.SelectedTab)) RebuildResults(ran);
     }
 
     /// <summary>query.runAll: run the entire buffer as a batch, ignoring caret/selection.</summary>
     private async Task RunAllAsync()
     {
         if (Vm is null) return;
+        var ran = Vm.Workspace.SelectedTab;
         await Vm.Execution.ExecuteAsync(Squirrel.Sql.StatementSplitter.EnsureSeparated(Editor.Text));
-        RebuildResults(Vm.Workspace.SelectedTab);
+        if (ReferenceEquals(ran, Vm.Workspace.SelectedTab)) RebuildResults(ran);
     }
 
     /// <summary>tab.next / tab.prev: move to the adjacent tab in visual (strip) order, wrapping around.</summary>
@@ -335,7 +343,8 @@ public partial class MainWindow
 
     private void OnWindowNavKey(object? sender, KeyEventArgs e)
     {
-        if (AnyOverlayOpen) return;                         // an overlay owns the keyboard while open
+        // an overlay owns the keyboard while open (nav commands carry no Escape, so block all of them)
+        if (AnyOverlayOpen || _pendingPanel.IsOpen) return;
         _dispatcher.TryHandle(e, KeyScope.Global, _navCommands);
     }
 
@@ -411,7 +420,7 @@ public partial class MainWindow
     /// <summary>Render the given tab's current result frame, plus the back-bar state (FK-nav history).</summary>
     internal void RebuildResults(EditorTabViewModel? tab)
     {
-        HidePendingScript(); // a new run / tab switch invalidates the pending-changes panel
+        _pendingPanel.Hide(); // a new run / tab switch invalidates the pending-changes panel
         ResultsView.CanGoBack = tab?.CanGoBack ?? false;
         ResultsView.Results = tab?.Results; // assignment triggers the rebuild (reads CanGoBack)
         SetResultsVisible(tab?.Results is { Count: > 0 }); // reveal on results, collapse when none

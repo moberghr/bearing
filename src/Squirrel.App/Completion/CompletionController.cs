@@ -80,9 +80,12 @@ internal sealed class CompletionController
         {
             result = await Task.Run(() => _engine.Complete(text, localCaret, snapshot));
         }
-        catch
+        catch (Exception ex)
         {
-            return; // completion must never disrupt editing
+            // Completion must never disrupt editing — but a silent swallow hid real engine faults
+            // (e.g. the antlr4-c3 gotcha). Record it so it's at least visible in the crash log.
+            Squirrel.Persistence.CrashLog.Write("completion", ex);
+            return;
         }
 
         if (generation != _generation) return; // a newer keystroke superseded this

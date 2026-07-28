@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Media;
 using AvaloniaEdit.Editing;
 using AvaloniaEdit.Rendering;
+using Squirrel.App.Theming;
 
 namespace Squirrel.App.Editing;
 
@@ -16,7 +17,10 @@ public sealed class StatementMargin : AbstractMargin
     private const double BarWidth = 3;
     private const double BarInset = 2;
 
-    private static readonly IBrush Bar = new SolidColorBrush(Color.FromArgb(0xDD, 0x4F, 0x9C, 0xEE));
+    // {Syntax.Func} Kanagawa blue at the bar's ~0xDD alpha. Resolved from the theme token (falls back
+    // to the token's literal value) so a theme swap follows; cached after the first render.
+    private static IBrush? _bar;
+    private static IBrush Bar => _bar ??= ThemeBrush.AtAlpha("Syntax.Func", 0xDD, Color.FromRgb(0x7E, 0x9C, 0xD8));
 
     private int _start = -1;
     private int _end = -1;

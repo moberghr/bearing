@@ -104,7 +104,7 @@ public sealed partial class CompletionEngine : ICompletionEngine
                 FilterText = t.Name,
                 DetailText = t.Schema,
                 ReplacementText = $"{t.Name} {alias}",
-                Kind = t.Kind == PgRelKind.View ? SuggestionKind.View : SuggestionKind.Table,
+                Kind = t.Kind == RelationKind.View ? SuggestionKind.View : SuggestionKind.Table,
                 Priority = 10,
                 Description = $"{t.Kind}: {t.Schema}.{t.Name}",
             };
@@ -120,25 +120,25 @@ public sealed partial class CompletionEngine : ICompletionEngine
         foreach (var src in sources)
         {
             if (src.Resolved is null) continue;
-            var srcOid = src.Resolved.Oid;
+            var srcOid = src.Resolved.Id;
             var srcAlias = src.EffectiveName;
 
             foreach (var fk in schema.ForeignKeysTouching(srcOid))
             {
-                uint otherOid;
-                IReadOnlyList<short> srcCols, otherCols;
+                long otherOid;
+                IReadOnlyList<int> srcCols, otherCols;
 
-                if (fk.ParentOid == srcOid)
+                if (fk.ParentTableId == srcOid)
                 {
-                    otherOid = fk.ReferencedOid; srcCols = fk.ParentAttNums; otherCols = fk.ReferencedAttNums;
+                    otherOid = fk.ReferencedTableId; srcCols = fk.ParentOrdinals; otherCols = fk.ReferencedOrdinals;
                 }
-                else if (fk.ReferencedOid == srcOid)
+                else if (fk.ReferencedTableId == srcOid)
                 {
-                    otherOid = fk.ParentOid; srcCols = fk.ReferencedAttNums; otherCols = fk.ParentAttNums;
+                    otherOid = fk.ParentTableId; srcCols = fk.ReferencedOrdinals; otherCols = fk.ParentOrdinals;
                 }
                 else continue;
 
-                var other = schema.Tables.FirstOrDefault(t => t.Oid == otherOid);
+                var other = schema.Tables.FirstOrDefault(t => t.Id == otherOid);
                 if (other is null) continue;
 
                 var alias = AliasResolver.Determine(other, existing);
@@ -175,21 +175,21 @@ public sealed partial class CompletionEngine : ICompletionEngine
         var owner = sources.FirstOrDefault(s =>
             string.Equals(s.EffectiveName, qualifier, StringComparison.OrdinalIgnoreCase));
         if (owner?.Resolved is null) yield break;
-        var ownerOid = owner.Resolved.Oid;
+        var ownerOid = owner.Resolved.Id;
 
         foreach (var other in sources)
         {
             if (other.Resolved is null || ReferenceEquals(other, owner)) continue;
             if (string.Equals(other.EffectiveName, qualifier, StringComparison.OrdinalIgnoreCase)) continue;
-            var otherOid = other.Resolved.Oid;
+            var otherOid = other.Resolved.Id;
 
             foreach (var fk in schema.ForeignKeysTouching(ownerOid))
             {
-                IReadOnlyList<short> ownerCols, otherCols;
-                if (fk.ParentOid == ownerOid && fk.ReferencedOid == otherOid)
-                    (ownerCols, otherCols) = (fk.ParentAttNums, fk.ReferencedAttNums);
-                else if (fk.ReferencedOid == ownerOid && fk.ParentOid == otherOid)
-                    (ownerCols, otherCols) = (fk.ReferencedAttNums, fk.ParentAttNums);
+                IReadOnlyList<int> ownerCols, otherCols;
+                if (fk.ParentTableId == ownerOid && fk.ReferencedTableId == otherOid)
+                    (ownerCols, otherCols) = (fk.ParentOrdinals, fk.ReferencedOrdinals);
+                else if (fk.ReferencedTableId == ownerOid && fk.ParentTableId == otherOid)
+                    (ownerCols, otherCols) = (fk.ReferencedOrdinals, fk.ParentOrdinals);
                 else continue;
 
                 var preds = new List<string>();
@@ -222,8 +222,8 @@ public sealed partial class CompletionEngine : ICompletionEngine
             var owner = sources.FirstOrDefault(s =>
                 string.Equals(s.EffectiveName, qualifier, StringComparison.OrdinalIgnoreCase));
             if (owner?.Resolved is null) yield break;
-            foreach (var c in schema.ColumnsOf(owner.Resolved.Oid))
-                yield return ColumnSuggestion(c, owner.EffectiveName, qualified: false);
+            foreach (var c in schema.ColumnsOf(owner.Resolved.Id))
+                yield return ColumnSuggestion(c, owner.EffectiveName);
             yield break;
         }
 
@@ -231,30 +231,30 @@ public sealed partial class CompletionEngine : ICompletionEngine
         if (resolved.Count > 0)
         {
             foreach (var src in resolved)
-                foreach (var c in schema.ColumnsOf(src.Resolved!.Oid))
-                    yield return ColumnSuggestion(c, src.EffectiveName, qualified: false);
+                foreach (var c in schema.ColumnsOf(src.Resolved!.Id))
+                    yield return ColumnSuggestion(c, src.EffectiveName);
             yield break;
         }
 
         // No FROM yet: offer every column (M3 fallback).
         foreach (var t in schema.Tables)
-            foreach (var c in schema.ColumnsOf(t.Oid))
-                yield return ColumnSuggestion(c, t.Name, qualified: false);
+            foreach (var c in schema.ColumnsOf(t.Id))
+                yield return ColumnSuggestion(c, t.Name);
     }
 
-    private static Suggestion ColumnSuggestion(PgColumn c, string owner, bool qualified) => new()
+    private static Suggestion ColumnSuggestion(ColumnInfo c, string owner) => new()
     {
         DisplayText = c.Name,
         FilterText = c.Name,
         DetailText = owner,
-        ReplacementText = qualified ? $"{owner}.{c.Name}" : c.Name,
+        ReplacementText = c.Name,
         Kind = SuggestionKind.Column,
         Priority = c.IsPrimaryKey ? 9 : 8,
         Description = $"{owner}.{c.Name} : {c.DataType}",
     };
 
-    private static string ColumnName(ISchemaSnapshot schema, uint tableOid, short attNum)
-        => schema.ColumnsOf(tableOid).FirstOrDefault(c => c.AttNum == attNum)?.Name ?? $"col{attNum}";
+    private static string ColumnName(ISchemaSnapshot schema, long tableId, int ordinal)
+        => schema.ColumnsOf(tableId).FirstOrDefault(c => c.Ordinal == ordinal)?.Name ?? $"col{ordinal}";
 
     private static List<string> ExistingAliases(IReadOnlyList<TableRef> sources)
         => sources.Select(s => s.EffectiveName).Where(a => !string.IsNullOrEmpty(a)).ToList();

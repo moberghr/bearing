@@ -16,14 +16,8 @@ public sealed class TableRef
     public string? Alias { get; init; }
 
     /// <summary>The resolved catalog relation, or null if it wasn't found in the snapshot.</summary>
-    public PgTable? Resolved { get; init; }
-
-    /// <summary>For subqueries / explicit column lists: the columns this source projects.</summary>
-    public IReadOnlyList<ColumnRef>? ProjectedColumns { get; init; }
+    public TableInfo? Resolved { get; init; }
 
     /// <summary>How this source is referred to in the query: its alias if present, else its name.</summary>
     public string EffectiveName => Alias ?? RawName;
 }
-
-/// <summary>A column reference/projection surfaced by a source (used for subqueries and wildcards).</summary>
-public sealed record ColumnRef(string Name, PgColumn? Resolved, TableRef? Owner);

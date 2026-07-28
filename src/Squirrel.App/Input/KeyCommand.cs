@@ -6,7 +6,7 @@ namespace Squirrel.App.Input;
 /// <summary>
 /// One keyboard-triggerable action, identified by a stable <see cref="Id"/>. The keymap binds gestures
 /// to these ids; the registry maps ids to the delegate that runs them. This is the single command model
-/// the palette (Phase 3) enumerates and invokes without a keystroke.
+/// the command palette enumerates and invokes without a keystroke.
 /// </summary>
 public sealed class KeyCommand
 {

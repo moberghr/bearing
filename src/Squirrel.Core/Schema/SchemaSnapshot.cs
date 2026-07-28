@@ -6,37 +6,37 @@ namespace Squirrel.Core.Schema;
 /// </summary>
 public sealed class SchemaSnapshot : ISchemaSnapshot
 {
-    private readonly Dictionary<uint, List<PgColumn>> _columnsByTable;
-    private readonly Dictionary<uint, List<PgForeignKey>> _fksByTable;
+    private readonly Dictionary<long, List<ColumnInfo>> _columnsByTable;
+    private readonly Dictionary<long, List<ForeignKeyInfo>> _fksByTable;
     // (schema, lower-name) and (lower-name) lookups
-    private readonly Dictionary<(string schema, string name), PgTable> _bySchemaName;
-    private readonly Dictionary<string, List<PgTable>> _byName;
+    private readonly Dictionary<(string schema, string name), TableInfo> _bySchemaName;
+    private readonly Dictionary<string, List<TableInfo>> _byName;
 
     public string Database { get; }
     public IReadOnlyList<string> Schemas { get; }
-    public IReadOnlyList<PgTable> Tables { get; }
+    public IReadOnlyList<TableInfo> Tables { get; }
 
     public SchemaSnapshot(
         string database,
         IReadOnlyList<string> schemas,
-        IReadOnlyList<PgTable> tables,
-        IReadOnlyList<PgColumn> columns,
-        IReadOnlyList<PgForeignKey> foreignKeys)
+        IReadOnlyList<TableInfo> tables,
+        IReadOnlyList<ColumnInfo> columns,
+        IReadOnlyList<ForeignKeyInfo> foreignKeys)
     {
         Database = database;
         Schemas = schemas;
         Tables = tables;
 
         _columnsByTable = columns
-            .GroupBy(c => c.TableOid)
-            .ToDictionary(g => g.Key, g => g.OrderBy(c => c.AttNum).ToList());
+            .GroupBy(c => c.TableId)
+            .ToDictionary(g => g.Key, g => g.OrderBy(c => c.Ordinal).ToList());
 
-        _fksByTable = new Dictionary<uint, List<PgForeignKey>>();
+        _fksByTable = new Dictionary<long, List<ForeignKeyInfo>>();
         foreach (var fk in foreignKeys)
         {
-            Add(_fksByTable, fk.ParentOid, fk);
-            if (fk.ReferencedOid != fk.ParentOid)
-                Add(_fksByTable, fk.ReferencedOid, fk);
+            Add(_fksByTable, fk.ParentTableId, fk);
+            if (fk.ReferencedTableId != fk.ParentTableId)
+                Add(_fksByTable, fk.ReferencedTableId, fk);
         }
 
         _bySchemaName = tables.ToDictionary(t => (t.Schema.ToLowerInvariant(), t.Name.ToLowerInvariant()), t => t);
@@ -44,17 +44,17 @@ public sealed class SchemaSnapshot : ISchemaSnapshot
             .GroupBy(t => t.Name.ToLowerInvariant())
             .ToDictionary(g => g.Key, g => g.ToList());
 
-        static void Add(Dictionary<uint, List<PgForeignKey>> map, uint key, PgForeignKey fk)
+        static void Add(Dictionary<long, List<ForeignKeyInfo>> map, long key, ForeignKeyInfo fk)
         {
-            if (!map.TryGetValue(key, out var list)) map[key] = list = new List<PgForeignKey>();
+            if (!map.TryGetValue(key, out var list)) map[key] = list = new List<ForeignKeyInfo>();
             list.Add(fk);
         }
     }
 
-    public IReadOnlyList<PgColumn> ColumnsOf(uint tableOid)
-        => _columnsByTable.TryGetValue(tableOid, out var c) ? c : Array.Empty<PgColumn>();
+    public IReadOnlyList<ColumnInfo> ColumnsOf(long tableId)
+        => _columnsByTable.TryGetValue(tableId, out var c) ? c : Array.Empty<ColumnInfo>();
 
-    public PgTable? ResolveTable(string? schema, string name)
+    public TableInfo? ResolveTable(string? schema, string name)
     {
         var n = name.ToLowerInvariant();
         if (schema is not null)
@@ -74,6 +74,6 @@ public sealed class SchemaSnapshot : ISchemaSnapshot
         return candidates[0];
     }
 
-    public IReadOnlyList<PgForeignKey> ForeignKeysTouching(uint tableOid)
-        => _fksByTable.TryGetValue(tableOid, out var f) ? f : Array.Empty<PgForeignKey>();
+    public IReadOnlyList<ForeignKeyInfo> ForeignKeysTouching(long tableId)
+        => _fksByTable.TryGetValue(tableId, out var f) ? f : Array.Empty<ForeignKeyInfo>();
 }

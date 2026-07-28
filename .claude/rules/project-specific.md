@@ -1,12 +1,15 @@
 # Project-Specific Rules (§9.x)
 
 ## §9.1 — God objects: extract, don't grow
-Three files are already oversized and are the #1 place changes go wrong:
-- `src/Squirrel.App/Controls/ResultView.cs` (~1700 lines)
-- `src/Squirrel.App/Views/MainWindow.axaml.cs` (~1600 lines)
-- `src/Squirrel.App/ViewModels/MainWindowViewModel.cs` (~1000 lines)
+Two classes are already oversized and are the #1 place changes go wrong. Both were split into partial
+*files* but each is still a single class — the split hid the line count without separating concerns:
+- `src/Squirrel.App/Controls/ResultView.*.cs` (~1,900 lines across 6 partials, one class)
+- `src/Squirrel.App/Views/MainWindow.*.cs` (~1,300 lines across 6 partials, one class)
 
-WHEN a change would add code to any of them, DO NOT append — extract:
+(`ViewModels/ShellViewModel` — the former `MainWindowViewModel` — has since been genuinely decomposed
+into child VMs behind `WorkspaceContext` and is no longer a god object; follow that pattern.)
+
+WHEN a change would add code to either god object, DO NOT append — extract:
 - Pure/stateless logic → helpers under `Results/`, `Input/`, or the `Sql` project (pattern:
   `ResultSetBuilder`, `ResultEditModel`, `PaletteFilter`).
 - Self-contained visuals/overlays → their own `Views/`/`Controls/` class.

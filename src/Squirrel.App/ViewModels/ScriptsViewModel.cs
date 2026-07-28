@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Squirrel.App.Workspace;
+using Squirrel.Core.Workspace;
 
 namespace Squirrel.App.ViewModels;
 
@@ -46,7 +47,7 @@ public sealed partial class ScriptsViewModel : ObservableObject
         Scripts.Clear();
         ScriptNodes.Clear();
         var dir = _ctx.Project?.ScriptsDirectory;
-        if (dir is null || !Directory.Exists(dir)) return;
+        if (dir is null || _ctx.ScriptStore.ReadTree(dir) is not { } tree) return;
 
         // Tabs with unsaved edits mark their backing script with a dot.
         var unsaved = Tabs.Where(t => t.IsDirty && t.ScriptPath is not null)
@@ -54,30 +55,30 @@ public sealed partial class ScriptsViewModel : ObservableObject
                            .ToHashSet(StringComparer.Ordinal);
         var filter = ScriptFilter?.Trim() ?? "";
         bool Matches(string name) => filter.Length == 0 || name.Contains(filter, StringComparison.OrdinalIgnoreCase);
-        ScriptItem Make(string path) => new(Path.GetFileName(path), path) { IsUnsaved = unsaved.Contains(path) };
+        ScriptItem Make(ScriptFileRef f) => new(f.Name, f.Path) { IsUnsaved = unsaved.Contains(f.Path) };
 
-        BuildScriptNodes(dir, ScriptNodes, filter, Matches, Make);
+        BuildScriptNodes(tree, ScriptNodes, filter, Matches, Make);
     }
 
     /// <summary>Recursively fill <paramref name="target"/> with subfolders (each nested) then scripts;
-    /// returns how many scripts (matching the filter) are under this directory. Also feeds the flat
+    /// returns how many scripts (matching the filter) are under this node. Also feeds the flat
     /// <see cref="Scripts"/> list. Empty folders show when unfiltered; while filtering, a folder shows
     /// only if it has a matching descendant.</summary>
-    private int BuildScriptNodes(string dir, IList<object> target,
-        string filter, Func<string, bool> matches, Func<string, ScriptItem> make)
+    private int BuildScriptNodes(ScriptTree node, IList<object> target,
+        string filter, Func<string, bool> matches, Func<ScriptFileRef, ScriptItem> make)
     {
         var total = 0;
-        foreach (var sub in Directory.EnumerateDirectories(dir).OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+        foreach (var sub in node.Folders)
         {
-            var folder = new ScriptFolderViewModel(Path.GetFileName(sub), sub) { IsExpanded = filter.Length > 0 };
+            var folder = new ScriptFolderViewModel(sub.Name, sub.Path) { IsExpanded = filter.Length > 0 };
             var n = BuildScriptNodes(sub, folder.Children, filter, matches, make);
             folder.Count = n;
             total += n;
             if (n > 0 || filter.Length == 0) target.Add(folder);
         }
-        foreach (var path in Directory.EnumerateFiles(dir, "*.sql").OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+        foreach (var file in node.Files)
         {
-            var item = make(path);
+            var item = make(file);
             Scripts.Add(item);
             if (matches(item.Name)) { target.Add(item); total++; }
         }
@@ -92,7 +93,7 @@ public sealed partial class ScriptsViewModel : ObservableObject
         var parent = parentDir ?? root;
         var safe = string.Concat(name.Trim().Split(Path.GetInvalidFileNameChars()));
         if (safe.Length == 0) return;
-        try { Directory.CreateDirectory(Path.Combine(parent, safe)); }
+        try { _ctx.ScriptStore.CreateFolder(Path.Combine(parent, safe)); }
         catch (Exception ex) { _ctx.SetStatus($"Could not create folder: {ex.Message}"); return; }
         RefreshScripts();
         _ctx.SetStatus($"Created folder {safe}.");
@@ -101,11 +102,11 @@ public sealed partial class ScriptsViewModel : ObservableObject
     /// <summary>Create an empty .sql file in <paramref name="dir"/>; returns its path (null on clash/error).</summary>
     public async Task<string?> CreateScriptFileAsync(string dir, string name)
     {
-        if (!Directory.Exists(dir) || string.IsNullOrWhiteSpace(name)) return null;
+        if (!_ctx.ScriptStore.DirectoryExists(dir) || string.IsNullOrWhiteSpace(name)) return null;
         if (!name.EndsWith(".sql", StringComparison.OrdinalIgnoreCase)) name += ".sql";
         var path = Path.Combine(dir, name);
-        if (File.Exists(path)) { _ctx.SetStatus($"{name} already exists."); return null; }
-        try { await File.WriteAllTextAsync(path, "", CancellationToken.None); }
+        if (_ctx.ScriptStore.FileExists(path)) { _ctx.SetStatus($"{name} already exists."); return null; }
+        try { await _ctx.ScriptStore.WriteTextAsync(path, "", CancellationToken.None); }
         catch (Exception ex) { _ctx.SetStatus($"Could not create script: {ex.Message}"); return null; }
         RefreshScripts();
         return path;
@@ -114,11 +115,11 @@ public sealed partial class ScriptsViewModel : ObservableObject
     /// <summary>Move a script file into <paramref name="targetDir"/> (drag &amp; drop between folders).</summary>
     public void MoveScript(string sourcePath, string targetDir)
     {
-        if (!File.Exists(sourcePath) || !Directory.Exists(targetDir)) return;
+        if (!_ctx.ScriptStore.FileExists(sourcePath) || !_ctx.ScriptStore.DirectoryExists(targetDir)) return;
         var dest = Path.Combine(targetDir, Path.GetFileName(sourcePath));
         if (string.Equals(Path.GetFullPath(dest), Path.GetFullPath(sourcePath), StringComparison.Ordinal)) return;
-        if (File.Exists(dest)) { _ctx.SetStatus($"{Path.GetFileName(dest)} already exists there."); return; }
-        try { File.Move(sourcePath, dest); }
+        if (_ctx.ScriptStore.FileExists(dest)) { _ctx.SetStatus($"{Path.GetFileName(dest)} already exists there."); return; }
+        try { _ctx.ScriptStore.Move(sourcePath, dest); }
         catch (Exception ex) { _ctx.SetStatus($"Move failed: {ex.Message}"); return; }
 
         foreach (var t in Tabs)
@@ -134,9 +135,9 @@ public sealed partial class ScriptsViewModel : ObservableObject
         if (!newName.EndsWith(".sql", StringComparison.OrdinalIgnoreCase)) newName += ".sql";
         var newPath = Path.Combine(dir, newName);
         if (string.Equals(newPath, oldPath, StringComparison.Ordinal)) return;
-        if (File.Exists(newPath)) { _ctx.SetStatus($"A script named {newName} already exists."); return; }
+        if (_ctx.ScriptStore.FileExists(newPath)) { _ctx.SetStatus($"A script named {newName} already exists."); return; }
 
-        try { await Task.Run(() => File.Move(oldPath, newPath)); }
+        try { await Task.Run(() => _ctx.ScriptStore.Move(oldPath, newPath)); }
         catch (Exception ex) { _ctx.SetStatus($"Rename failed: {ex.Message}"); return; }
 
         foreach (var t in Tabs)

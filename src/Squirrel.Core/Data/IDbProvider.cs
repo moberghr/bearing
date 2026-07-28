@@ -34,13 +34,13 @@ public interface IMetadataReader
     Task<ISchemaSnapshot> LoadSnapshotAsync(string database, CancellationToken ct);
 
     /// <summary>Stored routines (functions/procedures/…) in the reader's database, for schema browsing.</summary>
-    Task<IReadOnlyList<PgRoutine>> GetRoutinesAsync(CancellationToken ct);
+    Task<IReadOnlyList<RoutineInfo>> GetRoutinesAsync(CancellationToken ct);
 
-    /// <summary>Rendered SQL of a view / materialized view (pg_get_viewdef), by relation OID.</summary>
-    Task<string> GetViewDefinitionAsync(uint relOid, CancellationToken ct);
+    /// <summary>Rendered SQL of a view / materialized view, by its table id (<see cref="TableInfo.Id"/>).</summary>
+    Task<string> GetViewDefinitionAsync(long tableId, CancellationToken ct);
 
-    /// <summary>Rendered <c>CREATE … FUNCTION/PROCEDURE</c> source (pg_get_functiondef), by routine OID.</summary>
-    Task<string> GetRoutineDefinitionAsync(uint routineOid, CancellationToken ct);
+    /// <summary>Rendered <c>CREATE … FUNCTION/PROCEDURE</c> source, by routine id (<see cref="RoutineInfo.Id"/>).</summary>
+    Task<string> GetRoutineDefinitionAsync(long routineId, CancellationToken ct);
 }
 
 public interface IQueryExecutor
@@ -54,10 +54,11 @@ public interface IQueryExecutor
     Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct);
 
     /// <summary>
-    /// Fetch one page of a single SELECT by wrapping it — <c>select * from (&lt;sql&gt;) offset..limit..</c>
-    /// — for "load more" paging. The SQL must be a single row-returning statement.
+    /// Run one already-built page query (the caller shaped the LIMIT/OFFSET — see <c>PageSql.Page</c>)
+    /// as a single row-returning statement. One result set, uncapped; base-table origin isn't read
+    /// (the columns come from the first page). The executor only runs the SQL — it doesn't shape it.
     /// </summary>
-    Task<QueryResult> ExecutePageAsync(string sql, int offset, int limit, CancellationToken ct);
+    Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct);
 
     /// <summary>Total row count of a single SELECT (<c>select count(*) from (&lt;sql&gt;)</c>); null if it can't be counted.</summary>
     Task<long?> CountAsync(string sql, CancellationToken ct);
@@ -69,8 +70,6 @@ public interface IQueryExecutor
     /// single error result rather than thrown.
     /// </summary>
     Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct);
-
-    IAsyncEnumerable<ResultBatch> StreamAsync(string sql, QueryOptions options, CancellationToken ct);
 }
 
 /// <summary>Registry of available providers, resolved by <see cref="IDbProvider.Id"/>.</summary>

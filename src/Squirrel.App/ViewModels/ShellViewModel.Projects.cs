@@ -86,7 +86,9 @@ public sealed partial class ShellViewModel
             return;
 
         SaveWorkspace();
-        await _sessions.DisposeAsync();
+        // Reset (not dispose) the shared managers — they are reused for the next project. DisposeAsync
+        // retires the session manager for good, which would make every later query throw.
+        await _sessions.CloseAllAsync();
         await _schemaBrowser.DisposeAsync();
         _ctx.IsConnected = false;
         _ctx.DefaultConnectionId = null;
@@ -97,7 +99,8 @@ public sealed partial class ShellViewModel
     public async Task NewProjectAsync(string projectDirectory, string name)
     {
         SaveWorkspace();
-        await _sessions.DisposeAsync();
+        // Reset (not dispose) the shared managers — they are reused for the next project (see OpenProjectAsync).
+        await _sessions.CloseAllAsync();
         await _schemaBrowser.DisposeAsync();
         _ctx.IsConnected = false;
         _ctx.DefaultConnectionId = null;

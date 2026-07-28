@@ -44,8 +44,8 @@ public class PostgresExecutorColumnTests
         Assert.False(expr.HasBaseColumn);
 
         // film_id and language_id share the same base table but differ in attribute number.
-        Assert.Equal(filmId.BaseTableOid, lang.BaseTableOid);
-        Assert.NotEqual(filmId.BaseColumnAttNum, lang.BaseColumnAttNum);
+        Assert.Equal(filmId.BaseTableId, lang.BaseTableId);
+        Assert.NotEqual(filmId.BaseColumnOrdinal, lang.BaseColumnOrdinal);
     }
 
     private static async Task<bool> Safe(IDbConnectionFactory f)

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Squirrel.App.ViewModels;
@@ -89,6 +90,40 @@ public sealed partial class EditorTabViewModel : ObservableObject
 
     /// <summary>Swap the current result frame (e.g. after a save/discard refresh) without touching history.</summary>
     public void ReplaceResults(IReadOnlyList<ResultSetViewModel> results) => Results = results;
+
+    // ---- execution state (per-tab) --------------------------------------------------------------
+    // Each tab owns its own busy flag + cancellation source, so tabs run concurrently: every execute
+    // opens its own pooled connection (NpgsqlDataSource is a thread-safe pool), and Run/Esc on the
+    // focused tab never touch another tab's in-flight query. At most one operation runs per tab.
+    private CancellationTokenSource? _runCts;
+
+    /// <summary>True while this tab has a query / page / count / save in flight. Drives the tab-header
+    /// running indicator and (for the selected tab) the Run/Cancel button and Esc.</summary>
+    [ObservableProperty] private bool _isRunning;
+
+    /// <summary>Begin a run: publish the busy flag and a fresh cancellation source, returning its token.
+    /// The caller has already ensured this tab isn't already running (one operation per tab).</summary>
+    internal CancellationToken BeginRun()
+    {
+        _runCts = new CancellationTokenSource();
+        IsRunning = true;
+        return _runCts.Token;
+    }
+
+    /// <summary>End the current run: dispose the cancellation source and lower the busy flag.</summary>
+    internal void EndRun()
+    {
+        _runCts?.Dispose();
+        _runCts = null;
+        IsRunning = false;
+    }
+
+    /// <summary>Cancel this tab's in-flight run, if any (Esc / the Run button as Cancel on the focused tab).</summary>
+    public void CancelRun()
+    {
+        try { _runCts?.Cancel(); }
+        catch (ObjectDisposedException) { /* completed between the null-check and Cancel */ }
+    }
 
     [ObservableProperty] private string _header = "";
 

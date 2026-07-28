@@ -12,16 +12,16 @@ public interface ISchemaSnapshot
     /// <summary>Schemas, in search_path order where known (falls back to alphabetical).</summary>
     IReadOnlyList<string> Schemas { get; }
 
-    IReadOnlyList<PgTable> Tables { get; }
+    IReadOnlyList<TableInfo> Tables { get; }
 
-    IReadOnlyList<PgColumn> ColumnsOf(uint tableOid);
+    IReadOnlyList<ColumnInfo> ColumnsOf(long tableId);
 
     /// <summary>
     /// Resolve a table by optional schema + name. When schema is null, search_path order and
     /// identifier-casing/quoting rules decide the match. Returns null when nothing matches.
     /// </summary>
-    PgTable? ResolveTable(string? schema, string name);
+    TableInfo? ResolveTable(string? schema, string name);
 
     /// <summary>Every FK where the given table is either the referencing or the referenced side.</summary>
-    IReadOnlyList<PgForeignKey> ForeignKeysTouching(uint tableOid);
+    IReadOnlyList<ForeignKeyInfo> ForeignKeysTouching(long tableId);
 }

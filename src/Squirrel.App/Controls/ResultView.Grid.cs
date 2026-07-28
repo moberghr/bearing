@@ -106,23 +106,24 @@ public sealed partial class ResultView
         // Measure cells drive their own selection (per-cell PointerPressed, below). The grid extends a
         // drag and clears the selection when a click missed a measure cell. handledEventsToo:true is
         // required because the DataGrid marks these pointer events handled in the tunnel phase.
-        grid.AddHandler(PointerMovedEvent, (_, e) => { if (_dragging) DragSelectTo(grid, result, e); },
+        grid.AddHandler(PointerMovedEvent, (_, e) => { if (_sel.Dragging) DragSelectTo(grid, result, e); },
             RoutingStrategies.Bubble, handledEventsToo: true);
-        grid.AddHandler(PointerReleasedEvent, (_, e) => { if (_dragging) { _dragging = false; e.Pointer.Capture(null); } },
+        grid.AddHandler(PointerReleasedEvent, (_, e) => { if (_sel.Dragging) { _sel.Dragging = false; e.Pointer.Capture(null); } },
             RoutingStrategies.Bubble, handledEventsToo: true);
         // Clear on click-away: plain handler (skipped when a measure cell already handled the press).
-        grid.PointerPressed += (_, _) => { if (_selection.Count > 0) { ClearSelection(); SelectionChanged(); } };
+        grid.PointerPressed += (_, _) => { if (_sel.Cells.Count > 0) { ClearSelection(); SelectionChanged(); } };
 
         // Keyboard-drive the grid. Handled in the tunnel phase so we pre-empt the DataGrid's own
         // arrow-nav / Ctrl+C before it acts (setting Handled skips its class-level OnKeyDown).
         grid.Focusable = true;
         grid.AddHandler(KeyDownEvent, (_, e) => OnGridKey(grid, result, e), RoutingStrategies.Tunnel);
+        _gridsByResult[result] = grid; // resolve the grid for a palette-invoked grid command (see GridTarget)
 
         // When the grid takes focus (e.g. via F6) with no active cell yet, seed the top-left cell so the
         // focus is visible instead of the caller having to press an arrow first.
         grid.GotFocus += (_, _) =>
         {
-            if (result.Rows.Count > 0 && (_active is null || !ReferenceEquals(_selectionResult, result)))
+            if (result.Rows.Count > 0 && (_sel.Active is null || !ReferenceEquals(_sel.Result, result)))
                 MoveActive(grid, result, result.Rows[0], FirstSelectableColumn(result), extend: false);
         };
 
@@ -133,8 +134,7 @@ public sealed partial class ResultView
             {
                 if (e.EditAction != DataGridEditAction.Commit) return;
                 if (e.Row.DataContext is not object?[] row || e.Column.Tag is not int idx) return;
-                if (e.EditingElement is TextBox tb && idx < row.Length) row[idx] = tb.Text;
-                result.MarkEdited(row);
+                if (e.EditingElement is TextBox tb) result.SetCell(row, idx, tb.Text);
                 ApplyRowStatus(e.Row, result); // tint + status bar on the edited row immediately
             };
         }

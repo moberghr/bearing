@@ -236,4 +236,36 @@ public class ConnectionSessionManagerTests
         Assert.Equal(1, ((FakeFactory)b.Factory).DisposeCount);
         Assert.Null(mgr.TryGet(a.ConnectionId));
     }
+
+    [Fact]
+    public async Task CloseAll_disposes_sessions_but_leaves_the_manager_usable()
+    {
+        // Project switch resets the shared manager and then reuses it for the next project.
+        var provider = new FakeProvider();
+        await using var mgr = new ConnectionSessionManager(provider, () => null);
+        var info = Conn(Guid.NewGuid());
+        var first = await mgr.GetOrConnectAsync(info, CancellationToken.None);
+
+        await mgr.CloseAllAsync();
+
+        Assert.Equal(1, ((FakeFactory)first.Factory).DisposeCount); // old session disposed
+        Assert.Null(mgr.TryGet(info.Id));                           // cache cleared
+
+        var second = await mgr.GetOrConnectAsync(info, CancellationToken.None); // reconnects — does not throw
+        Assert.NotSame(first, second);
+        Assert.Equal(2, provider.FactoriesCreated);                 // a fresh factory was built
+    }
+
+    [Fact]
+    public async Task Dispose_retires_the_manager_so_further_connects_throw()
+    {
+        var provider = new FakeProvider();
+        var mgr = new ConnectionSessionManager(provider, () => null);
+        await mgr.GetOrConnectAsync(Conn(Guid.NewGuid()), CancellationToken.None);
+
+        await mgr.DisposeAsync();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(
+            () => mgr.GetOrConnectAsync(Conn(Guid.NewGuid()), CancellationToken.None));
+    }
 }

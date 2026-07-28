@@ -45,16 +45,16 @@ public sealed class SchemaBrowser : ISchemaBrowser
         return new DatabaseObjects(snapshot, routines);
     }
 
-    public async Task<string> GetViewDefinitionAsync(ConnectionInfo connection, string database, uint relOid, CancellationToken ct)
+    public async Task<string> GetViewDefinitionAsync(ConnectionInfo connection, string database, long tableId, CancellationToken ct)
     {
         var reader = await GetReaderAsync(connection, database, ct);
-        return await reader.Metadata.GetViewDefinitionAsync(relOid, ct);
+        return await reader.Metadata.GetViewDefinitionAsync(tableId, ct);
     }
 
-    public async Task<string> GetRoutineDefinitionAsync(ConnectionInfo connection, string database, uint routineOid, CancellationToken ct)
+    public async Task<string> GetRoutineDefinitionAsync(ConnectionInfo connection, string database, long routineId, CancellationToken ct)
     {
         var reader = await GetReaderAsync(connection, database, ct);
-        return await reader.Metadata.GetRoutineDefinitionAsync(routineOid, ct);
+        return await reader.Metadata.GetRoutineDefinitionAsync(routineId, ct);
     }
 
     private Task<Reader> GetReaderAsync(ConnectionInfo connection, string database, CancellationToken ct)
@@ -74,12 +74,8 @@ public sealed class SchemaBrowser : ISchemaBrowser
         await Task.Yield();
         try
         {
-            var store = _secretStore();
-            var password = store is null ? null : await store.GetPasswordAsync(connection.Id, ct);
-
-            var provider = _providers.Get(connection.ProviderId);
             var clone = connection with { Database = database };
-            var factory = provider.CreateConnectionFactory(clone, password);
+            var (provider, factory) = await ConnectionFactoryBuilder.BuildAsync(_providers, _secretStore(), clone, ct);
             return new Reader(factory, provider.CreateMetadataReader(factory));
         }
         catch

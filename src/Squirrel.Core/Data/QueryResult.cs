@@ -2,19 +2,20 @@ namespace Squirrel.Core.Data;
 
 /// <summary>
 /// One result column. When the column maps straight to a table column (not an expression/alias),
-/// <see cref="BaseTableOid"/> + <see cref="BaseColumnAttNum"/> identify its catalog origin (resolved
+/// <see cref="BaseTableId"/> + <see cref="BaseColumnOrdinal"/> identify its catalog origin (resolved
 /// against the schema snapshot) — the hook for FK navigation and inline edit. Both are 0 for
 /// expression/aliased columns, and are populated only for a raw query, not the wrapped paging query.
+/// Identity is provider-assigned (the Postgres provider maps table OID + attribute number onto it).
 /// </summary>
 public sealed record ColumnDescriptor(
     string Name,
     string DataTypeName,
     Type ClrType,
-    uint BaseTableOid = 0,
-    short BaseColumnAttNum = 0)
+    long BaseTableId = 0,
+    int BaseColumnOrdinal = 0)
 {
     /// <summary>True when this column maps straight to a catalog table column.</summary>
-    public bool HasBaseColumn => BaseTableOid != 0 && BaseColumnAttNum > 0;
+    public bool HasBaseColumn => BaseTableId != 0 && BaseColumnOrdinal > 0;
 }
 
 public sealed record QueryError(string Message, string? SqlState, int? Position);
@@ -31,9 +32,6 @@ public sealed record QueryResult(
 {
     public bool Success => Error is null;
 }
-
-/// <summary>A chunk of rows from a streaming execution.</summary>
-public sealed record ResultBatch(IReadOnlyList<ColumnDescriptor> Columns, IReadOnlyList<object?[]> Rows);
 
 public sealed record QueryOptions
 {

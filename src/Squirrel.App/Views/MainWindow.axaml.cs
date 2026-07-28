@@ -17,6 +17,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using AvaloniaEdit.TextMate;
 using Squirrel.App.Completion;
+using Squirrel.App.Controls;
 using Squirrel.App.Editing;
 using Squirrel.App.Input;
 using Squirrel.App.ViewModels;
@@ -116,7 +117,8 @@ public partial class MainWindow : Window
             await Vm.Execution.DiscardChangesAsync(rs);   // reverts pending changes in place
             RebuildResults(Vm.Workspace.SelectedTab);     // re-render the restored rows
         };
-        ResultsView.PreviewSql = ShowPendingScript; // floating color-coded script panel (design §5)
+        _pendingPanel = new PendingChangesOverlay(this); // floating color-coded script panel (design §5)
+        ResultsView.PreviewSql = ShowPendingScript;
 
         // Translucent selection so syntax-highlighted glyphs stay readable through it — the opaque
         // default paints solid over the colored text. Kanagawa wave-blue at ~40% alpha.

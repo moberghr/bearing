@@ -13,8 +13,4 @@ public enum KeyScope
     Editor,
     /// <summary>Results grid discrete commands (copy, select-all, delete, begin-edit…). Grid tunnel.</summary>
     Grid,
-    /// <summary>Connections/scripts tree. Reserved for a later phase (today's type-ahead stays bespoke).</summary>
-    Tree,
-    /// <summary>Command palette overlay. Reserved for Phase 3.</summary>
-    Palette,
 }

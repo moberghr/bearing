@@ -9,7 +9,7 @@ namespace Squirrel.Sql;
 /// </summary>
 public static class AliasResolver
 {
-    public static string Determine(PgTable table, IEnumerable<string> existingAliases)
+    public static string Determine(TableInfo table, IEnumerable<string> existingAliases)
     {
         var parts = table.Name.Split(new[] { '_', ' ' }, StringSplitOptions.RemoveEmptyEntries);
         var baseAlias = parts.Length > 1

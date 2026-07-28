@@ -2,18 +2,22 @@ using System;
 using System.Globalization;
 using Avalonia.Data.Converters;
 using Avalonia.Media;
+using Squirrel.App.Theming;
 
 namespace Squirrel.App.Converters;
 
 /// <summary>
 /// Turns a hex color string ("#E53935") into a brush for environment badges. Null/blank/invalid
-/// falls back to a neutral gray so an untagged connection still renders a subtle chip.
+/// falls back to a translucent neutral so an untagged connection still renders a subtle chip.
 /// </summary>
 public sealed class HexBrushConverter : IValueConverter
 {
     public static readonly HexBrushConverter Instance = new();
 
-    private static readonly IBrush Neutral = new SolidColorBrush(Color.FromArgb(0x55, 0x88, 0x88, 0x88));
+    // Translucent {Text.Faint} — same slate hue as ConnectionColors.Neutral / ConnectionBrush's
+    // default (the badge stays translucent by design; only the hue is unified). Resolved from the token.
+    private static IBrush? _neutral;
+    private static IBrush Neutral => _neutral ??= ThemeBrush.AtAlpha("Text.Faint", 0x55, Color.FromRgb(0x54, 0x54, 0x6D));
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {

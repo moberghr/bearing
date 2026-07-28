@@ -180,17 +180,17 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
             .ToList();
     }
 
-    private static int RelationRank(PgRelKind kind) => kind switch
+    private static int RelationRank(RelationKind kind) => kind switch
     {
-        PgRelKind.Table => 0,
-        PgRelKind.Partitioned => 0,
-        PgRelKind.ForeignTable => 1,
-        PgRelKind.View => 2,
-        PgRelKind.MaterializedView => 3,
+        RelationKind.Table => 0,
+        RelationKind.Partitioned => 0,
+        RelationKind.ForeignTable => 1,
+        RelationKind.View => 2,
+        RelationKind.MaterializedView => 3,
         _ => 1,
     };
 
-    private static int RoutineRank(PgRoutineKind kind) => kind == PgRoutineKind.Procedure ? 5 : 4;
+    private static int RoutineRank(RoutineKind kind) => kind == RoutineKind.Procedure ? 5 : 4;
 }
 
 /// <summary>A relation (table/view/…). Expands to its columns; can show a definition (view SQL or DDL).</summary>
@@ -198,12 +198,12 @@ public sealed class RelationNodeViewModel : SchemaNodeViewModel
 {
     private readonly ConnectionInfo _connection;
     private readonly string _database;
-    private readonly PgTable _table;
+    private readonly TableInfo _table;
     private readonly ISchemaSnapshot _snapshot;
     private readonly ISchemaBrowser _browser;
 
     public RelationNodeViewModel(
-        ConnectionInfo connection, string database, PgTable table, ISchemaSnapshot snapshot, ISchemaBrowser browser)
+        ConnectionInfo connection, string database, TableInfo table, ISchemaSnapshot snapshot, ISchemaBrowser browser)
         : base(Glyphs(table.Kind), table.Name, $"{KindLabel(table.Kind)} · {table.Schema}", hasChildren: true)
     {
         _connection = connection;
@@ -213,35 +213,35 @@ public sealed class RelationNodeViewModel : SchemaNodeViewModel
         _browser = browser;
     }
 
-    private bool IsViewLike => _table.Kind is PgRelKind.View or PgRelKind.MaterializedView;
+    private bool IsViewLike => _table.Kind is RelationKind.View or RelationKind.MaterializedView;
 
     public override bool CanShowDefinition => true;
 
     // Columns are already in the loaded snapshot — no round-trip.
     protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync()
         => Task.FromResult<IReadOnlyList<SchemaNodeViewModel>>(
-            _snapshot.ColumnsOf(_table.Oid).Select(c => (SchemaNodeViewModel)new ColumnNodeViewModel(c)).ToList());
+            _snapshot.ColumnsOf(_table.Id).Select(c => (SchemaNodeViewModel)new ColumnNodeViewModel(c)).ToList());
 
     public override async Task<string> LoadDefinitionAsync(CancellationToken ct)
         => IsViewLike
-            ? await _browser.GetViewDefinitionAsync(_connection, _database, _table.Oid, ct)
+            ? await _browser.GetViewDefinitionAsync(_connection, _database, _table.Id, ct)
             : TableDdlGenerator.CreateTable(_table, _snapshot);
 
-    private static string KindLabel(PgRelKind kind) => kind switch
+    private static string KindLabel(RelationKind kind) => kind switch
     {
-        PgRelKind.Table => "table",
-        PgRelKind.View => "view",
-        PgRelKind.MaterializedView => "materialized view",
-        PgRelKind.ForeignTable => "foreign table",
-        PgRelKind.Partitioned => "partitioned table",
+        RelationKind.Table => "table",
+        RelationKind.View => "view",
+        RelationKind.MaterializedView => "materialized view",
+        RelationKind.ForeignTable => "foreign table",
+        RelationKind.Partitioned => "partitioned table",
         _ => "table",
     };
 
-    private static string Glyphs(PgRelKind kind) => kind switch
+    private static string Glyphs(RelationKind kind) => kind switch
     {
-        PgRelKind.View => "◨",
-        PgRelKind.MaterializedView => "◫",
-        PgRelKind.ForeignTable => "▤",
+        RelationKind.View => "◨",
+        RelationKind.MaterializedView => "◫",
+        RelationKind.ForeignTable => "▤",
         _ => "▦",
     };
 }
@@ -251,10 +251,10 @@ public sealed class RoutineNodeViewModel : SchemaNodeViewModel
 {
     private readonly ConnectionInfo _connection;
     private readonly string _database;
-    private readonly PgRoutine _routine;
+    private readonly RoutineInfo _routine;
     private readonly ISchemaBrowser _browser;
 
-    public RoutineNodeViewModel(ConnectionInfo connection, string database, PgRoutine routine, ISchemaBrowser browser)
+    public RoutineNodeViewModel(ConnectionInfo connection, string database, RoutineInfo routine, ISchemaBrowser browser)
         : base(GlyphFor(routine.Kind), routine.Name, DetailFor(routine), hasChildren: false)
     {
         _connection = connection;
@@ -266,19 +266,19 @@ public sealed class RoutineNodeViewModel : SchemaNodeViewModel
     public override bool CanShowDefinition => true;
 
     public override Task<string> LoadDefinitionAsync(CancellationToken ct)
-        => _browser.GetRoutineDefinitionAsync(_connection, _database, _routine.Oid, ct);
+        => _browser.GetRoutineDefinitionAsync(_connection, _database, _routine.Id, ct);
 
     protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync() => Task.FromResult(None);
 
-    private static string GlyphFor(PgRoutineKind kind) => kind == PgRoutineKind.Procedure ? "▷" : "ƒ";
+    private static string GlyphFor(RoutineKind kind) => kind == RoutineKind.Procedure ? "▷" : "ƒ";
 
-    private static string DetailFor(PgRoutine r)
+    private static string DetailFor(RoutineInfo r)
     {
         var label = r.Kind switch
         {
-            PgRoutineKind.Procedure => "procedure",
-            PgRoutineKind.Aggregate => "aggregate",
-            PgRoutineKind.Window => "window",
+            RoutineKind.Procedure => "procedure",
+            RoutineKind.Aggregate => "aggregate",
+            RoutineKind.Window => "window",
             _ => "function",
         };
         return $"{label} · {r.Schema}";
@@ -288,12 +288,12 @@ public sealed class RoutineNodeViewModel : SchemaNodeViewModel
 /// <summary>A column of a relation. Leaf; shows type + PK / NOT NULL.</summary>
 public sealed class ColumnNodeViewModel : SchemaNodeViewModel
 {
-    public ColumnNodeViewModel(PgColumn column)
+    public ColumnNodeViewModel(ColumnInfo column)
         : base(column.IsPrimaryKey ? "🔑" : "·", column.Name, DetailFor(column), hasChildren: false) { }
 
     protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync() => Task.FromResult(None);
 
-    private static string DetailFor(PgColumn c)
+    private static string DetailFor(ColumnInfo c)
     {
         var s = c.DataType;
         if (c.NotNull) s += " not null";

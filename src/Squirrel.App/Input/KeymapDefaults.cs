@@ -4,7 +4,7 @@ namespace Squirrel.App.Input;
 
 /// <summary>
 /// The built-in keymap — every shortcut Squirrel ships with, in one table. A user
-/// <c>keybindings.json</c> will layer over this in Phase 2; today this is the whole map.
+/// <c>keybindings.json</c> layers over this at startup (see <see cref="KeymapLoader"/>).
 /// Gestures are written in the same text form the config and menu use, so this doubles as documentation.
 /// </summary>
 public static class KeymapDefaults

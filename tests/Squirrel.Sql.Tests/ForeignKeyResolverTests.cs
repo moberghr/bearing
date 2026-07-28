@@ -13,9 +13,9 @@ public class ForeignKeyResolverTests
     // Columns as `select * from orders` would produce them, with catalog origin (oid + attnum) set.
     private static IReadOnlyList<ColumnDescriptor> OrdersColumns() => new[]
     {
-        new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersOid, 1),
-        new ColumnDescriptor("user_id", "int4", typeof(int), TestSchema.OrdersOid, 2),
-        new ColumnDescriptor("total", "numeric", typeof(decimal), TestSchema.OrdersOid, 3),
+        new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersId, 1),
+        new ColumnDescriptor("user_id", "int4", typeof(int), TestSchema.OrdersId, 2),
+        new ColumnDescriptor("total", "numeric", typeof(decimal), TestSchema.OrdersId, 3),
     };
 
     [Fact]
@@ -42,7 +42,7 @@ public class ForeignKeyResolverTests
     public void Referenced_side_is_not_navigable()
     {
         // users.id is the referenced (child) side of the FK — clicking it should not navigate.
-        var usersCols = new[] { new ColumnDescriptor("id", "int4", typeof(int), TestSchema.UsersOid, 1) };
+        var usersCols = new[] { new ColumnDescriptor("id", "int4", typeof(int), TestSchema.UsersId, 1) };
         Assert.Null(ForeignKeyResolver.Resolve(Schema, usersCols, 0));
     }
 

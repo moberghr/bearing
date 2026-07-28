@@ -30,21 +30,20 @@ namespace Squirrel.App.ViewModels;
 public sealed partial class ShellViewModel : ObservableObject
 {
     // The shared workspace aggregate: services, current project, status sink, connection resolution.
-    // The former fields below are now thin accessors into it (phase 0 of docs/mvvm-refactor-plan.md), so
-    // every existing call site keeps working while ownership of the state moves to the context.
+    // The former per-concern fields are thin accessors into it, so every call site keeps working while
+    // the context owns the state.
     private readonly WorkspaceContext _ctx;
 
-    /// <summary>The connections concern (tree, pills, dialogs). The shell re-exposes its surface as thin
-    /// delegates (see ShellViewModel.Connections.cs) so bindings and code-behind stay unchanged.</summary>
+    /// <summary>The connections concern (tree, pills, dialogs), exposed as <see cref="Connections"/>.</summary>
     private readonly ConnectionsViewModel _connections;
 
-    /// <summary>The scripts concern (tree + folder/file CRUD). Same delegation facade (ShellViewModel.Scripts.cs).</summary>
+    /// <summary>The scripts concern (tree + folder/file CRUD), exposed as <see cref="Scripts"/>.</summary>
     private readonly ScriptsViewModel _scripts;
 
-    /// <summary>The workspace concern (editor tabs + lifecycle + tab-bridging). Same delegation facade (ShellViewModel.Tabs.cs).</summary>
+    /// <summary>The workspace concern (editor tabs + lifecycle + tab-bridging), exposed as <see cref="Workspace"/>.</summary>
     private readonly WorkspaceViewModel _workspace;
 
-    /// <summary>The execution concern (run/page/count/FK-nav/inline-edit). Same delegation facade (ShellViewModel.Execution.cs).</summary>
+    /// <summary>The execution concern (run/page/count/FK-nav/inline-edit), exposed as <see cref="Execution"/>.</summary>
     private readonly ExecutionViewModel _execution;
 
     private IProviderRegistry _providers => _ctx.Providers;
@@ -70,10 +69,10 @@ public sealed partial class ShellViewModel : ObservableObject
         _ctx.Status = text => StatusText = text;
         _connections = new ConnectionsViewModel(_ctx);
         _scripts = new ScriptsViewModel(_ctx, UpdateTitle);
-        // The workspace owns the tabs; it calls back to the connections concern (connection-display /
-        // script rename) and the shell (title / scripts refresh) rather than referencing those VMs.
-        _workspace = new WorkspaceViewModel(_ctx, _scripts.RefreshScripts, UpdateTitle,
-            _connections.ApplyConnectionDisplay, _scripts.RenameScriptAsync);
+        // The workspace owns the tabs and coordinates with the scripts concern (refresh tree / rename file)
+        // and the connections concern (connection-display); it holds both directly (they're already built
+        // and don't reference it back).
+        _workspace = new WorkspaceViewModel(_ctx, _scripts, _connections);
         _execution = new ExecutionViewModel(_ctx, dialogs);
         History = new HistoryPanelViewModel(SearchHistoryAsync, ColorForConnection);
     }

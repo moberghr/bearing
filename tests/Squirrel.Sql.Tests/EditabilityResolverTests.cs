@@ -15,9 +15,9 @@ public class EditabilityResolverTests
     {
         var cols = new[]
         {
-            new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersOid, 1),
-            new ColumnDescriptor("user_id", "int4", typeof(int), TestSchema.OrdersOid, 2),
-            new ColumnDescriptor("total", "numeric", typeof(decimal), TestSchema.OrdersOid, 3),
+            new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersId, 1),
+            new ColumnDescriptor("user_id", "int4", typeof(int), TestSchema.OrdersId, 2),
+            new ColumnDescriptor("total", "numeric", typeof(decimal), TestSchema.OrdersId, 3),
         };
 
         var t = EditabilityResolver.Resolve(Schema, cols);
@@ -34,9 +34,9 @@ public class EditabilityResolverTests
         // `select id as oid, name, email from users` — PK still maps to catalog name "id".
         var cols = new[]
         {
-            new ColumnDescriptor("oid", "int4", typeof(int), TestSchema.UsersOid, 1),
-            new ColumnDescriptor("name", "text", typeof(string), TestSchema.UsersOid, 2),
-            new ColumnDescriptor("email", "text", typeof(string), TestSchema.UsersOid, 3),
+            new ColumnDescriptor("oid", "int4", typeof(int), TestSchema.UsersId, 1),
+            new ColumnDescriptor("name", "text", typeof(string), TestSchema.UsersId, 2),
+            new ColumnDescriptor("email", "text", typeof(string), TestSchema.UsersId, 3),
         };
 
         var t = EditabilityResolver.Resolve(Schema, cols);
@@ -51,8 +51,8 @@ public class EditabilityResolverTests
         // users without its PK column (id) present.
         var cols = new[]
         {
-            new ColumnDescriptor("name", "text", typeof(string), TestSchema.UsersOid, 2),
-            new ColumnDescriptor("email", "text", typeof(string), TestSchema.UsersOid, 3),
+            new ColumnDescriptor("name", "text", typeof(string), TestSchema.UsersId, 2),
+            new ColumnDescriptor("email", "text", typeof(string), TestSchema.UsersId, 3),
         };
         Assert.Null(EditabilityResolver.Resolve(Schema, cols));
     }
@@ -62,8 +62,8 @@ public class EditabilityResolverTests
     {
         var cols = new[]
         {
-            new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersOid, 1),
-            new ColumnDescriptor("name", "text", typeof(string), TestSchema.UsersOid, 2),
+            new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersId, 1),
+            new ColumnDescriptor("name", "text", typeof(string), TestSchema.UsersId, 2),
         };
         Assert.Null(EditabilityResolver.Resolve(Schema, cols));
     }
@@ -73,7 +73,7 @@ public class EditabilityResolverTests
     {
         var cols = new[]
         {
-            new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersOid, 1),
+            new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersId, 1),
             new ColumnDescriptor("doubled", "numeric", typeof(decimal)), // no base origin
         };
         Assert.Null(EditabilityResolver.Resolve(Schema, cols));
@@ -84,8 +84,8 @@ public class EditabilityResolverTests
     {
         var cols = new[]
         {
-            new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersOid, 1),
-            new ColumnDescriptor("total", "numeric", typeof(decimal), TestSchema.OrdersOid, 3),
+            new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersId, 1),
+            new ColumnDescriptor("total", "numeric", typeof(decimal), TestSchema.OrdersId, 3),
         };
         var (target, reason) = EditabilityResolver.ResolveWithReason(Schema, cols);
         Assert.NotNull(target);
@@ -97,8 +97,8 @@ public class EditabilityResolverTests
     {
         var cols = new[]
         {
-            new ColumnDescriptor("name", "text", typeof(string), TestSchema.UsersOid, 2),
-            new ColumnDescriptor("email", "text", typeof(string), TestSchema.UsersOid, 3),
+            new ColumnDescriptor("name", "text", typeof(string), TestSchema.UsersId, 2),
+            new ColumnDescriptor("email", "text", typeof(string), TestSchema.UsersId, 3),
         };
         var (target, reason) = EditabilityResolver.ResolveWithReason(Schema, cols);
         Assert.Null(target);
@@ -110,8 +110,8 @@ public class EditabilityResolverTests
     {
         var cols = new[]
         {
-            new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersOid, 1),
-            new ColumnDescriptor("name", "text", typeof(string), TestSchema.UsersOid, 2),
+            new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersId, 1),
+            new ColumnDescriptor("name", "text", typeof(string), TestSchema.UsersId, 2),
         };
         var (target, reason) = EditabilityResolver.ResolveWithReason(Schema, cols);
         Assert.Null(target);
@@ -123,7 +123,7 @@ public class EditabilityResolverTests
     {
         var cols = new[]
         {
-            new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersOid, 1),
+            new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersId, 1),
             new ColumnDescriptor("doubled", "numeric", typeof(decimal)), // no base origin
         };
         var (target, reason) = EditabilityResolver.ResolveWithReason(Schema, cols);

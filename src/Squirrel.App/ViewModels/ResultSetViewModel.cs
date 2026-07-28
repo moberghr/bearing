@@ -12,9 +12,8 @@ namespace Squirrel.App.ViewModels;
 /// One result set from a run, with its own mutable row buffer so paging can append in place.
 /// A grid result exposes <see cref="Columns"/> + <see cref="Rows"/>; non-query / error results
 /// carry <see cref="Message"/> / <see cref="Error"/> instead. When <see cref="IsPageable"/> the
-/// footer offers "load more" / "count", driven by <see cref="ShellViewModel"/> against
-/// <see cref="SourceSql"/>. This is the seed of the per-result-set model Phases 2–3 build on
-/// (base-table mapping, editability, PK).
+/// footer offers "load more" / "count", driven by <see cref="ExecutionViewModel"/> against
+/// <see cref="SourceSql"/>. Also carries the base-table mapping, editability, and PK/FK columns.
 /// </summary>
 public sealed partial class ResultSetViewModel : ObservableObject
 {
@@ -146,6 +145,19 @@ public sealed partial class ResultSetViewModel : ObservableObject
     public IReadOnlyCollection<object?[]> EditedRows => _edited;
     public IReadOnlyCollection<object?[]> NewRows => _newRows;
     public IReadOnlyCollection<object?[]> DeletedRows => _deleted;
+
+    /// <summary>Commit a cell edit from the grid: write the raw value into the row buffer and mark the row
+    /// edited. No-op (returns false) when the value is unchanged or the column is out of range. Coercion of
+    /// the raw value to the column's CLR type happens at save time (see <c>ResultEditModel</c>), so the grid
+    /// never coerces — it just hands the raw checkbox/text value here.</summary>
+    public bool SetCell(object?[] row, int column, object? value)
+    {
+        if (column < 0 || column >= row.Length) return false;
+        if (Equals(row[column], value)) return false;
+        row[column] = value;
+        MarkEdited(row);
+        return true;
+    }
 
     /// <summary>Record that a cell in <paramref name="row"/> changed (new rows fold into their INSERT).</summary>
     public void MarkEdited(object?[] row)

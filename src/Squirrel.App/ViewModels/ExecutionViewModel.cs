@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
 using System.Text;
@@ -34,30 +35,55 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
     private readonly WorkspaceContext _ctx;
     private readonly IDialogService? _dialogs;
-    private CancellationTokenSource? _executionCts;
+    private EditorTabViewModel? _watchedTab;
 
     public ExecutionViewModel(WorkspaceContext ctx, IDialogService? dialogs)
     {
         _ctx = ctx;
         _dialogs = dialogs;
+        // IsBusy / RunButtonText / CancelExecution are a façade over the *selected* tab's per-tab run
+        // state (execution itself is per-tab). Track selection changes and the selected tab's IsRunning
+        // so the toolbar Run/Cancel button reflects whichever tab is focused.
+        _ctx.SelectedTabChanged += OnSelectedTabChanged;
+        OnSelectedTabChanged();
     }
 
     private EditorTabViewModel? Selected => _ctx.SelectedTab;
 
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(RunButtonText))]
-    private bool _isBusy;
+    /// <summary>Whether the *selected* tab has a query in flight — drives the toolbar Run/Cancel button
+    /// and Esc. Background tabs run concurrently and independently; this reflects only the focused tab.</summary>
+    public bool IsBusy => Selected?.IsRunning ?? false;
 
-    /// <summary>The Run button doubles as Cancel while a query is in flight.</summary>
+    /// <summary>The Run button doubles as Cancel while the selected tab's query is in flight.</summary>
     public string RunButtonText => IsBusy ? "Cancel (Esc)" : "Run (Ctrl+Enter)";
+
+    // Re-raise the façade properties when the selection changes, and re-subscribe to the newly selected
+    // tab so its IsRunning transitions (start/finish/cancel) update the toolbar button live.
+    private void OnSelectedTabChanged()
+    {
+        if (_watchedTab is not null) _watchedTab.PropertyChanged -= OnWatchedTabChanged;
+        _watchedTab = Selected;
+        if (_watchedTab is not null) _watchedTab.PropertyChanged += OnWatchedTabChanged;
+        OnPropertyChanged(nameof(IsBusy));
+        OnPropertyChanged(nameof(RunButtonText));
+    }
+
+    private void OnWatchedTabChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(EditorTabViewModel.IsRunning))
+        {
+            OnPropertyChanged(nameof(IsBusy));
+            OnPropertyChanged(nameof(RunButtonText));
+        }
+    }
 
     /// <summary>Execute SQL for the selected tab against that tab's connection; record it in the log.</summary>
     public async Task ExecuteAsync(string sql)
     {
-        if (IsBusy) return;
         if (string.IsNullOrWhiteSpace(sql)) return;
         var tab = Selected;
         if (tab is null) { _ctx.SetStatus("No editor."); return; }
+        if (tab.IsRunning) return; // this tab already has an operation in flight (one per tab)
         if (tab.ConnectionId is null) { _ctx.SetStatus("This tab has no connection — pick one."); return; }
         var info = _ctx.EffectiveConnection(tab);
         if (info is null) { _ctx.SetStatus("Connection no longer exists."); return; }
@@ -73,12 +99,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
             }
         }
 
-        IsBusy = true;
-        _executionCts = new CancellationTokenSource();
-        var ct = _executionCts.Token;
-        var wall = Stopwatch.StartNew();
-        try
+        await RunExclusiveAsync(tab, async ct =>
         {
+            var wall = Stopwatch.StartNew();
             // Acquire a lease so an idle sweep / evict / database switch can't dispose the pool from
             // under this query while it runs (the lease is held for the whole read).
             SessionLease lease;
@@ -106,65 +129,62 @@ public sealed partial class ExecutionViewModel : ObservableObject
                 // On success, lead with the connection so the status bar reads e.g. "pagila (local) · 88 ms".
                 _ctx.SetStatus(results.Any(r => !r.Success) ? summary : $"{info.Name} · {summary}");
             }
-        }
-        catch (OperationCanceledException) { _ctx.SetStatus("Query cancelled."); }
-        catch (Exception ex) { _ctx.SetStatus($"Execution error: {ex.Message}"); }
-        finally
-        {
-            _executionCts.Dispose();
-            _executionCts = null;
-            IsBusy = false;
-        }
+        }, "Query cancelled.", "Execution error");
     }
 
-    /// <summary>Cancel the in-flight query, if any (Esc / the Run button while busy).</summary>
-    public void CancelExecution()
+    /// <summary>Run <paramref name="body"/> under <paramref name="tab"/>'s per-tab single-flight lifecycle:
+    /// raise that tab's busy flag + a fresh cancellation source (so <see cref="CancelExecution"/> can cancel
+    /// it while the tab is selected), pass its token to the body, and always tear the run down afterwards.
+    /// Cancellation and errors become a status line ("<c>{cancelled}</c>" / "<c>{failed}: {message}</c>").
+    /// Callers pre-check <c>tab.IsRunning</c>; this assumes the tab isn't already running.</summary>
+    private async Task RunExclusiveAsync(
+        EditorTabViewModel tab, Func<CancellationToken, Task> body, string cancelled, string failed)
     {
-        try { _executionCts?.Cancel(); }
-        catch (ObjectDisposedException) { /* completed between the null-check and Cancel */ }
+        var ct = tab.BeginRun();
+        try { await body(ct); }
+        catch (OperationCanceledException) { _ctx.SetStatus(cancelled); }
+        catch (Exception ex) { _ctx.SetStatus($"{failed}: {ex.Message}"); }
+        finally { tab.EndRun(); }
     }
+
+    /// <summary>Cancel the selected tab's in-flight query, if any (Esc / the Run button while busy).
+    /// Only the focused tab is cancelled — a background tab's query keeps running.</summary>
+    public void CancelExecution() => Selected?.CancelRun();
 
     /// <summary>Append the next page to a pageable result set (infinite-scroll "load more").</summary>
     public async Task LoadMoreAsync(ResultSetViewModel rs)
     {
-        if (IsBusy || !rs.IsPageable || rs.SourceSql is null || !rs.HasMore) return;
+        var tab = Selected;
+        if (tab is null || tab.IsRunning || !rs.IsPageable || rs.SourceSql is null || !rs.HasMore) return;
         using var lease = ResolveLiveLease();
         if (lease is null) return;
         var session = lease.Session;
 
-        IsBusy = true;
-        _executionCts = new CancellationTokenSource();
-        var ct = _executionCts.Token;
-        try
+        await RunExclusiveAsync(tab, async ct =>
         {
-            var page = await session.Executor.ExecutePageAsync(rs.SourceSql, rs.Loaded, PageSize, ct);
+            // PageSql shapes the paging: a top-level limit/offset (same as the first page, so the query's
+            // ORDER BY is honored consistently across pages) when the query allows a safe suffix, else a
+            // subquery wrap. The executor just runs the string.
+            var page = await session.Executor.ExecutePageAsync(PageSql.Page(rs.SourceSql, rs.Loaded, PageSize), ct);
             rs.AppendPage(page.Rows, page.RowCount == PageSize);
             // No status update: auto-load fires on scroll and the count lives on the meta row.
-        }
-        catch (OperationCanceledException) { _ctx.SetStatus("Load cancelled."); }
-        catch (Exception ex) { _ctx.SetStatus($"Load more failed: {ex.Message}"); }
-        finally { _executionCts.Dispose(); _executionCts = null; IsBusy = false; }
+        }, "Load cancelled.", "Load more failed");
     }
 
     /// <summary>Fill in the total row count for a pageable result set (the [Count] action).</summary>
     public async Task CountTotalAsync(ResultSetViewModel rs)
     {
-        if (IsBusy || !rs.IsPageable || rs.SourceSql is null) return;
+        var tab = Selected;
+        if (tab is null || tab.IsRunning || !rs.IsPageable || rs.SourceSql is null) return;
         using var lease = ResolveLiveLease();
         if (lease is null) return;
         var session = lease.Session;
 
-        IsBusy = true;
-        _executionCts = new CancellationTokenSource();
-        var ct = _executionCts.Token;
-        try
+        await RunExclusiveAsync(tab, async ct =>
         {
             rs.TotalCount = await session.Executor.CountAsync(rs.SourceSql, ct);
             _ctx.SetStatus(rs.TotalCount is not null ? "Counted total." : "Count unavailable for this query.");
-        }
-        catch (OperationCanceledException) { _ctx.SetStatus("Count cancelled."); }
-        catch (Exception ex) { _ctx.SetStatus($"Count failed: {ex.Message}"); }
-        finally { _executionCts.Dispose(); _executionCts = null; IsBusy = false; }
+        }, "Count cancelled.", "Count failed");
     }
 
     /// <summary>A lease on the already-connected session for the selected tab (paging/count/nav/save run
@@ -184,10 +204,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// The query is never surfaced in the editor.</summary>
     public async Task NavigateForeignKeyAsync(ResultSetViewModel rs, int columnIndex, object?[] row)
     {
-        if (IsBusy) return;
+        if (Selected is not { } tab || tab.IsRunning) return;
         if (columnIndex < 0 || columnIndex >= row.Length) return;
         if (row[columnIndex] is null) { _ctx.SetStatus("Empty key — nothing to navigate to."); return; }
-        if (Selected is not { } tab) return;
         if (SnapshotForSelectedTab() is not { } snapshot) { _ctx.SetStatus("Schema not loaded yet."); return; }
         if (ForeignKeyResolver.Resolve(snapshot, rs.Columns, columnIndex) is not { } target)
         { _ctx.SetStatus("Not a foreign key."); return; }
@@ -196,19 +215,13 @@ public sealed partial class ExecutionViewModel : ObservableObject
         var session = lease.Session;
 
         var sql = ResultEditModel.BuildForeignKeySelect(target, row);
-        IsBusy = true;
-        _executionCts = new CancellationTokenSource();
-        var ct = _executionCts.Token;
-        try
+        await RunExclusiveAsync(tab, async ct =>
         {
             _ctx.SetStatus("Opening referenced row…");
             var results = await session.Executor.ExecuteAsync(sql, new QueryOptions { MaxRows = PageSize }, ct);
             tab.PushResults(ResultSetBuilder.BuildResultSets(results, sql, session.Snapshot));
             _ctx.SetStatus(ResultSetBuilder.DescribeResults(results));
-        }
-        catch (OperationCanceledException) { _ctx.SetStatus("Navigation cancelled."); }
-        catch (Exception ex) { _ctx.SetStatus($"Navigation failed: {ex.Message}"); }
-        finally { _executionCts.Dispose(); _executionCts = null; IsBusy = false; }
+        }, "Navigation cancelled.", "Navigation failed");
     }
 
     // ---- Inline editing — connection/transaction/status concerns; pure DML lives in Results/ResultEditModel.
@@ -217,7 +230,8 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// affected rows in place (no reload — paged-in rows and scroll are preserved).</summary>
     public async Task SaveChangesAsync(ResultSetViewModel rs)
     {
-        if (IsBusy) return;
+        var tab = Selected;
+        if (tab is null || tab.IsRunning) return;
         if (rs.EditTarget is not { } target || !rs.HasPendingChanges) return;
         using var lease = ResolveLiveLease();
         if (lease is null) return;
@@ -228,7 +242,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
         // Production write-guard: inline grid saves are always data-modifying (INSERT/UPDATE/DELETE),
         // so confirm before committing them on a guarded connection — mirrors the ExecuteAsync gate.
-        if (Selected is { } sel && _ctx.EffectiveConnection(sel) is { RequireWriteConfirmation: true } guarded
+        if (_ctx.EffectiveConnection(tab) is { RequireWriteConfirmation: true } guarded
             && _dialogs is { } dialogs)
         {
             var verbs = changes.Select(c => c.Kind.ToString().ToUpperInvariant()).Distinct().ToList();
@@ -239,10 +253,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             }
         }
 
-        IsBusy = true;
-        _executionCts = new CancellationTokenSource();
-        var ct = _executionCts.Token;
-        try
+        await RunExclusiveAsync(tab, async ct =>
         {
             _ctx.SetStatus($"Saving {changes.Count} change(s)…");
             var results = await session.Executor.ExecuteWriteAsync(changes.Select(c => c.Command).ToList(), ct);
@@ -251,10 +262,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
             ResultEditModel.ApplySavedChanges(rs, target, changes, results);
             _ctx.SetStatus($"Saved {changes.Count} change(s).");
-        }
-        catch (OperationCanceledException) { _ctx.SetStatus("Save cancelled."); }
-        catch (Exception ex) { _ctx.SetStatus($"Save failed: {ex.Message}"); }
-        finally { _executionCts.Dispose(); _executionCts = null; IsBusy = false; }
+        }, "Save cancelled.", "Save failed");
     }
 
     /// <summary>Discard all pending changes in place (restore edited cells, drop new rows, un-mark deletes).</summary>

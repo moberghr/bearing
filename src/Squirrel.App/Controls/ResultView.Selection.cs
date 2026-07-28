@@ -32,13 +32,13 @@ public sealed partial class ResultView
     /// anchor to it (all selectable columns; bool checkbox columns are skipped).</summary>
     private void DragSelectTo(DataGrid grid, ResultSetViewModel result, PointerEventArgs e)
     {
-        if (!_dragging || !ReferenceEquals(_selectionResult, result) || _dragAnchor is not { } anchor) return;
+        if (!_sel.Dragging || !ReferenceEquals(_sel.Result, result) || _sel.DragAnchor is not { } anchor) return;
         if (grid.InputHitTest(e.GetPosition(grid)) is not Visual hit) return;
         var cell = hit.GetSelfAndVisualAncestors().OfType<Border>()
             .FirstOrDefault(b => b.Tag is ValueTuple<object?[], int>);
         if (cell?.Tag is not ValueTuple<object?[], int> target) return;
 
-        _active = (target.Item1, target.Item2);
+        _sel.Active = (target.Item1, target.Item2);
         SelectRectangle(result, anchor, (target.Item1, target.Item2));
     }
 
@@ -52,34 +52,28 @@ public sealed partial class ResultView
         if (r0 > r1) (r0, r1) = (r1, r0);
         int c0 = Math.Min(a.Col, b.Col), c1 = Math.Max(a.Col, b.Col);
 
-        _selectionResult = result;
-        _selection.Clear();
+        _sel.Result = result;
+        _sel.Cells.Clear();
         for (var r = r0; r <= r1; r++)
         {
             var rr = rows[r];
             for (var c = c0; c <= c1; c++)
                 if (c < rr.Length && !IsBoolColumn(result.Columns[c]))
-                    _selection.Add((rr, c));
+                    _sel.Cells.Add((rr, c));
         }
         SelectionChanged();
     }
 
     private void ToggleCellSelection(ResultSetViewModel result, object?[] row, int index, bool extend)
     {
-        if (!ReferenceEquals(_selectionResult, result)) { _selection.Clear(); _selectionResult = result; }
+        if (!ReferenceEquals(_sel.Result, result)) { _sel.Cells.Clear(); _sel.Result = result; }
         var key = (row, index);
-        if (extend) { if (!_selection.Remove(key)) _selection.Add(key); }
-        else { _selection.Clear(); _selection.Add(key); }
+        if (extend) { if (!_sel.Cells.Remove(key)) _sel.Cells.Add(key); }
+        else { _sel.Cells.Clear(); _sel.Cells.Add(key); }
         SelectionChanged();
     }
 
-    private void ClearSelection()
-    {
-        _selection.Clear();
-        _selectionResult = null;
-        _active = null;
-        _selAnchor = null;
-    }
+    private void ClearSelection() => _sel.Clear();
 
     // ---- Keyboard navigation & actions (spreadsheet-style) -----------------------------------
 
@@ -97,11 +91,15 @@ public sealed partial class ResultView
         if (!result.HasGrid || result.Rows.Count == 0) return;
 
         // Discrete grid commands (copy, select-all, delete, begin-edit, clear) go through the shared
-        // dispatcher; _keyTarget tells those commands which grid received the key. A command whose guard
-        // is false (Delete on a read-only set, Escape with no selection) leaves the key unhandled so it
-        // falls through to navigation below or bubbles to the window.
-        _keyTarget = (grid, result);
-        if (_dispatcher?.TryHandle(e, KeyScope.Grid) == true) return;
+        // dispatcher; the grid+result they act on is published on _keyStrokeTarget for the duration of the
+        // dispatch only (grid commands are synchronous, so they read it inside TryHandle). A command whose
+        // guard is false (Delete on a read-only set, Escape with no selection) leaves the key unhandled so
+        // it falls through to navigation below or bubbles to the window.
+        _keyStrokeTarget = (grid, result);
+        bool handled;
+        try { handled = _dispatcher?.TryHandle(e, KeyScope.Grid) == true; }
+        finally { _keyStrokeTarget = null; }
+        if (handled) return;
 
         // Everything below is spatial cell-cursor motion — intrinsic grid navigation, not a rebindable
         // command (mirrors how the editor's caret motion isn't in the keymap).
@@ -111,7 +109,7 @@ public sealed partial class ResultView
         var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
 
         // First arrow into a grid that isn't the active one: seed the active cell at the top-left.
-        if (!ReferenceEquals(_selectionResult, result) || _active is not { } active)
+        if (!ReferenceEquals(_sel.Result, result) || _sel.Active is not { } active)
         {
             MoveActive(grid, result, result.Rows[0], FirstSelectableColumn(result), extend: false);
             e.Handled = true;
@@ -146,18 +144,18 @@ public sealed partial class ResultView
     /// the selection collapses to the single cell and re-seeds the anchor. Scrolls the target into view.</summary>
     private void MoveActive(DataGrid grid, ResultSetViewModel result, object?[] row, int col, bool extend)
     {
-        _active = (row, col);
-        _selectionResult = result;
+        _sel.Active = (row, col);
+        _sel.Result = result;
         if (extend)
         {
-            _selAnchor ??= _active;
-            SelectRectangle(result, _selAnchor.Value, _active.Value);
+            _sel.Anchor ??= _sel.Active;
+            SelectRectangle(result, _sel.Anchor.Value, _sel.Active.Value);
         }
         else
         {
-            _selAnchor = _active;
-            _selection.Clear();
-            if (col < result.Columns.Count && !IsBoolColumn(result.Columns[col])) _selection.Add((row, col));
+            _sel.Anchor = _sel.Active;
+            _sel.Cells.Clear();
+            if (col < result.Columns.Count && !IsBoolColumn(result.Columns[col])) _sel.Cells.Add((row, col));
             SelectionChanged();
         }
         if (col < grid.Columns.Count) grid.ScrollIntoView(row, grid.Columns[col]);
@@ -195,14 +193,14 @@ public sealed partial class ResultView
     /// <summary>Select every (non-bool) cell of the result (Ctrl+A).</summary>
     private void SelectAll(ResultSetViewModel result)
     {
-        _selectionResult = result;
-        _selection.Clear();
+        _sel.Result = result;
+        _sel.Cells.Clear();
         foreach (var row in result.Rows)
             for (var c = 0; c < result.Columns.Count; c++)
                 if (c < row.Length && !IsBoolColumn(result.Columns[c]))
-                    _selection.Add((row, c));
-        _active ??= (result.Rows[0], FirstSelectableColumn(result));
-        _selAnchor ??= _active;
+                    _sel.Cells.Add((row, c));
+        _sel.Active ??= (result.Rows[0], FirstSelectableColumn(result));
+        _sel.Anchor ??= _sel.Active;
         SelectionChanged();
     }
 
@@ -210,17 +208,17 @@ public sealed partial class ResultView
     /// rows × columns; gaps in a non-rectangular selection come out blank).</summary>
     private void CopySelection(ResultSetViewModel result)
     {
-        if (!ReferenceEquals(_selectionResult, result) || _selection.Count == 0) return;
+        if (!ReferenceEquals(_sel.Result, result) || _sel.Cells.Count == 0) return;
         var rows = result.Rows;
-        var rowIdx = _selection.Select(s => rows.IndexOf(s.Row)).Where(i => i >= 0).Distinct().OrderBy(i => i).ToList();
-        var colIdx = _selection.Select(s => s.Col).Distinct().OrderBy(i => i).ToList();
+        var rowIdx = _sel.Cells.Select(s => rows.IndexOf(s.Row)).Where(i => i >= 0).Distinct().OrderBy(i => i).ToList();
+        var colIdx = _sel.Cells.Select(s => s.Col).Distinct().OrderBy(i => i).ToList();
         if (rowIdx.Count == 0 || colIdx.Count == 0) return;
 
         var text = string.Join("\n", rowIdx.Select(ri =>
         {
             var row = rows[ri];
             return string.Join("\t", colIdx.Select(c =>
-                _selection.Contains((row, c)) && c < row.Length ? CellText(row, c) : ""));
+                _sel.Cells.Contains((row, c)) && c < row.Length ? CellText(row, c) : ""));
         }));
         TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(text);
     }
@@ -229,11 +227,11 @@ public sealed partial class ResultView
     /// row is dropped outright, so prune any now-dangling selection entries afterwards.</summary>
     private void DeleteSelectedRows(DataGrid grid, ResultSetViewModel result)
     {
-        if (!result.IsEditable || !ReferenceEquals(_selectionResult, result)) return;
-        foreach (var row in _selection.Select(s => s.Row).Distinct().ToList())
+        if (!result.IsEditable || !ReferenceEquals(_sel.Result, result)) return;
+        foreach (var row in _sel.Cells.Select(s => s.Row).Distinct().ToList())
             if (!result.IsRowDeleted(row)) result.ToggleDelete(row); // mark (never un-mark) for deletion
-        _selection.RemoveWhere(s => !result.Rows.Contains(s.Row));
-        if (_active is { } a && !result.Rows.Contains(a.Row)) { _active = null; _selAnchor = null; }
+        _sel.Cells.RemoveWhere(s => !result.Rows.Contains(s.Row));
+        if (_sel.Active is { } a && !result.Rows.Contains(a.Row)) { _sel.Active = null; _sel.Anchor = null; }
         RefreshRowColors(grid, result);
         SelectionChanged();
     }
@@ -241,7 +239,7 @@ public sealed partial class ResultView
     /// <summary>Begin editing the active cell via the DataGrid's own edit machinery (Enter/F2).</summary>
     private void BeginEditActive(DataGrid grid, ResultSetViewModel result)
     {
-        if (_active is not { } a || !ReferenceEquals(_selectionResult, result)) return;
+        if (_sel.Active is not { } a || !ReferenceEquals(_sel.Result, result)) return;
         if (result.Rows.IndexOf(a.Row) < 0 || a.Col >= grid.Columns.Count) return;
         grid.ScrollIntoView(a.Row, grid.Columns[a.Col]);
         grid.SelectedItem = a.Row;
@@ -254,10 +252,10 @@ public sealed partial class ResultView
     {
         foreach (var (result, bar) in _statsBars)
         {
-            var show = ReferenceEquals(result, _selectionResult) && _selection.Count >= 2;
+            var show = ReferenceEquals(result, _sel.Result) && _sel.Cells.Count >= 2;
             if (show && CellStats.Aggregate(SelectedValues(result)) is { } stats)
             {
-                bar.Child = BuildStatsContent(result, _selection.Count, stats);
+                bar.Child = BuildStatsContent(result, _sel.Cells.Count, stats);
                 bar.IsVisible = true;
             }
             else
@@ -265,14 +263,21 @@ public sealed partial class ResultView
                 bar.IsVisible = false;
             }
         }
-        _cellRestyle?.Invoke();
+        _sel.CellRestyle?.Invoke();
     }
 
     private IEnumerable<object?> SelectedValues(ResultSetViewModel result)
     {
-        if (!ReferenceEquals(result, _selectionResult)) yield break;
-        foreach (var (row, col) in _selection)
-            if (col < row.Length) yield return row[col];
+        if (!ReferenceEquals(result, _sel.Result)) yield break;
+        foreach (var (row, col) in _sel.Cells)
+        {
+            if (col >= row.Length || col >= result.Columns.Count) continue;
+            // Only "measure" columns feed the stats — summing/averaging PK/FK identifiers is meaningless.
+            var isPk = result.PrimaryKeyColumns.Contains(col);
+            var isFk = result.ForeignKeyColumns.Contains(col);
+            if (!CellStats.IsMeasureColumn(result.Columns[col].ClrType, isPk, isFk)) continue;
+            yield return row[col];
+        }
     }
 
     /// <summary>Wrap content with a bottom quick-stats bar (hidden until ≥2 measure cells are selected).</summary>
@@ -312,7 +317,7 @@ public sealed partial class ResultView
 
         var clear = IconTextButton("Clear", "Clear selection");
         clear.Margin = new Thickness(12, 0, 0, 0);
-        clear.Click += (_, _) => { if (ReferenceEquals(_selectionResult, result)) { ClearSelection(); SelectionChanged(); } };
+        clear.Click += (_, _) => { if (ReferenceEquals(_sel.Result, result)) { ClearSelection(); SelectionChanged(); } };
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         Grid.SetColumn(stack, 0);

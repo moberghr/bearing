@@ -24,3 +24,6 @@ dist/
 .DS_Store
 tasks/todo.md
 .mtk/
+
+# Test run artifacts (VSTest results / blame-hang dumps)
+TestResults/

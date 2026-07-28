@@ -71,8 +71,8 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedTabDatabase));
         var tab = Selected;
         _ctx.IsConnected = tab?.ConnectionId is { } id && _ctx.Sessions.TryGet(id) is not null;
-        RefreshTabDatabases(tab);
-        WarmConnection(tab);
+        CrashReporter.Observe(RefreshTabDatabasesAsync(tab), "connections.refresh-databases");
+        CrashReporter.Observe(WarmConnectionAsync(tab), "connections.warm");
     }
 
     public void RefreshConnections()
@@ -106,8 +106,8 @@ public sealed partial class ConnectionsViewModel : ObservableObject
             OnPropertyChanged(nameof(ActiveConnectionColor));
             OnPropertyChanged(nameof(SelectedTabDatabase));
             _ctx.IsConnected = id is { } cid && _ctx.Sessions.TryGet(cid) is not null;
-            RefreshTabDatabases(tab);
-            WarmConnection(tab);
+            CrashReporter.Observe(RefreshTabDatabasesAsync(tab), "connections.refresh-databases");
+            CrashReporter.Observe(WarmConnectionAsync(tab), "connections.warm");
         }
     }
 
@@ -121,12 +121,15 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         {
             OnPropertyChanged(nameof(SelectedTabDatabase));
             _ctx.IsConnected = false;
-            WarmConnection(tab);
+            CrashReporter.Observe(WarmConnectionAsync(tab), "connections.warm");
         }
     }
 
-    /// <summary>Load the server's database list into <see cref="TabDatabases"/> for the given tab.</summary>
-    private async void RefreshTabDatabases(EditorTabViewModel? tab)
+    /// <summary>Load the server's database list into <see cref="TabDatabases"/> for the given tab. Awaited
+    /// through <see cref="CrashReporter.Observe(Task, string)"/> at every call site (it is fire-and-forget,
+    /// triggered by tab/connection changes), so a preamble fault is logged instead of escaping unobserved.
+    /// The offline fallback below is deliberate and stays swallowed.</summary>
+    private async Task RefreshTabDatabasesAsync(EditorTabViewModel? tab)
     {
         TabDatabases.Clear();
         if (tab?.ConnectionId is not { } id || _ctx.FindConnection(id) is not { } info)
@@ -218,7 +221,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         var node = ServerNodes.FirstOrDefault(n => n.Connection.Id == connectionId);
         if (node is not null) await node.RefreshAsync();
 
-        if (Selected?.ConnectionId == connectionId) WarmConnection(Selected);
+        if (Selected?.ConnectionId == connectionId) CrashReporter.Observe(WarmConnectionAsync(Selected), "connections.warm");
         _ctx.SetStatus("Schema metadata refreshed.");
     }
 
@@ -253,8 +256,11 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         _ctx.SetStatus($"Added demo connection '{conn.Name}'. Press F5 to run.");
     }
 
-    /// <summary>Background connect + schema warm so completion is ready before the first Run. Quiet on failure.</summary>
-    private async void WarmConnection(EditorTabViewModel? tab)
+    /// <summary>Background connect + schema warm so completion is ready before the first Run. Quiet on
+    /// failure (connection errors are expected and left for Run to surface). Awaited through
+    /// <see cref="CrashReporter.Observe(Task, string)"/> at every call site (fire-and-forget), so a
+    /// preamble fault is logged instead of escaping unobserved.</summary>
+    private async Task WarmConnectionAsync(EditorTabViewModel? tab)
     {
         if (tab is null) return;
         var info = _ctx.EffectiveConnection(tab);

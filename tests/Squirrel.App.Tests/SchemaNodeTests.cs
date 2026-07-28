@@ -129,24 +129,24 @@ public class SchemaNodeTests
             ObjectCalls++;
             var tables = new[]
             {
-                new PgTable(1, "public", "film", PgRelKind.Table),
-                new PgTable(2, "public", "zebra", PgRelKind.Table),
-                new PgTable(3, "public", "film_list", PgRelKind.View),
+                new TableInfo(1, "public", "film", RelationKind.Table),
+                new TableInfo(2, "public", "zebra", RelationKind.Table),
+                new TableInfo(3, "public", "film_list", RelationKind.View),
             };
             var columns = new[]
             {
-                new PgColumn(1, 1, "film_id", "integer", NotNull: true, IsPrimaryKey: true),
-                new PgColumn(1, 2, "title", "text", NotNull: false, IsPrimaryKey: false),
+                new ColumnInfo(1, 1, "film_id", "integer", NotNull: true, IsPrimaryKey: true),
+                new ColumnInfo(1, 2, "title", "text", NotNull: false, IsPrimaryKey: false),
             };
-            var snapshot = new SchemaSnapshot(database, new[] { "public" }, tables, columns, Array.Empty<PgForeignKey>());
-            var routines = new[] { new PgRoutine(10, "public", "calc", PgRoutineKind.Function, "a integer", "integer") };
+            var snapshot = new SchemaSnapshot(database, new[] { "public" }, tables, columns, Array.Empty<ForeignKeyInfo>());
+            var routines = new[] { new RoutineInfo(10, "public", "calc", RoutineKind.Function, "a integer", "integer") };
             return Task.FromResult(new DatabaseObjects(snapshot, routines));
         }
 
-        public Task<string> GetViewDefinitionAsync(ConnectionInfo connection, string database, uint relOid, CancellationToken ct)
+        public Task<string> GetViewDefinitionAsync(ConnectionInfo connection, string database, long tableId, CancellationToken ct)
             => Task.FromResult("select 1");
 
-        public Task<string> GetRoutineDefinitionAsync(ConnectionInfo connection, string database, uint routineOid, CancellationToken ct)
+        public Task<string> GetRoutineDefinitionAsync(ConnectionInfo connection, string database, long routineId, CancellationToken ct)
             => Task.FromResult("CREATE FUNCTION calc() ...");
 
         public int InvalidateCalls;

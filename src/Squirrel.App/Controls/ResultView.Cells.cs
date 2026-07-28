@@ -89,7 +89,7 @@ public sealed partial class ResultView
 
         void Restyle()
         {
-            var selected = ReferenceEquals(_selectionResult, result) && _selection.Contains((row, index));
+            var selected = ReferenceEquals(_sel.Result, result) && _sel.Cells.Contains((row, index));
             if (!selected)
             {
                 border.Background = Brushes.Transparent;
@@ -104,10 +104,10 @@ public sealed partial class ResultView
             // contiguous region instead of a grid of individually-ringed cells.
             var rows = result.Rows;
             var r = rows.IndexOf(row);
-            var up    = r > 0 && _selection.Contains((rows[r - 1], index));
-            var down   = r >= 0 && r + 1 < rows.Count && _selection.Contains((rows[r + 1], index));
-            var left  = _selection.Contains((row, index - 1));
-            var right = _selection.Contains((row, index + 1));
+            var up    = r > 0 && _sel.Cells.Contains((rows[r - 1], index));
+            var down   = r >= 0 && r + 1 < rows.Count && _sel.Cells.Contains((rows[r + 1], index));
+            var left  = _sel.Cells.Contains((row, index - 1));
+            var right = _sel.Cells.Contains((row, index + 1));
 
             // Border on outer edges only. Each side's border + padding sums to 1px so content never shifts:
             // a drawn edge is 1px border / 0 padding, a shared (undrawn) edge is 0 border / 1px padding.
@@ -120,8 +120,8 @@ public sealed partial class ResultView
             border.CornerRadius = new CornerRadius(up || down || left || right ? 0 : 2);
         }
         Restyle();
-        _cellRestyle += Restyle;
-        border.DetachedFromVisualTree += (_, _) => _cellRestyle -= Restyle;
+        _sel.CellRestyle += Restyle;
+        border.DetachedFromVisualTree += (_, _) => _sel.CellRestyle -= Restyle;
 
         border.AddHandler(PointerPressedEvent, (_, e) =>
         {
@@ -130,27 +130,27 @@ public sealed partial class ResultView
             grid.Focus(); // route subsequent key presses to this grid's keyboard handler
             var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);
             var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-            if (shift && _selAnchor is { } anchor && ReferenceEquals(_selectionResult, result))
+            if (shift && _sel.Anchor is { } anchor && ReferenceEquals(_sel.Result, result))
             {
                 // Shift-click: rectangular range from the existing anchor to the clicked cell.
                 SelectRectangle(result, anchor, (row, index));
-                _active = (row, index);
+                _sel.Active = (row, index);
             }
             else if (ctrl)
             {
                 ToggleCellSelection(result, row, index, extend: true);
-                _active = (row, index);
-                _selAnchor = (row, index);
+                _sel.Active = (row, index);
+                _sel.Anchor = (row, index);
             }
             else
             {
-                _selectionResult = result;
-                _selection.Clear();
-                _selection.Add((row, index));
-                _active = (row, index);
-                _selAnchor = (row, index);
-                _dragging = true;
-                _dragAnchor = (row, index);
+                _sel.Result = result;
+                _sel.Cells.Clear();
+                _sel.Cells.Add((row, index));
+                _sel.Active = (row, index);
+                _sel.Anchor = (row, index);
+                _sel.Dragging = true;
+                _sel.DragAnchor = (row, index);
                 e.Pointer.Capture(grid);
                 SelectionChanged();
             }
@@ -182,10 +182,8 @@ public sealed partial class ResultView
             }
             cb.IsCheckedChanged += (_, _) =>
             {
-                if (row is null || index >= row.Length) return;
-                if (Equals(row[index] as bool?, cb.IsChecked)) return; // no-op (e.g. initial bind)
-                row[index] = cb.IsChecked;
-                result.MarkEdited(row);
+                if (row is null) return;
+                if (!result.SetCell(row, index, cb.IsChecked)) return; // unchanged / out of range (e.g. initial bind)
                 if (cb.GetVisualAncestors().OfType<DataGridRow>().FirstOrDefault() is { } dgr)
                     ApplyRowStatus(dgr, result);
             };

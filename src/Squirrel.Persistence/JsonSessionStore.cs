@@ -34,6 +34,10 @@ public sealed class JsonSessionStore : ISessionStore
         var dir = Path.Combine(projectDirectory, ".squirrel");
         Directory.CreateDirectory(dir);
         var path = Path.Combine(dir, "session.json");
-        File.WriteAllText(path, JsonSerializer.Serialize(state, SquirrelJson.Options));
+        // Atomic tmp+move (mirrors SaveAsync): this runs on the shutdown path where interruption is
+        // likeliest, and a truncated session.json would lose the resume state.
+        var tmp = path + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(state, SquirrelJson.Options));
+        File.Move(tmp, path, overwrite: true);
     }
 }

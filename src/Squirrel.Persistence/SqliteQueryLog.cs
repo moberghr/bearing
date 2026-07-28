@@ -193,6 +193,5 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         _channel.Writer.TryComplete();
         try { await _writerLoop; } catch { }
         await _writeConnection.DisposeAsync();
-        SqliteConnection.ClearAllPools();
     }
 }

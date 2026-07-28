@@ -89,25 +89,36 @@ public sealed partial class ResultView : UserControl
     }
     private KeyDispatcher? _dispatcher;
 
-    // The grid+result the current keystroke targets — set at the top of OnGridKey so grid commands
-    // (which run via the shared registry) act on the grid that received the key.
-    private (DataGrid Grid, ResultSetViewModel Result)? _keyTarget;
+    // The grid+result the in-flight grid keystroke is dispatching into — published for the duration of a
+    // single OnGridKey dispatch only (cleared in its finally), so it can never be read stale.
+    private (DataGrid Grid, ResultSetViewModel Result)? _keyStrokeTarget;
+
+    /// <summary>The grid + result a grid command should act on: the grid the current keystroke is
+    /// dispatching into, or — when a command runs without a keystroke (the command palette) — the grid that
+    /// owns the current cell selection. Null when neither applies (nothing is selected and no key is in
+    /// flight), leaving the command a no-op / its guard false.</summary>
+    private (DataGrid Grid, ResultSetViewModel Result)? GridTarget()
+    {
+        if (_keyStrokeTarget is { } t) return t;
+        if (_sel.Result is { } r && _gridsByResult.TryGetValue(r, out var g)) return (g, r);
+        return null;
+    }
 
     private void RegisterGridCommands(CommandRegistry r)
     {
         r.Register(KeyCommand.Sync(CommandIds.GridCopy, "Copy", KeyScope.Grid, "Grid",
-            () => { if (_keyTarget is { } t) CopySelection(t.Result); }));
+            () => { if (GridTarget() is { } t) CopySelection(t.Result); }));
         r.Register(KeyCommand.Sync(CommandIds.GridSelectAll, "Select all", KeyScope.Grid, "Grid",
-            () => { if (_keyTarget is { } t) SelectAll(t.Result); }));
+            () => { if (GridTarget() is { } t) SelectAll(t.Result); }));
         r.Register(KeyCommand.Sync(CommandIds.GridDelete, "Delete rows", KeyScope.Grid, "Grid",
-            () => { if (_keyTarget is { } t) DeleteSelectedRows(t.Grid, t.Result); },
-            canRun: () => _keyTarget?.Result.IsEditable == true));
+            () => { if (GridTarget() is { } t) DeleteSelectedRows(t.Grid, t.Result); },
+            canRun: () => GridTarget()?.Result.IsEditable == true));
         r.Register(KeyCommand.Sync(CommandIds.GridBeginEdit, "Edit cell", KeyScope.Grid, "Grid",
-            () => { if (_keyTarget is { } t) BeginEditActive(t.Grid, t.Result); },
-            canRun: () => _keyTarget?.Result.IsEditable == true));
+            () => { if (GridTarget() is { } t) BeginEditActive(t.Grid, t.Result); },
+            canRun: () => GridTarget()?.Result.IsEditable == true));
         r.Register(KeyCommand.Sync(CommandIds.GridClearSelection, "Clear selection", KeyScope.Grid, "Grid",
             () => { ClearSelection(); SelectionChanged(); },
-            canRun: () => _selection.Count > 0));
+            canRun: () => _sel.Cells.Count > 0));
         r.Register(KeyCommand.Sync(CommandIds.GridFollowFk, "Follow foreign key", KeyScope.Grid, "Grid",
             FollowActiveFk, canRun: ActiveCellIsFk));
         r.Register(KeyCommand.Sync(CommandIds.GridBack, "Back (foreign-key navigation)", KeyScope.Grid, "Grid",
@@ -119,12 +130,12 @@ public sealed partial class ResultView : UserControl
     private DataGrid? _firstGrid;
 
     private bool ActiveCellIsFk()
-        => _selectionResult is { } r && _active is { } cell && r.ForeignKeyColumns.Contains(cell.Col);
+        => _sel.Result is { } r && _sel.Active is { } cell && r.ForeignKeyColumns.Contains(cell.Col);
 
     /// <summary>grid.followFk: drill into the row the active FK cell points to (same as clicking its ↗).</summary>
     private void FollowActiveFk()
     {
-        if (_selectionResult is not { } result || _active is not { } cell) return;
+        if (_sel.Result is not { } result || _sel.Active is not { } cell) return;
         if (!result.ForeignKeyColumns.Contains(cell.Col)) return;
         _ = NavigateForeignKey?.Invoke(result, cell.Col, cell.Row);
     }

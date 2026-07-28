@@ -49,7 +49,7 @@ internal static class ResultSetBuilder
         {
             var c = columns[i];
             if (!c.HasBaseColumn) continue;
-            if (snapshot.ColumnsOf(c.BaseTableOid).Any(pc => pc.AttNum == c.BaseColumnAttNum && pc.IsPrimaryKey))
+            if (snapshot.ColumnsOf(c.BaseTableId).Any(pc => pc.Ordinal == c.BaseColumnOrdinal && pc.IsPrimaryKey))
                 pks.Add(i);
         }
         return pks;

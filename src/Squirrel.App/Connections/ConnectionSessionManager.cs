@@ -35,6 +35,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     // (the toolbar can switch DB on the same connection id while the first connect is still running).
     private readonly Dictionary<Guid, (ConnectionInfo Info, Task<ConnectionSession> Task)> _inflight = new();
     private readonly Dictionary<Guid, Task<ISchemaSnapshot?>> _schemaInflight = new();
+    private bool _disposed;
 
     /// <summary>Default idle timeout before an unused connection is closed.</summary>
     public static readonly TimeSpan DefaultIdleTimeout = TimeSpan.FromMinutes(30);
@@ -60,6 +61,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     {
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (_live.TryGetValue(info.Id, out var existing) && SameConnection(existing.Info, info))
             {
                 existing.LastUsedUtc = _clock();
@@ -180,18 +182,29 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         foreach (var s in toDispose) await SafeDisposeAsync(s);
     }
 
+    /// <summary>Close and dispose every live/in-flight session (e.g. on a project switch) but keep the
+    /// manager usable — it can connect again for the next project. In-flight queries are expected to be
+    /// cancelled by the caller first; leases are not honored here.</summary>
+    public Task CloseAllAsync() => CloseAllAsync(retire: false);
+
     public async ValueTask DisposeAsync()
     {
         _sweepTimer?.Dispose();
+        // Shutdown: retire the manager so any later use throws, and dispose everything regardless of leases.
+        await CloseAllAsync(retire: true);
+    }
+
+    private async Task CloseAllAsync(bool retire)
+    {
         ConnectionSession[] all;
         lock (_gate)
         {
+            if (retire) _disposed = true;
             all = _live.Values.ToArray();
             _live.Clear();
             _inflight.Clear();
             _schemaInflight.Clear();
         }
-        // Shutdown: dispose everything regardless of leases (in-flight queries are cancelled first).
         foreach (var s in all) await SafeDisposeAsync(s);
     }
 
@@ -218,11 +231,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             }
             if (stale is not null && disposeStale) await SafeDisposeAsync(stale);
 
-            var store = _secretStore();
-            var password = store is null ? null : await store.GetPasswordAsync(info.Id, ct);
-
-            var provider = _providers.Get(info.ProviderId);
-            var factory = provider.CreateConnectionFactory(info, password);
+            var (provider, factory) = await ConnectionFactoryBuilder.BuildAsync(_providers, _secretStore(), info, ct);
 
             bool ok;
             try { ok = await factory.TestConnectionAsync(ct); }
@@ -240,7 +249,19 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             var session = new ConnectionSession(
                 info, factory, provider.CreateQueryExecutor(factory), provider.CreateMetadataReader(factory))
             { LastUsedUtc = _clock() };
-            lock (_gate) _live[info.Id] = session;
+            bool disposedDuringConnect;
+            lock (_gate)
+            {
+                // The manager may have been disposed while we were awaiting the connect. Don't repopulate
+                // the cleared _live map — that would leak this session's factory (never disposed).
+                disposedDuringConnect = _disposed;
+                if (!disposedDuringConnect) _live[info.Id] = session;
+            }
+            if (disposedDuringConnect)
+            {
+                await SafeDisposeAsync(session);
+                throw new ObjectDisposedException(nameof(ConnectionSessionManager));
+            }
             return session;
         }
         finally

@@ -7,7 +7,7 @@ using Squirrel.Core.Schema;
 namespace Squirrel.App.Connections;
 
 /// <summary>The relations + routines of one database, for the schema browser tree.</summary>
-public sealed record DatabaseObjects(ISchemaSnapshot Snapshot, IReadOnlyList<PgRoutine> Routines);
+public sealed record DatabaseObjects(ISchemaSnapshot Snapshot, IReadOnlyList<RoutineInfo> Routines);
 
 /// <summary>
 /// Read-only metadata access for the sidebar schema tree. Unlike <see cref="IConnectionSessionManager"/>
@@ -23,8 +23,8 @@ public interface ISchemaBrowser : IAsyncDisposable
     /// <summary>Relations + routines of one database (opens/reuses a per-database connection).</summary>
     Task<DatabaseObjects> GetObjectsAsync(ConnectionInfo connection, string database, CancellationToken ct);
 
-    Task<string> GetViewDefinitionAsync(ConnectionInfo connection, string database, uint relOid, CancellationToken ct);
-    Task<string> GetRoutineDefinitionAsync(ConnectionInfo connection, string database, uint routineOid, CancellationToken ct);
+    Task<string> GetViewDefinitionAsync(ConnectionInfo connection, string database, long tableId, CancellationToken ct);
+    Task<string> GetRoutineDefinitionAsync(ConnectionInfo connection, string database, long routineId, CancellationToken ct);
 
     /// <summary>Drop all cached per-database readers for a connection so the next read re-fetches fresh metadata.</summary>
     Task InvalidateAsync(Guid connectionId);

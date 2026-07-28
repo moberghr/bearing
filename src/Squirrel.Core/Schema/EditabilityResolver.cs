@@ -34,55 +34,55 @@ public static class EditabilityResolver
         if (columns.Count == 0) return (null, "no columns to edit.");
 
         // All columns must originate from the same base table.
-        uint oid = 0;
+        long tableId = 0;
         foreach (var c in columns)
         {
             if (!c.HasBaseColumn)                               // expression/aliased column ⇒ not a clean single table
                 return (null, "a column is a computed expression, not a table column.");
-            if (oid == 0) oid = c.BaseTableOid;
-            else if (c.BaseTableOid != oid)                     // spans multiple tables (join)
+            if (tableId == 0) tableId = c.BaseTableId;
+            else if (c.BaseTableId != tableId)                  // spans multiple tables (join)
                 return (null, "the result joins more than one table.");
         }
 
-        var table = FindTable(snapshot, oid);
+        var table = FindTable(snapshot, tableId);
         if (table is null) return (null, "the source table isn't in the loaded schema.");
-        if (table.Kind is not (PgRelKind.Table or PgRelKind.Partitioned)) // views etc. aren't editable
+        if (table.Kind is not (RelationKind.Table or RelationKind.Partitioned)) // views etc. aren't editable
             return (null, "the result comes from a view, not a table.");
 
-        var catalog = snapshot.ColumnsOf(oid);
-        var pkAttNums = catalog.Where(c => c.IsPrimaryKey).Select(c => c.AttNum).ToHashSet();
-        if (pkAttNums.Count == 0)                              // no detectable PK ⇒ can't key edits
+        var catalog = snapshot.ColumnsOf(tableId);
+        var pkOrdinals = catalog.Where(c => c.IsPrimaryKey).Select(c => c.Ordinal).ToHashSet();
+        if (pkOrdinals.Count == 0)                             // no detectable PK ⇒ can't key edits
             return (null, "no primary key found — can't generate a safe UPDATE.");
 
         var mapped = new List<EditableColumn>(columns.Count);
-        var present = new HashSet<short>();
+        var present = new HashSet<int>();
         for (var i = 0; i < columns.Count; i++)
         {
-            var att = columns[i].BaseColumnAttNum;
-            var name = NameOf(catalog, att);
+            var ordinal = columns[i].BaseColumnOrdinal;
+            var name = NameOf(catalog, ordinal);
             if (name is null)                                  // column not in the snapshot ⇒ bail
                 return (null, "a column isn't in the loaded schema.");
-            mapped.Add(new EditableColumn(i, name, pkAttNums.Contains(att)));
-            present.Add(att);
+            mapped.Add(new EditableColumn(i, name, pkOrdinals.Contains(ordinal)));
+            present.Add(ordinal);
         }
 
-        if (!pkAttNums.All(present.Contains))                  // a PK column is missing from the result
+        if (!pkOrdinals.All(present.Contains))                 // a PK column is missing from the result
             return (null, "a primary-key column is missing from the result.");
 
         return (new EditTarget(table.Schema, table.Name, mapped), null);
     }
 
-    private static string? NameOf(IReadOnlyList<PgColumn> cols, short attNum)
+    private static string? NameOf(IReadOnlyList<ColumnInfo> cols, int ordinal)
     {
         foreach (var c in cols)
-            if (c.AttNum == attNum) return c.Name;
+            if (c.Ordinal == ordinal) return c.Name;
         return null;
     }
 
-    private static PgTable? FindTable(ISchemaSnapshot snapshot, uint oid)
+    private static TableInfo? FindTable(ISchemaSnapshot snapshot, long tableId)
     {
         foreach (var t in snapshot.Tables)
-            if (t.Oid == oid) return t;
+            if (t.Id == tableId) return t;
         return null;
     }
 }

@@ -28,7 +28,6 @@
     <PackageReference Include="Avalonia.AvaloniaEdit" />
     <PackageReference Include="AvaloniaEdit.TextMate" />
     <PackageReference Include="CommunityToolkit.Mvvm" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
   </ItemGroup>
 
 </Project>

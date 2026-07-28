@@ -15,27 +15,24 @@ namespace Squirrel.App.ViewModels;
 /// The workspace concern: the editor-tab list and selection (owned in <see cref="WorkspaceContext"/>),
 /// their lifecycle (new/close/session-restore), and the tab-bridging that opens/loads/saves a script into
 /// a tab. Extracted from the shell (docs/mvvm-refactor-plan.md phase 4); coordinates through the context
-/// and calls back to the connections concern (connection-display) and the shell (title/scripts refresh)
-/// rather than referencing those view-models directly. The shell re-exposes this VM's surface as thin
-/// delegates so existing bindings, code-behind, and tests stay unchanged.
+/// and its two sibling concerns — <see cref="ScriptsViewModel"/> (refresh the tree, rename a file) and
+/// <see cref="ConnectionsViewModel"/> (apply a tab's connection display). It holds them directly rather
+/// than through a bag of loose callbacks; neither references the workspace back, so there is no cycle.
+/// The shell re-exposes this VM's surface as thin delegates so existing bindings, code-behind, and tests
+/// stay unchanged.
 /// </summary>
 public sealed partial class WorkspaceViewModel : ObservableObject
 {
     private readonly WorkspaceContext _ctx;
-    private readonly Action _refreshScripts;
-    private readonly Action _updateTitle;
-    private readonly Action<EditorTabViewModel> _applyConnectionDisplay;
-    private readonly Func<string, string, Task> _renameScript;
+    private readonly ScriptsViewModel _scripts;
+    private readonly ConnectionsViewModel _connections;
     private int _scratchCounter;
 
-    public WorkspaceViewModel(WorkspaceContext ctx, Action refreshScripts, Action updateTitle,
-        Action<EditorTabViewModel> applyConnectionDisplay, Func<string, string, Task> renameScript)
+    public WorkspaceViewModel(WorkspaceContext ctx, ScriptsViewModel scripts, ConnectionsViewModel connections)
     {
         _ctx = ctx;
-        _refreshScripts = refreshScripts;
-        _updateTitle = updateTitle;
-        _applyConnectionDisplay = applyConnectionDisplay;
-        _renameScript = renameScript;
+        _scripts = scripts;
+        _connections = connections;
         // Re-raise the binding notification when the selection changes underneath us (the context is the
         // single owner; the connections concern also listens to the same event).
         _ctx.SelectedTabChanged += () => OnPropertyChanged(nameof(SelectedTab));
@@ -60,7 +57,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         {
             ConnectionId = inherit,
         };
-        _applyConnectionDisplay(tab);
+        _connections.ApplyConnectionDisplay(tab);
         Tabs.Add(tab);
         SelectedTab = tab;
         return tab;
@@ -86,11 +83,11 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         {
             var abs = e.ScriptPath is { } rel && _ctx.Project is not null ? Path.Combine(_ctx.Project.Directory, rel) : null;
             EditorTabViewModel tab;
-            if (abs is not null && File.Exists(abs))
+            if (abs is not null && _ctx.ScriptStore.FileExists(abs))
             {
                 // Restore the last editor buffer (which may hold unsaved edits), keeping the on-disk
                 // content as the clean baseline so an unsaved script comes back marked modified.
-                var disk = await File.ReadAllTextAsync(abs, CancellationToken.None);
+                var disk = await _ctx.ScriptStore.ReadTextAsync(abs, CancellationToken.None);
                 var buffer = e.ScratchText ?? disk;
                 tab = NewTab(buffer, abs);
                 tab.MarkSaved(disk);
@@ -119,33 +116,30 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     {
         var existing = Tabs.FirstOrDefault(t => string.Equals(t.ScriptPath, absolutePath, StringComparison.Ordinal));
         if (existing is not null) { SelectedTab = existing; return; }
-        var text = await File.ReadAllTextAsync(absolutePath, CancellationToken.None);
+        var text = await _ctx.ScriptStore.ReadTextAsync(absolutePath, CancellationToken.None);
         NewTab(text, absolutePath);
         _ctx.SetStatus($"Opened {Path.GetFileName(absolutePath)}.");
     }
 
     public async Task LoadScriptIntoSelectedAsync(string absolutePath)
     {
-        var text = await File.ReadAllTextAsync(absolutePath, CancellationToken.None);
+        var text = await _ctx.ScriptStore.ReadTextAsync(absolutePath, CancellationToken.None);
         var tab = SelectedTab ?? NewTab();
         tab.Text = text;
         tab.ScriptPath = absolutePath;
         tab.MarkSaved(text);
-        _refreshScripts();
-        _updateTitle();
+        _scripts.RefreshScripts();
         _ctx.SetStatus($"Opened {Path.GetFileName(absolutePath)}.");
     }
 
     public async Task SaveSelectedScriptAsync(string absolutePath, string text)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(absolutePath)!);
-        await File.WriteAllTextAsync(absolutePath, text, CancellationToken.None);
+        await _ctx.ScriptStore.WriteTextAsync(absolutePath, text, CancellationToken.None);
         var tab = SelectedTab ?? NewTab(text);
         tab.Text = text;
         tab.ScriptPath = absolutePath;
         tab.MarkSaved(text);
-        _refreshScripts();
-        _updateTitle();
+        _scripts.RefreshScripts();
         _ctx.SetStatus($"Saved {Path.GetFileName(absolutePath)}.");
     }
 
@@ -154,6 +148,6 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     {
         if (string.IsNullOrWhiteSpace(newName)) return;
         if (tab.IsScratch) tab.DisplayName = newName.Trim();
-        else if (tab.ScriptPath is { } path) await _renameScript(path, newName.Trim());
+        else if (tab.ScriptPath is { } path) await _scripts.RenameScriptAsync(path, newName.Trim());
     }
 }

@@ -32,15 +32,34 @@ public static class FirstPageLimiter
     /// or <c>null</c> when the caller should execute the original SQL unbounded. The clause is placed on
     /// its own line so a trailing line-comment (<c>-- …</c>) can't swallow it.
     /// </summary>
-    public static string? TryAppendLimit(string sql, int limit)
-    {
-        if (string.IsNullOrWhiteSpace(sql) || limit <= 0) return null;
+    public static string? TryAppendLimit(string sql, int limit) => TryAppendPage(sql, 0, limit);
 
+    /// <summary>
+    /// Returns <paramref name="sql"/> with a top-level <c>limit &lt;limit&gt; offset &lt;offset&gt;</c>
+    /// appended when it is safe to do so, or <c>null</c> otherwise. Used to page a query with the same
+    /// top-level suffix on every page (offset 0 for the first) — so a query's <c>ORDER BY</c> is honored
+    /// consistently across pages, unlike a subquery wrap whose ordering the planner needn't preserve. The
+    /// clause goes on its own line so a trailing line-comment can't swallow it; <c>offset 0</c> is omitted
+    /// so a first page reads identically to <see cref="TryAppendLimit"/>.
+    /// </summary>
+    public static string? TryAppendPage(string sql, int offset, int limit)
+    {
+        if (string.IsNullOrWhiteSpace(sql) || limit <= 0 || offset < 0) return null;
+        if (!CanSuffixLimit(sql)) return null;
+
+        var clause = offset > 0 ? $"limit {limit} offset {offset}" : $"limit {limit}";
+        return $"{StripTrailingSemicolon(sql)}\n{clause}";
+    }
+
+    /// <summary>True when a top-level LIMIT/OFFSET can be safely suffixed to <paramref name="sql"/>:
+    /// a single read-only, row-returning statement with no row cap / locking / INTO of its own.</summary>
+    private static bool CanSuffixLimit(string sql)
+    {
         // A batch would bind the limit to the wrong (last) statement — only a lone statement qualifies.
-        if (StatementSplitter.Split(sql).Count != 1) return null;
+        if (StatementSplitter.Split(sql).Count != 1) return false;
 
         // Never reshape a write / destructive DDL; this also catches data-modifying CTEs.
-        if (WriteGuard.HasRisk(sql)) return null;
+        if (WriteGuard.HasRisk(sql)) return false;
 
         string? firstKeyword = null;
         var depth = 0;
@@ -53,12 +72,10 @@ public static class FirstPageLimiter
 
             if (t.Type == PostgreSQLLexer.OPEN_PAREN) depth++;
             else if (t.Type == PostgreSQLLexer.CLOSE_PAREN && depth > 0) depth--;
-            else if (depth == 0 && BlockingKeywords.Contains(text)) return null;
+            else if (depth == 0 && BlockingKeywords.Contains(text)) return false;
         }
 
-        if (firstKeyword is null || !RowReturningStarts.Contains(firstKeyword)) return null;
-
-        return $"{StripTrailingSemicolon(sql)}\nlimit {limit}";
+        return firstKeyword is not null && RowReturningStarts.Contains(firstKeyword);
     }
 
     private static string StripTrailingSemicolon(string sql)

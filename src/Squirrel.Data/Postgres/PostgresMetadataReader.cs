@@ -51,7 +51,7 @@ public sealed class PostgresMetadataReader : IMetadataReader
         return list;
     }
 
-    private static async Task<List<PgTable>> ReadTablesAsync(NpgsqlConnection conn, CancellationToken ct)
+    private static async Task<List<TableInfo>> ReadTablesAsync(NpgsqlConnection conn, CancellationToken ct)
     {
         const string sql = """
             select c.oid::bigint, n.nspname, c.relname, c.relkind::text
@@ -64,17 +64,17 @@ public sealed class PostgresMetadataReader : IMetadataReader
             """;
         await using var cmd = new NpgsqlCommand(sql, conn);
         await using var r = await cmd.ExecuteReaderAsync(ct);
-        var list = new List<PgTable>();
+        var list = new List<TableInfo>();
         while (await r.ReadAsync(ct))
         {
-            var oid = (uint)r.GetInt64(0);
+            var id = r.GetInt64(0);
             var kind = MapRelKind(r.GetString(3)[0]);
-            list.Add(new PgTable(oid, r.GetString(1), r.GetString(2), kind));
+            list.Add(new TableInfo(id, r.GetString(1), r.GetString(2), kind));
         }
         return list;
     }
 
-    private static async Task<List<PgColumn>> ReadColumnsAsync(NpgsqlConnection conn, CancellationToken ct)
+    private static async Task<List<ColumnInfo>> ReadColumnsAsync(NpgsqlConnection conn, CancellationToken ct)
     {
         const string sql = """
             select a.attrelid::bigint, a.attnum, a.attname,
@@ -96,12 +96,12 @@ public sealed class PostgresMetadataReader : IMetadataReader
             """;
         await using var cmd = new NpgsqlCommand(sql, conn);
         await using var r = await cmd.ExecuteReaderAsync(ct);
-        var list = new List<PgColumn>();
+        var list = new List<ColumnInfo>();
         while (await r.ReadAsync(ct))
         {
-            list.Add(new PgColumn(
-                TableOid: (uint)r.GetInt64(0),
-                AttNum: r.GetInt16(1),
+            list.Add(new ColumnInfo(
+                TableId: r.GetInt64(0),
+                Ordinal: r.GetInt16(1),
                 Name: r.GetString(2),
                 DataType: r.GetString(3),
                 NotNull: r.GetBoolean(4),
@@ -110,7 +110,7 @@ public sealed class PostgresMetadataReader : IMetadataReader
         return list;
     }
 
-    private static async Task<List<PgForeignKey>> ReadForeignKeysAsync(NpgsqlConnection conn, CancellationToken ct)
+    private static async Task<List<ForeignKeyInfo>> ReadForeignKeysAsync(NpgsqlConnection conn, CancellationToken ct)
     {
         const string sql = """
             select con.oid::bigint, con.conname,
@@ -125,21 +125,21 @@ public sealed class PostgresMetadataReader : IMetadataReader
             """;
         await using var cmd = new NpgsqlCommand(sql, conn);
         await using var r = await cmd.ExecuteReaderAsync(ct);
-        var list = new List<PgForeignKey>();
+        var list = new List<ForeignKeyInfo>();
         while (await r.ReadAsync(ct))
         {
-            list.Add(new PgForeignKey(
-                ConstraintOid: (uint)r.GetInt64(0),
+            list.Add(new ForeignKeyInfo(
+                Id: r.GetInt64(0),
                 Name: r.GetString(1),
-                ParentOid: (uint)r.GetInt64(2),
-                ParentAttNums: r.GetFieldValue<short[]>(4),
-                ReferencedOid: (uint)r.GetInt64(3),
-                ReferencedAttNums: r.GetFieldValue<short[]>(5)));
+                ParentTableId: r.GetInt64(2),
+                ParentOrdinals: Array.ConvertAll(r.GetFieldValue<short[]>(4), x => (int)x),
+                ReferencedTableId: r.GetInt64(3),
+                ReferencedOrdinals: Array.ConvertAll(r.GetFieldValue<short[]>(5), x => (int)x)));
         }
         return list;
     }
 
-    public async Task<IReadOnlyList<PgRoutine>> GetRoutinesAsync(CancellationToken ct)
+    public async Task<IReadOnlyList<RoutineInfo>> GetRoutinesAsync(CancellationToken ct)
     {
         const string sql = """
             select p.oid::bigint, n.nspname, p.proname, p.prokind::text,
@@ -155,11 +155,11 @@ public sealed class PostgresMetadataReader : IMetadataReader
         await using var conn = await _factory.DataSource.OpenConnectionAsync(ct);
         await using var cmd = new NpgsqlCommand(sql, conn);
         await using var r = await cmd.ExecuteReaderAsync(ct);
-        var list = new List<PgRoutine>();
+        var list = new List<RoutineInfo>();
         while (await r.ReadAsync(ct))
         {
-            list.Add(new PgRoutine(
-                Oid: (uint)r.GetInt64(0),
+            list.Add(new RoutineInfo(
+                Id: r.GetInt64(0),
                 Schema: r.GetString(1),
                 Name: r.GetString(2),
                 Kind: MapProKind(r.GetString(3)[0]),
@@ -169,13 +169,13 @@ public sealed class PostgresMetadataReader : IMetadataReader
         return list;
     }
 
-    // The OID is a uint we read from the catalog (pure digits) — safe to interpolate, and both
-    // pg_get_*def overloads take oid, which an integer literal casts to implicitly.
-    public Task<string> GetViewDefinitionAsync(uint relOid, CancellationToken ct)
-        => ScalarTextAsync($"select pg_get_viewdef({relOid}, true)", ct);
+    // The id is the catalog OID (pure digits, read as bigint) — safe to interpolate, and the pg_get_*def
+    // functions take an oid, which an integer literal casts to implicitly.
+    public Task<string> GetViewDefinitionAsync(long tableId, CancellationToken ct)
+        => ScalarTextAsync($"select pg_get_viewdef({tableId}, true)", ct);
 
-    public Task<string> GetRoutineDefinitionAsync(uint routineOid, CancellationToken ct)
-        => ScalarTextAsync($"select pg_get_functiondef({routineOid})", ct);
+    public Task<string> GetRoutineDefinitionAsync(long routineId, CancellationToken ct)
+        => ScalarTextAsync($"select pg_get_functiondef({routineId})", ct);
 
     private async Task<string> ScalarTextAsync(string sql, CancellationToken ct)
     {
@@ -185,22 +185,22 @@ public sealed class PostgresMetadataReader : IMetadataReader
         return result as string ?? "";
     }
 
-    private static PgRoutineKind MapProKind(char prokind) => prokind switch
+    private static RoutineKind MapProKind(char prokind) => prokind switch
     {
-        'f' => PgRoutineKind.Function,
-        'p' => PgRoutineKind.Procedure,
-        'a' => PgRoutineKind.Aggregate,
-        'w' => PgRoutineKind.Window,
-        _ => PgRoutineKind.Function,
+        'f' => RoutineKind.Function,
+        'p' => RoutineKind.Procedure,
+        'a' => RoutineKind.Aggregate,
+        'w' => RoutineKind.Window,
+        _ => RoutineKind.Function,
     };
 
-    private static PgRelKind MapRelKind(char relkind) => relkind switch
+    private static RelationKind MapRelKind(char relkind) => relkind switch
     {
-        'r' => PgRelKind.Table,
-        'v' => PgRelKind.View,
-        'm' => PgRelKind.MaterializedView,
-        'f' => PgRelKind.ForeignTable,
-        'p' => PgRelKind.Partitioned,
-        _ => PgRelKind.Table,
+        'r' => RelationKind.Table,
+        'v' => RelationKind.View,
+        'm' => RelationKind.MaterializedView,
+        'f' => RelationKind.ForeignTable,
+        'p' => RelationKind.Partitioned,
+        _ => RelationKind.Table,
     };
 }

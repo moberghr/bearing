@@ -39,16 +39,16 @@ public class PostgresMetadataTests
         Assert.Equal(film, filmBare);
 
         // Columns
-        var cols = snapshot.ColumnsOf(film!.Oid).Select(c => c.Name).ToList();
+        var cols = snapshot.ColumnsOf(film!.Id).Select(c => c.Name).ToList();
         Assert.Contains("film_id", cols);
         Assert.Contains("title", cols);
         Assert.Contains("language_id", cols);
-        Assert.True(snapshot.ColumnsOf(film.Oid).Single(c => c.Name == "film_id").IsPrimaryKey);
+        Assert.True(snapshot.ColumnsOf(film.Id).Single(c => c.Name == "film_id").IsPrimaryKey);
 
         // Foreign keys touching film (film.language_id -> language, and film_actor/film_category -> film)
-        var fks = snapshot.ForeignKeysTouching(film.Oid);
+        var fks = snapshot.ForeignKeysTouching(film.Id);
         Assert.NotEmpty(fks);
-        Assert.Contains(fks, fk => fk.ReferencedOid == film.Oid || fk.ParentOid == film.Oid);
+        Assert.Contains(fks, fk => fk.ReferencedTableId == film.Id || fk.ParentTableId == film.Id);
 
         // Pagila has 36 FKs total; make sure we read a healthy set.
         Assert.Contains("public", snapshot.Schemas);
@@ -67,7 +67,7 @@ public class PostgresMetadataTests
         // Pagila ships several functions.
         var balance = routines.FirstOrDefault(r => r.Name == "get_customer_balance");
         Assert.NotNull(balance);
-        Assert.Equal(Squirrel.Core.Schema.PgRoutineKind.Function, balance!.Kind);
+        Assert.Equal(Squirrel.Core.Schema.RoutineKind.Function, balance!.Kind);
         Assert.Equal("public", balance.Schema);
         Assert.Contains("rewards_report", routines.Select(r => r.Name));
         Assert.All(routines, r => Assert.NotEqual("pg_catalog", r.Schema));
@@ -85,7 +85,7 @@ public class PostgresMetadataTests
         var view = snapshot.ResolveTable("public", "film_list");
         Assert.NotNull(view);
 
-        var def = await reader.GetViewDefinitionAsync(view!.Oid, CancellationToken.None);
+        var def = await reader.GetViewDefinitionAsync(view!.Id, CancellationToken.None);
         Assert.Contains("select", def, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -100,7 +100,7 @@ public class PostgresMetadataTests
         var routine = (await reader.GetRoutinesAsync(CancellationToken.None))
             .First(r => r.Name == "get_customer_balance");
 
-        var def = await reader.GetRoutineDefinitionAsync(routine.Oid, CancellationToken.None);
+        var def = await reader.GetRoutineDefinitionAsync(routine.Id, CancellationToken.None);
         Assert.Contains("FUNCTION", def, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("get_customer_balance", def);
     }
