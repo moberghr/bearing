@@ -63,6 +63,14 @@ public class CellFormatTests
     }
 
     [Fact]
+    public void Multidimensional_arrays_flatten_instead_of_throwing()
+    {
+        // Postgres int[][] / text[][] come back as a rank-2 Array; the old single-index GetValue threw.
+        var grid = new[,] { { 1, 2 }, { 3, 4 } };
+        Assert.Equal("[1, 2, 3, 4]", CellFormat.Display(grid)); // row-major flatten, no exception
+    }
+
+    [Fact]
     public void Bytea_renders_as_hex_and_truncates_when_long()
     {
         Assert.Equal(@"\xdeadbeef", CellFormat.Display(new byte[] { 0xDE, 0xAD, 0xBE, 0xEF }));

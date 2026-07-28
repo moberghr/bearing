@@ -25,10 +25,15 @@ public sealed class FileFallbackSecretStore : ISecretStore
     public async Task SetPasswordAsync(Guid connectionId, string password, CancellationToken ct)
     {
         var path = PathFor(connectionId);
+        var tmp = path + ".tmp";
         var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(password));
-        await File.WriteAllTextAsync(path, encoded, ct);
+        // Write to a temp file, lock it down, then atomically rename into place. A crash mid-write
+        // leaves the previous secret intact (never a truncated file), and restricting the mode BEFORE
+        // the rename means the secret is never briefly world-readable (the old order chmod'd after).
+        await File.WriteAllTextAsync(tmp, encoded, ct);
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            File.SetUnixFileMode(tmp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        File.Move(tmp, path, overwrite: true);
     }
 
     public async Task<string?> GetPasswordAsync(Guid connectionId, CancellationToken ct)

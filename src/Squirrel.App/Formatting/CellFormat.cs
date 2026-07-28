@@ -35,8 +35,11 @@ public static class CellFormat
     /// (so nested arrays, dates and nulls render consistently).</summary>
     private static string FormatArray(Array arr)
     {
+        // foreach flattens any rank in row-major order; the old arr.Length + single-index GetValue(i)
+        // threw on a multi-dimensional Postgres array (int[][], text[][], …) which needs rank-N indices.
         var parts = new string[arr.Length];
-        for (var i = 0; i < arr.Length; i++) parts[i] = Display(arr.GetValue(i));
+        var i = 0;
+        foreach (var item in arr) parts[i++] = Display(item);
         return "[" + string.Join(", ", parts) + "]";
     }
 
