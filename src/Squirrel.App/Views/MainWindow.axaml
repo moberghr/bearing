@@ -359,10 +359,6 @@
               <TabStrip.ItemTemplate>
                 <DataTemplate x:DataType="vm:EditorTabViewModel">
                   <StackPanel Orientation="Horizontal" DoubleTapped="OnTabHeaderDoubleTapped">
-                    <Border Width="8" Height="8" CornerRadius="4" Margin="0,0,6,0"
-                            VerticalAlignment="Center"
-                            IsVisible="{Binding ConnectionColor, Converter={x:Static ObjectConverters.IsNotNull}}"
-                            Background="{Binding ConnectionColor, Converter={StaticResource HexBrush}}"/>
                     <TextBlock Text="{Binding Header}" VerticalAlignment="Center"/>
                     <!-- Running indicator: a rotating arc while this tab has a query in flight. Execution
                          is per-tab, so a background tab shows progress here without being the focused tab. -->
