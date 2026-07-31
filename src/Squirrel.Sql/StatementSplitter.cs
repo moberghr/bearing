@@ -60,8 +60,12 @@ public static class StatementSplitter
                 ? cbs
                 : null;
 
+            // A blank line only ends the previous statement when this token actually begins a new one.
+            // Otherwise a statement wrapped across a blank line — e.g. a WHERE continued by "and", or a
+            // trailing "order by" / "union" — would be mis-split into a fragment that fails to parse.
             if (firstStart is not null && prev is not null && depth == 0
-                && HasBlankLine(sql, prev.StopIndex + 1, t.StartIndex))
+                && HasBlankLine(sql, prev.StopIndex + 1, t.StartIndex)
+                && StartsStatement(t) && !EndsWithSetOperator(prev))
             {
                 starts.Add(firstStart.Value);   // a blank line ended the previous statement
                 firstStart = null;
@@ -97,6 +101,48 @@ public static class StatementSplitter
     /// <summary>True for a line (<c>--</c>) or block (<c>/* */</c>) comment token.</summary>
     private static bool IsComment(IToken t)
         => t.Text is { } text && (text.StartsWith("--") || text.StartsWith("/*"));
+
+    /// <summary>Keywords that can begin a top-level SQL statement — used to decide whether a blank line
+    /// separates two statements or merely wraps one. Conservative: an unknown leader keeps the lines
+    /// together (recoverable with an explicit <c>;</c>) rather than risking a false split.</summary>
+    private static readonly HashSet<string> StatementStartKeywords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "select", "insert", "update", "delete", "merge", "with", "values", "table",
+        "create", "alter", "drop", "truncate", "comment", "rename",
+        "grant", "revoke",
+        "begin", "start", "commit", "end", "rollback", "savepoint", "release", "abort",
+        "set", "reset", "show",
+        "explain", "analyze", "vacuum", "cluster", "reindex", "checkpoint",
+        "copy", "call", "do",
+        "declare", "fetch", "move", "close",
+        "listen", "notify", "unlisten",
+        "prepare", "execute", "deallocate",
+        "lock", "refresh", "discard", "import", "load",
+    };
+
+    /// <summary>Whether a token could be the first token of a new statement: a statement-starting
+    /// keyword, or an open paren (a parenthesized <c>(SELECT …) UNION …</c> query).</summary>
+    private static bool StartsStatement(IToken t)
+        => t.Type == PostgreSQLLexer.OPEN_PAREN
+           || (t.Text is { } text && StatementStartKeywords.Contains(text));
+
+    /// <summary>Whether a token is a set operator (<c>union</c>/<c>intersect</c>/<c>except</c>) — which
+    /// can never end a complete statement, so a following blank line is a continuation, not a boundary.</summary>
+    private static bool EndsWithSetOperator(IToken t)
+        => t.Text is { } text
+           && (text.Equals("union", StringComparison.OrdinalIgnoreCase)
+               || text.Equals("intersect", StringComparison.OrdinalIgnoreCase)
+               || text.Equals("except", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Whether the last token of <paramref name="fragment"/> is a line comment (<c>-- …</c>),
+    /// which runs to end of line and would swallow a <c>;</c> appended on the same line.</summary>
+    private static bool EndsWithLineComment(string fragment)
+    {
+        IToken? last = null;
+        foreach (var t in PgParsing.LexAll(fragment))
+            if (t.Type != TokenConstants.EOF) last = t;
+        return last?.Text is { } text && text.StartsWith("--", StringComparison.Ordinal);
+    }
 
     /// <summary>True if the text in [from,to) contains at least one newline.</summary>
     private static bool ContainsNewline(string sql, int from, int to)
@@ -155,6 +201,13 @@ public static class StatementSplitter
             while (t.EndsWith(";", StringComparison.Ordinal)) t = t[..^1].TrimEnd();
             if (t.Length > 0) parts.Add(t);
         }
-        return parts.Count == 0 ? sql : string.Join(";\n", parts) + ";";
+        if (parts.Count == 0) return sql;
+
+        // Terminate each part with ';'. A part ending in a trailing "-- comment" needs the ';' on a
+        // fresh line, or the comment (which runs to end of line) would swallow it and merge statements.
+        var terminated = new List<string>(parts.Count);
+        foreach (var p in parts)
+            terminated.Add(EndsWithLineComment(p) ? p + "\n;" : p + ";");
+        return string.Join("\n", terminated);
     }
 }

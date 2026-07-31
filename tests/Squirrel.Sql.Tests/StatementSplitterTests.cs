@@ -45,6 +45,43 @@ public class StatementSplitterTests
     }
 
     [Fact]
+    public void EnsureSeparated_puts_terminator_on_its_own_line_after_a_trailing_line_comment()
+    {
+        // The ';' must not land on the "-- note" line, or the comment swallows it and the two
+        // statements merge into one malformed command.
+        var normalized = StatementSplitter.EnsureSeparated("select 1 -- note\n\nselect 2");
+        Assert.Equal("select 1 -- note\n;\nselect 2;", normalized);
+
+        // Re-splitting the normalized text must see two statements (the ';' actually terminates).
+        Assert.Equal(2, StatementSplitter.Split(normalized).Count);
+    }
+
+    [Fact]
+    public void Split_does_not_break_a_statement_continued_after_a_blank_line()
+    {
+        // A blank line before a continuation keyword ("and") is inside one statement, not a boundary.
+        var spans = StatementSplitter.Split("select *\nfrom t\nwhere x = 1\n\nand y = 2");
+        Assert.Single(spans);
+    }
+
+    [Fact]
+    public void Split_does_not_break_before_trailing_clauses_or_set_operators()
+    {
+        Assert.Single(StatementSplitter.Split("select *\nfrom t\n\norder by id"));   // trailing clause
+        Assert.Single(StatementSplitter.Split("select 1\n\nunion\n\nselect 2"));      // set operator
+    }
+
+    [Fact]
+    public void Split_still_breaks_when_a_blank_line_precedes_a_new_statement()
+    {
+        // The blank-line convention still splits when the next line genuinely starts a statement.
+        var spans = StatementSplitter.Split("update t set x = 1\n\ninsert into t values (2)");
+        Assert.Equal(2, spans.Count);
+        Assert.Contains("update", spans[0].Text);
+        Assert.Contains("insert", spans[1].Text);
+    }
+
+    [Fact]
     public void Split_ignores_semicolons_inside_strings()
     {
         var spans = StatementSplitter.Split("select ';not a boundary;' as x; select 2");
