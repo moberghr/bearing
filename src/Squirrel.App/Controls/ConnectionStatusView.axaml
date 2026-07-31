@@ -44,8 +44,7 @@
     </Style>
   </UserControl.Styles>
 
-  <!-- MinWidth reserves room for the widest label ("Disconnected") so the neighbouring toggle never shifts. -->
-  <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" MinWidth="96"
+  <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
               Classes.connecting="{Binding Connections.IsConnecting}"
               Classes.disconnected="{Binding Connections.IsDisconnected}"
               ToolTip.Tip="{Binding Connections.StatusLabel}">
