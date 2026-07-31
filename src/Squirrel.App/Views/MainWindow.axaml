@@ -211,11 +211,16 @@
                   ItemsSource="{Binding Connections.TabDatabases}" SelectionChanged="OnDatabaseSelected"
                   PlaceholderText="— db —" ToolTip.Tip="Database (switch DB on this server)"/>
 
-        <!-- Run: understated 30×30 icon button (doubles as Cancel while busy; Esc also cancels) -->
+        <!-- Run: understated 30×30 icon button. Doubles as Cancel while busy (Esc also cancels): the green
+             play triangle swaps to a red stop square while the selected tab's query is in flight. -->
         <Button x:Name="RunButton" Classes="rail" Theme="{StaticResource RailButton}" Width="30" Height="30"
                 Click="OnRunClick" Margin="6,0,0,0" ToolTip.Tip="{Binding Execution.RunButtonText}">
-          <Path Data="{StaticResource Icon.Run}" Fill="{DynamicResource Ok.Green}" Stretch="Uniform"
-                Width="14" Height="14"/>
+          <Panel>
+            <Path Data="{StaticResource Icon.Run}" Fill="{DynamicResource Ok.Green}" Stretch="Uniform"
+                  Width="14" Height="14" IsVisible="{Binding !Execution.IsBusy}"/>
+            <Path Data="{StaticResource Icon.Stop}" Fill="{DynamicResource Error.Red}" Stretch="Uniform"
+                  Width="12" Height="12" IsVisible="{Binding Execution.IsBusy}"/>
+          </Panel>
         </Button>
 
         <Border Width="1" Height="22" Background="{DynamicResource Border}" Margin="4,0"/>
@@ -236,6 +241,10 @@
         <TextBlock Text="·" Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
         <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center"
                    Foreground="{DynamicResource Text.Dim}"/>
+        <!-- Live execution timer: ticks while the selected tab's query runs, hidden otherwise. -->
+        <TextBlock Text="{Binding Execution.ElapsedText}" VerticalAlignment="Center"
+                   IsVisible="{Binding Execution.IsBusy}"
+                   Foreground="{DynamicResource Ok.Green}"/>
       </StackPanel>
     </Border>
 

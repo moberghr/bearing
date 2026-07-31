@@ -34,6 +34,9 @@
   <!-- Run: filled triangle (this one is meant to be filled) -->
   <StreamGeometry x:Key="Icon.Run">M7,5 L18,12 L7,19 Z</StreamGeometry>
 
+  <!-- Stop: filled square (Run button while a query is in flight — cancel) -->
+  <StreamGeometry x:Key="Icon.Stop">M6,6 h12 v12 h-12 z</StreamGeometry>
+
   <!-- Focus: expand arrows -->
   <StreamGeometry x:Key="Icon.Focus">M4,9 v-5 h5 M20,9 v-5 h-5 M4,15 v5 h5 M20,15 v5 h-5</StreamGeometry>
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -97,6 +98,14 @@ public sealed partial class EditorTabViewModel : ObservableObject
     // focused tab never touch another tab's in-flight query. At most one operation runs per tab.
     private CancellationTokenSource? _runCts;
 
+    /// <summary>Wall-clock of the current (or most recent) run, so the status bar can tick a live timer
+    /// while the query is in flight. Started in <see cref="BeginRun"/>, stopped in <see cref="EndRun"/>.</summary>
+    private readonly Stopwatch _runClock = new();
+
+    /// <summary>Elapsed time of the current run (or the final duration once stopped) — drives the live
+    /// status-bar execution timer for the selected tab.</summary>
+    public TimeSpan RunElapsed => _runClock.Elapsed;
+
     /// <summary>True while this tab has a query / page / count / save in flight. Drives the tab-header
     /// running indicator and (for the selected tab) the Run/Cancel button and Esc.</summary>
     [ObservableProperty] private bool _isRunning;
@@ -106,6 +115,7 @@ public sealed partial class EditorTabViewModel : ObservableObject
     internal CancellationToken BeginRun()
     {
         _runCts = new CancellationTokenSource();
+        _runClock.Restart();
         IsRunning = true;
         return _runCts.Token;
     }
@@ -113,6 +123,7 @@ public sealed partial class EditorTabViewModel : ObservableObject
     /// <summary>End the current run: dispose the cancellation source and lower the busy flag.</summary>
     internal void EndRun()
     {
+        _runClock.Stop();
         _runCts?.Dispose();
         _runCts = null;
         IsRunning = false;

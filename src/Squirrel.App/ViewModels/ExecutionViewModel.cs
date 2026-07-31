@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Squirrel.App.Connections;
 using Squirrel.App.Results;
@@ -37,16 +38,26 @@ public sealed partial class ExecutionViewModel : ObservableObject
     private readonly IDialogService? _dialogs;
     private EditorTabViewModel? _watchedTab;
 
+    // Ticks on the UI thread while the selected tab is running, refreshing ElapsedText from that tab's
+    // run clock so the status bar shows a live execution timer. Stopped whenever nothing is in flight.
+    private readonly DispatcherTimer _elapsedTimer;
+
     public ExecutionViewModel(WorkspaceContext ctx, IDialogService? dialogs)
     {
         _ctx = ctx;
         _dialogs = dialogs;
+        _elapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+        _elapsedTimer.Tick += (_, _) => RefreshElapsed();
         // IsBusy / RunButtonText / CancelExecution are a façade over the *selected* tab's per-tab run
         // state (execution itself is per-tab). Track selection changes and the selected tab's IsRunning
         // so the toolbar Run/Cancel button reflects whichever tab is focused.
         _ctx.SelectedTabChanged += OnSelectedTabChanged;
         OnSelectedTabChanged();
     }
+
+    /// <summary>Live elapsed time of the selected tab's in-flight run ("247 ms" / "1.2 s"), or empty when
+    /// idle. Shown in the status bar (visibility bound to <see cref="IsBusy"/>) and refreshed ~10×/second.</summary>
+    [ObservableProperty] private string _elapsedText = "";
 
     private EditorTabViewModel? Selected => _ctx.SelectedTab;
 
@@ -66,6 +77,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
         if (_watchedTab is not null) _watchedTab.PropertyChanged += OnWatchedTabChanged;
         OnPropertyChanged(nameof(IsBusy));
         OnPropertyChanged(nameof(RunButtonText));
+        SyncElapsedTimer();
     }
 
     private void OnWatchedTabChanged(object? sender, PropertyChangedEventArgs e)
@@ -74,7 +86,30 @@ public sealed partial class ExecutionViewModel : ObservableObject
         {
             OnPropertyChanged(nameof(IsBusy));
             OnPropertyChanged(nameof(RunButtonText));
+            SyncElapsedTimer();
         }
+    }
+
+    // Run the timer exactly when the selected tab is in flight. Reading RunElapsed off the current
+    // selection means switching tabs mid-run picks up the newly-focused tab's clock automatically.
+    private void SyncElapsedTimer()
+    {
+        if (IsBusy)
+        {
+            RefreshElapsed();       // show a value immediately rather than after the first 100 ms tick
+            _elapsedTimer.Start();
+        }
+        else
+        {
+            _elapsedTimer.Stop();
+            ElapsedText = "";
+        }
+    }
+
+    private void RefreshElapsed()
+    {
+        if (Selected is { IsRunning: true } tab)
+            ElapsedText = ResultSetBuilder.FormatElapsed(tab.RunElapsed.TotalMilliseconds);
     }
 
     /// <summary>Execute SQL for the selected tab against that tab's connection; record it in the log.</summary>
@@ -135,7 +170,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
                 // On success, lead with the connection so the status bar reads e.g. "pagila (local) · 88 ms".
                 _ctx.SetStatus(results.Any(r => !r.Success) ? summary : $"{info.Name} · {summary}");
             }
-        }, "Query cancelled.", "Execution error");
+        }, "Query cancelled by user.", "Execution error");
     }
 
     /// <summary>Run <paramref name="body"/> under <paramref name="tab"/>'s per-tab single-flight lifecycle:
@@ -149,6 +184,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
         var ct = tab.BeginRun();
         try { await body(ct); }
         catch (OperationCanceledException) { _ctx.SetStatus(cancelled); }
+        // Cancelling an in-flight Npgsql query surfaces as a PostgresException (SQLSTATE 57014), not an
+        // OperationCanceledException — treat any failure while the token is cancelled as the user's cancel.
+        catch (Exception) when (ct.IsCancellationRequested) { _ctx.SetStatus(cancelled); }
         catch (Exception ex) { _ctx.SetStatus($"{failed}: {ex.Message}"); }
         finally { tab.EndRun(); }
     }

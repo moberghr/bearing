@@ -85,7 +85,8 @@ internal static class ResultSetBuilder
         return results.Count == 1 ? $"Done · {elapsed}" : $"{results.Count} result sets · {elapsed}";
     }
 
-    /// <summary>Human-friendly elapsed: "88 ms" under a second, "8.4 s" above — so a slow run reads honestly.</summary>
-    private static string FormatElapsed(double ms) =>
+    /// <summary>Human-friendly elapsed: "88 ms" under a second, "8.4 s" above — so a slow run reads honestly.
+    /// Shared by the final run summary and the live status-bar execution timer so both read consistently.</summary>
+    public static string FormatElapsed(double ms) =>
         ms >= 1000 ? $"{ms / 1000:0.0} s" : $"{ms:0} ms";
 }

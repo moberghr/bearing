@@ -73,6 +73,11 @@ public partial class MainWindow : Window
         // tab traversal and the editor/grid don't consume them first.
         AddHandler(KeyDownEvent, OnWindowNavKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
 
+        // Escape must cancel a running query no matter where focus sits (editor, results grid, Run button).
+        // The grid's own Escape (clear selection) and AvaloniaEdit both sit below the window in the tunnel,
+        // so claim it here first — see OnWindowEscapeCancel for the more-modal exceptions.
+        AddHandler(KeyDownEvent, OnWindowEscapeCancel, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+
         // The Alt-toggled menu behaves like a real menu bar: auto-hide on a click outside it or once a
         // (leaf) menu item is invoked.
         AddHandler(PointerPressedEvent, OnWindowPointerPressed, Avalonia.Interactivity.RoutingStrategies.Tunnel);

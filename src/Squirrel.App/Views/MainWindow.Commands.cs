@@ -348,6 +348,17 @@ public partial class MainWindow
         _dispatcher.TryHandle(e, KeyScope.Global, _navCommands);
     }
 
+    /// <summary>Tunnel-phase Escape → cancel the selected tab's in-flight query, pre-empting the grid's
+    /// clear-selection and AvaloniaEdit (which sit lower in the tunnel). Overlays / the pending-changes
+    /// panel / the Alt menu own Escape first — they're dismissed by the bubble-phase <see cref="HandleEscape"/>,
+    /// so we only claim it here once none of them are up.</summary>
+    private void OnWindowEscapeCancel(object? sender, KeyEventArgs e)
+    {
+        if (e.Handled || e.Key is not Key.Escape || Vm is null) return;
+        if (AnyOverlayOpen || _pendingPanel.IsOpen || Vm.IsMenuVisible) return;
+        if (Vm.Execution.IsBusy) { Vm.Execution.CancelExecution(); e.Handled = true; }
+    }
+
     /// <summary>focus.cycle (F6): move keyboard focus editor → results grid → sidebar → editor,
     /// skipping regions that aren't currently shown.</summary>
     private void CycleFocus()
