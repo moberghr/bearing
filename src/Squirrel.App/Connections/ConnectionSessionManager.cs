@@ -29,6 +29,15 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     private readonly Func<DateTime> _clock;
     private readonly Timer? _sweepTimer;
 
+    /// <inheritdoc />
+    public event Action<Guid>? LiveChanged;
+
+    // Never let a subscriber's fault escape into the connect/evict path it fired from.
+    private void RaiseLiveChanged(Guid id)
+    {
+        try { LiveChanged?.Invoke(id); } catch { /* indicator refresh is best-effort */ }
+    }
+
     private readonly object _gate = new();
     private readonly Dictionary<Guid, ConnectionSession> _live = new();
     // Value carries the target Info so a connect in flight for one database isn't reused for another
@@ -159,6 +168,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             }
         }
         if (session is not null && disposeNow) await SafeDisposeAsync(session);
+        if (session is not null) RaiseLiveChanged(connectionId); // left the live map
     }
 
     /// <summary>Close sessions that hold no lease and have been idle past the timeout. Safe to call anytime.</summary>
@@ -180,6 +190,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         }
         catch { /* sweep is best-effort; never surface */ }
         foreach (var s in toDispose) await SafeDisposeAsync(s);
+        foreach (var s in toDispose) RaiseLiveChanged(s.ConnectionId); // idle connections left the live map
     }
 
     /// <summary>Close and dispose every live/in-flight session (e.g. on a project switch) but keep the
@@ -206,6 +217,9 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             _schemaInflight.Clear();
         }
         foreach (var s in all) await SafeDisposeAsync(s);
+        // On a project switch the manager stays usable, so tell listeners those ids went away. On retire
+        // (shutdown) skip it — the app is tearing down and handlers may already be gone.
+        if (!retire) foreach (var s in all) RaiseLiveChanged(s.ConnectionId);
     }
 
     private async Task<ConnectionSession> BuildAsync(ConnectionInfo info, CancellationToken ct)
@@ -262,6 +276,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
                 await SafeDisposeAsync(session);
                 throw new ObjectDisposedException(nameof(ConnectionSessionManager));
             }
+            RaiseLiveChanged(info.Id); // a new session entered the live map
             return session;
         }
         finally

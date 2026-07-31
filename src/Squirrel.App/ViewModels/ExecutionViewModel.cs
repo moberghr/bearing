@@ -112,7 +112,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
             {
                 var session = lease.Session;
                 _ctx.IsConnected = true;
-                _ = _ctx.Sessions.EnsureSchemaAsync(session, CancellationToken.None); // warm completion, don't block Run
+                // Warm the schema in parallel with the fetch — editability (below) needs the snapshot, and
+                // with no connect-on-tab-switch anymore this run is the first thing to load it.
+                var schemaWarm = _ctx.Sessions.EnsureSchemaAsync(session, CancellationToken.None);
 
                 _ctx.SetStatus("Running…");
                 // Push a server-side LIMIT for a single read-only SELECT so a remote server produces only
@@ -123,6 +125,10 @@ public sealed partial class ExecutionViewModel : ObservableObject
                 var fetchSql = FirstPageLimiter.TryAppendLimit(sql, PageSize + 1) ?? sql;
                 var results = await session.Executor.ExecuteAsync(fetchSql, new QueryOptions { MaxRows = PageSize }, ct);
                 wall.Stop();
+                // Ensure the snapshot is loaded so a first-page result resolves as editable. Only the first
+                // run per session waits (the snapshot is cached thereafter); best-effort so a schema-load
+                // failure still shows the rows, just non-editable.
+                if (session.Snapshot is null) { try { await schemaWarm; } catch { /* results still show */ } }
                 tab.SetFreshResults(ResultSetBuilder.BuildResultSets(results, sql, session.Snapshot));
                 LogExecution(info, sql, results);
                 var summary = ResultSetBuilder.DescribeResults(results, wall.Elapsed);

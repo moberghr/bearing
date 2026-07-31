@@ -26,8 +26,12 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
     {
         Interlocked.Increment(ref FactoriesCreated);
         LastPassword = password;
-        return new FakeFactory { TestResult = TestResult, TestThrows = TestThrows };
+        return new FakeFactory { TestResult = TestResult, TestThrows = TestThrows, Gate = ConnectGate };
     }
+
+    /// <summary>When set, every factory's connection test blocks on this gate — lets a test observe an
+    /// attempt mid-flight (Connecting) and then cancel or complete it deterministically.</summary>
+    public TaskCompletionSource<bool>? ConnectGate;
 
     public string? LastPassword;
 
@@ -43,12 +47,14 @@ internal sealed class FakeFactory : IDbConnectionFactory
 {
     public bool TestResult = true;
     public Exception? TestThrows;
+    public TaskCompletionSource<bool>? Gate;
     public int DisposeCount;
 
-    public Task<bool> TestConnectionAsync(CancellationToken ct)
+    public async Task<bool> TestConnectionAsync(CancellationToken ct)
     {
         if (TestThrows is not null) throw TestThrows;
-        return Task.FromResult(TestResult);
+        if (Gate is not null) await Gate.Task.WaitAsync(ct); // blocks until released, throws on cancel
+        return TestResult;
     }
 
     public ValueTask DisposeAsync()

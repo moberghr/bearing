@@ -13,6 +13,12 @@ namespace Squirrel.App.Connections;
 /// </summary>
 public interface IConnectionSessionManager : IAsyncDisposable
 {
+    /// <summary>Raised when a connection id enters or leaves the live-session map — a connect landing, an
+    /// evict, an idle-sweep, or a project close. The argument is the affected connection id; a handler
+    /// re-reads <see cref="TryGet"/> to learn the new state. May fire on a background thread, so marshal
+    /// to the UI thread before touching bound state.</summary>
+    event Action<Guid>? LiveChanged;
+
     /// <summary>
     /// Return the live session for <paramref name="info"/>, creating and testing it on first use.
     /// Reuses an existing session only if its settings still match; a changed connection is rebuilt.

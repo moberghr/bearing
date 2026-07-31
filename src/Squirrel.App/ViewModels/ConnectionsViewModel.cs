@@ -3,7 +3,9 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using Squirrel.App.Connections;
 using Squirrel.App.Workspace;
 using Squirrel.Core.Data;
@@ -26,6 +28,23 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     {
         _ctx = ctx;
         _ctx.SelectedTabChanged += OnSelectedTabChanged;
+        // Reflect the real session pool: any connect (explicit, or lazily from a query / schema warm) or
+        // teardown (disconnect, idle sweep) re-derives the indicator, so it can't drift out of sync.
+        _ctx.Sessions.LiveChanged += OnSessionLiveChanged;
+    }
+
+    /// <summary>The session pool changed for some connection. If it is the active tab's connection, re-derive
+    /// the indicator from the real session state on the UI thread. This is what makes a query-driven connect
+    /// (or an idle eviction) update the dot without the user touching the toggle. Fires possibly off-thread.</summary>
+    private void OnSessionLiveChanged(Guid id)
+    {
+        if (Selected?.ConnectionId != id) return;
+        Dispatcher.UIThread.Post(() =>
+        {
+            var tab = Selected;
+            // Don't clobber an in-flight explicit connect's Connecting state with a spurious re-derive.
+            if (tab?.ConnectionId == id && State != ConnectionState.Connecting) SyncStateFromSession(tab);
+        });
     }
 
     private EditorTabViewModel? Selected => _ctx.SelectedTab;
@@ -42,6 +61,83 @@ public sealed partial class ConnectionsViewModel : ObservableObject
 
     /// <summary>Environment hex of the selected tab's connection (null = untagged/none). Drives the accent.</summary>
     public string? ActiveConnectionColor => Selected?.ConnectionColor;
+
+    // ---- connection status (toolbar / status-bar indicator) -----------------------------------
+
+    /// <summary>Live-session state of the selected tab's connection. Semantic (green/amber/red) —
+    /// deliberately independent of the environment color; drives the status dot, label, and chain toggle.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(StatusLabel))]
+    [NotifyPropertyChangedFor(nameof(IsLinked))]
+    [NotifyPropertyChangedFor(nameof(IsConnecting))]
+    [NotifyPropertyChangedFor(nameof(IsDisconnected))]
+    [NotifyPropertyChangedFor(nameof(ToggleTip))]
+    private ConnectionState _state = ConnectionState.Disconnected;
+
+    public string StatusLabel => State switch
+    {
+        ConnectionState.Connected => "Connected",
+        ConnectionState.Connecting => "Connecting…",
+        _ => "Disconnected",
+    };
+
+    /// <summary>True unless fully disconnected — picks the linked (vs broken) chain glyph.</summary>
+    public bool IsLinked => State != ConnectionState.Disconnected;
+    public bool IsConnecting => State == ConnectionState.Connecting;
+    public bool IsDisconnected => State == ConnectionState.Disconnected;
+
+    public string ToggleTip => State switch
+    {
+        ConnectionState.Connected => "Disconnect from server",
+        ConnectionState.Connecting => "Cancel connecting",
+        _ => "Connect to server",
+    };
+
+    /// <summary>Keep the context's (unbound, logic-facing) flag in lockstep with the observable state —
+    /// one source of truth instead of the former ad-hoc <c>TryGet</c> assignments scattered per call site.</summary>
+    partial void OnStateChanged(ConnectionState value) => _ctx.IsConnected = value == ConnectionState.Connected;
+
+    // Per-attempt cancellation + epoch: a cancelled or superseded connect must never flip to Connected.
+    private CancellationTokenSource? _connectCts;
+    private int _connectEpoch;
+
+    /// <summary>Set <see cref="State"/> from whether the tab's connection has a live session right now
+    /// (called on tab/connection changes, before a fresh connect flips it to Connecting).</summary>
+    private void SyncStateFromSession(EditorTabViewModel? tab)
+        => State = tab?.ConnectionId is { } id && _ctx.Sessions.TryGet(id) is not null
+            ? ConnectionState.Connected
+            : ConnectionState.Disconnected;
+
+    /// <summary>Toolbar chain toggle: Connect when disconnected, Cancel while connecting, Disconnect when
+    /// connected. Connect reuses <see cref="ConnectAsync"/>; disconnect evicts the shared session (every
+    /// tab on this connection shares it, so this drops the session for all of them).
+    /// <c>AllowConcurrentExecutions</c> is required: the connect keeps this command's task in flight, and
+    /// without it the button would disable itself mid-connect — the user could never click it to Cancel.</summary>
+    [RelayCommand(AllowConcurrentExecutions = true)]
+    private async Task ToggleConnectionAsync()
+    {
+        var tab = Selected;
+        switch (State)
+        {
+            case ConnectionState.Disconnected:
+                if (tab is not null) await ConnectAsync(tab, isExplicit: true);
+                break;
+            case ConnectionState.Connecting:
+                _connectCts?.Cancel();
+                State = ConnectionState.Disconnected;
+                break;
+            case ConnectionState.Connected:
+                if (tab?.ConnectionId is { } id)
+                {
+                    var name = _ctx.FindConnection(id)?.Name;
+                    await _ctx.Sessions.EvictAsync(id);
+                    State = ConnectionState.Disconnected;
+                    _ctx.SetStatus(name is null ? "Disconnected." : $"Disconnected from {name}.");
+                }
+                else State = ConnectionState.Disconnected;
+                break;
+        }
+    }
 
     /// <summary>Two-way binding target for the per-tab connection picker.</summary>
     public ConnectionInfo? SelectedTabConnection
@@ -70,9 +166,10 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         OnPropertyChanged(nameof(ActiveConnectionColor));
         OnPropertyChanged(nameof(SelectedTabDatabase));
         var tab = Selected;
-        _ctx.IsConnected = tab?.ConnectionId is { } id && _ctx.Sessions.TryGet(id) is not null;
+        // No eager connect on tab switch — just reflect whatever session already exists. Connecting is
+        // driven by an explicit action (the Connect toggle, running a query, expanding the schema tree).
+        SyncStateFromSession(tab);
         CrashReporter.Observe(RefreshTabDatabasesAsync(tab), "connections.refresh-databases");
-        CrashReporter.Observe(WarmConnectionAsync(tab), "connections.warm");
     }
 
     public void RefreshConnections()
@@ -105,9 +202,8 @@ public sealed partial class ConnectionsViewModel : ObservableObject
             OnPropertyChanged(nameof(SelectedTabConnection));
             OnPropertyChanged(nameof(ActiveConnectionColor));
             OnPropertyChanged(nameof(SelectedTabDatabase));
-            _ctx.IsConnected = id is { } cid && _ctx.Sessions.TryGet(cid) is not null;
+            SyncStateFromSession(tab); // reflect the existing session; do not eagerly connect
             CrashReporter.Observe(RefreshTabDatabasesAsync(tab), "connections.refresh-databases");
-            CrashReporter.Observe(WarmConnectionAsync(tab), "connections.warm");
         }
     }
 
@@ -120,8 +216,9 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         if (ReferenceEquals(tab, Selected))
         {
             OnPropertyChanged(nameof(SelectedTabDatabase));
-            _ctx.IsConnected = false;
-            CrashReporter.Observe(WarmConnectionAsync(tab), "connections.warm");
+            // Don't eagerly reconnect on a DB switch either — the next query (or explicit Connect) rebuilds
+            // the session for the new DB. Reflect whatever session exists now.
+            SyncStateFromSession(tab);
         }
     }
 
@@ -221,7 +318,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         var node = ServerNodes.FirstOrDefault(n => n.Connection.Id == connectionId);
         if (node is not null) await node.RefreshAsync();
 
-        if (Selected?.ConnectionId == connectionId) CrashReporter.Observe(WarmConnectionAsync(Selected), "connections.warm");
+        if (Selected?.ConnectionId == connectionId) CrashReporter.Observe(ConnectAsync(Selected, isExplicit: false), "connections.warm");
         _ctx.SetStatus("Schema metadata refreshed.");
     }
 
@@ -256,26 +353,65 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         _ctx.SetStatus($"Added demo connection '{conn.Name}'. Press F5 to run.");
     }
 
-    /// <summary>Background connect + schema warm so completion is ready before the first Run. Quiet on
-    /// failure (connection errors are expected and left for Run to surface). Awaited through
-    /// <see cref="CrashReporter.Observe(Task, string)"/> at every call site (fire-and-forget), so a
-    /// preamble fault is logged instead of escaping unobserved.</summary>
-    private async Task WarmConnectionAsync(EditorTabViewModel? tab)
+    /// <summary>Establish the connection on an explicit trigger — the toolbar chain toggle
+    /// (<paramref name="isExplicit"/> = true) or a metadata refresh (<paramref name="isExplicit"/> = false).
+    /// There is no longer any connect-on-tab-switch; a query connects lazily through the execution path,
+    /// and the <see cref="OnSessionLiveChanged"/> handler keeps the indicator in sync for those. Drives
+    /// <see cref="State"/>: Connecting while the attempt runs, then Connected on success (+ schema warm +
+    /// status) or Disconnected on failure. Also warms completion metadata. The attempt is cancellable and
+    /// epoch-guarded, so a cancelled or superseded attempt is ignored and can never flip the dot to
+    /// Connected. Only an explicit connect reports a failure status. Awaited through
+    /// <see cref="CrashReporter.Observe(Task, string)"/> at its call sites (fire-and-forget), so a preamble
+    /// fault is logged instead of escaping unobserved.</summary>
+    private async Task ConnectAsync(EditorTabViewModel? tab, bool isExplicit)
     {
         if (tab is null) return;
         var info = _ctx.EffectiveConnection(tab);
-        if (info is null) return;
+        if (info is null) { SyncStateFromSession(tab); return; }
+
+        var cts = new CancellationTokenSource();
+        var prior = Interlocked.Exchange(ref _connectCts, cts);
+        prior?.Cancel();
+        prior?.Dispose();
+        var epoch = ++_connectEpoch;
+        State = ConnectionState.Connecting;
+
         try
         {
-            var session = await _ctx.Sessions.GetOrConnectAsync(info, CancellationToken.None);
-            if (ReferenceEquals(Selected, tab)) _ctx.IsConnected = true;
-            var snapshot = await _ctx.Sessions.EnsureSchemaAsync(session, CancellationToken.None);
-            if (ReferenceEquals(Selected, tab))
-                _ctx.SetStatus(snapshot is null
-                    ? $"Connected to {info.Name}."
-                    : $"Connected to {info.Name} · {snapshot.Tables.Count} tables.");
+            var session = await _ctx.Sessions.GetOrConnectAsync(info, cts.Token);
+            if (cts.IsCancellationRequested)
+            {
+                // Cancelled during the open, but the attempt still produced a live session (cancel raced
+                // the connect completing) — tear it down so "Cancel" reliably leaves nothing live pooled.
+                await _ctx.Sessions.EvictAsync(info.Id);
+                return;
+            }
+            if (!IsCurrentAttempt(epoch, tab)) return; // superseded by a newer attempt which now owns state
+            State = ConnectionState.Connected;
+            var snapshot = await _ctx.Sessions.EnsureSchemaAsync(session, cts.Token);
+            if (cts.IsCancellationRequested || !IsCurrentAttempt(epoch, tab)) return;
+            _ctx.SetStatus(snapshot is null
+                ? $"Connected to {info.Name}."
+                : $"Connected to {info.Name} · {snapshot.Tables.Count} tables.");
         }
-        catch (ConnectionFailedException) { /* Run will surface the error explicitly */ }
-        catch { /* completion warming must never disrupt the UI */ }
+        catch (OperationCanceledException) { /* cancelled — the cancel path already set Disconnected */ }
+        catch (ConnectionFailedException)
+        {
+            // A cancelled attempt surfaces here too (the session manager wraps the cancellation), so bail
+            // on cancellation to leave the deliberate Disconnected state and avoid a spurious failure status.
+            if (cts.IsCancellationRequested || !IsCurrentAttempt(epoch, tab)) return;
+            State = ConnectionState.Disconnected;
+            if (isExplicit) _ctx.SetStatus($"Could not connect to {info.Name}.");
+        }
+        catch
+        {
+            // Unexpected preamble fault: fail closed to Disconnected, never disrupt the UI.
+            if (!cts.IsCancellationRequested && IsCurrentAttempt(epoch, tab)) State = ConnectionState.Disconnected;
+        }
     }
+
+    /// <summary>A connect attempt's result may be applied only while it is still the latest attempt and the
+    /// tab it targeted is still selected — otherwise a stale attempt could clobber a newer state.</summary>
+    private bool IsCurrentAttempt(int epoch, EditorTabViewModel tab)
+        => epoch == _connectEpoch && ReferenceEquals(Selected, tab);
 }

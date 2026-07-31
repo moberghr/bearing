@@ -48,11 +48,18 @@ project switches + a completion toast (**no** background-jobs panel), per-tab ca
   in this roadmap — query-log retention, the 30-min idle timeout, TLS/`sslmode` preference, restore-window-size —
   which should migrate into this screen rather than staying file-edit-only or hard-coded constants. Model the
   UI after the existing code-built `KeybindingsWindow` (Keyboard Shortcuts already lives under Edit ▸).
-- [ ] **P2** Manual connect / disconnect + connection status. Let the user explicitly connect and disconnect a session (not only lazily on Run), with a visible status indicator (connected / connecting / disconnected / failed) per connection and/or tab. Builds on the `SessionLease` model — a manual disconnect must respect a running query's lease.
+- [~] **P2** Manual connect / disconnect + connection status *(uncommitted, in live QA)*. Toolbar status dot + label (green Connected / amber Connecting / red Disconnected, semantic — never the environment color) mirrored in the status bar, plus a chain toggle that Connects / Cancels-connecting / Disconnects. Indicator reflects the real session pool via `IConnectionSessionManager.LiveChanged`, so a query-driven connect / idle eviction updates it too. No connect-on-tab-switch — connecting is explicit (Connect button) or on an action that needs it (Run, which now also loads the schema before building results so first-page edits work). `ConnectionState` + state machine in `ConnectionsViewModel`; reusable `Controls/ConnectionStatusView`. Remaining: live QA of layout + behavior.
 - [ ] **P2** Remove / delete projects. Delete a project from the recent list, and optionally from disk (with confirm). Also prune stale/missing entries from the recent list (see the P3 recent-projects item below).
 - [ ] **P3** Restore last window size on startup; persist size only and let the window manager handle placement/position. (Add to session or app-settings state; apply in `App`/`MainWindow`.)
 - [ ] **P3** Selecting a script that's already open should focus its existing tab (not open a duplicate / no-op). `OpenScriptInNewTabAsync` already focuses an existing tab on open; verify the single-click/select path in the scripts tree does the same. `ShellViewModel.Scripts` / `SidebarView`.
 - [ ] **P2** Keyboard shortcuts for result-grid editing — save changes / discard / add row. Delete-row and begin-edit already have grid commands (`grid.delete`, `grid.beginEdit`); add `grid.save` / `grid.discard` / `grid.addRow` to `CommandIds` + `KeymapDefaults`, register them in `ResultView`'s grid scope (`RegisterGridCommands`), gated on `IsEditable`/`HasPendingChanges`.
+- [ ] **P2** Configurable + dynamic font size (per tab). A configurable **base** font size (lives in the Settings
+  framework above) applied to the editor. On top of that, dynamic zoom while a tab is open: `Ctrl+=`/`Ctrl+-`
+  bump the *current* tab's font size up/down (and a `Ctrl+0`-style reset), **per tab** — each tab keeps its own
+  zoom. The zoom is transient: reopening a tab (or a fresh tab) starts from the base size again, not the last
+  zoom. Wire the zoom as commands in the input pipeline (`CommandIds` + `KeymapDefaults`, §9.2), not ad-hoc key
+  handlers; store the current size on `EditorTabViewModel` (not persisted) and bind the editor `FontSize` to it.
+  Decide whether results-grid font follows the same zoom or only the editor.
 
 ---
 

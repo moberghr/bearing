@@ -40,4 +40,10 @@
   <!-- Database cylinder (toolbar db pill / tree) -->
   <StreamGeometry x:Key="Icon.Database">M5,6 a7,3 0 1 1 14,0 a7,3 0 1 1 -14,0 M5,6 v12 a7,3 0 0 0 14,0 v-12 M5,12 a7,3 0 0 0 14,0</StreamGeometry>
 
+  <!-- Chain, linked: two capsule links joined by an unbroken bar (connection status toggle) -->
+  <StreamGeometry x:Key="Icon.ChainLinked">M8,8 h-1 a4,4 0 0 0 0,8 h1 M16,8 h1 a4,4 0 0 1 0,8 h-1 M9,12 h6</StreamGeometry>
+
+  <!-- Chain, broken: same links, gap in the middle bar (disconnected) -->
+  <StreamGeometry x:Key="Icon.ChainBroken">M8,8 h-1 a4,4 0 0 0 0,8 h1 M16,8 h1 a4,4 0 0 1 0,8 h-1 M9,12 h2 M13,12 h2</StreamGeometry>
+
 </ResourceDictionary>

@@ -79,6 +79,29 @@
         </Style>
       </ControlTheme>
 
+      <!-- Bordered 30×30 icon button (connection toggle): transparent fill, thin border, subtle hover. -->
+      <ControlTheme x:Key="IconToggleButton" TargetType="Button">
+        <Setter Property="Width" Value="30"/>
+        <Setter Property="Height" Value="30"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Border.Control}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Template">
+          <ControlTemplate>
+            <Border Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="7">
+              <ContentPresenter Content="{TemplateBinding Content}"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+          </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover">
+          <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
+        </Style>
+      </ControlTheme>
+
       <!-- History filter pill: small rounded toggle; active segment fills Bg.TileActive. -->
       <ControlTheme x:Key="PillToggle" TargetType="RadioButton">
         <Setter Property="Padding" Value="9,2"/>

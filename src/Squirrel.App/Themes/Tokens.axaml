@@ -35,6 +35,7 @@
   <SolidColorBrush x:Key="Syntax.Table"   Color="#6A9589"/>
   <SolidColorBrush x:Key="Syntax.TableSel" Color="#7AA89F"/>
   <SolidColorBrush x:Key="Ok.Green"       Color="#98BB6C"/>
+  <SolidColorBrush x:Key="Warn.Amber"     Color="#E6C384"/>  <!-- connecting status dot/label -->
   <SolidColorBrush x:Key="Error.Red"      Color="#C34043"/>
 
   <!-- Geometry (design §Geometry) -->

@@ -38,6 +38,23 @@
       <Setter Property="Height" Value="20"/>
     </Style>
 
+    <!-- Connection toggle: stroked chain glyph; stroke recolors with the semantic connection state. -->
+    <Style Selector="Button#ConnectionToggle Path">
+      <Setter Property="Stroke" Value="{DynamicResource Ok.Green}"/>
+      <Setter Property="StrokeThickness" Value="1.6"/>
+      <Setter Property="StrokeLineCap" Value="Round"/>
+      <Setter Property="StrokeJoin" Value="Round"/>
+      <Setter Property="Stretch" Value="Uniform"/>
+      <Setter Property="Width" Value="16"/>
+      <Setter Property="Height" Value="16"/>
+    </Style>
+    <Style Selector="Button#ConnectionToggle.connecting Path">
+      <Setter Property="Stroke" Value="{DynamicResource Warn.Amber}"/>
+    </Style>
+    <Style Selector="Button#ConnectionToggle.disconnected Path">
+      <Setter Property="Stroke" Value="{DynamicResource Error.Red}"/>
+    </Style>
+
     <!-- History rows: selected = wave-blue fill + 2px orange left border (design §4). -->
     <Style Selector="ListBox.history > ListBoxItem">
       <Setter Property="Padding" Value="8,3"/>
@@ -169,6 +186,21 @@
           </ComboBox.ItemTemplate>
         </ComboBox>
 
+        <!-- Connection status: semantic dot + label (green/amber/red). Never the environment color. -->
+        <controls:ConnectionStatusView VerticalAlignment="Center"/>
+
+        <!-- Connect / cancel-connecting / disconnect toggle: chain (linked) ↔ broken-chain glyph. -->
+        <Button x:Name="ConnectionToggle" Theme="{StaticResource IconToggleButton}" VerticalAlignment="Center"
+                Command="{Binding Connections.ToggleConnectionCommand}"
+                ToolTip.Tip="{Binding Connections.ToggleTip}"
+                Classes.connecting="{Binding Connections.IsConnecting}"
+                Classes.disconnected="{Binding Connections.IsDisconnected}">
+          <Panel>
+            <Path Data="{StaticResource Icon.ChainLinked}" IsVisible="{Binding Connections.IsLinked}"/>
+            <Path Data="{StaticResource Icon.ChainBroken}" IsVisible="{Binding !Connections.IsLinked}"/>
+          </Panel>
+        </Button>
+
         <TextBlock Text="›" VerticalAlignment="Center" Foreground="{DynamicResource Text.Faint}"/>
 
         <!-- Database (switchable; lists all DBs on the server). Selection is driven in code-behind
@@ -194,11 +226,16 @@
       </StackPanel>
     </Border>
 
-    <!-- Status bar: 3px ConnectionBrush line across the top edge, then muted metadata. -->
+    <!-- Status bar: 3px ConnectionBrush (environment color) line across the top edge — deliberately the
+         one prominent db-color surface, independent of connection state — then the status dot + metadata. -->
     <Border DockPanel.Dock="Bottom" Padding="8,4" Background="{DynamicResource Bg.Window}"
             BorderBrush="{DynamicResource ConnectionBrush}" BorderThickness="0,3,0,0">
-      <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center"
-                 Foreground="{DynamicResource Text.Dim}"/>
+      <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+        <controls:ConnectionStatusView VerticalAlignment="Center"/>
+        <TextBlock Text="·" Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
+        <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center"
+                   Foreground="{DynamicResource Text.Dim}"/>
+      </StackPanel>
     </Border>
 
     <!-- Body: persistent icon rail + swappable 262px side panel + editor workspace -->

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -115,6 +116,21 @@ public class ConnectionSessionManagerTests
         Assert.Same(s1, s2);
         Assert.Same(s1, session.Snapshot);
         Assert.Equal(1, ((FakeMetadata)session.Metadata).LoadCount);
+    }
+
+    [Fact]
+    public async Task LiveChanged_fires_when_a_session_is_created_and_evicted()
+    {
+        var provider = new FakeProvider();
+        await using var mgr = new ConnectionSessionManager(provider, () => null, runSweepTimer: false);
+        var info = Conn(Guid.NewGuid());
+        var events = new List<Guid>();
+        mgr.LiveChanged += events.Add;
+
+        await mgr.GetOrConnectAsync(info, CancellationToken.None); // enters the live map
+        await mgr.EvictAsync(info.Id);                              // leaves it
+
+        Assert.Equal(new[] { info.Id, info.Id }, events);
     }
 
     [Fact]
