@@ -136,41 +136,102 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
         await RunExclusiveAsync(tab, async ct =>
         {
-            var wall = Stopwatch.StartNew();
-            // Acquire a lease so an idle sweep / evict / database switch can't dispose the pool from
-            // under this query while it runs (the lease is held for the whole read).
-            SessionLease lease;
-            try { lease = await _ctx.Sessions.AcquireAsync(info, ct); }
-            catch (ConnectionFailedException ex) { _ctx.IsConnected = false; _ctx.SetStatus(ex.Message); return; }
+            // Push a server-side LIMIT for a single read-only SELECT so a remote server produces only
+            // ~one page instead of streaming the whole result. Fetch one extra row (PageSize+1) so the
+            // executor's Truncated flag still signals "more rows exist". Writes / multi-statement /
+            // already-limited queries return null here and run unbounded (capped client-side). The set
+            // still pages/counts against the original sql, so SourceSql is unchanged.
+            var fetchSql = FirstPageLimiter.TryAppendLimit(sql, PageSize + 1) ?? sql;
 
-            using (lease)
+            // Prompt / Entra credentials can go stale (expired token, or a wrong password typed once): run,
+            // and on an auth failure refresh the credential and retry exactly once. A stored password that
+            // didn't change can't be helped by a retry, so it surfaces the error on the first pass.
+            var canRefresh = CanRefreshCredential(info);
+            var outcome = await RunFetchAsync(info, tab, sql, fetchSql, final: !canRefresh, ct);
+            if (outcome == RunOutcome.AuthFailed && canRefresh && !ct.IsCancellationRequested)
             {
-                var session = lease.Session;
-                _ctx.IsConnected = true;
-                // Warm the schema in parallel with the fetch — editability (below) needs the snapshot, and
-                // with no connect-on-tab-switch anymore this run is the first thing to load it.
-                var schemaWarm = _ctx.Sessions.EnsureSchemaAsync(session, CancellationToken.None);
-
-                _ctx.SetStatus("Running…");
-                // Push a server-side LIMIT for a single read-only SELECT so a remote server produces only
-                // ~one page instead of streaming the whole result. Fetch one extra row (PageSize+1) so the
-                // executor's Truncated flag still signals "more rows exist". Writes / multi-statement /
-                // already-limited queries return null here and run unbounded (capped client-side). The set
-                // still pages/counts against the original sql, so SourceSql is unchanged.
-                var fetchSql = FirstPageLimiter.TryAppendLimit(sql, PageSize + 1) ?? sql;
-                var results = await session.Executor.ExecuteAsync(fetchSql, new QueryOptions { MaxRows = PageSize }, ct);
-                wall.Stop();
-                // Ensure the snapshot is loaded so a first-page result resolves as editable. Only the first
-                // run per session waits (the snapshot is cached thereafter); best-effort so a schema-load
-                // failure still shows the rows, just non-editable.
-                if (session.Snapshot is null) { try { await schemaWarm; } catch { /* results still show */ } }
-                tab.SetFreshResults(ResultSetBuilder.BuildResultSets(results, sql, session.Snapshot));
-                LogExecution(info, sql, results);
-                var summary = ResultSetBuilder.DescribeResults(results, wall.Elapsed);
-                // On success, lead with the connection so the status bar reads e.g. "pagila (local) · 88 ms".
-                _ctx.SetStatus(results.Any(r => !r.Success) ? summary : $"{info.Name} · {summary}");
+                _ctx.Credentials.Invalidate(info.Id);
+                await _ctx.Sessions.EvictAsync(info.Id);
+                _ctx.SetStatus("Reauthenticating…");
+                await RunFetchAsync(info, tab, sql, fetchSql, final: true, ct);
             }
         }, "Query cancelled by user.", "Execution error");
+    }
+
+    private enum RunOutcome { Success, AuthFailed, Failed }
+
+    /// <summary>Acquire a lease, run the first-page fetch, and — unless this is a non-final attempt that hit
+    /// an authentication failure — bind + log the result. Returns <see cref="RunOutcome.AuthFailed"/> without
+    /// binding/logging on a non-final attempt so the caller can refresh the credential and retry once; on the
+    /// final attempt any error (auth included) is surfaced normally.</summary>
+    private async Task<RunOutcome> RunFetchAsync(
+        ConnectionInfo info, EditorTabViewModel tab, string sql, string fetchSql, bool final, CancellationToken ct)
+    {
+        var wall = Stopwatch.StartNew();
+        // Acquire a lease so an idle sweep / evict / database switch can't dispose the pool from
+        // under this query while it runs (the lease is held for the whole read).
+        SessionLease lease;
+        try { lease = await _ctx.Sessions.AcquireAsync(info, ct); }
+        catch (ConnectionFailedException ex)
+        {
+            if (!final && LooksLikeAuthFailure(ex)) return RunOutcome.AuthFailed;
+            _ctx.IsConnected = false;
+            _ctx.SetStatus(ex.Message);
+            return RunOutcome.Failed;
+        }
+
+        using (lease)
+        {
+            var session = lease.Session;
+            _ctx.IsConnected = true;
+            // Warm the schema in parallel with the fetch — editability (below) needs the snapshot, and
+            // with no connect-on-tab-switch anymore this run is the first thing to load it.
+            var schemaWarm = _ctx.Sessions.EnsureSchemaAsync(session, CancellationToken.None);
+
+            _ctx.SetStatus("Running…");
+            var results = await session.Executor.ExecuteAsync(fetchSql, new QueryOptions { MaxRows = PageSize }, ct);
+            wall.Stop();
+
+            // Auth rejected on open (stale token) comes back as a QueryError; retry before binding/logging.
+            if (!final && !ct.IsCancellationRequested
+                && results.Any(r => r.Error is { } e && IsAuthFailure(e.SqlState)))
+                return RunOutcome.AuthFailed;
+
+            // Ensure the snapshot is loaded so a first-page result resolves as editable. Only the first
+            // run per session waits (the snapshot is cached thereafter); best-effort so a schema-load
+            // failure still shows the rows, just non-editable.
+            if (session.Snapshot is null) { try { await schemaWarm; } catch { /* results still show */ } }
+            tab.SetFreshResults(ResultSetBuilder.BuildResultSets(results, sql, session.Snapshot));
+            LogExecution(info, sql, results);
+            var summary = ResultSetBuilder.DescribeResults(results, wall.Elapsed);
+            // On success, lead with the connection so the status bar reads e.g. "pagila (local) · 88 ms".
+            _ctx.SetStatus(results.Any(r => !r.Success) ? summary : $"{info.Name} · {summary}");
+            return results.Any(r => !r.Success) ? RunOutcome.Failed : RunOutcome.Success;
+        }
+    }
+
+    /// <summary>Which credential kinds a fresh acquire can actually help: prompt (re-ask) and Entra
+    /// (re-mint). A stored password that didn't change would just fail identically, so we don't retry it.</summary>
+    private static bool CanRefreshCredential(ConnectionInfo info)
+        => info.CredentialKind is CredentialKind.EntraToken or CredentialKind.Prompt;
+
+    /// <summary>True for the Postgres 28xxx authentication/authorization SQLSTATE class. Pure — unit-tested.</summary>
+    internal static bool IsAuthFailure(string? sqlState)
+        => sqlState is not null && sqlState.StartsWith("28", StringComparison.Ordinal);
+
+    /// <summary>Heuristic auth detection for a connect-time failure whose underlying Npgsql exception the App
+    /// layer can't type (no Npgsql reference here) — scan the message chain for the auth SQLSTATE / text.</summary>
+    private static bool LooksLikeAuthFailure(Exception ex)
+    {
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+        {
+            var m = e.Message;
+            if (m.Contains("28P01", StringComparison.OrdinalIgnoreCase)
+                || m.Contains("28000", StringComparison.OrdinalIgnoreCase)
+                || m.Contains("authentication failed", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>Run <paramref name="body"/> under <paramref name="tab"/>'s per-tab single-flight lifecycle:

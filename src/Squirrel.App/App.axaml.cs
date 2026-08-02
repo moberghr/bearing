@@ -58,7 +58,8 @@ public partial class App : Application
             IRecentProjects recentProjects = new FileRecentProjects();
 
             var vm = new ShellViewModel(providers, projectStore, sessionStore, queryLog, recentProjects,
-                dialogs: new Views.DialogService());
+                dialogs: new Views.DialogService(),
+                credentialPrompt: new Views.DialogCredentialPrompt());
             LogStartup("vm created");
             var window = new MainWindow { DataContext = vm };
             LogStartup("window constructed");

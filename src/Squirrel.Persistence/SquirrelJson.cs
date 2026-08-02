@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Squirrel.Persistence;
 
@@ -9,6 +10,9 @@ internal static class SquirrelJson
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        // Enums as readable strings (e.g. credentialKind: "EntraToken"). Reads legacy numeric values too,
+        // and a missing property still deserializes to the enum's default — so older project files load.
+        Converters = { new JsonStringEnumConverter() },
     };
 }

@@ -24,7 +24,7 @@ namespace Squirrel.App.Connections;
 public sealed class ConnectionSessionManager : IConnectionSessionManager
 {
     private readonly IProviderRegistry _providers;
-    private readonly Func<ISecretStore?> _secretStore;
+    private readonly Func<CredentialResolver?> _credentials;
     private readonly TimeSpan _idleTimeout;
     private readonly Func<DateTime> _clock;
     private readonly Timer? _sweepTimer;
@@ -49,12 +49,16 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     /// <summary>Default idle timeout before an unused connection is closed.</summary>
     public static readonly TimeSpan DefaultIdleTimeout = TimeSpan.FromMinutes(30);
 
+    /// <summary>How far ahead of a credential's real expiry the sweep disconnects it, so a stale token is
+    /// never handed to a new pooled open. Comfortably above the sweep period (≤ 60 s).</summary>
+    private static readonly TimeSpan ExpiryEvictSkew = TimeSpan.FromSeconds(90);
+
     public ConnectionSessionManager(
-        IProviderRegistry providers, Func<ISecretStore?> secretStore,
+        IProviderRegistry providers, Func<CredentialResolver?> credentials,
         TimeSpan? idleTimeout = null, Func<DateTime>? clock = null, bool runSweepTimer = true)
     {
         _providers = providers;
-        _secretStore = secretStore;
+        _credentials = credentials;
         _idleTimeout = idleTimeout ?? DefaultIdleTimeout;
         _clock = clock ?? (() => DateTime.UtcNow);
         // Sweep roughly every minute (never more often than needed to catch the timeout). Tests pass
@@ -171,26 +175,43 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         if (session is not null) RaiseLiveChanged(connectionId); // left the live map
     }
 
-    /// <summary>Close sessions that hold no lease and have been idle past the timeout. Safe to call anytime.</summary>
+    /// <summary>Close sessions that hold no lease and have been idle past the timeout, and disconnect any
+    /// session whose credential is about to expire so a stale token is never handed to a new pooled open.
+    /// An expiring session still holding a lease is retired (removed from the live map, kept alive for the
+    /// running query) so the next connect rebuilds with a fresh credential. Safe to call anytime.</summary>
     internal async Task SweepIdleAsync()
     {
         List<ConnectionSession> toDispose = new();
+        List<Guid> leftLive = new();
+        List<Guid> expired = new();
         try
         {
             var now = _clock();
+            var nowOffset = new DateTimeOffset(DateTime.SpecifyKind(now, DateTimeKind.Utc));
             lock (_gate)
             {
                 foreach (var (id, session) in _live.ToArray())
-                    if (session.LeaseCount == 0 && now - session.LastUsedUtc >= _idleTimeout)
-                    {
-                        _live.Remove(id);
-                        toDispose.Add(session);
-                    }
+                {
+                    var expiring = CredentialResolver.IsExpiring(session.CredentialExpiresAt, nowOffset, ExpiryEvictSkew);
+                    var idle = session.LeaseCount == 0 && now - session.LastUsedUtc >= _idleTimeout;
+                    if (!idle && !expiring) continue;
+
+                    _live.Remove(id);
+                    leftLive.Add(id);
+                    if (expiring) expired.Add(id);
+                    // A leased-but-expiring session is retired, not disposed — its running query keeps the
+                    // already-open connection until it releases; the next acquire rebuilds fresh.
+                    if (session.LeaseCount == 0) toDispose.Add(session);
+                    else session.Retired = true;
+                }
             }
         }
         catch { /* sweep is best-effort; never surface */ }
+        // Drop the cached token/password for expired sessions so the rebuild re-mints / re-prompts.
+        if (expired.Count > 0 && _credentials() is { } resolver)
+            foreach (var id in expired) resolver.Invalidate(id);
         foreach (var s in toDispose) await SafeDisposeAsync(s);
-        foreach (var s in toDispose) RaiseLiveChanged(s.ConnectionId); // idle connections left the live map
+        foreach (var id in leftLive) RaiseLiveChanged(id); // idle/expired connections left the live map
     }
 
     /// <summary>Close and dispose every live/in-flight session (e.g. on a project switch) but keep the
@@ -245,7 +266,8 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             }
             if (stale is not null && disposeStale) await SafeDisposeAsync(stale);
 
-            var (provider, factory) = await ConnectionFactoryBuilder.BuildAsync(_providers, _secretStore(), info, ct);
+            var (provider, factory, credential) =
+                await ConnectionFactoryBuilder.BuildAsync(_providers, _credentials(), info, forceRefresh: false, ct);
 
             bool ok;
             try { ok = await factory.TestConnectionAsync(ct); }
@@ -261,7 +283,8 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             }
 
             var session = new ConnectionSession(
-                info, factory, provider.CreateQueryExecutor(factory), provider.CreateMetadataReader(factory))
+                info, factory, provider.CreateQueryExecutor(factory), provider.CreateMetadataReader(factory),
+                credential.ExpiresAt)
             { LastUsedUtc = _clock() };
             bool disposedDuringConnect;
             lock (_gate)

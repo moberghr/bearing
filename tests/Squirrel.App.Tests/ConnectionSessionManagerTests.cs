@@ -95,7 +95,8 @@ public class ConnectionSessionManagerTests
         var info = Conn(Guid.NewGuid());
         await secrets.SetPasswordAsync(info.Id, "hunter2", CancellationToken.None);
 
-        await using var mgr = new ConnectionSessionManager(provider, () => secrets);
+        var resolver = new CredentialResolver(() => secrets, null, new ThrowingEntraTokens());
+        await using var mgr = new ConnectionSessionManager(provider, () => resolver);
         await mgr.GetOrConnectAsync(info, CancellationToken.None);
 
         Assert.Contains(info.Id, secrets.Fetched);
@@ -236,6 +237,61 @@ public class ConnectionSessionManagerTests
         now = now.AddMinutes(25);                                   // 25 min since last use (< 30)
         await mgr.SweepIdleAsync();
         Assert.NotNull(mgr.TryGet(info.Id));                        // not swept — activity kept it warm
+    }
+
+    [Fact]
+    public async Task Sweep_disconnects_a_session_whose_credential_nears_expiry()
+    {
+        var now = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var expiry = new DateTimeOffset(now).AddMinutes(10);
+        var provider = new FakeProvider();
+        var tokens = new FakeEntraTokens(_ => new Credential("tok", expiry));
+        var resolver = new CredentialResolver(() => null, null, tokens, () => new DateTimeOffset(now));
+        await using var mgr = new ConnectionSessionManager(
+            provider, () => resolver, idleTimeout: TimeSpan.FromMinutes(30), clock: () => now, runSweepTimer: false);
+        var info = Conn(Guid.NewGuid()) with { CredentialKind = CredentialKind.EntraToken };
+
+        var session = await mgr.GetOrConnectAsync(info, CancellationToken.None);
+        Assert.Equal(expiry, session.CredentialExpiresAt);
+
+        // Comfortably before expiry → not swept.
+        now = now.AddMinutes(5);
+        await mgr.SweepIdleAsync();
+        Assert.NotNull(mgr.TryGet(info.Id));
+
+        // Within the 90 s eviction skew of the 10-min expiry → disconnected, and the cached token dropped.
+        now = now.AddMinutes(4); // +9 min total
+        await mgr.SweepIdleAsync();
+        Assert.Null(mgr.TryGet(info.Id));
+        Assert.Equal(1, ((FakeFactory)session.Factory).DisposeCount);
+
+        // Next connect re-mints (the resolver was invalidated on eviction).
+        await mgr.GetOrConnectAsync(info, CancellationToken.None);
+        Assert.Equal(2, tokens.Calls);
+    }
+
+    [Fact]
+    public async Task Sweep_retires_a_leased_expiring_session_but_defers_disposal_until_release()
+    {
+        var now = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var expiry = new DateTimeOffset(now).AddMinutes(5);
+        var provider = new FakeProvider();
+        var tokens = new FakeEntraTokens(_ => new Credential("tok", expiry));
+        var resolver = new CredentialResolver(() => null, null, tokens, () => new DateTimeOffset(now));
+        await using var mgr = new ConnectionSessionManager(
+            provider, () => resolver, idleTimeout: TimeSpan.FromMinutes(30), clock: () => now, runSweepTimer: false);
+        var info = Conn(Guid.NewGuid()) with { CredentialKind = CredentialKind.EntraToken };
+
+        var lease = await mgr.AcquireAsync(info, CancellationToken.None);
+        var factory = (FakeFactory)lease.Session.Factory;
+
+        now = now.AddMinutes(5); // at expiry, within skew
+        await mgr.SweepIdleAsync();
+        Assert.Null(mgr.TryGet(info.Id));        // left the live map…
+        Assert.Equal(0, factory.DisposeCount);   // …but the running query keeps its connection
+
+        lease.Dispose();
+        Assert.Equal(1, factory.DisposeCount);   // freed at last release
     }
 
     [Fact]

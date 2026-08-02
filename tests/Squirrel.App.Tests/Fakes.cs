@@ -1,7 +1,9 @@
+using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Squirrel.App.Connections;
 using Squirrel.Core.Data;
 using Squirrel.Core.Schema;
 using Squirrel.Core.Workspace;
@@ -179,4 +181,34 @@ internal sealed class FakeSecretStore : ISecretStore
         return Task.FromResult(_store.TryGetValue(id, out var p) ? p : null);
     }
     public Task DeleteAsync(Guid id, CancellationToken ct) { _store.Remove(id); return Task.CompletedTask; }
+}
+
+/// <summary>Hands back a queued sequence of prompt answers (null = user cancelled). Counts calls.</summary>
+internal sealed class FakeCredentialPrompt : ICredentialPrompt
+{
+    private readonly Queue<string?> _answers;
+    public int Calls { get; private set; }
+    public FakeCredentialPrompt(params string?[] answers) => _answers = new Queue<string?>(answers);
+    public Task<string?> RequestPasswordAsync(ConnectionInfo info, string? message, CancellationToken ct)
+    {
+        Calls++;
+        return Task.FromResult(_answers.Count > 0 ? _answers.Dequeue() : null);
+    }
+}
+
+/// <summary>Mints tokens from a per-call factory (call index → credential). Counts calls.</summary>
+internal sealed class FakeEntraTokens : IEntraTokenProvider
+{
+    private readonly Func<int, Credential> _factory;
+    public int Calls { get; private set; }
+    public FakeEntraTokens(Func<int, Credential> factory) => _factory = factory;
+    public Task<Credential> GetTokenAsync(ConnectionInfo info, CancellationToken ct)
+        => Task.FromResult(_factory(Calls++));
+}
+
+/// <summary>Fails if a token is ever requested — for tests whose kind should never hit the token path.</summary>
+internal sealed class ThrowingEntraTokens : IEntraTokenProvider
+{
+    public Task<Credential> GetTokenAsync(ConnectionInfo info, CancellationToken ct)
+        => throw new InvalidOperationException("token provider should not be called");
 }

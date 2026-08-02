@@ -25,7 +25,9 @@ public sealed class WorkspaceContext
         IQueryLog queryLog,
         IRecentProjects recentProjects,
         ISecretStore? secrets = null,
-        IScriptStore? scriptStore = null)
+        IScriptStore? scriptStore = null,
+        ICredentialPrompt? credentialPrompt = null,
+        IEntraTokenProvider? entraTokens = null)
     {
         Providers = providers;
         ProjectStore = projectStore;
@@ -34,9 +36,11 @@ public sealed class WorkspaceContext
         RecentProjects = recentProjects;
         Secrets = secrets;
         ScriptStore = scriptStore ?? new FileScriptStore();
-        // The session/schema services read the secret store lazily so a late AttachSecretStore still applies.
-        Sessions = new ConnectionSessionManager(providers, () => Secrets);
-        Schema = new SchemaBrowser(providers, () => Secrets);
+        // Credential resolution reads the secret store lazily (via () => Secrets) so a late
+        // AttachSecretStore still applies; prompted passwords / Entra tokens are cached in-memory here.
+        Credentials = new CredentialResolver(() => Secrets, credentialPrompt, entraTokens ?? new EntraTokenProvider());
+        Sessions = new ConnectionSessionManager(providers, () => Credentials);
+        Schema = new SchemaBrowser(providers, () => Credentials);
     }
 
     // ---- services -----------------------------------------------------------------------------
@@ -47,6 +51,9 @@ public sealed class WorkspaceContext
     public IRecentProjects RecentProjects { get; }
     public ISecretStore? Secrets { get; set; }
     public IScriptStore ScriptStore { get; }
+    /// <summary>Resolves the secret each connection authenticates with (stored / prompt / Entra token) and
+    /// caches prompted/token credentials in memory. Also used by the execution path's refresh-and-retry.</summary>
+    public CredentialResolver Credentials { get; }
     public IConnectionSessionManager Sessions { get; }
     public ISchemaBrowser Schema { get; }
 

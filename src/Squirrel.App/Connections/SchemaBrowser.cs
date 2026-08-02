@@ -19,15 +19,15 @@ namespace Squirrel.App.Connections;
 public sealed class SchemaBrowser : ISchemaBrowser
 {
     private readonly IProviderRegistry _providers;
-    private readonly Func<ISecretStore?> _secretStore;
+    private readonly Func<CredentialResolver?> _credentials;
 
     private readonly object _gate = new();
     private readonly Dictionary<(Guid, string), Task<Reader>> _readers = new();
 
-    public SchemaBrowser(IProviderRegistry providers, Func<ISecretStore?> secretStore)
+    public SchemaBrowser(IProviderRegistry providers, Func<CredentialResolver?> credentials)
     {
         _providers = providers;
-        _secretStore = secretStore;
+        _credentials = credentials;
     }
 
     public async Task<IReadOnlyList<string>> GetDatabasesAsync(ConnectionInfo connection, CancellationToken ct)
@@ -75,7 +75,7 @@ public sealed class SchemaBrowser : ISchemaBrowser
         try
         {
             var clone = connection with { Database = database };
-            var (provider, factory) = await ConnectionFactoryBuilder.BuildAsync(_providers, _secretStore(), clone, ct);
+            var (provider, factory, _) = await ConnectionFactoryBuilder.BuildAsync(_providers, _credentials(), clone, forceRefresh: false, ct);
             return new Reader(factory, provider.CreateMetadataReader(factory));
         }
         catch

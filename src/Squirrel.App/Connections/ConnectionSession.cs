@@ -12,19 +12,25 @@ namespace Squirrel.App.Connections;
 /// </summary>
 public sealed class ConnectionSession : IAsyncDisposable
 {
-    public ConnectionSession(ConnectionInfo info, IDbConnectionFactory factory, IQueryExecutor executor, IMetadataReader metadata)
+    public ConnectionSession(ConnectionInfo info, IDbConnectionFactory factory, IQueryExecutor executor, IMetadataReader metadata,
+        DateTimeOffset? credentialExpiresAt = null)
     {
         ConnectionId = info.Id;
         Info = info;
         Factory = factory;
         Executor = executor;
         Metadata = metadata;
+        CredentialExpiresAt = credentialExpiresAt;
     }
 
     public Guid ConnectionId { get; }
 
     /// <summary>The settings snapshot this session was built from; used to detect edits that require a rebuild.</summary>
     public ConnectionInfo Info { get; }
+
+    /// <summary>When the credential this session was built with expires (short-lived Entra tokens), or null
+    /// for a fixed password. Drives disconnect-before-expiry in <see cref="ConnectionSessionManager"/>.</summary>
+    public DateTimeOffset? CredentialExpiresAt { get; }
 
     public IDbConnectionFactory Factory { get; }
     public IQueryExecutor Executor { get; }

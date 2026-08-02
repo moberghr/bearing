@@ -19,6 +19,7 @@ public partial class ConnectionDialog : Window
 {
     private readonly Guid _id;
     private readonly Func<ConnectionInfo, string?, CancellationToken, Task<bool>> _test;
+    private readonly bool _secretStorageSecure;
 
     // Parameterless ctor for the XAML designer/loader.
     public ConnectionDialog() : this(null, null, (_, _, _) => Task.FromResult(false)) { }
@@ -32,9 +33,7 @@ public partial class ConnectionDialog : Window
         InitializeComponent();
         _test = test;
         _id = existing?.Id ?? Guid.NewGuid();
-
-        // Warn up front when there is no OS keyring: the password will land in a plaintext-equivalent file.
-        InsecureWarning.IsVisible = !secretStorageSecure;
+        _secretStorageSecure = secretStorageSecure;
 
         if (existing is not null)
         {
@@ -45,6 +44,7 @@ public partial class ConnectionDialog : Window
             DatabaseBox.Text = existing.Database;
             UserBox.Text = existing.User;
             PasswordBox.Text = existingPassword ?? "";
+            CredentialKindBox.SelectedIndex = (int)existing.CredentialKind;
             EnvBox.Text = existing.Environment ?? "";
             EnvColorBox.Text = existing.EnvironmentColor ?? "";
             ConfirmWritesBox.IsChecked = existing.RequireWriteConfirmation;
@@ -55,7 +55,30 @@ public partial class ConnectionDialog : Window
             Title = "New connection";
             PortBox.Text = "5432";
             HostBox.Text = "localhost";
+            CredentialKindBox.SelectedIndex = 0;
         }
+        UpdateCredentialVisibility();
+    }
+
+    private CredentialKind SelectedCredentialKind() => CredentialKindBox.SelectedIndex switch
+    {
+        1 => CredentialKind.Prompt,
+        2 => CredentialKind.EntraToken,
+        _ => CredentialKind.StoredPassword,
+    };
+
+    private void OnCredentialKindChanged(object? sender, SelectionChangedEventArgs e) => UpdateCredentialVisibility();
+
+    /// <summary>Only the stored-password kind shows the password box + the no-keyring warning; prompt and
+    /// Entra never persist a secret (nothing to store), and Entra shows the az hint instead.</summary>
+    private void UpdateCredentialVisibility()
+    {
+        var kind = SelectedCredentialKind();
+        var stored = kind == CredentialKind.StoredPassword;
+        PasswordLabel.IsVisible = stored;
+        PasswordBox.IsVisible = stored;
+        InsecureWarning.IsVisible = stored && !_secretStorageSecure;
+        EntraHint.IsVisible = kind == CredentialKind.EntraToken;
     }
 
     private void OnPresetColorClick(object? sender, RoutedEventArgs e)
@@ -82,7 +105,13 @@ public partial class ConnectionDialog : Window
         Environment = string.IsNullOrWhiteSpace(EnvBox.Text) ? null : EnvBox.Text!.Trim(),
         EnvironmentColor = string.IsNullOrWhiteSpace(EnvColorBox.Text) ? null : EnvColorBox.Text!.Trim(),
         RequireWriteConfirmation = ConfirmWritesBox.IsChecked == true,
+        CredentialKind = SelectedCredentialKind(),
     };
+
+    /// <summary>The password to persist: the typed value for a stored-password connection, or empty for
+    /// prompt / Entra (nothing is stored — an empty value deletes any existing secret on save).</summary>
+    private string SecretToStore()
+        => SelectedCredentialKind() == CredentialKind.StoredPassword ? (PasswordBox.Text ?? "") : "";
 
     private string BuildFallbackName()
     {
@@ -106,10 +135,10 @@ public partial class ConnectionDialog : Window
     }
 
     private void OnSaveClick(object? sender, RoutedEventArgs e)
-        => Close(new ConnectionDialogResult(BuildConnection(), PasswordBox.Text ?? "", Delete: false));
+        => Close(new ConnectionDialogResult(BuildConnection(), SecretToStore(), Delete: false));
 
     private void OnDeleteClick(object? sender, RoutedEventArgs e)
-        => Close(new ConnectionDialogResult(BuildConnection(), PasswordBox.Text ?? "", Delete: true));
+        => Close(new ConnectionDialogResult(BuildConnection(), SecretToStore(), Delete: true));
 
     private void OnCancelClick(object? sender, RoutedEventArgs e) => Close(null);
 }

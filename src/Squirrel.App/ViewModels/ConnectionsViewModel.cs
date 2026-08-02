@@ -326,11 +326,17 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         => a.ProviderId == b.ProviderId && a.Host == b.Host && a.Port == b.Port
            && a.Database == b.Database && a.User == b.User;
 
-    /// <summary>Build a throwaway connection and test it (for the dialog's Test button); nothing is persisted.</summary>
+    /// <summary>Build a throwaway connection and test it (for the dialog's Test button); nothing is persisted.
+    /// For an Entra connection the token is minted through the resolver (ignoring the box); prompt / stored
+    /// connections test with the value typed into the dialog.</summary>
     public async Task<bool> TestConnectionAsync(ConnectionInfo info, string? password, CancellationToken ct)
     {
+        var secret = password;
+        if (info.CredentialKind == CredentialKind.EntraToken)
+            secret = (await _ctx.Credentials.ResolveAsync(info, forceRefresh: true, ct)).Secret;
+
         var provider = _ctx.Providers.Get(info.ProviderId);
-        var factory = provider.CreateConnectionFactory(info, password);
+        var factory = provider.CreateConnectionFactory(info, secret);
         try { return await factory.TestConnectionAsync(ct); }
         finally { await factory.DisposeAsync(); }
     }

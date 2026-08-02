@@ -19,6 +19,11 @@ public sealed record ConnectionInfo
     public string Database { get; init; } = "";
     public string User { get; init; } = "";
 
+    /// <summary>How the secret (password / token) is obtained at connect time. Default
+    /// <see cref="CredentialKind.StoredPassword"/> — a missing value in an older project file
+    /// deserializes to the classic stored-password behaviour.</summary>
+    public CredentialKind CredentialKind { get; init; } = CredentialKind.StoredPassword;
+
     /// <summary>Free-form environment label (e.g. "local", "staging", "production"); null = untagged.</summary>
     public string? Environment { get; init; }
 

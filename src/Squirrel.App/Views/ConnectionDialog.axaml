@@ -8,7 +8,7 @@
 
   <StackPanel Margin="16" Spacing="8">
 
-    <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" >
+    <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" >
       <TextBlock Grid.Row="0" Grid.Column="0" Text="Name" VerticalAlignment="Center"/>
       <TextBox   Grid.Row="0" Grid.Column="1" x:Name="NameBox" PlaceholderText="e.g. pagila (local)"/>
 
@@ -24,9 +24,20 @@
       <TextBlock Grid.Row="4" Grid.Column="0" Text="User" VerticalAlignment="Center" Margin="0,6,0,0"/>
       <TextBox   Grid.Row="4" Grid.Column="1" x:Name="UserBox" Margin="0,6,0,0"/>
 
-      <TextBlock Grid.Row="5" Grid.Column="0" Text="Password" VerticalAlignment="Center" Margin="0,6,0,0"/>
-      <TextBox   Grid.Row="5" Grid.Column="1" x:Name="PasswordBox" PasswordChar="•" Margin="0,6,0,0"/>
+      <TextBlock Grid.Row="5" Grid.Column="0" Text="Credential" VerticalAlignment="Center" Margin="0,6,0,0"/>
+      <ComboBox  Grid.Row="5" Grid.Column="1" x:Name="CredentialKindBox" Margin="0,6,0,0"
+                 HorizontalAlignment="Stretch" SelectionChanged="OnCredentialKindChanged">
+        <ComboBoxItem Content="Stored password"/>
+        <ComboBoxItem Content="Prompt each time (not saved)"/>
+        <ComboBoxItem Content="Microsoft Entra token (az login)"/>
+      </ComboBox>
+
+      <TextBlock Grid.Row="6" Grid.Column="0" x:Name="PasswordLabel" Text="Password" VerticalAlignment="Center" Margin="0,6,0,0"/>
+      <TextBox   Grid.Row="6" Grid.Column="1" x:Name="PasswordBox" PasswordChar="•" Margin="0,6,0,0"/>
     </Grid>
+
+    <TextBlock x:Name="EntraHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,4,0,0"
+               Text="Signs in via the Azure CLI (`az account get-access-token`). Run `az login` first. The token is refreshed automatically and never touches the secret store."/>
 
     <Border x:Name="InsecureWarning" IsVisible="False"
             Background="#332B1A" BorderBrush="#D29922" BorderThickness="1" CornerRadius="4"

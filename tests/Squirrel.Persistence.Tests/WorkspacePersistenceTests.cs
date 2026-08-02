@@ -33,7 +33,9 @@ public class WorkspacePersistenceTests : IDisposable
         Assert.True(Directory.Exists(Path.Combine(dir, "scripts")));
 
         var manifestText = await File.ReadAllTextAsync(Path.Combine(dir, "project.json"));
-        Assert.DoesNotContain("password", manifestText, StringComparison.OrdinalIgnoreCase); // never persisted
+        // No password field/secret is ever persisted to the manifest (secrets live only in the secret store).
+        // Target the JSON key rather than the bare word so it doesn't false-match the "StoredPassword" enum value.
+        Assert.DoesNotContain("\"password\"", manifestText, StringComparison.OrdinalIgnoreCase);
 
         var reopened = await store.OpenAsync(dir, CancellationToken.None);
         Assert.Equal("Analytics", reopened.Manifest.Name);
@@ -70,6 +72,36 @@ public class WorkspacePersistenceTests : IDisposable
         var untagged = reopened.Manifest.Connections.Single(c => c.Name == "untagged");
         Assert.Null(untagged.Environment);
         Assert.Null(untagged.EnvironmentColor);
+    }
+
+    [Fact]
+    public async Task CredentialKind_round_trips_and_defaults_to_stored_password_for_legacy_manifests()
+    {
+        var dir = Path.Combine(_root, "credproj");
+        var store = new JsonProjectStore();
+        var created = await store.CreateAsync(dir, "Creds", CancellationToken.None);
+        created.Manifest.Connections.Add(new ConnectionInfo
+        {
+            Id = Guid.NewGuid(), Name = "azure", ProviderId = "postgres",
+            Host = "db", Database = "app", User = "svc", CredentialKind = CredentialKind.EntraToken,
+        });
+        await store.SaveAsync(created, CancellationToken.None);
+
+        // New kind serializes as a readable string and round-trips.
+        var manifestText = await File.ReadAllTextAsync(Path.Combine(dir, "project.json"));
+        Assert.Contains("\"EntraToken\"", manifestText);
+        var reopened = await store.OpenAsync(dir, CancellationToken.None);
+        Assert.Equal(CredentialKind.EntraToken, reopened.Manifest.Connections.Single().CredentialKind);
+
+        // A legacy manifest with no credentialKind property deserializes to the stored-password default.
+        // credentialKind is a middle field (requireWriteConfirmation/options follow), so its own line
+        // carries the trailing comma — dropping the whole line keeps the JSON valid.
+        var legacy = string.Join('\n',
+            manifestText.Split('\n').Where(l => !l.Contains("credentialKind")));
+        Assert.DoesNotContain("credentialKind", legacy);
+        await File.WriteAllTextAsync(Path.Combine(dir, "project.json"), legacy);
+        var legacyOpened = await store.OpenAsync(dir, CancellationToken.None);
+        Assert.Equal(CredentialKind.StoredPassword, legacyOpened.Manifest.Connections.Single().CredentialKind);
     }
 
     [Fact]
