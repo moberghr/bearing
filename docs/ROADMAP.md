@@ -53,6 +53,30 @@ project switches + a completion toast (**no** background-jobs panel), per-tab ca
 - [ ] **P3** Restore last window size on startup; persist size only and let the window manager handle placement/position. (Add to session or app-settings state; apply in `App`/`MainWindow`.)
 - [ ] **P3** Selecting a script that's already open should focus its existing tab (not open a duplicate / no-op). `OpenScriptInNewTabAsync` already focuses an existing tab on open; verify the single-click/select path in the scripts tree does the same. `ShellViewModel.Scripts` / `SidebarView`.
 - [ ] **P2** Keyboard shortcuts for result-grid editing — save changes / discard / add row. Delete-row and begin-edit already have grid commands (`grid.delete`, `grid.beginEdit`); add `grid.save` / `grid.discard` / `grid.addRow` to `CommandIds` + `KeymapDefaults`, register them in `ResultView`'s grid scope (`RegisterGridCommands`), gated on `IsEditable`/`HasPendingChanges`.
+- [ ] **P2** Show the SQL in the write-confirm dialog. When `RequireWriteConfirmation` trips (`ExecuteAsync`
+  and the inline-edit `SaveChangesAsync` path), the confirm prompt should display the statements about to run,
+  not just ask yes/no — so "am I about to nuke prod" is answerable from the dialog. `ConfirmWriteAsync`
+  (`IDialogService`/`DialogService`), callers in `ExecutionViewModel`.
+- [ ] **P2** Rework the edit **Preview SQL** flow — currently a separate `[Preview SQL]` button that pops an
+  overlay, and it looks bad. The generated DML should show up **automatically as part of the save
+  confirmation** instead of being a manual pre-step; drop the standalone button (or demote it) once the
+  confirm dialog carries the SQL. Folds into the write-confirm item above. `ResultView.PreviewSql` →
+  `MainWindow.ShowPendingScript` / `MainWindow.Overlays.cs`, `ResultView.Cells.cs:312`.
+- [ ] **P2** **Export results to Excel** (+ CSV) with an "open containing folder" action after the export
+  completes. Decide the xlsx route (a package vs. hand-rolled OOXML — note §0.1: nothing new in `Core`);
+  export should offer loaded-rows vs. whole-result (needs the fetch-all item below). No export exists today.
+- [ ] **P2** **Fetch all rows** button on a paged result — one action that loops `LoadMore` to completion
+  (cancelable, with progress/row count) instead of clicking through pages. Guard the obvious foot-gun on huge
+  results. `ResultSetViewModel.IsPageable/HasMore/AppendPage`, `ExecutionViewModel.LoadMoreAsync` (`PageSize` 100).
+- [ ] **P2** **Copy as…** — extend grid copy beyond TSV: HTML, Markdown, JSON, CSV, and SQL (`INSERT`
+  statements / `VALUES` list). Context menu + palette commands; pure formatters under `Results/`
+  (§2.5, testable without a grid) reusing the selection-rectangle logic in `ResultView.Selection.cs:209`.
+- [ ] **P2** Checkbox (bool) cells don't take grid selection — clicking one toggles the value but leaves the
+  cell/row selection where it was, so keyboard nav and copy act on the wrong cell. Make the bool cell set the
+  selection on click like every other cell. `ResultView.Cells.cs` `BoolCell` (~line 170).
+- [ ] **P2** `Tab` should move between rows/fields for view+edit in both table and pane (record) mode —
+  a consistent forward/back field traversal (`Tab`/`Shift+Tab`) that commits the current cell and advances,
+  wrapping to the next row at the end. Currently only spatial arrow nav exists in the grid.
 - [ ] **P2** Configurable + dynamic font size (per tab). A configurable **base** font size (lives in the Settings
   framework above) applied to the editor. On top of that, dynamic zoom while a tab is open: `Ctrl+=`/`Ctrl+-`
   bump the *current* tab's font size up/down (and a `Ctrl+0`-style reset), **per tab** — each tab keeps its own
