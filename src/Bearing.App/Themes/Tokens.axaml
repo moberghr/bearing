@@ -1,0 +1,59 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- ============================================================================================
+       Bearing design tokens (graphite surfaces / steel text / one machined-teal accent).
+       See docs/design/bearing/README.md §Design tokens. Keys stay semantic, not hue-named, so a
+       future re-skin is again a one-file change: reference as {DynamicResource Bg.Window} etc.
+
+       Colour SEMANTICS are unchanged from the previous (Kanagawa) skin — only the hues moved.
+       Teal is app state (active nav, unsaved, current line, PK); the per-connection environment
+       colour is separate and lives in ConnectionBrush, never in this file.
+       ============================================================================================ -->
+
+  <!-- Surfaces (handoff: graphite / ink-*) -->
+  <SolidColorBrush x:Key="Bg.Window"      Color="#0F1319"/>  <!-- ink-900: title bar, rail, status bar, menus, results header -->
+  <SolidColorBrush x:Key="Bg.Chrome"      Color="#161B21"/>  <!-- ink-800: toolbar, side panels, tab strip -->
+  <SolidColorBrush x:Key="Bg.Editor"      Color="#1A2027"/>  <!-- ink-700: editor + results body, active tab fill, window body -->
+  <SolidColorBrush x:Key="Bg.LineActive"  Color="#232B36"/>  <!-- current-line highlight, focused cell input -->
+  <SolidColorBrush x:Key="Bg.TileActive"  Color="#2A323C"/>  <!-- active rail tile, active pill/toggle segment -->
+  <SolidColorBrush x:Key="Bg.Select"      Color="#223440"/>  <!-- selected list row (schema / scripts / history / menu) -->
+  <SolidColorBrush x:Key="Bg.Hover"       Color="#222831"/>  <!-- ink-600: rail/menu row hover, quick-stats bar -->
+
+  <!-- Borders -->
+  <SolidColorBrush x:Key="Border"         Color="#2A323C"/>  <!-- 1px region separators -->
+  <SolidColorBrush x:Key="Border.Control" Color="#333C48"/>  <!-- input / button / dropdown-pill borders -->
+
+  <!-- Text (handoff: steel-*) -->
+  <SolidColorBrush x:Key="Text.Primary"   Color="#D8DEE6"/>  <!-- steel-100 -->
+  <SolidColorBrush x:Key="Text.Code"      Color="#B7C0CB"/>  <!-- steel-300: code + data values -->
+  <SolidColorBrush x:Key="Text.Muted"     Color="#8B95A1"/>  <!-- collapsed tree rows, secondary glyphs -->
+  <SolidColorBrush x:Key="Text.Dim"       Color="#79838F"/>  <!-- steel-500: labels, captions, idle glyphs -->
+  <SolidColorBrush x:Key="Text.Faint"     Color="#4E5865"/>  <!-- steel-700: line numbers, gutter, disabled, counts -->
+
+  <!-- Accents / syntax / status -->
+  <SolidColorBrush x:Key="Accent.Brand"   Color="#35D0BE"/>  <!-- teal: active rail icon, unsaved dot, current-line number, PK badge -->
+  <SolidColorBrush x:Key="Syntax.Keyword" Color="#978BE4"/>  <!-- violet: SQL keywords, FK badge -->
+  <SolidColorBrush x:Key="Syntax.Func"    Color="#6FA6E2"/>  <!-- azure: functions, server icon, JSON keys, links -->
+  <SolidColorBrush x:Key="Syntax.Number"  Color="#E9A46B"/>  <!-- amber: numeric literals -->
+  <SolidColorBrush x:Key="Syntax.Table"   Color="#6FB6AB"/>  <!-- mint, tree/table stroke weight -->
+  <SolidColorBrush x:Key="Syntax.TableSel" Color="#5FC9AD"/>
+  <!-- Deliberately NOT the handoff's mint (#5FC9AD): mint sits too close to Accent.Brand, so the Run
+       glyph and the Connected dot stopped reading as their own signal against the teal chrome. This
+       colour's whole job is to say "connected / succeeded / go", which it can only do if it is
+       unmistakably distinct from brand chrome — the server's environment is already signalled
+       separately (db chip dot, tab accent, status-bar line), so status keeps its own colour here. -->
+  <SolidColorBrush x:Key="Ok.Green"       Color="#98BB6C"/>  <!-- connected status, run, success, save, timings -->
+  <SolidColorBrush x:Key="Warn.Amber"     Color="#E3B457"/>  <!-- gold: connecting status dot/label, folder glyph -->
+  <SolidColorBrush x:Key="Error.Red"      Color="#D2555A"/>  <!-- errors, delete/discard -->
+
+  <!-- Geometry (design §Geometry) — unchanged: the Bearing handoff specifies the same metrics. -->
+  <x:Double x:Key="Radius.Control">7</x:Double>
+  <x:Double x:Key="Radius.Tile">9</x:Double>
+  <x:Double x:Key="Height.TitleBar">36</x:Double>
+  <x:Double x:Key="Height.Toolbar">46</x:Double>
+  <x:Double x:Key="Height.TabStrip">40</x:Double>
+  <x:Double x:Key="Width.Rail">52</x:Double>
+  <x:Double x:Key="Width.SidePanel">262</x:Double>
+
+</ResourceDictionary>

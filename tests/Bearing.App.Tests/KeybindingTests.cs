@@ -1,0 +1,157 @@
+using System.Linq;
+using Avalonia.Input;
+using Bearing.App.Input;
+using Xunit;
+
+namespace Bearing.App.Tests;
+
+public class KeybindingTests
+{
+    // ---- GestureParser ----
+
+    [Theory]
+    [InlineData("Ctrl+S", KeyModifiers.Control, Key.S)]
+    [InlineData("Ctrl+Shift+S", KeyModifiers.Control | KeyModifiers.Shift, Key.S)]
+    [InlineData("Ctrl+Enter", KeyModifiers.Control, Key.Enter)]
+    [InlineData("F5", KeyModifiers.None, Key.F5)]
+    [InlineData("Alt+Up", KeyModifiers.Alt, Key.Up)]
+    [InlineData("Ctrl+/", KeyModifiers.Control, Key.OemQuestion)]
+    [InlineData("Ctrl+-", KeyModifiers.Control, Key.OemMinus)]
+    [InlineData("Ctrl+Shift+=", KeyModifiers.Control | KeyModifiers.Shift, Key.OemPlus)]
+    public void Parses_logical_gestures(string text, KeyModifiers mods, Key key)
+    {
+        Assert.True(GestureParser.TryParse(text, out var g));
+        Assert.Equal(mods, g.Modifiers);
+        Assert.Equal(key, g.Logical);
+        Assert.Null(g.Physical);
+    }
+
+    [Fact]
+    public void Parses_physical_gesture()
+    {
+        Assert.True(GestureParser.TryParse("Ctrl+Shift+PhysBracketLeft", out var g));
+        Assert.Equal(KeyModifiers.Control | KeyModifiers.Shift, g.Modifiers);
+        Assert.Equal(PhysicalKey.BracketLeft, g.Physical);
+        Assert.Null(g.Logical);
+    }
+
+    [Theory]
+    [InlineData("nonsense")]
+    [InlineData("Ctrl+")]
+    [InlineData("Hyper+A")]        // unknown modifier
+    [InlineData("Ctrl+PhysNope")]  // unknown physical key
+    public void Rejects_garbage(string text) => Assert.False(GestureParser.TryParse(text, out _));
+
+    [Fact]
+    public void Meta_folds_to_control_when_parsed()
+    {
+        var g = GestureParser.Parse("Meta+C");
+        Assert.Equal(KeyModifiers.Control, g.Modifiers); // Cmd/Win normalized to Ctrl
+    }
+
+    [Fact]
+    public void All_default_bindings_round_trip()
+    {
+        foreach (var b in KeymapDefaults.Build().Bindings)
+        {
+            var text = GestureParser.Format(b.Gesture);
+            Assert.True(GestureParser.TryParse(text, out var reparsed), $"could not reparse '{text}'");
+            Assert.Equal(b.Gesture, reparsed);
+        }
+    }
+
+    // ---- Matching / resolution ----
+
+    private static readonly Keymap Defaults = KeymapDefaults.Build();
+
+    // Logical-binding resolution ignores the physical key, so pass PhysicalKey.None for these.
+    private const PhysicalKey NoPhys = PhysicalKey.None;
+
+    [Fact]
+    public void Resolves_global_run_on_both_bindings()
+    {
+        Assert.Equal(CommandIds.Run, Defaults.Resolve(KeyScope.Global, KeyModifiers.Control, Key.Enter, NoPhys));
+        Assert.Equal(CommandIds.Run, Defaults.Resolve(KeyScope.Global, KeyModifiers.None, Key.F5, NoPhys));
+    }
+
+    [Fact]
+    public void Meta_matches_a_control_binding()
+        => Assert.Equal(CommandIds.FileSave, Defaults.Resolve(KeyScope.Global, KeyModifiers.Meta, Key.S, NoPhys));
+
+    [Fact]
+    public void Exact_modifiers_required()
+    {
+        // plain S is typing, not Save; Ctrl+Shift+S is Save As, not Save.
+        Assert.Null(Defaults.Resolve(KeyScope.Global, KeyModifiers.None, Key.S, NoPhys));
+        Assert.Equal(CommandIds.FileSaveAs,
+            Defaults.Resolve(KeyScope.Global, KeyModifiers.Control | KeyModifiers.Shift, Key.S, NoPhys));
+    }
+
+    [Fact]
+    public void Scopes_are_isolated()
+    {
+        // Ctrl+A is Select-statement in the editor, Select-all in the grid, and unbound globally.
+        Assert.Equal(CommandIds.EditorSelectStatement, Defaults.Resolve(KeyScope.Editor, KeyModifiers.Control | KeyModifiers.Shift, Key.A, NoPhys));
+        Assert.Equal(CommandIds.GridSelectAll, Defaults.Resolve(KeyScope.Grid, KeyModifiers.Control, Key.A, NoPhys));
+        Assert.Null(Defaults.Resolve(KeyScope.Global, KeyModifiers.Control, Key.A, NoPhys));
+    }
+
+    [Fact]
+    public void Enter_means_run_globally_but_edit_in_the_grid()
+    {
+        Assert.Equal(CommandIds.Run, Defaults.Resolve(KeyScope.Global, KeyModifiers.Control, Key.Enter, NoPhys));
+        Assert.Equal(CommandIds.GridBeginEdit, Defaults.Resolve(KeyScope.Grid, KeyModifiers.None, Key.Enter, NoPhys));
+    }
+
+    [Fact]
+    public void Comment_vs_fold_all_differ_only_by_shift()
+    {
+        // Ctrl+- (OemMinus) toggles comment; Ctrl+Shift+- folds all.
+        Assert.Equal(CommandIds.EditorToggleComment, Defaults.Resolve(KeyScope.Editor, KeyModifiers.Control, Key.OemMinus, NoPhys));
+        Assert.Equal(CommandIds.EditorFoldAll, Defaults.Resolve(KeyScope.Editor, KeyModifiers.Control | KeyModifiers.Shift, Key.OemMinus, NoPhys));
+    }
+
+    [Fact]
+    public void Fold_matches_physical_bracket_regardless_of_logical_key()
+    {
+        // On a non-US layout the physical [ key reports a different logical Key; the physical binding must
+        // still match. Pass an unrelated logical key to prove physical is what's consulted.
+        Assert.Equal(CommandIds.EditorFoldCurrent,
+            Defaults.Resolve(KeyScope.Editor, KeyModifiers.Control | KeyModifiers.Shift, Key.OemTilde, PhysicalKey.BracketLeft));
+    }
+
+    [Fact]
+    public void Physical_binding_wins_over_logical_on_the_same_keystroke()
+    {
+        // A keystroke where BOTH bindings match: logical Ctrl+A and physical Ctrl+BracketRight.
+        var map = new Keymap(new[]
+        {
+            new Bearing.App.Input.KeyBinding(KeyScope.Editor, GestureParser.Parse("Ctrl+A"), "logical"),
+            new Bearing.App.Input.KeyBinding(KeyScope.Editor, GestureParser.Parse("Ctrl+PhysBracketRight"), "physical"),
+        });
+        Assert.Equal("physical", map.Resolve(KeyScope.Editor, KeyModifiers.Control, Key.A, PhysicalKey.BracketRight));
+    }
+
+    [Fact]
+    public void DisplayGesture_prefers_the_first_binding()
+    {
+        Assert.Equal("Ctrl+Enter", Defaults.DisplayGesture(CommandIds.Run));   // not F5
+        Assert.Equal("Ctrl+N", Defaults.DisplayGesture(CommandIds.TabNew));    // not Ctrl+T
+        Assert.Null(Defaults.DisplayGesture("does.not.exist"));
+    }
+
+    // ---- Registry ----
+
+    [Fact]
+    public void Registry_runs_and_gates_commands()
+    {
+        var registry = new CommandRegistry();
+        var ran = 0;
+        registry.Register(KeyCommand.Sync("t.run", "Run", KeyScope.Global, "g", () => ran++));
+        registry.Register(KeyCommand.Sync("t.gated", "Gated", KeyScope.Global, "g", () => ran++, canRun: () => false));
+
+        Assert.True(registry.Get("t.run")!.CanRun());
+        Assert.False(registry.Get("t.gated")!.CanRun());
+        Assert.Null(registry.Get("missing"));
+    }
+}

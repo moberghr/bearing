@@ -1,4 +1,4 @@
-# Squirrel roadmap
+# Bearing roadmap
 
 Single tracking list for outstanding work. Grouped by status, then priority (**P1** correctness/security ·
 **P2** UX/robustness · **P3** cleanup). Check items off as they land. Sources: the 2026-07-20 whole-codebase
@@ -11,7 +11,7 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done. "(uncommitted)" = in the 
 ## ✅ Done this session — uncommitted, needs commit + live QA
 
 - [x] **Resume last-used project on startup** — `App.ResumeLastProjectAsync`; skips deleted/unreadable recent entries. (+2 tests)
-- [x] **Server-side first-page `LIMIT`** — `Squirrel.Sql/FirstPageLimiter.cs`; remote SELECT fetches one page instead of streaming the whole set; edit/FK-nav preserved. (+23 tests, 10 live)
+- [x] **Server-side first-page `LIMIT`** — `Bearing.Sql/FirstPageLimiter.cs`; remote SELECT fetches one page instead of streaming the whole set; edit/FK-nav preserved. (+23 tests, 10 live)
 - [x] **Honest query timer** — status bar shows wall-clock (`DescribeResults(results, wallClock)`).
 - [x] **WriteGuard extended** — CREATE/CTAS, COPY, CALL, DO, GRANT/REVOKE, REFRESH, top-level `SELECT … INTO`. (+15 tests)
 - [x] **Connection lease + 30-min idle eviction** — `SessionLease` + `ConnectionSessionManager` rewrite; running query can't be disposed under; idle connections reclaimed. Fixes the disposal-mid-query race. (+4 tests)
@@ -37,11 +37,25 @@ project switches + a completion toast (**no** background-jobs panel), per-tab ca
 
 ## 🟢 Open — features & UX requests
 
-- [ ] **P2** Rename the product to **Bearing**. Cross-cutting: window titles, About dialog, menu labels
-  and any user-facing "Squirrel" strings; brand assets (logo/mark, `.ico`/`.icns`/favicons, in-app mark,
-  window icon); config/data dir names and any persisted paths (migrate or accept a reset); docs/README.
-  Decide separately whether to also rename the `Squirrel.*` assemblies/namespaces and the repo (larger,
-  code-only churn — can lag the user-facing rename).
+- [x] **P2** Rename the product Squirrel → **Bearing** *(uncommitted, needs live QA)*. **Done 2026-08-04**,
+  in two passes:
+  - **Skin + identity.** Bearing palette in `Themes/Tokens.axaml` (graphite surfaces / steel text / teal
+    `Accent.Brand`, renamed from `Accent.Orange`), the ball-bearing mark (`Themes/Brand.axaml` +
+    `assets/brand/bearing-*.svg` + rebuilt `.ico`/`.icns`/favicons, sizes ≤24px using the `markSolid`
+    variant), and every user-facing display string. Handoff archived at `docs/design/bearing/` with a note
+    on where the app deliberately diverges from the spec. **Colour semantics were kept, not re-mapped** —
+    status stays green/amber/red (`Ok.Green` holds `#98BB6C`, not the handoff's mint, which collided with
+    the teal accent) and env presets keep their existing hexes.
+  - **Full code rename.** `Squirrel.*` → `Bearing.*` across namespaces, assemblies, project/folder names
+    and `Bearing.slnx`; `SquirrelPaths`/`SquirrelJson`/`SquirrelCompletionData` →
+    `Bearing*`; `SQUIRREL_*` env vars → `BEARING_*`; `AssemblyName` → `bearing`; `build/release.sh`
+    `APP_ID`/`APP_NAME`; docs and `.claude/` rules.
+  - **`AppDirName` is now `bearing`**, so the app reads `~/.config/bearing` and `~/.local/share/bearing`.
+    **No migration code was written — this was a deliberate call.** Existing installs must move their data
+    by hand (see README ▸ Upgrading from Squirrel), and secrets stored in the OS keyring under the old
+    `app=squirrel` attribute are not found under `app=bearing` — those passwords need re-entering.
+  - **Not renamed:** the repo directory and git remote (still `squirrel`), and the historical design
+    bundle `docs/design/editor-4a/`, left verbatim as a dated snapshot.
 - [ ] **P2** Settings screen + framework. Build a real settings window (the `Settings…` menu is still a
   "coming soon" stub) backed by a general settings framework: a typed settings model, load/save via
   `AppSettingsStore`, and a UI that groups options by category. First tenants already have homes elsewhere
@@ -49,6 +63,19 @@ project switches + a completion toast (**no** background-jobs panel), per-tab ca
   which should migrate into this screen rather than staying file-edit-only or hard-coded constants. Model the
   UI after the existing code-built `KeybindingsWindow` (Keyboard Shortcuts already lives under Edit ▸).
 - [~] **P2** Manual connect / disconnect + connection status *(uncommitted, in live QA)*. Toolbar status dot + label (green Connected / amber Connecting / red Disconnected, semantic — never the environment color) mirrored in the status bar, plus a chain toggle that Connects / Cancels-connecting / Disconnects. Indicator reflects the real session pool via `IConnectionSessionManager.LiveChanged`, so a query-driven connect / idle eviction updates it too. No connect-on-tab-switch — connecting is explicit (Connect button) or on an action that needs it (Run, which now also loads the schema before building results so first-page edits work). `ConnectionState` + state machine in `ConnectionsViewModel`; reusable `Controls/ConnectionStatusView`. Remaining: live QA of layout + behavior.
+- [ ] **P2** **Back scratch scripts with real files + autosave.** Today a scratch buffer has no file at all —
+  `EditorTabViewModel.IsScratch => ScriptPath is null`, and its text is inlined into `session.json` as
+  `OpenEditor.ScratchText`. Instead: give every new tab a real file on disk from the moment it's created,
+  autosave it as you type, and park it in a dedicated subfolder of the project's `scripts/`
+  (`ProjectManifest.ScriptsDirectory`) named by number/date (e.g. `scripts/scratch/2026-08-04-01.sql`).
+  On rename, **move** the file out to the scripts root — or to whichever subfolder the user picks — so
+  naming a script is what promotes it out of scratch.
+  Seams to think through: `IsScratch` stops meaning "no path" and becomes "lives in the scratch folder",
+  which also shifts `IsDirty => !IsScratch && IsModified` (autosaved scratch is never dirty); `ScratchText`/
+  `ScratchName` in `OpenEditor` can then go away, shrinking session state to just paths; the scripts tree
+  (`ScriptsViewModel`, `BuildScriptNodes`) needs to either surface or deliberately hide the scratch folder;
+  and abandoned scratch files need a retention/cleanup story so the folder doesn't grow forever. Decide
+  whether the scratch folder is gitignored (it's per-user noise, unlike saved scripts).
 - [ ] **P2** Remove / delete projects. Delete a project from the recent list, and optionally from disk (with confirm). Also prune stale/missing entries from the recent list (see the P3 recent-projects item below).
 - [ ] **P3** Restore last window size on startup; persist size only and let the window manager handle placement/position. (Add to session or app-settings state; apply in `App`/`MainWindow`.)
 - [ ] **P3** Selecting a script that's already open should focus its existing tab (not open a duplicate / no-op). `OpenScriptInNewTabAsync` already focuses an existing tab on open; verify the single-click/select path in the scripts tree does the same. `ShellViewModel.Scripts` / `SidebarView`.

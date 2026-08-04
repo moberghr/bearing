@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;background:#0F1319;font-family:"Space Grotesk",system-ui,sans-serif}
+  *{box-sizing:border-box}
+  a{color:#6FA6E2;text-decoration:none}
+  a:hover{color:#8FBEF0}
+  .lbl{font:600 12px/1 "Space Grotesk";letter-spacing:.14em;text-transform:uppercase;color:#4E5865}
+</style>
+</helmet>
+<div style="min-height:100vh;padding:64px;display:flex;flex-direction:column;gap:76px;color:#D8DEE6">
+
+  <!-- header -->
+  <div style="display:flex;flex-direction:column;gap:10px">
+    <div style="display:flex;align-items:center;gap:14px">
+      <svg width="46" height="46" viewBox="0 0 100 100" fill="none">{{ markDuo }}</svg>
+      <div style="font:700 30px/1 'Space Grotesk';letter-spacing:-.02em">Bearing</div>
+      <div style="font:600 11px/1 'Space Grotesk';letter-spacing:.28em;text-transform:uppercase;color:#35D0BE;padding-top:4px">Brand Sheet</div>
+    </div>
+    <div style="color:#79838F;font-size:14px;max-width:640px">A ball-bearing mark — precision, low-friction, engineered. Machined-teal accent on a cool graphite ground. Rebrand of the Squirrel SQL editor.</div>
+  </div>
+
+  <!-- app tiles -->
+  <div style="display:flex;flex-direction:column;gap:18px">
+    <div class="lbl">App icon</div>
+    <div style="display:flex;gap:40px;flex-wrap:wrap;align-items:flex-end">
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div style="width:256px;height:256px;border-radius:56px;background:linear-gradient(155deg,#1E2630,#12161C);border:1px solid #2A323C;box-shadow:0 30px 60px -20px rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center">
+          <svg width="152" height="152" viewBox="0 0 100 100" fill="none">{{ markDuo }}</svg>
+        </div>
+        <div class="lbl" style="text-align:center">On graphite</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div style="width:256px;height:256px;border-radius:56px;background:#35D0BE;display:flex;align-items:center;justify-content:center">
+          <svg width="152" height="152" viewBox="0 0 100 100" fill="none">{{ markInk }}</svg>
+        </div>
+        <div class="lbl" style="text-align:center">Flat teal</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div style="width:256px;height:256px;border-radius:56px;background:#EAEEF3;display:flex;align-items:center;justify-content:center">
+          <svg width="152" height="152" viewBox="0 0 100 100" fill="none">{{ markInk }}</svg>
+        </div>
+        <div class="lbl" style="text-align:center">On light</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- lockups -->
+  <div style="display:flex;flex-direction:column;gap:18px">
+    <div class="lbl">Lockup</div>
+    <div style="display:flex;gap:32px;flex-wrap:wrap;align-items:stretch">
+      <div style="display:flex;align-items:center;gap:22px;background:#161B21;border:1px solid #2A323C;border-radius:20px;padding:34px 46px;width:max-content">
+        <svg width="66" height="66" viewBox="0 0 100 100" fill="none">{{ markDuo }}</svg>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <div style="font:700 42px/1 'Space Grotesk';letter-spacing:-.02em;color:#EAEEF3">Bearing</div>
+          <div style="font:600 13px/1 'Space Grotesk';letter-spacing:.34em;text-transform:uppercase;color:#35D0BE">SQL Editor</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:20px;background:#35D0BE;border-radius:20px;padding:34px 46px;width:max-content">
+        <svg width="60" height="60" viewBox="0 0 100 100" fill="none">{{ markInk }}</svg>
+        <div style="font:700 42px/1 'Space Grotesk';letter-spacing:-.02em;color:#0F1319">Bearing</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- scale + mono -->
+  <div style="display:flex;gap:64px;flex-wrap:wrap">
+    <div style="display:flex;flex-direction:column;gap:18px">
+      <div class="lbl">Sizes</div>
+      <div style="display:flex;align-items:flex-end;gap:26px">
+        <div style="width:96px;height:96px;border-radius:22px;background:#161B21;border:1px solid #2A323C;display:flex;align-items:center;justify-content:center"><svg width="60" height="60" viewBox="0 0 100 100" fill="none">{{ markDuo }}</svg></div>
+        <div style="width:56px;height:56px;border-radius:13px;background:#161B21;border:1px solid #2A323C;display:flex;align-items:center;justify-content:center"><svg width="36" height="36" viewBox="0 0 100 100" fill="none">{{ markDuo }}</svg></div>
+        <div style="width:32px;height:32px;border-radius:8px;background:#161B21;border:1px solid #2A323C;display:flex;align-items:center;justify-content:center"><svg width="21" height="21" viewBox="0 0 100 100" fill="none">{{ markDuo }}</svg></div>
+        <div style="width:16px;height:16px;border-radius:4px;background:#161B21;border:1px solid #2A323C;display:flex;align-items:center;justify-content:center"><svg width="12" height="12" viewBox="0 0 100 100" fill="none">{{ markSolid }}</svg></div>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:18px">
+      <div class="lbl">Monochrome</div>
+      <div style="display:flex;gap:22px">
+        <div style="width:96px;height:96px;border-radius:22px;background:#D8DEE6;display:flex;align-items:center;justify-content:center"><svg width="60" height="60" viewBox="0 0 100 100" fill="none">{{ markInk }}</svg></div>
+        <div style="width:96px;height:96px;border-radius:22px;background:#161B21;border:1px solid #2A323C;display:flex;align-items:center;justify-content:center"><svg width="60" height="60" viewBox="0 0 100 100" fill="none">{{ markSteel }}</svg></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- palette -->
+  <div style="display:flex;flex-direction:column;gap:20px">
+    <div class="lbl">Color palette</div>
+    <div style="display:flex;gap:40px;flex-wrap:wrap">
+
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="font:600 12px/1 'Space Grotesk';color:#79838F;letter-spacing:.02em">Graphite · surfaces</div>
+        <div style="display:flex;gap:0;border-radius:12px;overflow:hidden;border:1px solid #2A323C">
+          <sc-for list="{{ inks }}" as="s" hint-placeholder-count="5">
+            <div style="width:104px;height:120px;background:{{ s.bg }};display:flex;flex-direction:column;justify-content:flex-end;padding:9px 10px;gap:2px">
+              <span style="font:600 11px/1.3 'Space Grotesk';color:{{ s.fg }}">{{ s.name }}</span>
+              <span style="font:400 10.5px/1 ui-monospace,monospace;color:{{ s.fg }};opacity:.75">{{ s.hex }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="font:600 12px/1 'Space Grotesk';color:#79838F;letter-spacing:.02em">Steel · text</div>
+        <div style="display:flex;gap:0;border-radius:12px;overflow:hidden;border:1px solid #2A323C">
+          <sc-for list="{{ steels }}" as="s" hint-placeholder-count="5">
+            <div style="width:104px;height:120px;background:{{ s.bg }};display:flex;flex-direction:column;justify-content:flex-end;padding:9px 10px;gap:2px">
+              <span style="font:600 11px/1.3 'Space Grotesk';color:{{ s.fg }}">{{ s.name }}</span>
+              <span style="font:400 10.5px/1 ui-monospace,monospace;color:{{ s.fg }};opacity:.8">{{ s.hex }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:40px;flex-wrap:wrap">
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="font:600 12px/1 'Space Grotesk';color:#79838F;letter-spacing:.02em">Teal · brand accent</div>
+        <div style="display:flex;gap:0;border-radius:12px;overflow:hidden;border:1px solid #2A323C">
+          <sc-for list="{{ teals }}" as="s" hint-placeholder-count="3">
+            <div style="width:120px;height:120px;background:{{ s.bg }};display:flex;flex-direction:column;justify-content:flex-end;padding:9px 10px;gap:2px">
+              <span style="font:600 11px/1.3 'Space Grotesk';color:{{ s.fg }}">{{ s.name }}</span>
+              <span style="font:400 10.5px/1 ui-monospace,monospace;color:{{ s.fg }};opacity:.85">{{ s.hex }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="font:600 12px/1 'Space Grotesk';color:#79838F;letter-spacing:.02em">Signal · status & syntax</div>
+        <div style="display:flex;gap:0;border-radius:12px;overflow:hidden;border:1px solid #2A323C">
+          <sc-for list="{{ signals }}" as="s" hint-placeholder-count="6">
+            <div style="width:96px;height:120px;background:{{ s.bg }};display:flex;flex-direction:column;justify-content:flex-end;padding:9px 10px;gap:2px">
+              <span style="font:600 11px/1.3 'Space Grotesk';color:{{ s.fg }}">{{ s.name }}</span>
+              <span style="font:400 10.5px/1 ui-monospace,monospace;color:{{ s.fg }};opacity:.85">{{ s.hex }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  bearing(ringCol, ballCol) {
+    const e = React.createElement, out = [], n = 8, R = 31;
+    out.push(e('circle', { key: 'outer', cx: 50, cy: 50, r: 44, fill: 'none', stroke: ringCol, strokeWidth: 7 }));
+    out.push(e('circle', { key: 'race', cx: 50, cy: 50, r: R, fill: 'none', stroke: ringCol, strokeWidth: 1.6, opacity: .4 }));
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+      out.push(e('circle', { key: 'b' + i, cx: 50 + R * Math.cos(a), cy: 50 + R * Math.sin(a), r: 6.6, fill: ballCol }));
+    }
+    out.push(e('circle', { key: 'inner', cx: 50, cy: 50, r: 15, fill: 'none', stroke: ringCol, strokeWidth: 7 }));
+    return out;
+  }
+  // simplified solid mark for tiny sizes: filled ring, no bore detail
+  solid(col) {
+    const e = React.createElement, out = [], n = 8, R = 31;
+    out.push(e('circle', { key: 'o', cx: 50, cy: 50, r: 44, fill: 'none', stroke: col, strokeWidth: 12 }));
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+      out.push(e('circle', { key: 'b' + i, cx: 50 + R * Math.cos(a), cy: 50 + R * Math.sin(a), r: 7, fill: col }));
+    }
+    out.push(e('circle', { key: 'i', cx: 50, cy: 50, r: 12, fill: col }));
+    return out;
+  }
+  renderVals() {
+    const F = React.Fragment;
+    return {
+      markDuo:   React.createElement(F, null, this.bearing('#35D0BE', '#D8DEE6')),
+      markInk:   React.createElement(F, null, this.bearing('#0F1319', '#0F1319')),
+      markSteel: React.createElement(F, null, this.bearing('#D8DEE6', '#D8DEE6')),
+      markSolid: React.createElement(F, null, this.solid('#35D0BE')),
+      inks: [
+        { name: 'ink-900', hex: '#0F1319', bg: '#0F1319', fg: '#B7C0CB' },
+        { name: 'ink-800', hex: '#161B21', bg: '#161B21', fg: '#B7C0CB' },
+        { name: 'ink-700', hex: '#1A2027', bg: '#1A2027', fg: '#B7C0CB' },
+        { name: 'ink-600', hex: '#222831', bg: '#222831', fg: '#B7C0CB' },
+        { name: 'line',    hex: '#2A323C', bg: '#2A323C', fg: '#D8DEE6' },
+      ],
+      steels: [
+        { name: 'steel-50',  hex: '#EAEEF3', bg: '#EAEEF3', fg: '#0F1319' },
+        { name: 'steel-100', hex: '#D8DEE6', bg: '#D8DEE6', fg: '#0F1319' },
+        { name: 'steel-300', hex: '#B7C0CB', bg: '#B7C0CB', fg: '#0F1319' },
+        { name: 'steel-500', hex: '#79838F', bg: '#79838F', fg: '#0F1319' },
+        { name: 'steel-700', hex: '#4E5865', bg: '#4E5865', fg: '#EAEEF3' },
+      ],
+      teals: [
+        { name: 'teal-light', hex: '#5FE0D0', bg: '#5FE0D0', fg: '#0F1319' },
+        { name: 'teal',       hex: '#35D0BE', bg: '#35D0BE', fg: '#0F1319' },
+        { name: 'teal-deep',  hex: '#1F9E90', bg: '#1F9E90', fg: '#EAEEF3' },
+      ],
+      signals: [
+        { name: 'rose',   hex: '#E76A86', bg: '#E76A86', fg: '#0F1319' },
+        { name: 'gold',   hex: '#E3B457', bg: '#E3B457', fg: '#0F1319' },
+        { name: 'mint',   hex: '#5FC9AD', bg: '#5FC9AD', fg: '#0F1319' },
+        { name: 'azure',  hex: '#6FA6E2', bg: '#6FA6E2', fg: '#0F1319' },
+        { name: 'violet', hex: '#978BE4', bg: '#978BE4', fg: '#0F1319' },
+        { name: 'amber',  hex: '#E9A46B', bg: '#E9A46B', fg: '#0F1319' },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

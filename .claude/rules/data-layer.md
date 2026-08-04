@@ -2,14 +2,14 @@
 
 Raw ADO.NET — **no ORM**. Two data surfaces: Postgres (query targets) and SQLite (local app state).
 
-## §5.1 — Postgres (`Squirrel.Data/Postgres`)
+## §5.1 — Postgres (`Bearing.Data/Postgres`)
 - Access is via Npgsql directly (`NpgsqlConnection`, readers, `NpgsqlDbColumn`). Keep it behind the `Core`
   provider abstractions (`IDbProvider`, executor/metadata/completion interfaces).
 - Column origin uses table OID + attnum (`TableOID`/`ColumnAttributeNumber` from the RowDescription) —
   `NpgsqlDbColumn.BaseTableName` is null here, so do not rely on it.
 - Propagate `CancellationToken` through every async DB call (execution is cancelable via the Run/Esc path).
 
-## §5.2 — SQLite (`Squirrel.Persistence`)
+## §5.2 — SQLite (`Bearing.Persistence`)
 - Local stores (query log, workspace/session, recent projects) use `Microsoft.Data.Sqlite`, best-effort:
   persistence failures must not crash the app (they surface in the status bar and are swallowed on the
   shutdown/save path).

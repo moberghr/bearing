@@ -3,8 +3,8 @@
 ## §9.1 — God objects: extract, don't grow
 Two classes are already oversized and are the #1 place changes go wrong. Both were split into partial
 *files* but each is still a single class — the split hid the line count without separating concerns:
-- `src/Squirrel.App/Controls/ResultView.*.cs` (~1,900 lines across 6 partials, one class)
-- `src/Squirrel.App/Views/MainWindow.*.cs` (~1,300 lines across 6 partials, one class)
+- `src/Bearing.App/Controls/ResultView.*.cs` (~1,900 lines across 6 partials, one class)
+- `src/Bearing.App/Views/MainWindow.*.cs` (~1,300 lines across 6 partials, one class)
 
 (`ViewModels/ShellViewModel` — the former `MainWindowViewModel` — has since been genuinely decomposed
 into child VMs behind `WorkspaceContext` and is no longer a god object; follow that pattern.)
@@ -18,7 +18,7 @@ WHEN a change would add code to either god object, DO NOT append — extract:
 Keep the VM's public binding surface unchanged when splitting — leave thin delegating members behind.
 
 ## §9.2 — Input goes through the unified pipeline
-- Keyboard handling flows through `src/Squirrel.App/Input/` (`Gesture`/`GestureParser`, `Keymap`,
+- Keyboard handling flows through `src/Bearing.App/Input/` (`Gesture`/`GestureParser`, `Keymap`,
   `CommandRegistry`/`KeyCommand`, `KeyDispatcher`, `CommandIds`, `KeyScope`). Views call `TryHandle(e, scope)`.
 - WHEN adding a shortcut, register a command + default binding in the keymap — do NOT hand-roll a new
   `OnKeyDown` branch. Grid **spatial** navigation (cursor motion) is the deliberate exception and stays local.

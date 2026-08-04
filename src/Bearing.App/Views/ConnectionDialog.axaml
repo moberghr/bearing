@@ -1,0 +1,78 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Bearing.App.Views.ConnectionDialog"
+        Width="440" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Title="Connection">
+
+  <StackPanel Margin="16" Spacing="8">
+
+    <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" >
+      <TextBlock Grid.Row="0" Grid.Column="0" Text="Name" VerticalAlignment="Center"/>
+      <TextBox   Grid.Row="0" Grid.Column="1" x:Name="NameBox" PlaceholderText="e.g. pagila (local)"/>
+
+      <TextBlock Grid.Row="1" Grid.Column="0" Text="Host" VerticalAlignment="Center" Margin="0,6,0,0"/>
+      <TextBox   Grid.Row="1" Grid.Column="1" x:Name="HostBox" Margin="0,6,0,0"/>
+
+      <TextBlock Grid.Row="2" Grid.Column="0" Text="Port" VerticalAlignment="Center" Margin="0,6,0,0"/>
+      <TextBox   Grid.Row="2" Grid.Column="1" x:Name="PortBox" Margin="0,6,0,0"/>
+
+      <TextBlock Grid.Row="3" Grid.Column="0" Text="Database" VerticalAlignment="Center" Margin="0,6,0,0"/>
+      <TextBox   Grid.Row="3" Grid.Column="1" x:Name="DatabaseBox" Margin="0,6,0,0"/>
+
+      <TextBlock Grid.Row="4" Grid.Column="0" Text="User" VerticalAlignment="Center" Margin="0,6,0,0"/>
+      <TextBox   Grid.Row="4" Grid.Column="1" x:Name="UserBox" Margin="0,6,0,0"/>
+
+      <TextBlock Grid.Row="5" Grid.Column="0" Text="Credential" VerticalAlignment="Center" Margin="0,6,0,0"/>
+      <ComboBox  Grid.Row="5" Grid.Column="1" x:Name="CredentialKindBox" Margin="0,6,0,0"
+                 HorizontalAlignment="Stretch" SelectionChanged="OnCredentialKindChanged">
+        <ComboBoxItem Content="Stored password"/>
+        <ComboBoxItem Content="Prompt each time (not saved)"/>
+        <ComboBoxItem Content="Microsoft Entra token (az login)"/>
+      </ComboBox>
+
+      <TextBlock Grid.Row="6" Grid.Column="0" x:Name="PasswordLabel" Text="Password" VerticalAlignment="Center" Margin="0,6,0,0"/>
+      <TextBox   Grid.Row="6" Grid.Column="1" x:Name="PasswordBox" PasswordChar="•" Margin="0,6,0,0"/>
+    </Grid>
+
+    <TextBlock x:Name="EntraHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,4,0,0"
+               Text="Signs in via the Azure CLI (`az account get-access-token`). Run `az login` first. The token is refreshed automatically and never touches the secret store."/>
+
+    <Border x:Name="InsecureWarning" IsVisible="False"
+            Background="#2F2B22" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
+            Padding="8,6" Margin="0,4,0,0">
+      <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Warn.Amber}" FontSize="12"
+                 Text="⚠ No system keyring found — this password will be stored unencrypted on disk (base64) in your data directory. Anyone who can read your files can recover it."/>
+    </Border>
+
+    <Separator Margin="0,4"/>
+
+    <TextBlock Text="Environment" Opacity="0.8"/>
+    <StackPanel Orientation="Horizontal" Spacing="6">
+      <Border x:Name="ColorSwatch" Width="26" Height="26" CornerRadius="4"
+              Background="{Binding #EnvColorBox.Text, Converter={StaticResource HexBrush}}"/>
+      <TextBox x:Name="EnvBox" Width="150" PlaceholderText="label, e.g. production"/>
+      <TextBox x:Name="EnvColorBox" Width="90" PlaceholderText="#RRGGBB"/>
+    </StackPanel>
+    <StackPanel Orientation="Horizontal" Spacing="6" Margin="32,0,0,0">
+      <Button Content="Local"      Tag="#3FB950" Click="OnPresetColorClick" Background="#3FB950" Foreground="White" Padding="8,2"/>
+      <Button Content="Staging"    Tag="#D29922" Click="OnPresetColorClick" Background="#D29922" Foreground="White" Padding="8,2"/>
+      <Button Content="Production" Tag="#E5484D" Click="OnPresetColorClick" Background="#E5484D" Foreground="White" Padding="8,2"/>
+    </StackPanel>
+
+    <CheckBox x:Name="ConfirmWritesBox" Margin="0,4,0,0"
+              Content="Confirm before running writes / destructive DDL on this connection"/>
+
+    <TextBlock x:Name="TestResult" Opacity="0.75" Margin="0,4,0,0" Text=" "/>
+
+    <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" Margin="0,8,0,0">
+      <Button Grid.Column="0" x:Name="DeleteButton" Content="Delete" Click="OnDeleteClick"
+              Foreground="{DynamicResource Error.Red}" IsVisible="False"/>
+      <Button Grid.Column="2" x:Name="TestButton" Content="Test" Click="OnTestClick" Margin="0,0,8,0"/>
+      <Button Grid.Column="3" Content="Cancel" Click="OnCancelClick" Margin="0,0,8,0" IsCancel="True"/>
+      <Button Grid.Column="4" Content="Save" Click="OnSaveClick" IsDefault="True"/>
+    </Grid>
+
+  </StackPanel>
+</Window>

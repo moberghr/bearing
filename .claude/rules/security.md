@@ -6,13 +6,13 @@ Shared checklist: `.claude/references/security-checklist.md`.
 ## §1.1 — Secrets
 - NEVER log, print, or write connection passwords to disk outside the secret store.
 - Passwords go through `ISecretStore`. When no OS keyring is available the fallback stores secrets
-  **unencrypted** (base64) under `~/.local/share/squirrel/secrets/<guid>` — this is surfaced to the user
+  **unencrypted** (base64) under `~/.local/share/bearing/secrets/<guid>` — this is surfaced to the user
   (`SecretStorageSecure`, amber warning). DO NOT silently weaken or hide that posture.
 - Platform keychain / real fallback encryption is deferred, not abandoned — don't remove the warning as
   a shortcut.
 
 ## §1.2 — Write guard (destructive SQL)
-- `Squirrel.Sql.WriteGuard` flags data-modifying / DDL statements (INSERT/UPDATE/DELETE/MERGE, DROP/
+- `Bearing.Sql.WriteGuard` flags data-modifying / DDL statements (INSERT/UPDATE/DELETE/MERGE, DROP/
   TRUNCATE/ALTER, and data-modifying CTEs) on connections marked `RequireWriteConfirmation`.
 - Keep the guard lexer-based and conservative. If you touch it, do not narrow what counts as risky without
   a test; the Production connection preset relies on it.

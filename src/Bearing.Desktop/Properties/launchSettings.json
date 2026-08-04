@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Bearing (dev)": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "BEARING_PROFILE": "dev"
+      }
+    }
+  }
+}

@@ -1,0 +1,26 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- App icon tile (BRAND.md §App icon): duo mark on the graphite rounded tile.
+       256 tile, radius 56 (~22%), mark 152 (~59%). Master for all raster icons. -->
+  <defs>
+    <!-- CSS linear-gradient(155deg, #1E2630, #12161C). -->
+    <linearGradient id="tile" x1="0" y1="0" x2="0.4226" y2="0.9063">
+      <stop offset="0" stop-color="#1E2630"/>
+      <stop offset="1" stop-color="#12161C"/>
+    </linearGradient>
+  </defs>
+  <rect x="0.5" y="0.5" width="255" height="255" rx="56" ry="56" fill="url(#tile)" stroke="#2A323C" stroke-width="1"/>
+  <!-- 100-viewBox mark scaled x1.52 (=>152px) and centred ((256-152)/2 = 52). -->
+  <g transform="translate(52 52) scale(1.52)">
+    <circle cx="50" cy="50" r="44" fill="none" stroke="#35D0BE" stroke-width="7"/>
+    <circle cx="50" cy="50" r="31" fill="none" stroke="#35D0BE" stroke-width="1.6" opacity="0.4"/>
+    <circle cx="50" cy="19" r="6.6" fill="#D8DEE6"/>
+    <circle cx="71.9203" cy="28.0797" r="6.6" fill="#D8DEE6"/>
+    <circle cx="81" cy="50" r="6.6" fill="#D8DEE6"/>
+    <circle cx="71.9203" cy="71.9203" r="6.6" fill="#D8DEE6"/>
+    <circle cx="50" cy="81" r="6.6" fill="#D8DEE6"/>
+    <circle cx="28.0797" cy="71.9203" r="6.6" fill="#D8DEE6"/>
+    <circle cx="19" cy="50" r="6.6" fill="#D8DEE6"/>
+    <circle cx="28.0797" cy="28.0797" r="6.6" fill="#D8DEE6"/>
+    <circle cx="50" cy="50" r="15" fill="none" stroke="#35D0BE" stroke-width="7"/>
+  </g>
+</svg>

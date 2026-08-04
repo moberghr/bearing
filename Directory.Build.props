@@ -9,7 +9,7 @@
     <AccelerateBuildsInVisualStudio>true</AccelerateBuildsInVisualStudio>
     <!-- Single source of truth for the app version; surfaced in Help ▸ About. -->
     <Version>0.1.0</Version>
-    <!-- Squirrel: a fast SQL query tool & script manager. See plans/i-want-to-create-bubbly-sunset.md -->
+    <!-- Bearing: a fast SQL query tool & script manager. See plans/i-want-to-create-bubbly-sunset.md -->
   </PropertyGroup>
 
 </Project>

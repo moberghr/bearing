@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Bearing.Core: domain vocabulary + provider/persistence interfaces. NO external dependencies. -->
+
+</Project>

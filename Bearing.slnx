@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Bearing.App/Bearing.App.csproj" />
+    <Project Path="src/Bearing.Core/Bearing.Core.csproj" />
+    <Project Path="src/Bearing.Data/Bearing.Data.csproj" />
+    <Project Path="src/Bearing.Desktop/Bearing.Desktop.csproj" />
+    <Project Path="src/Bearing.Persistence/Bearing.Persistence.csproj" />
+    <Project Path="src/Bearing.Sql/Bearing.Sql.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Bearing.App.Tests/Bearing.App.Tests.csproj" />
+    <Project Path="tests/Bearing.Data.Tests/Bearing.Data.Tests.csproj" />
+    <Project Path="tests/Bearing.Persistence.Tests/Bearing.Persistence.Tests.csproj" />
+    <Project Path="tests/Bearing.Sql.Tests/Bearing.Sql.Tests.csproj" />
+  </Folder>
+</Solution>

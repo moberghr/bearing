@@ -6,18 +6,18 @@
 
 ## The two seams
 
-Adding capability to Squirrel splits along two independent axes. Keeping them separate is the whole
+Adding capability to Bearing splits along two independent axes. Keeping them separate is the whole
 point.
 
-### Seam 1 — the runtime provider (`Squirrel.Data`)
+### Seam 1 — the runtime provider (`Bearing.Data`)
 One `IDbProvider` per engine → `{ IDbConnectionFactory, IMetadataReader, IQueryExecutor }`, registered
 in `ProviderRegistry`. This seam already exists. A new engine implements it and plugs in.
 
 **Prerequisite (doing now):** `Core` must expose only engine-neutral types so a provider isn't forced to
 hand Postgres notions back up. See *Core neutralization* below.
 
-### Seam 2 — the SQL dialect / intelligence (`Squirrel.Sql`)
-Today `Squirrel.Sql` is a **PostgreSQL** layer: ANTLR PG grammar (completion, folding, statement-split,
+### Seam 2 — the SQL dialect / intelligence (`Bearing.Sql`)
+Today `Bearing.Sql` is a **PostgreSQL** layer: ANTLR PG grammar (completion, folding, statement-split,
 write-guard, alias/FROM extraction), `"…"` identifier quoting (`DmlGenerator`/`TableDdlGenerator`), and
 `LIMIT/OFFSET` paging (`PageSql`). Making it pluggable = an **`ISqlDialect`** supplied per engine:
 
@@ -74,7 +74,7 @@ This is orthogonal to both seams and flips the earlier "write a compiler" estima
 
 ### What it reuses vs. needs
 - **Reuses:** results grid (read-only), editor host, tab shell.
-- **Bypasses entirely:** `Squirrel.Sql`, and our provider/dialect seams — EF owns both the SQL *and* the
+- **Bypasses entirely:** `Bearing.Sql`, and our provider/dialect seams — EF owns both the SQL *and* the
   driver. LINQ mode therefore "supports" whatever engine the user's EF provider targets, for free.
 - **Loses:** inline edit + FK-nav for LINQ results — they're materialized objects, not a live cursor with
   column origin (like LINQPad's read-only dumps).
@@ -83,7 +83,7 @@ This is orthogonal to both seams and flips the earlier "write a compiler" estima
 1. **Roslyn completion + C# editing** — medium; largely off-the-shelf (`RoslynPad.Roslyn`).
 2. **Executing the user's C#/EF** — the real hard part, and it's *dependency isolation*, not language:
    must run against the user's **exact EF + provider versions**. Solve with an **out-of-process runner**
-   (`Squirrel.ScriptRunner`) that references the user's assembly, executes, returns results over IPC —
+   (`Bearing.ScriptRunner`) that references the user's assembly, executes, returns results over IPC —
    also sandboxes crashes and enables cancel-by-kill. In-process collectible `AssemblyLoadContext` is
    fragile once native provider deps appear.
 3. **Result marshalling** — reflect over EF's result element type → `ColumnDescriptor[]` + rows (read-only).
@@ -93,7 +93,7 @@ instead of host/port/db/user — touches the connect dialog + workspace model + 
 (`DbContextOptionsBuilder` / `IDesignTimeDbContextFactory`).
 
 ### Where it lives
-New `Squirrel.Scripting` (Roslyn hosting + runner protocol) + `Squirrel.ScriptRunner` (executable),
+New `Bearing.Scripting` (Roslyn hosting + runner protocol) + `Bearing.ScriptRunner` (executable),
 both off `Core`. App gains a per-tab "C#/LINQ" language mode routing completion to Roslyn and execution
 to the runner; results into the existing read-only grid.
 

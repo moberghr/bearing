@@ -1,0 +1,146 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:conv="using:Bearing.App.Converters"
+             x:Class="Bearing.App.App"
+             RequestedThemeVariant="Dark">
+
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <!-- Bearing design tokens (Bg.*, Text.*, Accent.*, Syntax.*, geometry). -->
+        <ResourceInclude Source="avares://Bearing.App/Themes/Tokens.axaml"/>
+        <!-- Line-icon geometries for the rail + toolbar (Icon.*). -->
+        <ResourceInclude Source="avares://Bearing.App/Themes/Icons.axaml"/>
+        <!-- Bearing brand mark (BearingMark.Duo/Ink/Steel/Solid DrawingImages). -->
+        <ResourceInclude Source="avares://Bearing.App/Themes/Brand.axaml"/>
+      </ResourceDictionary.MergedDictionaries>
+
+      <conv:HexBrushConverter x:Key="HexBrush"/>
+      <conv:EnumToBoolConverter x:Key="EnumToBool"/>
+      <conv:ResourceGeometryConverter x:Key="ResourceGeometry"/>
+      <conv:MatchHighlightConverter x:Key="MatchHighlight"/>
+      <conv:PanelActiveConverter x:Key="PanelActive"/>
+      <!-- Shared monospace family for the code editor(s) and result grid. Iosevka is
+           installed as the "Nerd Font Mono" build; the rest are fallbacks. -->
+      <FontFamily x:Key="MonoFontFamily">Iosevka Nerd Font Mono,Iosevka,Cascadia Code,JetBrains Mono,Consolas,Menlo,monospace</FontFamily>
+
+      <!-- The linchpin accent: mutated in place (App.SetConnectionAccent) when the selected tab's
+           connection changes, so the tab accent, dots, results accent and status-bar line recolor
+           together. Bind via {DynamicResource ConnectionBrush}. Default = neutral slate. -->
+      <SolidColorBrush x:Key="ConnectionBrush" Color="#4E5865"/>
+
+      <!-- Left-rail tile: a 36×36 rounded button with just an icon. Idle = dim glyph on transparent;
+           hover tints; the checked (active) tile fills Bg.TileActive and turns the glyph teal.
+           App-scoped so both the shell rail and the extracted SidebarView can resolve them. -->
+      <ControlTheme x:Key="RailTile" TargetType="RadioButton">
+        <Setter Property="Width" Value="36"/>
+        <Setter Property="Height" Value="36"/>
+        <Setter Property="Margin" Value="0,3"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource Text.Dim}"/>
+        <Setter Property="Template">
+          <ControlTemplate>
+            <Border Background="{TemplateBinding Background}" CornerRadius="9">
+              <ContentPresenter Content="{TemplateBinding Content}"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+          </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover">
+          <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
+          <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+        </Style>
+        <Style Selector="^:checked">
+          <Setter Property="Background" Value="{DynamicResource Bg.TileActive}"/>
+          <Setter Property="Foreground" Value="{DynamicResource Accent.Brand}"/>
+        </Style>
+      </ControlTheme>
+
+      <!-- Same tile as a plain Button (Settings / scripts new-folder) — hover only, no checked state. -->
+      <ControlTheme x:Key="RailButton" TargetType="Button">
+        <Setter Property="Width" Value="36"/>
+        <Setter Property="Height" Value="36"/>
+        <Setter Property="Margin" Value="0,3"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource Text.Dim}"/>
+        <Setter Property="Template">
+          <ControlTemplate>
+            <Border Background="{TemplateBinding Background}" CornerRadius="9">
+              <ContentPresenter Content="{TemplateBinding Content}"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+          </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover">
+          <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
+          <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+        </Style>
+      </ControlTheme>
+
+      <!-- Bordered 30×30 icon button (connection toggle): transparent fill, thin border, subtle hover. -->
+      <ControlTheme x:Key="IconToggleButton" TargetType="Button">
+        <Setter Property="Width" Value="30"/>
+        <Setter Property="Height" Value="30"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Border.Control}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Template">
+          <ControlTemplate>
+            <Border Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="7">
+              <ContentPresenter Content="{TemplateBinding Content}"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+          </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover">
+          <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
+        </Style>
+      </ControlTheme>
+
+      <!-- History filter pill: small rounded toggle; active segment fills Bg.TileActive. -->
+      <ControlTheme x:Key="PillToggle" TargetType="RadioButton">
+        <Setter Property="Padding" Value="9,2"/>
+        <Setter Property="MinHeight" Value="0"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource Text.Dim}"/>
+        <Setter Property="Template">
+          <ControlTemplate>
+            <Border Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+              <ContentPresenter Content="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}"
+                                VerticalAlignment="Center"/>
+            </Border>
+          </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover">
+          <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
+        </Style>
+        <Style Selector="^:checked">
+          <Setter Property="Background" Value="{DynamicResource Bg.TileActive}"/>
+          <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+        </Style>
+      </ControlTheme>
+    </ResourceDictionary>
+  </Application.Resources>
+
+  <Application.Styles>
+    <FluentTheme />
+    <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
+    <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml" />
+
+    <!-- Result/history grids: monospace so column values line up.
+         Global (not window-scoped) since the result grid is built in code-behind
+         and has no host of its own to attach a style to. -->
+    <Style Selector="DataGrid">
+      <Setter Property="FontFamily" Value="{StaticResource MonoFontFamily}"/>
+      <Setter Property="FontSize" Value="13"/>
+    </Style>
+  </Application.Styles>
+
+</Application>

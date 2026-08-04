@@ -1,5 +1,5 @@
 #nullable disable
-// NOTE (Squirrel): locally ported from the antlr4-c3 C# port to the official
+// NOTE (Bearing): locally ported from the antlr4-c3 C# port to the official
 // Antlr4.Runtime.Standard API (4.13.x). Changes are mechanical member renames:
 //   .start->.Start, .Lt->.LT, TokenConstants.EOF->.EOF, .Epsilon->.EPSILON,
 //   ATNState.Transitions->.TransitionsArray, TransitionType.Xxx->.XXX (upper snake).

@@ -1,0 +1,55 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Bearing.App.ViewModels"
+             x:Class="Bearing.App.Controls.ConnectionStatusView"
+             x:DataType="vm:ShellViewModel">
+
+  <!-- Reusable connection-status dot + label (toolbar + status bar). The dot/label color is the SEMANTIC
+       state color (green Connected / amber Connecting / red Disconnected) and is deliberately independent
+       of the database environment color. State is driven purely by conditional classes on the root, so the
+       glow and pulse are style triggers (no per-render computation). -->
+  <UserControl.Styles>
+    <!-- Base = Connected: green + a soft glow. -->
+    <Style Selector="Border#Dot">
+      <Setter Property="Background" Value="{DynamicResource Ok.Green}"/>
+      <Setter Property="BoxShadow" Value="0 0 6 0 #98BB6C"/>
+    </Style>
+    <Style Selector="TextBlock#Label">
+      <Setter Property="Foreground" Value="{DynamicResource Ok.Green}"/>
+    </Style>
+
+    <!-- Connecting: amber, no glow, opacity pulse (1 → .3 → 1, 1s, infinite). -->
+    <Style Selector="StackPanel.connecting > Border#Dot">
+      <Setter Property="Background" Value="{DynamicResource Warn.Amber}"/>
+      <Setter Property="BoxShadow" Value="0 0 0 0 #00000000"/>
+      <Style.Animations>
+        <Animation Duration="0:0:1" IterationCount="INFINITE">
+          <KeyFrame Cue="0%"><Setter Property="Opacity" Value="1"/></KeyFrame>
+          <KeyFrame Cue="50%"><Setter Property="Opacity" Value="0.3"/></KeyFrame>
+          <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1"/></KeyFrame>
+        </Animation>
+      </Style.Animations>
+    </Style>
+    <Style Selector="StackPanel.connecting > TextBlock#Label">
+      <Setter Property="Foreground" Value="{DynamicResource Warn.Amber}"/>
+    </Style>
+
+    <!-- Disconnected: red, no glow. -->
+    <Style Selector="StackPanel.disconnected > Border#Dot">
+      <Setter Property="Background" Value="{DynamicResource Error.Red}"/>
+      <Setter Property="BoxShadow" Value="0 0 0 0 #00000000"/>
+    </Style>
+    <Style Selector="StackPanel.disconnected > TextBlock#Label">
+      <Setter Property="Foreground" Value="{DynamicResource Error.Red}"/>
+    </Style>
+  </UserControl.Styles>
+
+  <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
+              Classes.connecting="{Binding Connections.IsConnecting}"
+              Classes.disconnected="{Binding Connections.IsDisconnected}"
+              ToolTip.Tip="{Binding Connections.StatusLabel}">
+    <Border x:Name="Dot" Width="8" Height="8" CornerRadius="4" VerticalAlignment="Center"/>
+    <TextBlock x:Name="Label" Text="{Binding Connections.StatusLabel}" FontSize="11" FontWeight="SemiBold"
+               VerticalAlignment="Center" TextWrapping="NoWrap"/>
+  </StackPanel>
+</UserControl>

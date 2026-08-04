@@ -18,7 +18,7 @@ dist/
 .vs/
 
 # Per-user session state inside projects (never shared)
-.squirrel/
+.bearing/
 
 # OS
 .DS_Store

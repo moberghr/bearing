@@ -1,31 +1,47 @@
-# Squirrel — brand assets
+# Bearing — brand assets
 
-Vector identity for **Squirrel** (SQL query editor), mark direction **1a**: a sitting
-squirrel with a bushy curled tail holding an acorn. Source of truth is the SVG path data
-(100×100 viewBox) reproduced from the design handoff.
+Vector identity for **Bearing** (SQL query editor): a **ball bearing** — precision, low
+friction, engineered tolerance. Machined teal (`#35D0BE`) on cool graphite.
+
+The mark is **generated geometry**, not a drawn path. On a 100×100 viewBox centred at (50,50):
+
+| Element | Construction |
+|---|---|
+| Outer race | `circle r=44`, stroke, width **7** |
+| Pitch circle | `circle r=31`, stroke, width **1.6**, opacity **.4** |
+| 8 balls | `r=6.6`, filled, centres at `(50 + 31·cos a, 50 + 31·sin a)` for `a = i/8·2π − π/2` (first at 12 o'clock) |
+| Inner race (bore) | `circle r=15`, stroke, width **7** |
+
+Do not redraw by eye — regenerate from the construction above. See
+`docs/design/bearing/BRAND.md` §The mark for the full spec.
 
 ## Source SVGs
 | File | Use |
 |------|-----|
-| `squirrel-amber.svg` | Primary two-tone amber mark (body `#FF9E3B`, tail `#E6883B`, acorn `#DCD7BA`, eye `#16161D`). |
-| `squirrel-ink.svg`   | Mono ink mark for light backgrounds (eye punched in cream). |
-| `squirrel-light.svg` | Mono cream mark for dark backgrounds. |
-| `squirrel-tile.svg`  | 256×256 app-icon tile: amber mark on the dark rounded-superellipse tile (r56, 160° `#20202B→#16161D` gradient, `#2A2A37` border). Master for all raster icons. |
-| `squirrel-wordmark.svg` | Horizontal lockup (mark + "Squirrel / SQL EDITOR"). Text is Space Grotesk 700/600 — install or embed the font when rasterizing. |
+| `bearing-duo.svg`   | Primary duo-tone mark (races teal `#35D0BE`, balls steel `#D8DEE6`). Default, on dark. |
+| `bearing-ink.svg`   | Mono ink mark (`#0F1319`) — on teal and on light. |
+| `bearing-steel.svg` | Mono steel mark (`#D8DEE6`) — on dark. |
+| `bearing-solid.svg` | The **≤16px** simplification: bore detail and pitch circle collapse (outer `r=44` width 12, balls `r=7`, inner `r=12` filled). Favicon, tray, tiny list rows. |
+| `bearing-tile.svg`  | 256×256 app-icon tile: duo mark (152px, ≈59%) on the graphite rounded tile (r56, 155° `#1E2630→#12161C` gradient, `#2A323C` border). Master for raster icons ≥32px. |
+| `bearing-tile-small.svg` | Same tile with the **solid** mark. Master for raster icons ≤24px. |
+| `bearing-wordmark.svg` | Horizontal lockup (mark + "Bearing / SQL EDITOR"). Text is Space Grotesk 700/600 — install or embed the font when rasterizing. |
 
 ## Generated icons (`icons/`)
 Rebuild with `./build-icons.sh` (needs ImageMagick, `icotool` from icoutils, python3):
 
-- `squirrel.ico` — Windows / Avalonia window icon (16/24/32/48/256).
-- `squirrel.icns` — macOS (16–1024 + Retina slots), packed by `pack-icns.py`.
+- `bearing.ico` — Windows / Avalonia window icon (16/24/32/48/256).
+- `bearing.icns` — macOS (16–1024 + Retina slots), packed by `pack-icns.py`.
 - `favicon-16/32/48.png`, `apple-touch-icon.png` (180) — web.
 - `png/` — the intermediate size ramp.
 
-## In-app usage
-- **Window icon**: `squirrel.ico` is copied to `src/Squirrel.App/Assets/` (an `AvaloniaResource`)
-  and referenced by `MainWindow.axaml` via `Icon="/Assets/squirrel.ico"`.
-- **Brand mark control**: `src/Squirrel.App/Themes/Brand.axaml` exposes the mark as
-  `SquirrelMark.Amber` / `.Ink` / `.Light` `DrawingImage` resources
-  (`<Image Source="{StaticResource SquirrelMark.Amber}"/>`), shown at the top of the left rail.
+The script renders sizes ≤24px from `bearing-tile-small.svg` and everything above from
+`bearing-tile.svg`, so the small icons get the solid mark automatically.
 
-Regenerating `squirrel.ico`? Re-copy it into `src/Squirrel.App/Assets/` afterwards.
+## In-app usage
+- **Window icon**: `bearing.ico` is copied to `src/Bearing.App/Assets/` (an `AvaloniaResource`)
+  and referenced by `MainWindow.axaml` via `Icon="/Assets/bearing.ico"`.
+- **Brand mark control**: `src/Bearing.App/Themes/Brand.axaml` exposes the mark as
+  `BearingMark.Duo` / `.Ink` / `.Steel` / `.Solid` `DrawingImage` resources
+  (`<Image Source="{StaticResource BearingMark.Duo}"/>`), shown at the top of the left rail.
+
+Regenerating `bearing.ico`? Re-copy it into `src/Bearing.App/Assets/` afterwards.

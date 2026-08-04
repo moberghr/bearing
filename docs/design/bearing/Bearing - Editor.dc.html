@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  html,body{margin:0;height:100%;background:#0F1319;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+  *{box-sizing:border-box}
+  a{color:#6FA6E2;text-decoration:none}
+  a:hover{color:#8FBEF0}
+  .rail-btn:hover{background:#222831}
+  .menu-row:hover{background:#223440}
+  .drop-row:hover{background:#222831}
+  .cell-in{background:transparent;border:none;color:inherit;font:inherit;width:100%;padding:3px 10px;outline:none}
+  .cell-in:focus{background:#232B36;box-shadow:inset 0 0 0 1px #6FA6E2;border-radius:3px}
+  .grow-row:hover .rowdel{opacity:1}
+  .rowdel{opacity:0;cursor:pointer;transition:opacity .1s}
+  .gbtn{cursor:pointer;font-size:11px;border-radius:6px;padding:4px 10px;display:flex;align-items:center;gap:6px;white-space:nowrap}
+  @keyframes connpulse{0%,100%{opacity:1}50%{opacity:.3}}
+</style>
+</helmet>
+<div style="position:relative;width:100vw;height:100vh;display:flex;flex-direction:column;background:#1A2027;color:#D8DEE6;font-size:13px;overflow:hidden">
+
+  <!-- title bar -->
+  <div style="height:36px;background:#0F1319;border-bottom:1px solid #2A323C;display:flex;align-items:center;padding:0 12px;flex:none;position:relative;z-index:5">
+    <div style="display:flex;gap:8px"><span style="width:12px;height:12px;border-radius:50%;background:#E76A86"></span><span style="width:12px;height:12px;border-radius:50%;background:#E3B457"></span><span style="width:12px;height:12px;border-radius:50%;background:#5FC9AD"></span></div>
+    <div style="flex:1;text-align:center;font-size:12.5px;color:#79838F;font-weight:500;display:flex;align-items:center;justify-content:center;gap:7px"><svg width="15" height="15" viewBox="0 0 20 20" fill="none" style="flex:none"><circle cx="10" cy="10" r="8.4" stroke="#35D0BE" stroke-width="1.5"/><circle cx="10" cy="10" r="3" stroke="#35D0BE" stroke-width="1.5"/><g fill="#D8DEE6"><circle cx="10" cy="4" r="1.5"/><circle cx="15.2" cy="7" r="1.5"/><circle cx="15.2" cy="13" r="1.5"/><circle cx="10" cy="16" r="1.5"/><circle cx="4.8" cy="13" r="1.5"/><circle cx="4.8" cy="7" r="1.5"/></g></svg> Bearing — analytics</div>
+    <div style="width:52px;text-align:right;color:#4E5865;font-size:11px" title="Press Alt for menu">⌥</div>
+  </div>
+
+  <!-- toolbar -->
+  <div style="height:46px;background:#161B21;border-bottom:1px solid #2A323C;display:flex;align-items:center;gap:8px;padding:0 12px;flex:none;position:relative;z-index:20">
+    <div class="drop-row" style="display:flex;align-items:center;gap:8px;background:#1A2027;border:1px solid #333C48;border-radius:7px;padding:6px 10px;min-width:120px;cursor:pointer"><span style="color:#79838F;font-size:11px;text-transform:uppercase;letter-spacing:.06em">Proj</span><span style="flex:1;color:#D8DEE6;font-weight:500">analytics</span><span style="color:#61697A">▾</span></div>
+    <div style="width:1px;height:22px;background:#2A323C;margin:0 2px"></div>
+    <div class="drop-row" onClick="{{ openServer }}" style="display:flex;align-items:center;gap:7px;background:#1A2027;border-radius:7px;padding:6px 10px;cursor:pointer;border:1px solid {{ serverBorder }}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6FA6E2" stroke-width="2"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><line x1="7" y1="7.5" x2="7.01" y2="7.5"/><line x1="7" y1="16.5" x2="7.01" y2="16.5"/></svg><span style="color:#D8DEE6;font-weight:500">{{ connHost }}</span><span style="color:#61697A">▾</span></div>
+    <div title="{{ statusLabel }}" style="display:flex;align-items:center;gap:6px;padding:0 2px;font-size:11px;font-weight:600;color:{{ statusColor }};white-space:nowrap"><span style="width:8px;height:8px;border-radius:50%;flex:none;background:{{ statusDot }};box-shadow:{{ statusGlow }};animation:{{ statusAnim }}"></span>{{ statusLabel }}</div>
+    <button onClick="{{ onToggleConn }}" title="{{ connBtnTitle }}" style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;background:transparent;color:{{ connBtnColor }};border:1px solid #333C48;border-radius:7px;cursor:pointer">
+      <sc-if value="{{ isLinked }}" hint-placeholder-val="{{ true }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/></svg></sc-if>
+      <sc-if value="{{ isBroken }}" hint-placeholder-val="{{ false }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><line x1="7.5" y1="12" x2="9.5" y2="12"/><line x1="14.5" y1="12" x2="16.5" y2="12"/></svg></sc-if>
+    </button>
+    <span style="color:#4E5865">›</span>
+    <div class="drop-row" onClick="{{ openDb }}" style="display:flex;align-items:center;gap:7px;background:#1A2027;border-radius:7px;padding:6px 10px;cursor:pointer;border:1px solid {{ dbBorder }}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#5FC9AD" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg><span style="color:#D8DEE6;font-weight:600">{{ connDb }}</span><span style="width:7px;height:7px;border-radius:50%;background:{{ connColor }}"></span><span style="color:#61697A">▾</span></div>
+    <button title="Run  ⌘⏎" style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;background:transparent;color:#5FC9AD;border:1px solid #333C48;border-radius:7px;cursor:pointer;font-size:11px;margin-left:2px">▶</button>
+    <div style="flex:1"></div>
+    <span style="color:#4E5865;font-size:11.5px;display:flex;align-items:center;gap:6px"><kbd style="background:#0F1319;border:1px solid #2A323C;border-radius:4px;padding:1px 6px;font-family:ui-monospace,monospace;font-size:10.5px;color:#79838F">Alt</kbd> menu</span>
+    <button onClick="{{ enterFocus }}" title="Focus mode  ⌃⌘F" style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;background:transparent;color:#79838F;border:1px solid #333C48;border-radius:7px;cursor:pointer;font-size:14px">⤢</button>
+  </div>
+
+  <div style="flex:1;display:flex;min-height:0">
+    <!-- left icon rail -->
+    <div style="width:52px;flex:none;background:#0F1319;border-right:1px solid #2A323C;display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:6px">
+      <div class="rail-btn" title="Connections" style="width:36px;height:36px;border-radius:9px;color:#79838F;display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer">🖧</div>
+      <div class="rail-btn" onClick="{{ goSchema }}" title="Schema" style="width:36px;height:36px;border-radius:9px;background:{{ schemaBg }};color:{{ schemaFg }};display:flex;align-items:center;justify-content:center;font-size:17px;cursor:pointer">🗄</div>
+      <div class="rail-btn" onClick="{{ goScripts }}" title="Scripts" style="width:36px;height:36px;border-radius:9px;background:{{ scriptsBg }};color:{{ scriptsFg }};display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer">📄</div>
+      <div class="rail-btn" onClick="{{ goHistory }}" title="History" style="width:36px;height:36px;border-radius:9px;background:{{ historyBg }};color:{{ historyFg }};display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer">🕘</div>
+      <div style="flex:1"></div>
+      <div class="rail-btn" title="Settings" style="width:36px;height:36px;border-radius:9px;color:#79838F;display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer">⚙</div>
+    </div>
+
+    <!-- SCHEMA side panel -->
+    <sc-if value="{{ isSchema }}" hint-placeholder-val="{{ true }}">
+    <div style="width:262px;flex:none;background:#161B21;border-right:1px solid #2A323C;display:flex;flex-direction:column;min-height:0">
+      <div style="padding:11px 13px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#79838F;font-weight:700;display:flex;align-items:center;justify-content:space-between">Schema <span style="color:#4E5865;font-size:11px;text-transform:none;letter-spacing:0">⌕</span></div>
+      <div style="flex:1;overflow:hidden;padding:2px 6px;font-family:ui-monospace,monospace;font-size:12.5px;line-height:1.95;color:#B7C0CB">
+        <div style="display:flex;align-items:center;gap:7px;padding-left:4px"><span style="color:#4E5865">▾</span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6FA6E2" stroke-width="2" style="flex:none"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><line x1="7" y1="7.5" x2="7.01" y2="7.5"/><line x1="7" y1="16.5" x2="7.01" y2="16.5"/></svg><span style="color:#D8DEE6">{{ connHost }}</span><span style="width:7px;height:7px;border-radius:50%;background:{{ connColor }};margin-left:auto;margin-right:6px"></span></div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:20px"><span style="color:#4E5865">▾</span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#5FC9AD" stroke-width="2" style="flex:none"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg><b style="color:#D8DEE6">{{ connDb }}</b><span style="background:#2A323C;color:#5FC9AD;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px">DEFAULT</span></div>
+        <div style="padding-left:44px;color:#8b95a1">▾ public</div>
+        <div style="display:flex;align-items:center;gap:6px;padding-left:56px;color:#8b95a1"><span style="color:#4E5865">▸</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6BAEA2" stroke-width="2" style="flex:none"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9.5h18M9 4v16"/></svg>actor</div>
+        <div style="display:flex;align-items:center;gap:6px;padding-left:56px;background:#223440;border-radius:5px;color:#D8DEE6"><span style="color:#4E5865">▾</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6FB6AB" stroke-width="2" style="flex:none"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9.5h18M9 4v16"/></svg>film</div>
+        <div style="padding-left:78px;display:flex;color:#B7C0CB"><span style="flex:1">film_id</span><span style="color:#35D0BE;font-size:10px;font-weight:700;margin-right:6px">PK</span><span style="color:#79838F">int4</span></div>
+        <div style="padding-left:78px;display:flex;color:#B7C0CB"><span style="flex:1">title</span><span style="color:#79838F">varchar</span></div>
+        <div style="padding-left:78px;display:flex;color:#B7C0CB"><span style="flex:1">language_id</span><span style="color:#978BE4;font-size:10px;font-weight:700;margin-right:6px">FK</span><span style="color:#79838F">int2</span></div>
+        <div style="padding-left:78px;display:flex;color:#B7C0CB"><span style="flex:1">rental_rate</span><span style="color:#79838F">numeric</span></div>
+        <div style="padding-left:78px;color:#79838F">▸ Indexes (3)</div>
+        <div style="display:flex;align-items:center;gap:6px;padding-left:56px;color:#8b95a1"><span style="color:#4E5865">▸</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6BAEA2" stroke-width="2" style="flex:none"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9.5h18M9 4v16"/></svg>rental</div>
+        <div style="display:flex;align-items:center;gap:6px;padding-left:56px;color:#8b95a1"><span style="color:#4E5865">▸</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6BAEA2" stroke-width="2" style="flex:none"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9.5h18M9 4v16"/></svg>inventory</div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- SCRIPTS side panel: folders -->
+    <sc-if value="{{ isScripts }}" hint-placeholder-val="{{ false }}">
+    <div style="width:262px;flex:none;background:#161B21;border-right:1px solid #2A323C;display:flex;flex-direction:column;min-height:0">
+      <div style="padding:11px 13px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#79838F;font-weight:700;display:flex;align-items:center;justify-content:space-between">Scripts <span style="display:flex;gap:10px;color:#4E5865;font-size:13px;text-transform:none;letter-spacing:0"><span title="New folder">🗀</span><span title="New script">＋</span></span></div>
+      <div style="padding:0 10px 8px"><div style="display:flex;align-items:center;gap:6px;background:#0F1319;border:1px solid #2A323C;border-radius:6px;padding:5px 8px;color:#4E5865;font-size:12px">⌕ Filter scripts…</div></div>
+      <div style="flex:1;overflow:hidden;padding:2px 6px;font-size:12.5px;line-height:2.05;color:#B7C0CB">
+        <div style="display:flex;align-items:center;gap:7px;padding-left:4px;color:#D8DEE6"><span style="color:#4E5865">▾</span><span style="color:#E3B457">🗀</span>Reports<span style="margin-left:auto;margin-right:8px;color:#4E5865;font-size:11px">4</span></div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:30px"><span style="color:#79838F">📄</span>monthly_rentals.sql</div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:30px;background:#223440;border-radius:5px;color:#D8DEE6"><span style="color:#35D0BE">📄</span>top_films.sql<span style="margin-left:auto;margin-right:8px;color:#35D0BE;font-size:15px;line-height:0">•</span></div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:30px"><span style="color:#79838F">📄</span>revenue_by_store.sql</div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:30px"><span style="color:#79838F">📄</span>customer_ltv.sql</div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:4px;color:#D8DEE6;margin-top:2px"><span style="color:#4E5865">▾</span><span style="color:#E3B457">🗀</span>Migrations<span style="margin-left:auto;margin-right:8px;color:#4E5865;font-size:11px">2</span></div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:30px"><span style="color:#79838F">📄</span>001_add_indexes.sql</div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:30px"><span style="color:#79838F">📄</span>002_seed_data.sql</div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:4px;color:#8b95a1;margin-top:2px"><span style="color:#4E5865">▸</span><span style="color:#E3B457">🗀</span>Ad-hoc<span style="margin-left:auto;margin-right:8px;color:#4E5865;font-size:11px">11</span></div>
+        <div style="display:flex;align-items:center;gap:7px;padding-left:4px;margin-top:2px"><span style="width:11px"></span><span style="color:#79838F">📄</span>scratch.sql</div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- HISTORY side panel -->
+    <sc-if value="{{ isHistory }}" hint-placeholder-val="{{ false }}">
+    <div style="width:262px;flex:none;background:#161B21;border-right:1px solid #2A323C;display:flex;flex-direction:column;min-height:0">
+      <div style="padding:11px 13px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#79838F;font-weight:700;display:flex;align-items:center;justify-content:space-between">History <span style="color:#4E5865;font-size:11px;text-transform:none;letter-spacing:0">⌕</span></div>
+      <div style="padding:0 10px 8px;display:flex;gap:6px">
+        <span style="padding:3px 9px;border-radius:6px;background:#2A323C;color:#D8DEE6;font-size:11px;font-weight:600">All</span>
+        <span style="padding:3px 9px;border-radius:6px;color:#79838F;font-size:11px">✓ ok</span>
+        <span style="padding:3px 9px;border-radius:6px;color:#79838F;font-size:11px">✕ error</span>
+      </div>
+      <div style="flex:1;overflow:hidden;font-size:12px;color:#8b95a1">
+        <div style="padding:6px 13px 4px;color:#4E5865;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Today</div>
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:#223440;color:#D8DEE6;border-left:2px solid #35D0BE"><span style="width:6px;height:6px;border-radius:50%;background:#E76A86;flex:none"></span><span style="flex:1;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">select f.title, count(*)…</span><span style="color:#4E5865;font-size:11px">14:22</span></div>
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px"><span style="width:6px;height:6px;border-radius:50%;background:#E76A86;flex:none"></span><span style="flex:1;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">select * from film limit…</span><span style="color:#4E5865;font-size:11px">14:20</span></div>
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;color:#D2555A"><span style="width:6px;height:6px;border-radius:50%;background:#6FB6AB;flex:none"></span><span style="flex:1;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">✕ update rental set…</span><span style="color:#4E5865;font-size:11px">13:58</span></div>
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px"><span style="width:6px;height:6px;border-radius:50%;background:#E3B457;flex:none"></span><span style="flex:1;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">explain analyze select…</span><span style="color:#4E5865;font-size:11px">11:04</span></div>
+        <div style="padding:6px 13px 4px;color:#4E5865;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Yesterday</div>
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px"><span style="width:6px;height:6px;border-radius:50%;background:#6FB6AB;flex:none"></span><span style="flex:1;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">select store_id, sum…</span><span style="color:#4E5865;font-size:11px">18:31</span></div>
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px"><span style="width:6px;height:6px;border-radius:50%;background:#E3B457;flex:none"></span><span style="flex:1;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">select count(*) from…</span><span style="color:#4E5865;font-size:11px">16:12</span></div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- editor column (shared) -->
+    <div style="flex:1;display:flex;flex-direction:column;min-width:0;background:#1A2027">
+      <div style="height:40px;flex:none;display:flex;align-items:flex-end;background:#161B21;border-bottom:1px solid #2A323C;padding:0 6px;gap:2px">
+        <div style="display:flex;align-items:center;gap:9px;padding:8px 12px;background:#1A2027;border:1px solid #2A323C;border-top:2px solid {{ connColor }};border-bottom:none;border-radius:7px 7px 0 0;margin-bottom:-1px"><span style="color:#D8DEE6;font-weight:600">top_films.sql</span><span style="color:#35D0BE;font-size:15px;line-height:0" title="unsaved">•</span><span style="display:flex;align-items:center;gap:5px"><span style="width:7px;height:7px;border-radius:50%;background:{{ connColor }}"></span><span style="font-size:11px;font-weight:600;color:{{ connColor }}">{{ connName }}</span></span><span style="color:#79838F;margin-left:2px">✕</span></div>
+        <div style="display:flex;align-items:center;gap:9px;padding:8px 12px;color:#8b95a1">scratch.sql<span style="display:flex;align-items:center;gap:5px"><span style="width:7px;height:7px;border-radius:50%;background:#6FB6AB"></span><span style="font-size:11px;font-weight:600;color:#6FB6AB">local</span></span><span style="color:#79838F">✕</span></div>
+        <div style="padding:8px 12px;color:#79838F">+</div>
+      </div>
+
+      <div style="flex:1;overflow:hidden;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:13.5px;line-height:1.62;padding:10px 0">
+        <div style="display:flex"><span style="width:44px;text-align:right;padding-right:14px;color:#4E5865">1</span><span><span style="color:#978BE4">select</span> f.title, <span style="color:#6FA6E2">count</span>(*) <span style="color:#978BE4">as</span> rentals</span></div>
+        <div style="display:flex"><span style="width:44px;text-align:right;padding-right:14px;color:#4E5865">2</span><span><span style="color:#978BE4">from</span> rental r <span style="color:#978BE4">join</span> inventory i <span style="color:#978BE4">on</span> i.inventory_id = r.inventory_id</span></div>
+        <div style="display:flex"><span style="width:44px;text-align:right;padding-right:14px;color:#4E5865">3</span><span><span style="color:#978BE4">join</span> film f <span style="color:#978BE4">on</span> f.film_id = i.film_id</span></div>
+        <div style="display:flex;background:#232B36"><span style="width:44px;text-align:right;padding-right:14px;color:#35D0BE">4</span><span><span style="color:#978BE4">group by</span> f.title <span style="color:#978BE4">order by</span> rentals <span style="color:#978BE4">desc</span> <span style="color:#978BE4">limit</span> <span style="color:#E9A46B">10</span>;</span></div>
+      </div>
+
+      <div style="flex:none;height:322px;border-top:1px solid #2A323C;background:#1A2027;display:flex;flex-direction:column;min-height:0">
+        <!-- header row: title · stacked/tabbed toggle (kept) -->
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;font-size:11px;color:#79838F;letter-spacing:.06em;text-transform:uppercase;font-weight:700;border-bottom:1px solid #2A323C">Results<div style="flex:1"></div><div style="display:flex;background:#0F1319;border:1px solid #2A323C;border-radius:7px;padding:2px;text-transform:none;letter-spacing:0"><span style="padding:3px 10px;border-radius:5px;background:#2A323C;color:#D8DEE6;font-size:11px;font-weight:600">▤ Stacked</span><span style="padding:3px 10px;border-radius:5px;color:#79838F;font-size:11px">▭ Tabbed</span></div></div>
+
+        <!-- result meta + edit controls -->
+        <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;font-size:12px;border-bottom:1px solid #2A323C;flex-wrap:wrap">
+          <span style="color:#D8DEE6;font-weight:600">▾ Result</span><span style="color:#79838F">public.film</span><span style="color:#4E5865">·</span><span style="color:#5FC9AD">42 ms</span>
+          <div style="flex:1"></div>
+          <sc-if value="{{ dirty }}" hint-placeholder-val="{{ false }}">
+            <span style="display:flex;align-items:center;gap:7px;color:#35D0BE;font-size:11px;font-weight:600"><span style="width:7px;height:7px;border-radius:50%;background:#35D0BE"></span>{{ pendingCount }} pending</span>
+            <span onClick="{{ showScript }}" class="gbtn" style="color:#B7C0CB;border:1px solid #333C48">‹ › Script</span>
+            <span onClick="{{ discard }}" class="gbtn" style="color:#D2555A;border:1px solid #3a2530">Discard</span>
+            <span onClick="{{ commit }}" class="gbtn" style="color:#0F1319;background:#5FC9AD;font-weight:600">✓ Save changes</span>
+            <span style="width:1px;height:18px;background:#2A323C"></span>
+          </sc-if>
+          <sc-if value="{{ editable }}" hint-placeholder-val="{{ true }}"><span onClick="{{ addRow }}" class="gbtn" style="color:#B7C0CB;border:1px solid #333C48">＋ Add row</span></sc-if>
+          <span class="gbtn" style="color:#B7C0CB;border:1px solid #333C48">⭳ Export</span>
+        </div>
+
+        <!-- grid + cell inspector -->
+        <div style="flex:1;display:flex;min-height:0">
+        <div style="flex:1;overflow:auto;font-family:ui-monospace,monospace;font-size:12px;position:relative;min-height:0">
+          <div style="display:flex;position:sticky;top:0;background:#0F1319;color:#79838F;border-bottom:1px solid #2A323C;font-weight:600;z-index:1;width:max-content;min-width:100%">
+            <span title="{{ lockReason }}" style="width:46px;padding:5px 8px;text-align:center;border-right:1px solid #2A323C;color:{{ lockColor }};cursor:{{ lockCursor }}">{{ lockGlyph }}</span>
+            <span style="width:88px;padding:5px 10px;border-right:1px solid #2A323C;display:flex;align-items:center;gap:5px">film_id<span style="color:#35D0BE;font-size:9px;font-weight:700">PK</span></span>
+            <span style="width:210px;padding:5px 10px;border-right:1px solid #2A323C">title</span>
+            <span style="width:110px;padding:5px 10px;border-right:1px solid #2A323C;display:flex;align-items:center;gap:5px">language_id<span style="color:#978BE4;font-size:9px;font-weight:700">FK</span></span>
+            <span style="width:104px;padding:5px 10px;border-right:1px solid #2A323C">release_year</span>
+            <span style="width:104px;padding:5px 10px;border-right:1px solid #2A323C">rental_rate</span>
+            <span style="width:250px;padding:5px 10px;border-right:1px solid #2A323C;display:flex;align-items:center;gap:5px">metadata<span style="color:#6BAEA2;font-size:9px;font-weight:700">jsonb</span></span>
+            <span style="width:30px"></span>
+          </div>
+          <sc-for list="{{ viewRows }}" as="row" hint-placeholder-count="6">
+            <div class="grow-row" style="display:flex;color:#D8DEE6;border-bottom:1px solid #232A33;border-left:2px solid {{ row.bar }};background:{{ row.bg }};width:max-content;min-width:100%">
+              <span style="width:46px;padding:3px 8px;text-align:right;border-right:1px solid #2A323C;background:#0F1319;font-weight:600;color:{{ row.numColor }}">{{ row.num }}</span>
+              <span style="width:88px;padding:3px 10px;border-right:1px solid #232A33;color:#4E5865;text-decoration:{{ row.strike }}">{{ row.filmId }}</span>
+              <span style="width:210px;border-right:1px solid #232A33;text-decoration:{{ row.strike }}"><input class="cell-in" value="{{ row.title }}" onChange="{{ row.onTitle }}" disabled="{{ row.locked }}"></span>
+              <span style="width:110px;padding:3px 10px;border-right:1px solid #232A33;color:#978BE4;text-decoration:{{ row.strike }}">{{ row.lang }}</span>
+              <span onClick="{{ row.onYearClick }}" style="width:104px;padding:3px 10px;color:#B7C0CB;text-decoration:{{ row.strike }};cursor:cell;background:{{ row.yearSel }};box-shadow:{{ row.yearRing }}">{{ row.year }}</span>
+              <span onClick="{{ row.onRateClick }}" onDoubleClick="{{ row.onRateEdit }}" title="Double-click to edit" style="width:104px;text-decoration:{{ row.strike }};cursor:cell;background:{{ row.rateSel }};box-shadow:{{ row.rateRing }}"><input class="cell-in" style="cursor:cell" value="{{ row.rate }}" onChange="{{ row.onRate }}" disabled="{{ row.locked }}" readOnly="{{ row.rateReadOnly }}"></span>
+              <span onClick="{{ row.onInspect }}" title="Click to inspect" style="width:250px;padding:3px 10px;border-left:1px solid #232A33;border-right:1px solid #232A33;display:flex;align-items:center;gap:6px;cursor:pointer;background:{{ row.metaSel }}"><span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#6FB6AB">{{ row.metaPreview }}</span><span style="color:#4E5865;flex:none">⤢</span></span>
+              <span class="rowdel" onClick="{{ row.onDelete }}" style="width:30px;display:flex;align-items:center;justify-content:center;color:{{ row.delColor }};display:{{ row.delShow }}" title="{{ row.delTitle }}">{{ row.delGlyph }}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ inspectorOpen }}" hint-placeholder-val="{{ false }}">
+        <aside style="width:400px;flex:none;border-left:1px solid #2A323C;background:#161B21;display:flex;flex-direction:column;min-height:0">
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid #2A323C;font-size:12px">
+            <span style="color:#D8DEE6;font-weight:600;font-family:ui-monospace,monospace">{{ inspectorTitle }}</span>
+            <span style="color:#6BAEA2;font-size:10px;font-weight:700">{{ inspectorType }}</span>
+            <div style="flex:1"></div>
+            <span onClick="{{ copyCell }}" class="gbtn" style="color:#B7C0CB;border:1px solid #333C48" title="Copy value">⧉</span>
+            <span onClick="{{ closeInspector }}" style="color:#79838F;cursor:pointer;padding:0 4px;font-size:14px">✕</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid #2A323C">
+            <sc-if value="{{ inspectorIsJson }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;background:#0F1319;border-radius:7px;padding:2px">
+                <span onClick="{{ setFormatted }}" style="padding:3px 9px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;background:{{ fmtBg }};color:{{ fmtFg }}">Formatted</span>
+                <span onClick="{{ setRaw }}" style="padding:3px 9px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;background:{{ rawBg }};color:{{ rawFg }}">Raw</span>
+              </div>
+              <span onClick="{{ collapseAll }}" class="gbtn" style="color:#79838F;border:1px solid #2A323C" title="Collapse all">⊟</span>
+              <span onClick="{{ expandAll }}" class="gbtn" style="color:#79838F;border:1px solid #2A323C" title="Expand all">⊞</span>
+            </sc-if>
+            <div style="flex:1;display:flex;align-items:center;gap:6px;background:#0F1319;border:1px solid #2A323C;border-radius:6px;padding:4px 8px"><span style="color:#4E5865;font-size:11px">⌕</span><input class="cell-in" style="padding:0;font-size:11.5px;font-family:system-ui,sans-serif" placeholder="Find in value…" value="{{ inspectorSearch }}" onInput="{{ onSearch }}"></div>
+          </div>
+          <div style="flex:1;overflow:auto;padding:12px 14px;font-family:ui-monospace,monospace;font-size:12.5px;line-height:1.75;min-height:0">{{ inspectorBody }}</div>
+        </aside>
+        </sc-if>
+        </div>
+
+        <!-- selection quick-stats -->
+        <sc-if value="{{ statsShow }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:none;display:flex;align-items:center;gap:18px;padding:6px 12px;border-top:1px solid #2A323C;background:#222831;font-size:11.5px;color:#B7C0CB">
+            <span style="color:#79838F;font-weight:600">{{ statCount }} cells</span>
+            <span style="color:#79838F">count <b style="color:#D8DEE6">{{ statCount }}</b></span>
+            <span style="color:#79838F">sum <b style="color:#5FC9AD">{{ statSum }}</b></span>
+            <span style="color:#79838F">avg <b style="color:#D8DEE6">{{ statAvg }}</b></span>
+            <span style="color:#79838F">min <b style="color:#D8DEE6">{{ statMin }}</b></span>
+            <span style="color:#79838F">max <b style="color:#D8DEE6">{{ statMax }}</b></span>
+            <div style="flex:1"></div>
+            <span onClick="{{ clearSel }}" style="cursor:pointer;color:#79838F">Clear</span>
+          </div>
+        </sc-if>
+
+        <!-- paging footer -->
+        <div style="flex:none;display:flex;align-items:center;gap:10px;padding:6px 12px;border-top:1px solid #2A323C;background:#161B21;font-size:11.5px;color:#79838F">
+          <span>Showing <b style="color:#B7C0CB">{{ loaded }}</b> rows{{ ofTotal }}</span>
+          <sc-if value="{{ showCountBtn }}" hint-placeholder-val="{{ true }}">
+            <span onClick="{{ getCount }}" class="gbtn" style="color:#6FA6E2;border:1px solid #2b3a44;padding:4px 8px" title="Get total count">∑</span>
+          </sc-if>
+          <span onClick="{{ loadMore }}" class="gbtn" style="color:#B7C0CB;border:1px solid #333C48">↓ Load more</span>
+          <div style="flex:1"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- status bar -->
+  <div style="flex:none;background:#0F1319;border-top:3px solid {{ connColor }};display:flex;align-items:center;gap:14px;padding:5px 12px 6px;font-size:11.5px;color:#79838F">
+    <span style="display:flex;align-items:center;gap:6px;color:{{ statusColor }};font-weight:600"><span style="width:8px;height:8px;border-radius:50%;background:{{ statusDot }};box-shadow:{{ statusGlow }};animation:{{ statusAnim }}"></span>{{ connName }}</span>
+    <span style="color:{{ statusColor }}">{{ statusLabel }}</span><span>·</span><span>{{ connDb }} @ {{ connHost }}</span><span>·</span><span>30 tables</span>
+    <div style="flex:1"></div>
+    <span>Ln 4, Col 24</span><span>UTF-8</span><span>PostgreSQL 16.2</span>
+  </div>
+
+  <!-- Pending changes as SQL script -->
+  <sc-if value="{{ scriptOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeScript }}" style="position:absolute;inset:0;z-index:44;background:rgba(15,15,20,.5)"></div>
+    <div style="position:absolute;right:20px;bottom:52px;z-index:45;width:520px;max-height:340px;background:#0F1319;border:1px solid #333C48;border-radius:10px;box-shadow:0 24px 60px -16px rgba(0,0,0,.8);display:flex;flex-direction:column;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid #2A323C;font-size:12px"><span style="color:#D8DEE6;font-weight:600">Pending changes</span><span style="color:#79838F">· {{ pendingCount }} statement(s)</span><div style="flex:1"></div><span onClick="{{ copyScript }}" class="gbtn" style="color:#B7C0CB;border:1px solid #333C48">⧉ Copy</span><span onClick="{{ closeScript }}" style="color:#79838F;cursor:pointer;padding:0 4px">✕</span></div>
+      <div style="flex:1;overflow:auto;padding:12px 14px;font-family:ui-monospace,monospace;font-size:12.5px;line-height:1.7">
+        <sc-for list="{{ scriptLines }}" as="ln" hint-placeholder-count="3">
+          <div style="display:flex;gap:12px"><span style="color:#4E5865;width:18px;text-align:right;flex:none">{{ ln.n }}</span><span style="color:{{ ln.color }}">{{ ln.text }}</span></div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid #2A323C"><div style="flex:1"></div><span onClick="{{ discard }}" class="gbtn" style="color:#D2555A;border:1px solid #3a2530">Discard</span><span onClick="{{ commit }}" class="gbtn" style="color:#0F1319;background:#5FC9AD;font-weight:600">✓ Run & save</span></div>
+    </div>
+  </sc-if>
+
+  <!-- SERVER dropdown -->
+  <sc-if value="{{ serverOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeDrop }}" style="position:absolute;inset:0;z-index:30"></div>
+    <div style="position:absolute;top:88px;left:150px;z-index:31;width:280px;background:#0F1319;border:1px solid #333C48;border-radius:9px;box-shadow:0 20px 50px -12px rgba(0,0,0,.75);padding:6px;font-size:12.5px">
+      <div style="padding:6px 8px 8px;color:#4E5865;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Connections</div>
+      <div class="menu-row" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;background:#223440;color:#D8DEE6"><span style="width:8px;height:8px;border-radius:50%;background:#E76A86"></span><span style="flex:1"><b>prod-db-01</b><div style="color:#79838F;font-size:11px">production · postgres 16.2</div></span><span style="color:#5FC9AD">✓</span></div>
+      <div class="menu-row" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#B7C0CB"><span style="width:8px;height:8px;border-radius:50%;background:#E3B457"></span><span style="flex:1"><b>staging-db</b><div style="color:#79838F;font-size:11px">staging · postgres 16.1</div></span></div>
+      <div class="menu-row" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#B7C0CB"><span style="width:8px;height:8px;border-radius:50%;background:#6FB6AB"></span><span style="flex:1"><b>localhost</b><div style="color:#79838F;font-size:11px">local · postgres 16.2</div></span></div>
+      <div style="border-top:1px solid #2A323C;margin:5px 6px"></div>
+      <div class="menu-row" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#6FA6E2">＋ New connection…</div>
+    </div>
+  </sc-if>
+
+  <!-- DATABASE dropdown -->
+  <sc-if value="{{ dbOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeDrop }}" style="position:absolute;inset:0;z-index:30"></div>
+    <div style="position:absolute;top:88px;left:300px;z-index:31;width:250px;background:#0F1319;border:1px solid #333C48;border-radius:9px;box-shadow:0 20px 50px -12px rgba(0,0,0,.75);padding:6px;font-size:12.5px">
+      <div style="padding:5px 8px;color:#4E5865;font-size:11px;display:flex;align-items:center;gap:6px">⌕ <span style="color:#4E5865">Search databases…</span></div>
+      <div style="border-top:1px solid #2A323C;margin:3px 6px"></div>
+      <div class="menu-row" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;background:#223440;color:#D8DEE6"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#5FC9AD" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/></svg><span style="flex:1">pagila</span><span style="background:#2A323C;color:#5FC9AD;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px">DEFAULT</span><span style="color:#5FC9AD">✓</span></div>
+      <div class="menu-row" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#B7C0CB"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6BAEA2" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/></svg><span style="flex:1">analytics</span></div>
+      <div class="menu-row" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#B7C0CB"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6BAEA2" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/></svg><span style="flex:1">warehouse</span></div>
+      <div class="menu-row" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#B7C0CB"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6BAEA2" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/></svg><span style="flex:1">postgres</span></div>
+    </div>
+  </sc-if>
+
+  <!-- FOCUS MODE overlay -->
+  <sc-if value="{{ focus }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0;z-index:50;background:#1A2027;display:flex;flex-direction:column">
+      <div style="height:34px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;background:#161B21;border-bottom:1px solid #2A323C;font-size:12px">
+        <span style="color:#D8DEE6;font-weight:600">top_films.sql</span>
+        <span style="color:#35D0BE;font-size:15px;line-height:0">•</span>
+        <span style="display:flex;align-items:center;gap:5px"><span style="width:7px;height:7px;border-radius:50%;background:{{ connColor }}"></span><span style="font-size:11px;font-weight:600;color:{{ connColor }}">{{ connName }}</span></span>
+        <div style="flex:1"></div>
+        <button title="Run  ⌘⏎" style="display:flex;align-items:center;justify-content:center;width:26px;height:26px;background:transparent;color:#5FC9AD;border:1px solid #333C48;border-radius:6px;cursor:pointer;font-size:10px">▶</button>
+        <button onClick="{{ exitFocus }}" title="Exit focus  Esc" style="display:flex;align-items:center;gap:6px;background:transparent;color:#79838F;border:1px solid #333C48;border-radius:6px;cursor:pointer;font-size:11px;padding:4px 9px">⤡ Exit <kbd style="font-family:ui-monospace,monospace;color:#4E5865">Esc</kbd></button>
+      </div>
+      <div style="flex:1;overflow:hidden;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:15px;line-height:1.85;padding:26px 0;max-width:820px;margin:0 auto;width:100%">
+        <div style="display:flex"><span style="width:52px;text-align:right;padding-right:18px;color:#4E5865">1</span><span><span style="color:#978BE4">select</span> f.title, <span style="color:#6FA6E2">count</span>(*) <span style="color:#978BE4">as</span> rentals</span></div>
+        <div style="display:flex"><span style="width:52px;text-align:right;padding-right:18px;color:#4E5865">2</span><span><span style="color:#978BE4">from</span> rental r <span style="color:#978BE4">join</span> inventory i <span style="color:#978BE4">on</span> i.inventory_id = r.inventory_id</span></div>
+        <div style="display:flex"><span style="width:52px;text-align:right;padding-right:18px;color:#4E5865">3</span><span><span style="color:#978BE4">join</span> film f <span style="color:#978BE4">on</span> f.film_id = i.film_id</span></div>
+        <div style="display:flex;background:#232B36"><span style="width:52px;text-align:right;padding-right:18px;color:#35D0BE">4</span><span><span style="color:#978BE4">group by</span> f.title <span style="color:#978BE4">order by</span> rentals <span style="color:#978BE4">desc</span> <span style="color:#978BE4">limit</span> <span style="color:#E9A46B">10</span>;</span></div>
+      </div>
+      <div style="flex:none;height:3px;background:{{ connColor }}"></div>
+    </div>
+  </sc-if>
+
+  <!-- Alt menu -->
+  <sc-if value="{{ menuVisible }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ hideMenu }}" style="position:absolute;inset:0;z-index:40"></div>
+    <div style="position:absolute;top:36px;left:0;right:0;height:30px;z-index:41;background:#161B21;border-bottom:1px solid #2A323C;display:flex;align-items:center;padding:0 8px;gap:2px;font-size:12.5px">
+      <span style="padding:4px 10px;border-radius:5px;background:#2A323C;color:#D8DEE6;font-weight:600"><u>F</u>ile</span>
+      <span style="padding:4px 10px;color:#B7C0CB"><u>E</u>dit</span>
+      <span style="padding:4px 10px;color:#B7C0CB"><u>V</u>iew</span>
+      <span style="padding:4px 10px;color:#B7C0CB"><u>Q</u>uery</span>
+      <span style="padding:4px 10px;color:#B7C0CB"><u>H</u>elp</span>
+    </div>
+    <div style="position:absolute;top:66px;left:8px;z-index:41;width:250px;background:#0F1319;border:1px solid #333C48;border-radius:8px;box-shadow:0 18px 46px -12px rgba(0,0,0,.7);padding:5px;font-size:12.5px">
+      <div class="menu-row" style="display:flex;align-items:center;padding:7px 10px;border-radius:6px;color:#B7C0CB"><span style="flex:1">New Query</span><span style="color:#4E5865;font-family:ui-monospace,monospace">⌘N</span></div>
+      <div class="menu-row" style="display:flex;align-items:center;padding:7px 10px;border-radius:6px;background:#223440;color:#D8DEE6"><span style="flex:1">Open…</span><span style="color:#6FA6E2;font-family:ui-monospace,monospace">⌘O</span></div>
+      <div class="menu-row" style="display:flex;align-items:center;padding:7px 10px;border-radius:6px;color:#B7C0CB"><span style="flex:1">Open Recent</span><span style="color:#4E5865">▸</span></div>
+      <div style="border-top:1px solid #2A323C;margin:4px 6px"></div>
+      <div class="menu-row" style="display:flex;align-items:center;padding:7px 10px;border-radius:6px;color:#B7C0CB"><span style="flex:1">Save</span><span style="color:#4E5865;font-family:ui-monospace,monospace">⌘S</span></div>
+      <div class="menu-row" style="display:flex;align-items:center;padding:7px 10px;border-radius:6px;color:#B7C0CB"><span style="flex:1">Save As…</span><span style="color:#4E5865;font-family:ui-monospace,monospace">⇧⌘S</span></div>
+      <div style="border-top:1px solid #2A323C;margin:4px 6px"></div>
+      <div class="menu-row" style="display:flex;align-items:center;padding:7px 10px;border-radius:6px;color:#B7C0CB"><span style="flex:1">Close Tab</span><span style="color:#4E5865;font-family:ui-monospace,monospace">⌘W</span></div>
+    </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;connectionEnv&quot;: {&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;production&quot;,&quot;options&quot;:[&quot;production&quot;,&quot;staging&quot;,&quot;local&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Connection&quot;},
+  &quot;gridEditable&quot;: {&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Results grid&quot;},
+  &quot;lockReason&quot;: {&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Read-only: no primary key found on this result — can’t generate a safe UPDATE.&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Results grid&quot;}
+}">
+class Component extends DCLogic {
+  state = {
+    menuVisible: false, screen: 'schema', drop: null, focus: false,
+    loaded: 100, total: null, scriptOpen: false, nextTemp: -1,
+    inspect: null, jsonMode: 'formatted', inspectorSearch: '', collapsed: {},
+    selected: {}, editingCell: null, connState: 'connected',
+    rows: [
+      { id: 1, filmId: 1, title: 'ACADEMY DINOSAUR', year: 2006, rate: '0.99', lang: 1, meta: { rating: 'PG', length: 86, genres: ['Documentary', 'Family'], cast: { lead: 'PENELOPE GUINESS', supporting: ['CHRISTIAN GABLE', 'LUCILLE TRACY'], count: 3 }, synopsis: 'A Epic Drama of a Feminist And a Mad Scientist.\nSet in The Canadian Rockies.\nRuntime: 86 minutes.' } },
+      { id: 2, filmId: 2, title: 'ACE GOLDFINGER',   year: 2006, rate: '4.99', lang: 1, meta: { rating: 'G', length: 48, genres: ['Horror'], cast: { lead: 'BOB FAWCETT', supporting: [], count: 1 }, synopsis: 'A Astounding Epistle of a Database Administrator.' } },
+      { id: 3, filmId: 3, title: 'ADAPTATION HOLES', year: 2006, rate: '2.99', lang: 1, meta: { rating: 'NC-17', length: 50, genres: ['Documentary'], cast: { lead: 'NICK WAHLBERG', supporting: ['BOB FAWCETT'], count: 2 }, synopsis: 'A Astounding Reflection of a Lumberjack.' } },
+      { id: 4, filmId: 4, title: 'AFFAIR PREJUDICE', year: 2006, rate: '2.99', lang: 1, meta: { rating: 'G', length: 117, genres: ['Horror', 'Drama'], cast: { lead: 'JODIE DEGENERES', supporting: ['SCARLETT DAMON'], count: 2 }, synopsis: 'A Fanciful Documentary of a Frisbee.' } },
+      { id: 5, filmId: 5, title: 'AFRICAN EGG',      year: 2006, rate: '2.99', lang: 1, meta: { rating: 'G', length: 130, genres: ['Family'], cast: { lead: 'GARY PHOENIX', supporting: [], count: 1 }, synopsis: 'A Fast-Paced Documentary of a Pastry Chef.' } },
+      { id: 6, filmId: 6, title: 'AGENT TRUMAN',     year: 2006, rate: '2.99', lang: 1, meta: { rating: 'PG', length: 169, genres: ['Foreign', 'Action'], cast: { lead: 'KIRSTEN PALTROW', supporting: ['SANDRA KILMER'], count: 2 }, synopsis: 'A Intrepid Panorama of a Robot.' } },
+    ],
+  };
+  editField(id, field, val) {
+    this.setState(s => ({
+      rows: s.rows.map(r => r.id === id ? { ...r, [field]: val, dirty: !r.isNew } : r),
+    }));
+  }
+  toggleDelete(id) {
+    this.setState(s => ({
+      rows: s.rows.flatMap(r => {
+        if (r.id !== id) return [r];
+        if (r.isNew) return [];
+        return [{ ...r, deleted: !r.deleted }];
+      }),
+    }));
+  }
+  selectCell(id, col, ev) {
+    const key = id + ':' + col;
+    const additive = ev && (ev.metaKey || ev.ctrlKey || ev.shiftKey);
+    this.setState(s => {
+      let selected;
+      if (additive) { selected = { ...s.selected }; if (selected[key]) delete selected[key]; else selected[key] = true; }
+      else { selected = { [key]: true }; }
+      return { selected, editingCell: null };
+    });
+  }
+  addRow() {
+    this.setState(s => {
+      const t = s.nextTemp;
+      return { nextTemp: t - 1, rows: [...s.rows, { id: t, filmId: null, title: '', year: 2026, rate: '', lang: null, meta: {}, isNew: true }] };
+    });
+  }
+  // ---- cell inspector ----
+  toggleFold(path) { this.setState(s => ({ collapsed: { ...s.collapsed, [path]: !s.collapsed[path] } })); }
+  allPaths(v, path, acc) {
+    if (Array.isArray(v)) { acc.push(path); v.forEach((x, i) => this.allPaths(x, path + '/' + i, acc)); }
+    else if (v && typeof v === 'object') { acc.push(path); Object.keys(v).forEach(k => this.allPaths(v[k], path + '/' + k, acc)); }
+    return acc;
+  }
+  hi(text, q) { // highlight search matches
+    const e = React.createElement, str = String(text);
+    if (!q) return str;
+    const parts = [], low = str.toLowerCase(), ql = q.toLowerCase();
+    let i = 0, idx;
+    while ((idx = low.indexOf(ql, i)) !== -1) {
+      if (idx > i) parts.push(str.slice(i, idx));
+      parts.push(e('span', { key: idx, style: { background: '#294a45', color: '#EAEEF3', borderRadius: '2px' } }, str.slice(idx, idx + ql.length)));
+      i = idx + ql.length;
+    }
+    parts.push(str.slice(i));
+    return parts;
+  }
+  jsonLines(val, key, path, depth, lines, collapsed, q) {
+    const e = React.createElement;
+    const pad = { paddingLeft: (depth * 16) + 'px', display: 'flex', gap: '6px', alignItems: 'flex-start' };
+    const keyEl = key != null ? e('span', { style: { color: '#6FA6E2' } }, this.hi(key, q), ': ') : null;
+    const isArr = Array.isArray(val), isObj = val && typeof val === 'object';
+    if (isArr || isObj) {
+      const entries = isArr ? val.map((v, i) => [i, v]) : Object.entries(val);
+      const open = isArr ? '[' : '{', close = isArr ? ']' : '}';
+      const folded = collapsed[path];
+      const tri = e('span', { key: 't', onClick: () => this.toggleFold(path), style: { color: '#4E5865', cursor: 'pointer', width: '12px', flex: 'none' } }, entries.length ? (folded ? '▸' : '▾') : ' ');
+      if (folded || !entries.length) {
+        lines.push(e('div', { key: path, style: pad }, tri, keyEl, e('span', { style: { color: '#79838F' } }, open + (entries.length ? '…' + entries.length + '…' : '') + close)));
+        return;
+      }
+      lines.push(e('div', { key: path + '-o', style: pad }, tri, keyEl, e('span', { style: { color: '#79838F' } }, open)));
+      entries.forEach(([k, v]) => this.jsonLines(v, isArr ? null : k, path + '/' + k, depth + 1, lines, collapsed, q));
+      lines.push(e('div', { key: path + '-c', style: { paddingLeft: ((depth + 1) * 16 - 4) + 'px', color: '#79838F' } }, close));
+    } else {
+      let color = '#5FC9AD', disp = JSON.stringify(val);
+      if (typeof val === 'number') color = '#E9A46B';
+      else if (typeof val === 'boolean' || val === null) color = '#978BE4';
+      const multiline = typeof val === 'string' && val.indexOf('\n') !== -1;
+      const valStyle = { color, whiteSpace: multiline ? 'pre-wrap' : 'normal' };
+      const valEl = e('span', { style: valStyle }, typeof val === 'string' ? ['"', this.hi(val, q), '"'] : this.hi(disp, q));
+      lines.push(e('div', { key: path, style: pad }, e('span', { style: { width: '12px', flex: 'none' } }), keyEl, valEl));
+    }
+  }
+  addRowOld() {}
+  resetEdits() {
+    this.setState(s => ({
+      scriptOpen: false,
+      rows: s.rows.filter(r => !r.isNew).map(r => ({ id: r.id, filmId: r.filmId, title: r.title, year: r.year, rate: r.rate, lang: r.lang, meta: r.meta })),
+    }));
+  }
+  buildScript(rows) {
+    const out = [];
+    rows.forEach(r => {
+      if (r.deleted)      out.push({ kind: 'del', text: `DELETE FROM film WHERE film_id = ${r.filmId};` });
+      else if (r.isNew)   out.push({ kind: 'ins', text: `INSERT INTO film (title, release_year, rental_rate) VALUES ('${r.title}', ${r.year}, ${r.rate || 0});` });
+      else if (r.dirty)   out.push({ kind: 'upd', text: `UPDATE film SET title = '${r.title}', rental_rate = ${r.rate || 0} WHERE film_id = ${r.filmId};` });
+    });
+    return out;
+  }
+  componentDidMount() {
+    this._kd = (e) => {
+      if (e.key === 'Alt' || e.keyCode === 18) {
+        e.preventDefault();
+        this.setState(s => ({ menuVisible: !s.menuVisible, drop: null }));
+      } else if (e.key === 'Escape') {
+        this.setState({ menuVisible: false, drop: null, focus: false });
+      } else if (e.key === 'f' && (e.metaKey || e.ctrlKey) && e.ctrlKey) {
+        e.preventDefault();
+        this.setState(s => ({ focus: !s.focus }));
+      }
+    };
+    window.addEventListener('keydown', this._kd);
+  }
+  connect() {
+    this.setState({ connState: 'connecting' });
+    clearTimeout(this._ct);
+    this._ct = setTimeout(() => this.setState({ connState: 'connected' }), 900);
+  }
+  disconnect() { clearTimeout(this._ct); this.setState({ connState: 'disconnected' }); }
+  toggleConn() {
+    const st = this.state.connState;
+    if (st === 'disconnected') this.connect();
+    else this.disconnect();
+  }
+  componentWillUnmount() { window.removeEventListener('keydown', this._kd); clearTimeout(this._ct); }
+  renderVals() {
+    const env = this.props.connectionEnv || 'production';
+    const map = {
+      production: { name: 'production', color: '#E76A86', db: 'pagila', host: 'prod-db-01' },
+      staging:    { name: 'staging',    color: '#E3B457', db: 'pagila', host: 'staging-db' },
+      local:      { name: 'local',      color: '#6FB6AB', db: 'pagila', host: 'localhost'  },
+    };
+    const c = map[env] || map.production;
+    const s = this.state;
+    const active = (name, on, off) => (s.screen === name ? on : off);
+    const pending = this.buildScript(s.rows);
+    const gridEditable = this.props.gridEditable ?? true;
+    const lockReason = this.props.lockReason || 'Read-only: no primary key found on this result — can’t generate a safe UPDATE.';
+    return {
+      menuVisible: s.menuVisible,
+      hideMenu: () => this.setState({ menuVisible: false }),
+      isSchema: s.screen === 'schema',
+      isScripts: s.screen === 'scripts',
+      isHistory: s.screen === 'history',
+      goSchema: () => this.setState({ screen: 'schema' }),
+      goScripts: () => this.setState({ screen: 'scripts' }),
+      goHistory: () => this.setState({ screen: 'history' }),
+      schemaBg: active('schema', '#2A323C', 'transparent'),
+      schemaFg: active('schema', '#35D0BE', '#79838F'),
+      scriptsBg: active('scripts', '#2A323C', 'transparent'),
+      scriptsFg: active('scripts', '#35D0BE', '#79838F'),
+      historyBg: active('history', '#2A323C', 'transparent'),
+      historyFg: active('history', '#35D0BE', '#79838F'),
+      serverOpen: s.drop === 'server',
+      dbOpen: s.drop === 'database',
+      openServer: () => this.setState(x => ({ drop: x.drop === 'server' ? null : 'server', menuVisible: false })),
+      openDb: () => this.setState(x => ({ drop: x.drop === 'database' ? null : 'database', menuVisible: false })),
+      closeDrop: () => this.setState({ drop: null }),
+      serverBorder: s.drop === 'server' ? '#6FA6E2' : '#333C48',
+      dbBorder: s.drop === 'database' ? '#5FC9AD' : '#333C48',
+      focus: s.focus,
+      enterFocus: () => this.setState({ focus: true, drop: null, menuVisible: false }),
+      exitFocus: () => this.setState({ focus: false }),
+      connName: c.name, connColor: c.color, connDb: c.db, connHost: c.host,
+
+      // connection status + manual connect/disconnect
+      ...(() => {
+        const cs = s.connState;
+        const m = {
+          connected:    { dot: c.color,   glow: '0 0 6px ' + c.color, anim: 'none',                 label: 'Connected',    color: c.color   },
+          connecting:   { dot: '#E3B457',  glow: 'none',               anim: 'connpulse 1s infinite', label: 'Connecting…',  color: '#E3B457' },
+          disconnected: { dot: '#4E5865',  glow: 'none',               anim: 'none',                 label: 'Disconnected', color: '#79838F' },
+        }[cs];
+        return {
+          statusDot: m.dot, statusGlow: m.glow, statusAnim: m.anim,
+          statusLabel: m.label, statusColor: m.color,
+          connBtnColor: m.color,
+          isLinked: cs !== 'disconnected',
+          isBroken: cs === 'disconnected',
+          connBtnTitle: cs === 'disconnected' ? 'Connect to server' : cs === 'connecting' ? 'Cancel connecting' : 'Disconnect from server',
+          onToggleConn: () => this.toggleConn(),
+        };
+      })(),
+
+      // results grid
+      editable: gridEditable,
+      lockGlyph: gridEditable ? '#' : '🔒',
+      lockColor: gridEditable ? '#79838F' : '#E3B457',
+      lockCursor: gridEditable ? 'default' : 'help',
+      lockReason: gridEditable ? '' : lockReason,
+      viewRows: s.rows.map((r, i) => {
+        const bar = r.deleted ? '#D2555A' : r.isNew ? '#5FC9AD' : r.dirty ? '#35D0BE' : 'transparent';
+        const prev = s.rows[i - 1], next = s.rows[i + 1];
+        const sel = (id, col) => !!s.selected[id + ':' + col];
+        const C = '#6FA6E2';
+        const ring = (col, leftCol) => {
+          if (!sel(r.id, col)) return 'none';
+          const parts = [];
+          if (!prev || !sel(prev.id, col)) parts.push('inset 0 1px 0 ' + C);
+          if (!next || !sel(next.id, col)) parts.push('inset 0 -1px 0 ' + C);
+          if (!leftCol || !sel(r.id, leftCol)) parts.push('inset 1px 0 0 ' + C);
+          if (col === 'year' ? !sel(r.id, 'rate') : true) parts.push('inset -1px 0 0 ' + C);
+          return parts.join(',');
+        };
+        return {
+          num: i + 1, filmId: r.filmId == null ? '—' : r.filmId,
+          title: r.title, rate: r.rate, year: r.year, lang: r.lang == null ? '—' : r.lang,
+          bar, bg: r.deleted ? 'rgba(195,64,67,.07)' : r.isNew ? 'rgba(152,187,108,.07)' : (i % 2 ? 'rgba(255,255,255,.022)' : 'transparent'),
+          numColor: r.isNew ? '#5FC9AD' : '#79838F',
+          strike: r.deleted ? 'line-through' : 'none',
+          deleted: !!r.deleted,
+          locked: !!r.deleted || !gridEditable,
+          delShow: gridEditable ? 'flex' : 'none',
+          delGlyph: r.deleted ? '↺' : '✕',
+          delTitle: r.deleted ? 'Undo delete' : 'Delete row',
+          delColor: r.deleted ? '#5FC9AD' : '#D2555A',
+          onTitle: (e) => this.editField(r.id, 'title', e.target.value),
+          onRate: (e) => this.editField(r.id, 'rate', e.target.value),
+          onDelete: () => this.toggleDelete(r.id),
+          yearSel: sel(r.id, 'year') ? 'rgba(126,156,216,.18)' : 'transparent',
+          rateSel: sel(r.id, 'rate') ? 'rgba(126,156,216,.18)' : 'transparent',
+          yearRing: ring('year', null),
+          rateRing: ring('rate', 'year'),
+          rateReadOnly: s.editingCell !== r.id + ':rate',
+          onYearClick: (ev) => this.selectCell(r.id, 'year', ev),
+          onRateClick: (ev) => this.selectCell(r.id, 'rate', ev),
+          onRateEdit: () => this.setState({ editingCell: r.id + ':rate' }),
+          metaPreview: JSON.stringify(r.meta),
+          metaSel: (s.inspect && s.inspect.rowId === r.id) ? 'rgba(126,156,216,.12)' : 'transparent',
+          onInspect: () => this.setState({ inspect: { rowId: r.id, col: 'metadata' }, inspectorSearch: '' }),
+        };
+      }),
+      addRow: () => this.addRow(),
+      pending,
+      pendingCount: pending.length,
+      dirty: pending.length > 0,
+      commit: () => this.resetEdits(),
+      discard: () => this.resetEdits(),
+      showScript: () => this.setState({ scriptOpen: true, drop: null, menuVisible: false }),
+      closeScript: () => this.setState({ scriptOpen: false }),
+      copyScript: () => { try { navigator.clipboard.writeText(pending.map(p => p.text).join('\n')); } catch (e) {} },
+      scriptOpen: s.scriptOpen && pending.length > 0,
+      scriptLines: pending.map((p, i) => ({
+        n: i + 1, text: p.text,
+        color: p.kind === 'del' ? '#D2555A' : p.kind === 'ins' ? '#5FC9AD' : '#E3B457',
+      })),
+
+      // paging
+      loaded: s.loaded.toLocaleString(),
+      ofTotal: s.total == null ? '' : ' of ' + s.total.toLocaleString(),
+      showCountBtn: s.total == null,
+      getCount: () => this.setState({ total: 1000 }),
+      loadMore: () => this.setState(x => ({ loaded: x.loaded + 100 })),
+
+      // selection quick-stats
+      ...(() => {
+        const fmt = (v) => (Math.round(v * 100) / 100).toLocaleString(undefined, { maximumFractionDigits: 2 });
+        const vals = Object.keys(s.selected).map(k => {
+          const i = k.lastIndexOf(':'), idStr = k.slice(0, i), col = k.slice(i + 1);
+          const row = s.rows.find(r => String(r.id) === idStr);
+          if (!row) return NaN;
+          return parseFloat(col === 'year' ? row.year : row.rate);
+        }).filter(v => !isNaN(v));
+        if (vals.length < 2) return { statsShow: false };
+        const sum = vals.reduce((a, b) => a + b, 0);
+        return {
+          statsShow: true, statCount: vals.length,
+          statSum: fmt(sum), statAvg: fmt(sum / vals.length),
+          statMin: fmt(Math.min(...vals)), statMax: fmt(Math.max(...vals)),
+          clearSel: () => this.setState({ selected: {} }),
+        };
+      })(),
+
+      // cell inspector
+      ...(() => {
+        const ins = s.inspect;
+        if (!ins) return { inspectorOpen: false, inspectorBody: null, inspectorTitle: '', inspectorType: '', inspectorIsJson: false, inspectorSearch: '' };
+        const row = s.rows.find(r => r.id === ins.rowId);
+        const val = row ? row.meta : null;
+        const isJson = val && typeof val === 'object';
+        const q = s.inspectorSearch.trim();
+        const e = React.createElement;
+        let body;
+        if (s.jsonMode === 'raw') {
+          body = e('div', { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#B7C0CB' } }, this.hi(JSON.stringify(val), q));
+        } else if (isJson) {
+          const lines = [];
+          this.jsonLines(val, null, '$', 0, lines, s.collapsed, q);
+          body = e('div', null, lines);
+        } else {
+          body = e('div', { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#D8DEE6' } }, this.hi(String(val), q));
+        }
+        return {
+          inspectorOpen: true,
+          inspectorTitle: 'film[' + (row ? row.filmId : '?') + '].' + ins.col,
+          inspectorType: isJson ? 'jsonb' : 'text',
+          inspectorIsJson: isJson,
+          inspectorBody: body,
+          inspectorSearch: s.inspectorSearch,
+          onSearch: (ev) => this.setState({ inspectorSearch: ev.target.value }),
+          closeInspector: () => this.setState({ inspect: null }),
+          copyCell: () => { try { navigator.clipboard.writeText(JSON.stringify(val, null, 2)); } catch (e) {} },
+          setFormatted: () => this.setState({ jsonMode: 'formatted' }),
+          setRaw: () => this.setState({ jsonMode: 'raw' }),
+          fmtBg: s.jsonMode === 'formatted' ? '#35D0BE' : 'transparent',
+          fmtFg: s.jsonMode === 'formatted' ? '#1A2027' : '#79838F',
+          rawBg: s.jsonMode === 'raw' ? '#35D0BE' : 'transparent',
+          rawFg: s.jsonMode === 'raw' ? '#1A2027' : '#79838F',
+          collapseAll: () => this.setState({ collapsed: this.allPaths(val, '$', []).reduce((a, p) => (a[p] = true, a), {}) }),
+          expandAll: () => this.setState({ collapsed: {} }),
+        };
+      })(),
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Squirrel release builder.
+# Bearing release builder.
 #
 # Produces a self-contained, single-file build that runs on a target machine
 # WITHOUT the .NET runtime installed, and bundles it into a versioned tarball
@@ -32,9 +32,9 @@ cd "$ROOT"
 # --- Config -------------------------------------------------------------------
 RID="${RID:-linux-x64}"
 CONFIG="${CONFIG:-Release}"
-PROJECT="src/Squirrel.Desktop/Squirrel.Desktop.csproj"
-APP_ID="squirrel"
-APP_NAME="Squirrel"
+PROJECT="src/Bearing.Desktop/Bearing.Desktop.csproj"
+APP_ID="bearing"
+APP_NAME="Bearing"
 DIST="$ROOT/dist"
 
 # Version: explicit VERSION env wins, else derive from git (tag or short sha).
@@ -49,7 +49,7 @@ fi
 ASM_VERSION="${VERSION%%+*}"
 ASM_VERSION="${ASM_VERSION%%-*}"
 
-echo "==> Squirrel release"
+echo "==> Bearing release"
 echo "    version : $VERSION  (assembly $ASM_VERSION)"
 echo "    runtime : $RID"
 echo "    config  : $CONFIG"
@@ -58,7 +58,7 @@ echo
 # --- Tests (opt out with SKIP_TESTS=1) ----------------------------------------
 if [[ "${SKIP_TESTS:-0}" != "1" ]]; then
   echo "==> Running tests"
-  dotnet test "$ROOT/Squirrel.slnx" -c "$CONFIG" --nologo
+  dotnet test "$ROOT/Bearing.slnx" -c "$CONFIG" --nologo
   echo
 else
   echo "==> Skipping tests (SKIP_TESTS=1)"
@@ -128,10 +128,10 @@ EOF
 # --- Installer (per-user, no root) --------------------------------------------
 cat > "$STAGE/install.sh" <<'EOF'
 #!/usr/bin/env bash
-# Install Squirrel for the current user (no root required).
+# Install Bearing for the current user (no root required).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_ID="squirrel"
+APP_ID="bearing"
 
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN_DIR="$PREFIX/bin"
@@ -166,14 +166,14 @@ chmod +x "$STAGE/install.sh"
 cat > "$STAGE/uninstall.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-APP_ID="squirrel"
+APP_ID="bearing"
 PREFIX="${PREFIX:-$HOME/.local}"
 ICON_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 rm -f "$PREFIX/bin/$APP_ID"
 rm -f "$APPS_DIR/$APP_ID.desktop"
 find "$ICON_ROOT" -name "$APP_ID.png" -delete 2>/dev/null || true
-echo "Removed $APP_ID (user data under \$XDG_DATA_HOME/squirrel was left intact)."
+echo "Removed $APP_ID (user data under \$XDG_DATA_HOME/bearing was left intact)."
 EOF
 chmod +x "$STAGE/uninstall.sh"
 

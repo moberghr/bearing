@@ -1,0 +1,136 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- Bearing brand mark — a ball bearing (precision, low friction, engineered tolerance).
+       GENERATED GEOMETRY on a 100×100 viewBox centred at (50,50); see docs/design/bearing/BRAND.md
+       §The mark. Mirrors the vector source in assets/brand/bearing-*.svg. Do not redraw by eye —
+       the construction is:
+         outer race   circle r=44, stroke, width 7
+         pitch circle circle r=31, stroke, width 1.6 @ 40% alpha (baked in as #66)
+         8 balls      r=6.6, filled, centred on the r=31 pitch circle at i/8·2π − π/2 (first at 12 o'clock)
+         inner race   circle r=15, stroke, width 7
+       Use via <Image Source="{StaticResource BearingMark.Duo}"/>. -->
+
+  <!-- Primary duo-tone: teal race, steel balls. Default, on dark. -->
+  <DrawingImage x:Key="BearingMark.Duo">
+    <DrawingGroup>
+      <GeometryDrawing>
+        <GeometryDrawing.Geometry><EllipseGeometry Center="50,50" RadiusX="44" RadiusY="44"/></GeometryDrawing.Geometry>
+        <GeometryDrawing.Pen><Pen Brush="#35D0BE" Thickness="7"/></GeometryDrawing.Pen>
+      </GeometryDrawing>
+      <GeometryDrawing>
+        <GeometryDrawing.Geometry><EllipseGeometry Center="50,50" RadiusX="31" RadiusY="31"/></GeometryDrawing.Geometry>
+        <GeometryDrawing.Pen><Pen Brush="#6635D0BE" Thickness="1.6"/></GeometryDrawing.Pen>
+      </GeometryDrawing>
+      <GeometryDrawing Brush="#D8DEE6">
+        <GeometryDrawing.Geometry>
+          <GeometryGroup>
+            <EllipseGeometry Center="50,19"           RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="71.9203,28.0797" RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="81,50"           RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="71.9203,71.9203" RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="50,81"           RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="28.0797,71.9203" RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="19,50"           RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="28.0797,28.0797" RadiusX="6.6" RadiusY="6.6"/>
+          </GeometryGroup>
+        </GeometryDrawing.Geometry>
+      </GeometryDrawing>
+      <GeometryDrawing>
+        <GeometryDrawing.Geometry><EllipseGeometry Center="50,50" RadiusX="15" RadiusY="15"/></GeometryDrawing.Geometry>
+        <GeometryDrawing.Pen><Pen Brush="#35D0BE" Thickness="7"/></GeometryDrawing.Pen>
+      </GeometryDrawing>
+    </DrawingGroup>
+  </DrawingImage>
+
+  <!-- Ink (mono) — on teal and on light. -->
+  <DrawingImage x:Key="BearingMark.Ink">
+    <DrawingGroup>
+      <GeometryDrawing>
+        <GeometryDrawing.Geometry><EllipseGeometry Center="50,50" RadiusX="44" RadiusY="44"/></GeometryDrawing.Geometry>
+        <GeometryDrawing.Pen><Pen Brush="#0F1319" Thickness="7"/></GeometryDrawing.Pen>
+      </GeometryDrawing>
+      <GeometryDrawing>
+        <GeometryDrawing.Geometry><EllipseGeometry Center="50,50" RadiusX="31" RadiusY="31"/></GeometryDrawing.Geometry>
+        <GeometryDrawing.Pen><Pen Brush="#660F1319" Thickness="1.6"/></GeometryDrawing.Pen>
+      </GeometryDrawing>
+      <GeometryDrawing Brush="#0F1319">
+        <GeometryDrawing.Geometry>
+          <GeometryGroup>
+            <EllipseGeometry Center="50,19"           RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="71.9203,28.0797" RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="81,50"           RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="71.9203,71.9203" RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="50,81"           RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="28.0797,71.9203" RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="19,50"           RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="28.0797,28.0797" RadiusX="6.6" RadiusY="6.6"/>
+          </GeometryGroup>
+        </GeometryDrawing.Geometry>
+      </GeometryDrawing>
+      <GeometryDrawing>
+        <GeometryDrawing.Geometry><EllipseGeometry Center="50,50" RadiusX="15" RadiusY="15"/></GeometryDrawing.Geometry>
+        <GeometryDrawing.Pen><Pen Brush="#0F1319" Thickness="7"/></GeometryDrawing.Pen>
+      </GeometryDrawing>
+    </DrawingGroup>
+  </DrawingImage>
+
+  <!-- Steel (mono) — on dark. -->
+  <DrawingImage x:Key="BearingMark.Steel">
+    <DrawingGroup>
+      <GeometryDrawing>
+        <GeometryDrawing.Geometry><EllipseGeometry Center="50,50" RadiusX="44" RadiusY="44"/></GeometryDrawing.Geometry>
+        <GeometryDrawing.Pen><Pen Brush="#D8DEE6" Thickness="7"/></GeometryDrawing.Pen>
+      </GeometryDrawing>
+      <GeometryDrawing>
+        <GeometryDrawing.Geometry><EllipseGeometry Center="50,50" RadiusX="31" RadiusY="31"/></GeometryDrawing.Geometry>
+        <GeometryDrawing.Pen><Pen Brush="#66D8DEE6" Thickness="1.6"/></GeometryDrawing.Pen>
+      </GeometryDrawing>
+      <GeometryDrawing Brush="#D8DEE6">
+        <GeometryDrawing.Geometry>
+          <GeometryGroup>
+            <EllipseGeometry Center="50,19"           RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="71.9203,28.0797" RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="81,50"           RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="71.9203,71.9203" RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="50,81"           RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="28.0797,71.9203" RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="19,50"           RadiusX="6.6" RadiusY="6.6"/>
+            <EllipseGeometry Center="28.0797,28.0797" RadiusX="6.6" RadiusY="6.6"/>
+          </GeometryGroup>
+        </GeometryDrawing.Geometry>
+      </GeometryDrawing>
+      <GeometryDrawing>
+        <GeometryDrawing.Geometry><EllipseGeometry Center="50,50" RadiusX="15" RadiusY="15"/></GeometryDrawing.Geometry>
+        <GeometryDrawing.Pen><Pen Brush="#D8DEE6" Thickness="7"/></GeometryDrawing.Pen>
+      </GeometryDrawing>
+    </DrawingGroup>
+  </DrawingImage>
+
+  <!-- Solid — the ≤16px simplification (favicon, tray, tiny list rows). The bore detail and pitch
+       circle collapse: heavier outer race, fatter balls, a filled centre. Single colour. -->
+  <DrawingImage x:Key="BearingMark.Solid">
+    <DrawingGroup>
+      <GeometryDrawing>
+        <GeometryDrawing.Geometry><EllipseGeometry Center="50,50" RadiusX="44" RadiusY="44"/></GeometryDrawing.Geometry>
+        <GeometryDrawing.Pen><Pen Brush="#35D0BE" Thickness="12"/></GeometryDrawing.Pen>
+      </GeometryDrawing>
+      <GeometryDrawing Brush="#35D0BE">
+        <GeometryDrawing.Geometry>
+          <GeometryGroup>
+            <EllipseGeometry Center="50,19"           RadiusX="7" RadiusY="7"/>
+            <EllipseGeometry Center="71.9203,28.0797" RadiusX="7" RadiusY="7"/>
+            <EllipseGeometry Center="81,50"           RadiusX="7" RadiusY="7"/>
+            <EllipseGeometry Center="71.9203,71.9203" RadiusX="7" RadiusY="7"/>
+            <EllipseGeometry Center="50,81"           RadiusX="7" RadiusY="7"/>
+            <EllipseGeometry Center="28.0797,71.9203" RadiusX="7" RadiusY="7"/>
+            <EllipseGeometry Center="19,50"           RadiusX="7" RadiusY="7"/>
+            <EllipseGeometry Center="28.0797,28.0797" RadiusX="7" RadiusY="7"/>
+            <EllipseGeometry Center="50,50"           RadiusX="12" RadiusY="12"/>
+          </GeometryGroup>
+        </GeometryDrawing.Geometry>
+      </GeometryDrawing>
+    </DrawingGroup>
+  </DrawingImage>
+
+</ResourceDictionary>

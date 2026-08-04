@@ -1,6 +1,6 @@
 # Testing Rules (§4.x)
 
-xUnit across four test projects (`Squirrel.{Sql,App,Data,Persistence}.Tests`).
+xUnit across four test projects (`Bearing.{Sql,App,Data,Persistence}.Tests`).
 Supplement: `.claude/references/dotnet/testing-supplement.md`.
 
 ## §4.1 — Framework & doubles
@@ -10,11 +10,11 @@ Supplement: `.claude/references/dotnet/testing-supplement.md`.
 - No EF Core / `UseInMemoryDatabase` — this project uses raw ADO, so tests exercise real query behavior.
 
 ## §4.2 — Skip-safe Postgres integration tests
-- Tests needing a live Postgres use `Xunit.SkippableFact` and read `SQUIRREL_TEST_PG_*` env vars,
+- Tests needing a live Postgres use `Xunit.SkippableFact` and read `BEARING_TEST_PG_*` env vars,
   defaulting to a local docker container. They **skip** (never fail) when no server is reachable.
 - WHEN adding a Postgres-dependent test, DO NOT write a plain `[Fact]` that fails without a DB — follow the
-  `SkippableFact` + `SQUIRREL_TEST_PG_*` pattern in `tests/Squirrel.Data.Tests`.
-- To run them live: `SQUIRREL_TEST_PG_PORT=5434 dotnet test`.
+  `SkippableFact` + `BEARING_TEST_PG_*` pattern in `tests/Bearing.Data.Tests`.
+- To run them live: `BEARING_TEST_PG_PORT=5434 dotnet test`.
 
 ## §4.3 — UI is not headlessly testable
 - Avalonia UI cannot be driven headlessly on Wayland (no synthetic input, no self-screenshot). Cover UI

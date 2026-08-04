@@ -2,9 +2,9 @@
 
 Layered clean architecture. Reference: `.claude/references/architecture-principles.md`.
 
-## §2.1 — `Squirrel.Core` is dependency-free
+## §2.1 — `Bearing.Core` is dependency-free
 `Core` holds only abstractions and records: `Data/`, `Schema/`, `Workspace/`, `Logging/`, `Completion/`.
-- NEVER add a `PackageReference` or `ProjectReference` to `Squirrel.Core`.
+- NEVER add a `PackageReference` or `ProjectReference` to `Bearing.Core`.
 - Every other project references `Core`; `Core` references nothing. Provider/impl types (Npgsql, SQLite,
   Avalonia) live in the outer projects and are injected behind `Core` interfaces
   (`IDbProvider`, `IProjectStore`, `IQueryLog`, `ISchemaSnapshot`, …).
@@ -25,7 +25,7 @@ Core  ←  Sql, Data, Persistence  ←  App  ←  Desktop
   binding surface stable when refactoring; extract helpers behind thin delegating members.
 
 ## §2.4 — Composition root
-- All wiring is manual `new` in `src/Squirrel.App/App.axaml.cs`. There is no DI container despite the
+- All wiring is manual `new` in `src/Bearing.App/App.axaml.cs`. There is no DI container despite the
   `Microsoft.Extensions.DependencyInjection` reference — construct dependencies explicitly and pass them in.
 
 ## §2.5 — Pure logic extraction
