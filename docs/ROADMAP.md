@@ -4,21 +4,38 @@ Single tracking list for outstanding work. Grouped by status, then priority (**P
 **P2** UX/robustness · **P3** cleanup). Check items off as they land. Sources: the 2026-07-20 whole-codebase
 review, the earlier hardening review, and feature requests.
 
-Legend: `[ ]` open · `[~]` in progress · `[x]` done. "(uncommitted)" = in the working tree on `main`, not yet committed.
+Legend: `[ ]` open · `[~]` in progress · `[x]` done.
+
+> **Reconciled against the tree + git log on 2026-08-06.** Every open item below was re-checked at its cited
+> location and the file:line references refreshed; items that had quietly landed are marked done with what
+> closed them. The working tree is clean — **everything described here as done is committed on `main`.**
+> Verified this pass: clean build, **3 warnings**; tests **Sql 144 · App 182 · Persistence 14** green, plus
+> **Data 14 all skipped** (no live Postgres — run `BEARING_TEST_PG_PORT=5434 dotnet test` to exercise them).
+> Items tagged *(live QA)* are committed but never eyeball-checked in the running app (§4.3 — Wayland).
 
 ---
 
-## ✅ Done this session — uncommitted, needs commit + live QA
+## ✅ Landed on `main`
 
-- [x] **Resume last-used project on startup** — `App.ResumeLastProjectAsync`; skips deleted/unreadable recent entries. (+2 tests)
-- [x] **Server-side first-page `LIMIT`** — `Bearing.Sql/FirstPageLimiter.cs`; remote SELECT fetches one page instead of streaming the whole set; edit/FK-nav preserved. (+23 tests, 10 live)
-- [x] **Honest query timer** — status bar shows wall-clock (`DescribeResults(results, wallClock)`).
-- [x] **WriteGuard extended** — CREATE/CTAS, COPY, CALL, DO, GRANT/REVOKE, REFRESH, top-level `SELECT … INTO`. (+15 tests)
-- [x] **Connection lease + 30-min idle eviction** — `SessionLease` + `ConnectionSessionManager` rewrite; running query can't be disposed under; idle connections reclaimed. Fixes the disposal-mid-query race. (+4 tests)
-- [x] **Global error handling** — `CrashLog`, `CrashReporter`, `Views/ErrorDialog`, `Dispatcher.UnhandledException` (kept alive) + AppDomain/TaskScheduler backstops + guarded command dispatch.
-
-> Verified: Sql 119 · App 142 (10 live pagila) · Persistence 13, all green; clean build + boot.
-> **Suggested:** commit this batch as one reviewable unit before starting Stage E.
+- [x] **Whole earlier review batch** — squashed in `b2ada7d` (review-fixes) with follow-ups `8e4f48f`,
+  `33a3fda`: resume-last-project (`App.ResumeLastProjectAsync`), server-side first-page `LIMIT`
+  (`Bearing.Sql/FirstPageLimiter.cs`), honest wall-clock query timer, extended `WriteGuard`
+  (CREATE/CTAS, COPY, CALL, DO, GRANT/REVOKE, REFRESH, top-level `SELECT … INTO`), connection lease +
+  30-min idle eviction (`SessionLease`), and global error handling (`CrashLog`, `CrashReporter`,
+  `Views/ErrorDialog`, dispatcher/AppDomain/TaskScheduler backstops).
+- [x] **Squirrel → Bearing rename** — `f01ab71`. Details in the features section below.
+- [x] **Pluggable credential sources** — `1aa54f7` (creds-management). Per-connection `CredentialKind`
+  (`StoredPassword` / `Prompt` / `EntraToken`), `CredentialResolver` with in-memory-only caching of prompted
+  passwords and minted tokens, `EntraTokenProvider` shelling out to `az account get-access-token`,
+  expiry-driven disconnect before a token goes stale, and one-shot auth-retry. *(live QA)*
+- [x] **Manual connect / disconnect + connection status** — `419bd68`, `d233bdb`, `bf70b6b`, `4eadb4b`.
+  Toolbar status dot + label (green Connected / amber Connecting / red Disconnected — semantic, never the
+  environment colour) mirrored in the status bar, plus a chain toggle that Connects / Cancels-connecting /
+  Disconnects. Reflects the real session pool via `IConnectionSessionManager.LiveChanged`, so a query-driven
+  connect or an idle eviction updates it too. No connect-on-tab-switch: connecting is explicit, or implied by
+  Run (which now loads the schema before building results so first-page edits work). `ConnectionState` +
+  state machine in `ConnectionsViewModel`; reusable `Controls/ConnectionStatusView`. *(live QA)*
+- [x] **MVVM decomposition of the shell VM** — `6684644` (mvvm-fix) + `46f4024`. See the god-object item.
 
 ---
 
@@ -27,18 +44,34 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done. "(uncommitted)" = in the 
 Design: `docs/background-execution-plan.md`. Scope (confirmed): concurrent per-tab queries that survive
 project switches + a completion toast (**no** background-jobs panel), per-tab cancel, quit-confirm.
 
-- [ ] **P2** App-lifetime sessions — stop disposing `_sessions`/`_schemaBrowser` on project switch.
-- [ ] **P2** Per-tab run state + concurrent `ExecuteAsync` (remove the global `IsBusy` gate).
-- [ ] **P2** Completion routing — results to originating tab if open, else a toast (`WindowNotificationManager`). *(live QA)*
-- [ ] **P2** Per-tab cancel (Esc / stop button) — repoint the existing cancel at the selected tab's CTS.
-- [ ] **P2** Quit/tab-close confirm-then-cancel when a query is running. *(live QA)*
+**Two of the five already landed** — per-tab execution is real today; what's missing is surviving a project
+switch and telling you about a finish you didn't watch.
+
+- [x] **P2** Per-tab run state + concurrent `ExecuteAsync` — done. Each tab owns its `_runCts` +
+  `IsRunning` + run clock (`EditorTabViewModel.cs:99-135`), and `ExecutionViewModel.IsBusy` /
+  `RunButtonText` are now an explicit **façade over the selected tab** (`ExecutionViewModel.cs:51-92`),
+  re-raised on selection change and on the watched tab's `IsRunning`. Background tabs run concurrently and
+  independently; the global gate is gone.
+- [x] **P2** Per-tab cancel (Esc / stop button) — done, via the same per-tab CTS
+  (`EditorTabViewModel.cs:135`); Esc and the Run/Cancel button act on the selected tab
+  (`MainWindow.Commands.cs:41`, `MainWindow.Chrome.cs:95`).
+- [ ] **P2** App-lifetime sessions — still open: `ShellViewModel.Projects.cs:91,103` calls
+  `_sessions.CloseAllAsync()` on project switch, so a query dies when you change project. This is the one
+  remaining piece of "queries survive project switches", and it has to land before the toast is worth much.
+- [ ] **P2** Completion toast — still open, and it's the whole notification story: there is **no**
+  `WindowNotificationManager` anywhere in `src/` yet. Per-tab result routing already works (results attach to
+  the originating tab's VM); what's missing is telling the user about a run that finished while they were
+  looking elsewhere. *(live QA)*
+- [ ] **P2** Quit/tab-close confirm-then-cancel when a query is running — still open: no `OnClosing`
+  override exists in `MainWindow`, so quitting mid-query just drops it. Note this now overlaps the scratch-tab
+  save-on-close prompt below — both need the same window-closing hook, so build the hook once. *(live QA)*
 
 ---
 
 ## 🟢 Open — features & UX requests
 
-- [x] **P2** Rename the product Squirrel → **Bearing** *(uncommitted, needs live QA)*. **Done 2026-08-04**,
-  in two passes:
+- [x] **P2** Rename the product Squirrel → **Bearing** — **done 2026-08-04, committed in `f01ab71`**
+  *(live QA)*. In two passes:
   - **Skin + identity.** Bearing palette in `Themes/Tokens.axaml` (graphite surfaces / steel text / teal
     `Accent.Brand`, renamed from `Accent.Orange`), the ball-bearing mark (`Themes/Brand.axaml` +
     `assets/brand/bearing-*.svg` + rebuilt `.ico`/`.icns`/favicons, sizes ≤24px using the `markSolid`
@@ -62,7 +95,6 @@ project switches + a completion toast (**no** background-jobs panel), per-tab ca
   in this roadmap — query-log retention, the 30-min idle timeout, TLS/`sslmode` preference, restore-window-size —
   which should migrate into this screen rather than staying file-edit-only or hard-coded constants. Model the
   UI after the existing code-built `KeybindingsWindow` (Keyboard Shortcuts already lives under Edit ▸).
-- [~] **P2** Manual connect / disconnect + connection status *(uncommitted, in live QA)*. Toolbar status dot + label (green Connected / amber Connecting / red Disconnected, semantic — never the environment color) mirrored in the status bar, plus a chain toggle that Connects / Cancels-connecting / Disconnects. Indicator reflects the real session pool via `IConnectionSessionManager.LiveChanged`, so a query-driven connect / idle eviction updates it too. No connect-on-tab-switch — connecting is explicit (Connect button) or on an action that needs it (Run, which now also loads the schema before building results so first-page edits work). `ConnectionState` + state machine in `ConnectionsViewModel`; reusable `Controls/ConnectionStatusView`. Remaining: live QA of layout + behavior.
 - [ ] **P2** **Back scratch scripts with real files + autosave.** Today a scratch buffer has no file at all —
   `EditorTabViewModel.IsScratch => ScriptPath is null`, and its text is inlined into `session.json` as
   `OpenEditor.ScratchText`. Instead: give every new tab a real file on disk from the moment it's created,
@@ -76,10 +108,106 @@ project switches + a completion toast (**no** background-jobs panel), per-tab ca
   (`ScriptsViewModel`, `BuildScriptNodes`) needs to either surface or deliberately hide the scratch folder;
   and abandoned scratch files need a retention/cleanup story so the folder doesn't grow forever. Decide
   whether the scratch folder is gitignored (it's per-user noise, unlike saved scripts).
+  **Either way, closing a non-empty scratch tab must not silently drop the text** — today it does. Two
+  acceptable outcomes, and the choice is the whole design decision here: the file-backed route above
+  (nothing to prompt about, the text is already on disk), *or* a Save / Don't save / Cancel prompt on close
+  when the buffer is non-empty. The prompt is the cheaper fix and the safety net; file-backing is the real
+  one. If both land, the prompt disappears by construction. Gate it on non-empty — closing an untouched
+  blank tab must stay a single keystroke with no dialog. Seam: the tab-close path behind
+  `CommandIds.TabClose` (now `Ctrl+F4`, see the editor-shortcuts item) plus window close, which has to walk
+  every open scratch tab, not just the active one.
+- [ ] **P2** **Entra connection fails on prod, works on staging — `28000: no pg_hba.conf entry for host
+  "<client-ip>", user "sasa.kajfes@moberg.hr"`** when expanding the server node (reported 2026-08-06,
+  project `Arctic`). Both connections are configured identically — same user, `credentialKind: EntraToken`,
+  empty `options` — differing only in host (`pg-4dephyoq7p4ba` prod vs `pg-olpzioxfofkhw` staging), so the
+  divergence is in the token or in server-side provisioning, not in the saved config. Three things to fix,
+  in order:
+  - **Per-connection Entra tenant.** `EntraTokenProvider` runs `az account get-access-token --resource
+    https://ossrdbms-aad.database.windows.net` with **no `--tenant`**, so the token always comes from
+    whichever tenant `az` is currently logged into. If prod sits in a different tenant/subscription than
+    staging, prod correctly rejects a staging-tenant token with exactly this 28000. Add an
+    `entra.tenant` option key alongside the existing `ResourceOptionKey` (`entra.resource`) and pass
+    `--tenant` through, with a field in `ConnectionDialog`. This is the most likely root cause and the only
+    part that is unambiguously a Bearing gap.
+  - **Blocker for the above — `entra.*` option keys can't currently be used at all.** `ConnectionInfo.Options`
+    is handed verbatim to Npgsql: `NpgsqlConnectionFactory.cs:26-40` switches on `sslmode`/`search_path` and
+    sends **everything else** to `csb[key] = value`, which throws on an unknown keyword. Nothing filters
+    `entra.*` out first (verified: no filtering anywhere in `src/`). So the *already documented*
+    `entra.resource` override breaks the connection the moment you set it, and `entra.tenant` would inherit
+    the same fault. Fix the factory to ignore keys it doesn't own (or namespace app-level options away from
+    driver options) **before** adding the tenant key. Same root cause as the P3 factory item below.
+  - **Check the message tail before fixing anything.** Postgres puts the disambiguating part of a 28000 at
+    the *end* — a trailing `database "…", SSL off` means TLS, not auth. The error node
+    (`SchemaNodes.cs:83`, `⚠` + `ex.Message`) does show the full message, so read it off the running app
+    first; it decides between the tenant fix above and the TLS item in the hardening backlog
+    (`require_secure_transport=on` with SSL off produces the same 28000 shape).
+  - **P3 — a failed expand is sticky until Refresh.** `EnsureChildrenAsync` sets `_loaded = true` *before*
+    the load (`SchemaNodes.cs:73`), so collapsing and re-expanding replays the stale error instead of
+    retrying. Refresh server metadata does clear it (confirmed in use), so this is a papercut, not a
+    blocker — reset `_loaded = false` in the catch so re-expand retries too. Independent of Entra.
+    Worth noting the layer below **already intends** the retry: `SchemaBrowser.BuildAsync` deliberately
+    evicts a failed build so "the next expand retries (e.g. after fixing credentials)"
+    (`SchemaBrowser.cs:80-86`) — the node's `_loaded` flag is what defeats that intent.
+  - Remaining possibility once the above are done: the user simply isn't provisioned as an Entra principal
+    on the prod server — an Azure-side fix, not ours.
 - [ ] **P2** Remove / delete projects. Delete a project from the recent list, and optionally from disk (with confirm). Also prune stale/missing entries from the recent list (see the P3 recent-projects item below).
 - [ ] **P3** Restore last window size on startup; persist size only and let the window manager handle placement/position. (Add to session or app-settings state; apply in `App`/`MainWindow`.)
 - [ ] **P3** Selecting a script that's already open should focus its existing tab (not open a duplicate / no-op). `OpenScriptInNewTabAsync` already focuses an existing tab on open; verify the single-click/select path in the scripts tree does the same. `ShellViewModel.Scripts` / `SidebarView`.
 - [ ] **P2** Keyboard shortcuts for result-grid editing — save changes / discard / add row. Delete-row and begin-edit already have grid commands (`grid.delete`, `grid.beginEdit`); add `grid.save` / `grid.discard` / `grid.addRow` to `CommandIds` + `KeymapDefaults`, register them in `ResultView`'s grid scope (`RegisterGridCommands`), gated on `IsEditable`/`HasPendingChanges`.
+- [ ] **P2** **Editor line/word editing shortcuts + reclaim `Ctrl+W`.** Three related changes to the keymap,
+  all through the input pipeline (§9.2) — register commands in `CommandIds` + `KeymapDefaults`, no ad-hoc
+  `OnKeyDown` branches:
+  - **`Ctrl+U` = delete line** (`editor.deleteLine`, `KeyScope.Editor`). Decide the caret/selection contract:
+    with a selection, delete every line it touches; with none, the caret's line. Verify AvaloniaEdit doesn't
+    already claim `Ctrl+U` (its WPF ancestor bound case-conversion there) — if it does, the editor tunnel
+    handler has to mark the event handled so the built-in doesn't also fire.
+  - **`Ctrl+W` = delete word** (`editor.deleteWordBack`, readline semantics: the word *before* the caret),
+    replacing today's tab-close binding. Because Editor-scope bindings resolve on the tunnel path and
+    `tab.close` is Global (`KeymapDefaults.cs:25`), an Editor-scope `Ctrl+W` naturally wins while the editor
+    has focus — but `tab.close` must move off `Ctrl+W` anyway, or it still fires from the grid/sidebar and the
+    binding reads as ambiguous in the Keyboard Shortcuts window. Note Avalonia already binds
+    `Ctrl+Backspace`/`Ctrl+Delete` to delete-previous/next-word, so this is an additional gesture, not the
+    only route.
+  - **`Ctrl+F4` = close script** — rebind `CommandIds.TabClose` from `Ctrl+W` to `Ctrl+F4` (Windows MDI
+    convention). Check `SyncMenuGestures` picks up the new gesture in the File menu.
+  - Seam: implement the text ops as a **pure helper** (pattern: `Bearing.Sql.LineCommenter`, consumed by
+    `MainWindow.Commands.cs:185`) so they're unit-testable without a live editor — §0.4 forbids growing the
+    `MainWindow.*.cs` partials, and §4.3 means a keystroke can't be verified headlessly anyway.
+- [ ] **P2** **Autocomplete popup: icons, styling, and schema completion.** The engine is schema-aware but
+  the popup is stock AvaloniaEdit chrome showing plain strings, and schemas are absent from completion
+  entirely. Three parts, independent enough to land separately:
+  - **Per-kind icons.** `BearingCompletionData.Image => null` (`Completion/BearingCompletionData.cs:17`)
+    — every row renders iconless, so a table, a column, a keyword and an FK join snippet look identical.
+    `SuggestionKind` (`Core/Completion/Suggestion.cs:3-15`) already exists precisely so "the UI layer
+    chooses the glyph", and the engine already tags Table / View / Column / Join / Keyword
+    (`CompletionEngine.cs:64,107,157,207,251`). Wire kind → glyph, giving **joins their own mark** so an
+    FK-driven `JOIN … ON …` snippet reads as a distinct action rather than another table. Note
+    `ICompletionData.Image` is an `IImage`, but `Themes/Icons.axaml` holds `StreamGeometry` resources
+    (`Icon.Database`, `Icon.Schema`, …) — either render geometry to a `DrawingImage` or replace the
+    list's item template, which is the same seam as the styling item below. Four enum members
+    (`Alias`, `JoinPredicate`, `Function`, `Snippet`) are declared but never emitted — decide whether they
+    get glyphs or get deleted.
+  - **Style the popup to match the app.** No `CompletionWindow`/`CompletionList` style exists anywhere in
+    `Themes/` — the popup ignores the Bearing tokens (graphite surfaces, teal `Accent.Brand`) that every
+    other surface uses. Also fix the layout hack in `BearingCompletionData.Content:22-24`, which fakes
+    two columns by padding with four spaces (`$"{DisplayText}    {DetailText}"`); a real item template
+    gives icon + name + dimmed detail + right-aligned `TrailingText` (the join-predicate preview, currently
+    **never displayed at all** — nothing reads `Suggestion.TrailingText`). Description tooltips already
+    flow through `Description`.
+  - **Complete schema names — both directions, neither works today.** `ISchemaSnapshot.Schemas` exists
+    (search_path-ordered, `Core/Schema/ISchemaSnapshot.cs:13`) and is referenced **nowhere** in `src/`, and
+    `SuggestionKind.Schema` is likewise never emitted. So: (a) at a table position, offer schema names
+    alongside tables; and (b) typing `public.` produces an **empty popup** — `AliasQualifierBefore`
+    (`CompletionEngine.cs:265-273`) matches any `ident.` and unconditionally routes to column/FK-predicate
+    suggestions (`:38-45`), so a qualifier that is a schema rather than an in-scope alias falls through to
+    nothing. Disambiguate alias-vs-schema against `Schemas` + `sources`, and on a schema qualifier list
+    that schema's tables. Related: `TableSuggestions` inserts a **bare** `{t.Name} {alias}`
+    (`:106`) with the schema shown only as dimmed `DetailText`, so accepting a table outside search_path
+    yields SQL that won't resolve — qualify the replacement when the schema isn't reachable unqualified
+    (`ResolveTable(null, name)` answers that).
+  - Seam: all engine-side work is pure and belongs in `Bearing.Sql` with tests next to
+    `CompletionEngineTests.cs` / `JoinCompletionTests.cs` (§2.5); only the glyph/template half touches
+    `Bearing.App`. §9.5 — re-run the existing completion tests when touching the antlr4-c3 path. *(live QA)*
 - [ ] **P2** Show the SQL in the write-confirm dialog. When `RequireWriteConfirmation` trips (`ExecuteAsync`
   and the inline-edit `SaveChangesAsync` path), the confirm prompt should display the statements about to run,
   not just ask yes/no — so "am I about to nuke prod" is answerable from the dialog. `ConfirmWriteAsync`
@@ -91,7 +219,10 @@ project switches + a completion toast (**no** background-jobs panel), per-tab ca
   `MainWindow.ShowPendingScript` / `MainWindow.Overlays.cs`, `ResultView.Cells.cs:312`.
 - [ ] **P2** **Export results to Excel** (+ CSV) with an "open containing folder" action after the export
   completes. Decide the xlsx route (a package vs. hand-rolled OOXML — note §0.1: nothing new in `Core`);
-  export should offer loaded-rows vs. whole-result (needs the fetch-all item below). No export exists today.
+  export should offer loaded-rows vs. whole-result (needs the fetch-all item below). **The button already
+  exists and is deliberately dead** — `ResultView.Cells.cs:304` renders `⭳ Export` with the tooltip
+  "Export — coming soon" ("rendered; wired later (per decision)"), so this is wiring a present affordance,
+  not adding one. Nothing else export-related exists in `src/`.
 - [ ] **P2** **Fetch all rows** button on a paged result — one action that loops `LoadMore` to completion
   (cancelable, with progress/row count) instead of clicking through pages. Guard the obvious foot-gun on huge
   results. `ResultSetViewModel.IsPageable/HasMore/AppendPage`, `ExecutionViewModel.LoadMoreAsync` (`PageSize` 100).
@@ -117,33 +248,48 @@ project switches + a completion toast (**no** background-jobs panel), per-tab ca
 ## 🔴 Open — correctness & security (from review)
 
 - [x] **P1** `FileFallbackSecretStore` non-atomic write can corrupt/lose a stored password; `chmod 600` happens *after* a world-readable write (TOCTOU). `FileFallbackSecretStore.cs:25-31`. **Fixed:** write to `<file>.tmp`, `chmod 600` the temp, then atomic `File.Move(overwrite)` — a crash mid-write keeps the old secret, and the file is never world-readable. (+3 assertions)
-- [ ] **P1** `CountAsync` swallows all errors as "uncountable" → paging hides totals on real DB failure. `PostgresQueryExecutor.cs:84`.
+- [ ] **P1** `CountAsync` swallows all errors as "uncountable" → paging hides totals on real DB failure. `PostgresQueryExecutor.cs:83-86` (`catch { return null; }`).
 - [x] **P1** `StatementSplitter`: trailing `-- line comment` swallows the auto-appended `;` (merges statements → syntax error); blank-line heuristic mis-splits a single statement with a blank line at paren depth 0. `StatementSplitter.cs`. **Fixed:** `EnsureSeparated` puts the `;` on its own line after a fragment ending in a line comment; the blank-line split now fires only when the next token starts a statement (`StartsStatement`) and the previous token isn't a set operator (`EndsWithSetOperator`), so a statement continued by `and`/`order by`/`union` no longer mis-splits. (+4 tests)
 - [x] **P1** `CellFormat.FormatArray` throws on multi-dimensional Postgres arrays (uses `arr.Length` with single-index `GetValue`). `Formatting/CellFormat.cs:36-41`. **Fixed:** `foreach` flattens any rank in row-major order instead of single-index `GetValue`. (+1 test)
-- [ ] **P2** `EnsureSchemaAsync` inflight keyed by ConnectionId not (id, database) → wrong-DB snapshot across a rebuild. `ConnectionSessionManager.cs`.
-- [ ] **P2** Missing `ConfigureAwait(false)` throughout the data layer (deadlock risk for any sync-over-async caller). `PostgresQueryExecutor.cs`, `PostgresMetadataReader.cs`, `NpgsqlConnectionFactory.cs`.
-- [ ] **P2** `ForeignKeyResolver` assumes equal-length parent/referenced attnum lists → `IndexOutOfRange` on a malformed composite FK. `Core/Schema/ForeignKeyResolver.cs:45-52`.
+- [ ] **P2** `EnsureSchemaAsync` inflight keyed by ConnectionId not (id, database) → wrong-DB snapshot across a rebuild. `ConnectionSessionManager.cs:155-157` (`_schemaInflight[session.ConnectionId]`). Note §9.4: sessions are keyed by connection Id by design, so the fix is the *inflight* key, not the session key.
+- [ ] **P2** Missing `ConfigureAwait(false)` throughout the data layer (deadlock risk for any sync-over-async caller). Re-verified: **zero** occurrences in `PostgresQueryExecutor.cs`, `PostgresMetadataReader.cs`, `NpgsqlConnectionFactory.cs`.
+- [ ] **P2** `ForeignKeyResolver` assumes equal-length parent/referenced attnum lists → `IndexOutOfRange` on a malformed composite FK. `Core/Schema/ForeignKeyResolver.cs:45-56`: the loop is bounded by `fk.ParentOrdinals.Count` (:48) but indexes `fk.ReferencedOrdinals[i]` (:50), so a shorter referenced list throws.
 - [x] **P2** Write-guard gap: inline result-grid saves bypass the confirm dialog. **Already fixed** (landed in the merged review-fixes) — `ExecutionViewModel.SaveChangesAsync:245-254` confirms via `ConfirmWriteAsync` when the connection has `RequireWriteConfirmation`, mirroring the `ExecuteAsync` gate.
-- [ ] **P3** `NpgsqlConnectionFactory` applies persisted options verbatim — unknown key throws unwrapped at connect; an `Options["Password"]` overrides the secret. `NpgsqlConnectionFactory.cs:37`.
-- [ ] **P3** Raw `ex.Message` surfaced to the UI on generic catch paths (host/endpoint info leak). `PostgresQueryExecutor.cs:45,70,120`.
-- [ ] **P3** `SchemaBrowser.BuildAsync` catch removes the key unconditionally → can evict a concurrent replacement (pool leak). `SchemaBrowser.cs:85-90`.
-- [ ] **P3** `JsonSessionStore.Save` non-atomic + `LoadAsync` has no try/catch (a crash during shutdown-save bricks the next open; inconsistent with `AppSettingsStore`). `JsonSessionStore.cs`.
-- [ ] **P3** `secret-tool` delete ignores exit code → a failed clear leaves a stale credential after "delete". `SecretToolSecretStore.cs:35`.
-- [ ] **P3** `ResultSetViewModel.ToggleDelete` un-delete drops a prior pending edit. `ResultSetViewModel.cs:181`.
-- [ ] **P3** `ChangedAssignments` compares edited string vs typed original → emits no-op UPDATE assignments. `ResultEditModel.cs:140`.
-- [ ] **P3** `GestureParser` accepts numeric/undefined enum values (`Ctrl+16` binds `(Key)16`). `Input/GestureParser.cs:51,59`.
-- [ ] **P3** MRU tab-cycle state hard-coupled to the Ctrl key — rebinding `tab.mruNext` freezes MRU ordering. `MainWindow.axaml.cs:979`.
-- [ ] **P3** `StreamAsync` ignores `QueryOptions.MaxRows` — but has **no production caller**; decide: implement the cap or delete the dead API. `PostgresQueryExecutor.cs:158`.
-- [ ] **P3** Recent-projects dropdown isn't pruned of missing/empty dirs (resume skips them, but the list still shows them). `MainWindowViewModel.RefreshRecentAsync`.
+- [ ] **P3** `NpgsqlConnectionFactory` applies persisted options verbatim — unknown key throws unwrapped at connect; an `Options["Password"]` overrides the secret. `NpgsqlConnectionFactory.cs:26-40` (`default: csb[key] = value`). **Bigger than "P3 cleanup" now:** this is what makes the `entra.resource` option unusable and blocks the `entra.tenant` fix in the Entra item above. Promote it if you take that item.
+- [ ] **P3** Raw `ex.Message` surfaced to the UI on generic catch paths (host/endpoint info leak). `PostgresQueryExecutor.cs:45,69,119`.
+- [ ] **P3** `SchemaBrowser.BuildAsync` catch removes the key unconditionally → can evict a concurrent replacement (pool leak). `SchemaBrowser.cs:80-86`. **Narrower than originally written:** not caching a failed build is deliberate and documented there (so the next expand can retry); only the concurrent-replacement race remains — remove the key *only if it still maps to this build's task*.
+- [~] **P3** `JsonSessionStore` — **the atomicity half is fixed**: both `SaveAsync` (:26-29) and the shutdown-path `Save` (:39-41) now write `<file>.tmp` then `File.Move(overwrite: true)`. **Still open:** `LoadAsync` (:12-19) has no try/catch, so a truncated or hand-edited `session.json` throws on project open instead of falling back to defaults — inconsistent with `AppSettingsStore`.
+- [ ] **P3** `secret-tool` delete ignores exit code → a failed clear leaves a stale credential after "delete". `SecretToolSecretStore.cs:35-36` (`DeleteAsync` discards the tuple, unlike `SetPasswordAsync` which throws on non-zero).
+- [ ] **P3** `ResultSetViewModel.ToggleDelete` un-delete drops a prior pending edit. `ResultSetViewModel.cs:183-197`: marking a row deleted also does `_edited.Remove(row)` (":193 — delete supersedes pending edits"), and un-marking can't restore it — so the grid still shows the edited values but they'll never be saved.
+- [ ] **P3** `ChangedAssignments` compares edited string vs typed original → emits no-op UPDATE assignments. `ResultEditModel.cs:140`: `Equals(row[i], original[i])` runs *before* `Coerce`, so a grid-written `"5"` never equals a typed `5`.
+- [ ] **P3** `GestureParser` accepts numeric/undefined enum values (`Ctrl+16` binds `(Key)16`). `Input/GestureParser.cs:51,59` — partially mitigated (`key != Key.None` now guards the one worst case) but `Enum.TryParse` still accepts numeric tokens and there's no `Enum.IsDefined` check on either `Key` or `PhysicalKey`.
+- [ ] **P3** MRU tab-cycle state hard-coupled to the Ctrl key — rebinding `tab.mruNext` freezes MRU ordering. Moved by the partial-class split: now `MainWindow.Commands.cs:214` (`e.Key is Key.LeftCtrl or Key.RightCtrl && _mruCycling`), flag declared at `MainWindow.axaml.cs:40`.
+- [x] **P3** `StreamAsync` ignores `QueryOptions.MaxRows` — **closed by deleting the dead API.** No `StreamAsync` remains anywhere in the repo. (`QueryOptions.MaxRows` itself is live and honoured on the paging path: `PostgresQueryExecutor.cs:145`, set to `PageSize` by `ExecutionViewModel.cs:192,326`.)
+- [ ] **P3** Recent-projects dropdown isn't pruned of missing/empty dirs (resume skips them, but the list still shows them). Moved with the VM decomposition: now `ShellViewModel.Projects.cs:120-125` (`RefreshRecentAsync` adds every entry `ListAsync` returns, with no existence filter).
 
 ---
 
 ## 🟡 Open — quality & maintainability
 
-- [ ] **P2** Decompose the god objects: `Controls/ResultView.cs` (1716), `Views/MainWindow.axaml.cs` (1615), `MainWindowViewModel.cs` (1014). Overlay builders + tree-search are the most separable.
-- [ ] **P3** Remove dead `Views/HistoryWindow.axaml(.cs)` (replaced by the inline History panel).
-- [~] **P3** Implement or hide the `Settings…` / `About` menu stubs ("coming soon"). *(About done — `Views/AboutDialog.cs` shows name/tagline/version; version comes from `<Version>` in `Directory.Build.props`. Settings still a stub.)* *(live QA)*
-- [ ] **P3** Clear build warnings: `CS0108` `StatementMargin.Width` hides `Layoutable.Width`; obsolete `TextBox.Watermark` → `PlaceholderText` (×3); `xUnit2013` in `HistoryPanelTests` (×2).
+- [~] **P2** Decompose the god objects — **the VM third is done; the two views are not.**
+  - **Done: `MainWindowViewModel` (1014) is gone.** Really decomposed, not just split: `ShellViewModel`
+    (153 + `.Session` 59 + `.Projects` 158) now delegates to child VMs behind `WorkspaceContext` —
+    `WorkspaceViewModel` 153, `ConnectionsViewModel` 423, `ExecutionViewModel` 422, `ScriptsViewModel` 149,
+    `HistoryPanelViewModel` 130. This is the pattern the remaining two should follow.
+  - [ ] **`Controls/ResultView`** — still **one** `sealed partial class` over 7 files, **~1,902 lines**:
+    `.Cells` 431, `.Selection` 339, `.Layout` 322, `.Inspector` 265, `.Grid` 224, `.Rendering` 178, root 143.
+    The JSON inspector is a self-contained overlay → its own control; cell factories and the
+    selection-rectangle math are pure enough to move under `Results/` (§2.5).
+  - [ ] **`Views/MainWindow`** — still **one** `partial class` over 6 files, **~1,053 lines**:
+    `.Commands` 440, `.axaml.cs` 312, `.Chrome` 127, `.Palette` 112, `.ConnectionCommands` 36,
+    `.Overlays` 26. The palette overlay and the editor text ops in `.Commands` are the separable parts
+    (the latter overlaps the editor-shortcuts item above — do them together).
+  - Note the split-into-partial-*files* move already happened for both and is what §9.1 warns against: the
+    line count hid, the concerns didn't separate. Extract types, and leave thin delegating members so the
+    binding surface is unchanged.
+- [x] **P3** Remove dead `Views/HistoryWindow.axaml(.cs)` — **done**, the files are gone; the inline History panel is the only history UI.
+- [~] **P3** The "coming soon" stubs. *(`About` done — `Views/AboutDialog.cs` shows name/tagline/version from `<Version>` in `Directory.Build.props`.)* **Two** remain, and both belong to other items rather than here: **Settings** (`MainWindow.Chrome.cs:107`, sets the status text "Settings — coming soon") → the Settings-framework item above; **Export** (`ResultView.Cells.cs:304`, a rendered-but-unwired `⭳ Export` button) → the export item above. Nothing to do in this entry except not forget the third stub exists.
+- [~] **P3** Clear build warnings — **3 remain**, verified this pass; the obsolete `TextBox.Watermark` → `PlaceholderText` set is **fixed**. Left: `CS0108` `StatementMargin.Width` hides `Layoutable.Width` (`Editing/StatementMargin.cs:16`), and `xUnit2013` ×2 (`HistoryPanelTests.cs:51,53` — use `Assert.Single`).
 
 ---
 
@@ -154,13 +300,29 @@ project switches + a completion toast (**no** background-jobs panel), per-tab ca
 - [ ] **P2** Enforce/prompt TLS (`sslmode`) — currently only set if the user adds the option manually.
 - [ ] **P3** Settings UI for query-log retention (file-edit only today) and the 30-min idle timeout (currently a fixed constant).
 - [ ] **P3** CI pipeline (build + `dotnet test`). Previously skipped.
-- [ ] **P3** Deeper VM decomposition: stateful coordinators (connections/execution/tabs/panels) out of `MainWindowViewModel`; overlay code-behind out of `MainWindow.axaml.cs`.
+- [x] **P3** Deeper VM decomposition — **done for the VM half**: the stateful coordinators
+  (connections / execution / tabs / panels) now live in `ConnectionsViewModel`, `ExecutionViewModel`,
+  `WorkspaceViewModel`, `ScriptsViewModel` behind `WorkspaceContext`. The overlay-code-behind half is
+  tracked in the god-object item above, not here.
 
 ---
 
 ## Notes
 
-- GUI can't be driven headlessly here (Wayland) — items tagged *(live QA)* need a manual pass.
-- Nothing is committed yet. The "Done this session" batch is a clean unit to commit first.
+- GUI can't be driven headlessly here (Wayland) — items tagged *(live QA)* need a manual pass. Several
+  **committed** features have never had one: the rename, credential sources, and the connection-status
+  toggle. Committed ≠ eyeball-verified.
+- Keep this file honest by re-checking file:line references when you touch an item. The 2026-08-06
+  reconciliation found the two systematic drifts to watch for: **the partial-class split** moved a lot of
+  code (`MainWindowViewModel` → `ShellViewModel` + child VMs, `MainWindow`/`ResultView` into partials), so
+  pre-split line references are wrong; and **five items had quietly closed** (`StreamAsync`,
+  `HistoryWindow`, the `Watermark` warnings, half of `JsonSessionStore`, the VM decomposition) while their
+  entries still read as open.
+- Cross-cutting overlaps worth batching rather than doing twice:
+  - **Window-closing hook** — Stage E's quit-confirm and the scratch-tab save-prompt both need it.
+  - **Write-confirm dialog** — showing the SQL and reworking Preview SQL are one job.
+  - **`ConnectionInfo.Options` handling** — the P3 factory item is a prerequisite for the Entra tenant fix.
+  - **Settings framework** — gates four items (query-log retention, idle timeout, TLS preference, base font size).
+  - **Editor text ops** — the `Ctrl+U`/`Ctrl+W` helpers and carving up `MainWindow.Commands.cs` touch the same code.
 - The `SELECT … INTO` write-guard case and the recent-project pruning were partially informed by, and
   partially close, review findings — cross-check before re-doing.
