@@ -116,40 +116,14 @@ switch and telling you about a finish you didn't watch.
   blank tab must stay a single keystroke with no dialog. Seam: the tab-close path behind
   `CommandIds.TabClose` (now `Ctrl+F4`, see the editor-shortcuts item) plus window close, which has to walk
   every open scratch tab, not just the active one.
-- [ ] **P2** **Entra connection fails on prod, works on staging — `28000: no pg_hba.conf entry for host
-  "<client-ip>", user "sasa.kajfes@moberg.hr"`** when expanding the server node (reported 2026-08-06,
-  project `Arctic`). Both connections are configured identically — same user, `credentialKind: EntraToken`,
-  empty `options` — differing only in host (`pg-4dephyoq7p4ba` prod vs `pg-olpzioxfofkhw` staging), so the
-  divergence is in the token or in server-side provisioning, not in the saved config. Three things to fix,
-  in order:
-  - **Per-connection Entra tenant.** `EntraTokenProvider` runs `az account get-access-token --resource
-    https://ossrdbms-aad.database.windows.net` with **no `--tenant`**, so the token always comes from
-    whichever tenant `az` is currently logged into. If prod sits in a different tenant/subscription than
-    staging, prod correctly rejects a staging-tenant token with exactly this 28000. Add an
-    `entra.tenant` option key alongside the existing `ResourceOptionKey` (`entra.resource`) and pass
-    `--tenant` through, with a field in `ConnectionDialog`. This is the most likely root cause and the only
-    part that is unambiguously a Bearing gap.
-  - **Blocker for the above — `entra.*` option keys can't currently be used at all.** `ConnectionInfo.Options`
-    is handed verbatim to Npgsql: `NpgsqlConnectionFactory.cs:26-40` switches on `sslmode`/`search_path` and
-    sends **everything else** to `csb[key] = value`, which throws on an unknown keyword. Nothing filters
-    `entra.*` out first (verified: no filtering anywhere in `src/`). So the *already documented*
-    `entra.resource` override breaks the connection the moment you set it, and `entra.tenant` would inherit
-    the same fault. Fix the factory to ignore keys it doesn't own (or namespace app-level options away from
-    driver options) **before** adding the tenant key. Same root cause as the P3 factory item below.
-  - **Check the message tail before fixing anything.** Postgres puts the disambiguating part of a 28000 at
-    the *end* — a trailing `database "…", SSL off` means TLS, not auth. The error node
-    (`SchemaNodes.cs:83`, `⚠` + `ex.Message`) does show the full message, so read it off the running app
-    first; it decides between the tenant fix above and the TLS item in the hardening backlog
-    (`require_secure_transport=on` with SSL off produces the same 28000 shape).
-  - **P3 — a failed expand is sticky until Refresh.** `EnsureChildrenAsync` sets `_loaded = true` *before*
-    the load (`SchemaNodes.cs:73`), so collapsing and re-expanding replays the stale error instead of
-    retrying. Refresh server metadata does clear it (confirmed in use), so this is a papercut, not a
-    blocker — reset `_loaded = false` in the catch so re-expand retries too. Independent of Entra.
-    Worth noting the layer below **already intends** the retry: `SchemaBrowser.BuildAsync` deliberately
-    evicts a failed build so "the next expand retries (e.g. after fixing credentials)"
-    (`SchemaBrowser.cs:80-86`) — the node's `_loaded` flag is what defeats that intent.
-  - Remaining possibility once the above are done: the user simply isn't provisioned as an Entra principal
-    on the prod server — an Azure-side fix, not ours.
+- [ ] **P3** **A failed schema expand is sticky until Refresh.** `EnsureChildrenAsync` sets `_loaded = true`
+  *before* the load (`SchemaNodes.cs:73`), so collapsing and re-expanding a node that errored replays the
+  stale error instead of retrying. Refresh server metadata does clear it, so this is a papercut, not a
+  blocker — reset `_loaded = false` in the catch so re-expand retries too. Worth noting the layer below
+  **already intends** the retry: `SchemaBrowser.BuildAsync` deliberately evicts a failed build so "the next
+  expand retries (e.g. after fixing credentials)" (`SchemaBrowser.cs:80-86`) — the node's `_loaded` flag is
+  what defeats that intent. (Surfaced 2026-08-06 while chasing an Entra connection error that turned out not
+  to reproduce; this half stands on its own and is independent of credentials.)
 - [ ] **P2** Remove / delete projects. Delete a project from the recent list, and optionally from disk (with confirm). Also prune stale/missing entries from the recent list (see the P3 recent-projects item below).
 - [ ] **P3** Restore last window size on startup; persist size only and let the window manager handle placement/position. (Add to session or app-settings state; apply in `App`/`MainWindow`.)
 - [ ] **P3** Selecting a script that's already open should focus its existing tab (not open a duplicate / no-op). `OpenScriptInNewTabAsync` already focuses an existing tab on open; verify the single-click/select path in the scripts tree does the same. `ShellViewModel.Scripts` / `SidebarView`.
@@ -259,7 +233,7 @@ switch and telling you about a finish you didn't watch.
 - [ ] **P2** Missing `ConfigureAwait(false)` throughout the data layer (deadlock risk for any sync-over-async caller). Re-verified: **zero** occurrences in `PostgresQueryExecutor.cs`, `PostgresMetadataReader.cs`, `NpgsqlConnectionFactory.cs`.
 - [ ] **P2** `ForeignKeyResolver` assumes equal-length parent/referenced attnum lists → `IndexOutOfRange` on a malformed composite FK. `Core/Schema/ForeignKeyResolver.cs:45-56`: the loop is bounded by `fk.ParentOrdinals.Count` (:48) but indexes `fk.ReferencedOrdinals[i]` (:50), so a shorter referenced list throws.
 - [x] **P2** Write-guard gap: inline result-grid saves bypass the confirm dialog. **Already fixed** (landed in the merged review-fixes) — `ExecutionViewModel.SaveChangesAsync:245-254` confirms via `ConfirmWriteAsync` when the connection has `RequireWriteConfirmation`, mirroring the `ExecuteAsync` gate.
-- [ ] **P3** `NpgsqlConnectionFactory` applies persisted options verbatim — unknown key throws unwrapped at connect; an `Options["Password"]` overrides the secret. `NpgsqlConnectionFactory.cs:26-40` (`default: csb[key] = value`). **Bigger than "P3 cleanup" now:** this is what makes the `entra.resource` option unusable and blocks the `entra.tenant` fix in the Entra item above. Promote it if you take that item.
+- [ ] **P3** `NpgsqlConnectionFactory` applies persisted options verbatim — unknown key throws unwrapped at connect; an `Options["Password"]` overrides the secret. `NpgsqlConnectionFactory.cs:26-40` (`default: csb[key] = value`). Note this also makes the *documented* `entra.resource` override unusable — setting it breaks the connection, because nothing filters app-level `entra.*` keys out before the rest go to `csb[key] = value`. Fixing the factory to ignore keys it doesn't own (or namespacing app options away from driver options) is the prerequisite for any future per-connection Entra option.
 - [ ] **P3** Raw `ex.Message` surfaced to the UI on generic catch paths (host/endpoint info leak). `PostgresQueryExecutor.cs:45,69,119`.
 - [ ] **P3** `SchemaBrowser.BuildAsync` catch removes the key unconditionally → can evict a concurrent replacement (pool leak). `SchemaBrowser.cs:80-86`. **Narrower than originally written:** not caching a failed build is deliberate and documented there (so the next expand can retry); only the concurrent-replacement race remains — remove the key *only if it still maps to this build's task*.
 - [~] **P3** `JsonSessionStore` — **the atomicity half is fixed**: both `SaveAsync` (:26-29) and the shutdown-path `Save` (:39-41) now write `<file>.tmp` then `File.Move(overwrite: true)`. **Still open:** `LoadAsync` (:12-19) has no try/catch, so a truncated or hand-edited `session.json` throws on project open instead of falling back to defaults — inconsistent with `AppSettingsStore`.
@@ -325,7 +299,8 @@ switch and telling you about a finish you didn't watch.
 - Cross-cutting overlaps worth batching rather than doing twice:
   - **Window-closing hook** — Stage E's quit-confirm and the scratch-tab save-prompt both need it.
   - **Write-confirm dialog** — showing the SQL and reworking Preview SQL are one job.
-  - **`ConnectionInfo.Options` handling** — the P3 factory item is a prerequisite for the Entra tenant fix.
+  - **`ConnectionInfo.Options` handling** — the P3 factory item is the prerequisite for any app-level
+    (`entra.*`) option key, since unknown keys currently reach Npgsql and throw.
   - **Settings framework** — gates four items (query-log retention, idle timeout, TLS preference, base font size).
   - **Editor text ops** — the `Ctrl+U`/`Ctrl+W` helpers landed as `Bearing.Sql/TextDeleter.cs`; carving up
     `MainWindow.Commands.cs` still touches the same code, and `EditorSpan`/`ApplyDelete` are the shape the
