@@ -9,7 +9,7 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done.
 > **Reconciled against the tree + git log on 2026-08-06.** Every open item below was re-checked at its cited
 > location and the file:line references refreshed; items that had quietly landed are marked done with what
 > closed them. The working tree is clean — **everything described here as done is committed on `main`.**
-> Verified this pass: clean build, **3 warnings**; tests **Sql 144 · App 182 · Persistence 14** green, plus
+> Verified this pass: clean build, **3 warnings**; tests **Sql 159 · App 184 · Persistence 14** green, plus
 > **Data 14 all skipped** (no live Postgres — run `BEARING_TEST_PG_PORT=5434 dotnet test` to exercise them).
 > Items tagged *(live QA)* are committed but never eyeball-checked in the running app (§4.3 — Wayland).
 
@@ -154,25 +154,29 @@ switch and telling you about a finish you didn't watch.
 - [ ] **P3** Restore last window size on startup; persist size only and let the window manager handle placement/position. (Add to session or app-settings state; apply in `App`/`MainWindow`.)
 - [ ] **P3** Selecting a script that's already open should focus its existing tab (not open a duplicate / no-op). `OpenScriptInNewTabAsync` already focuses an existing tab on open; verify the single-click/select path in the scripts tree does the same. `ShellViewModel.Scripts` / `SidebarView`.
 - [ ] **P2** Keyboard shortcuts for result-grid editing — save changes / discard / add row. Delete-row and begin-edit already have grid commands (`grid.delete`, `grid.beginEdit`); add `grid.save` / `grid.discard` / `grid.addRow` to `CommandIds` + `KeymapDefaults`, register them in `ResultView`'s grid scope (`RegisterGridCommands`), gated on `IsEditable`/`HasPendingChanges`.
-- [ ] **P2** **Editor line/word editing shortcuts + reclaim `Ctrl+W`.** Three related changes to the keymap,
-  all through the input pipeline (§9.2) — register commands in `CommandIds` + `KeymapDefaults`, no ad-hoc
-  `OnKeyDown` branches:
-  - **`Ctrl+U` = delete line** (`editor.deleteLine`, `KeyScope.Editor`). Decide the caret/selection contract:
-    with a selection, delete every line it touches; with none, the caret's line. Verify AvaloniaEdit doesn't
-    already claim `Ctrl+U` (its WPF ancestor bound case-conversion there) — if it does, the editor tunnel
-    handler has to mark the event handled so the built-in doesn't also fire.
-  - **`Ctrl+W` = delete word** (`editor.deleteWordBack`, readline semantics: the word *before* the caret),
-    replacing today's tab-close binding. Because Editor-scope bindings resolve on the tunnel path and
-    `tab.close` is Global (`KeymapDefaults.cs:25`), an Editor-scope `Ctrl+W` naturally wins while the editor
-    has focus — but `tab.close` must move off `Ctrl+W` anyway, or it still fires from the grid/sidebar and the
-    binding reads as ambiguous in the Keyboard Shortcuts window. Note Avalonia already binds
-    `Ctrl+Backspace`/`Ctrl+Delete` to delete-previous/next-word, so this is an additional gesture, not the
-    only route.
-  - **`Ctrl+F4` = close script** — rebind `CommandIds.TabClose` from `Ctrl+W` to `Ctrl+F4` (Windows MDI
-    convention). Check `SyncMenuGestures` picks up the new gesture in the File menu.
-  - Seam: implement the text ops as a **pure helper** (pattern: `Bearing.Sql.LineCommenter`, consumed by
-    `MainWindow.Commands.cs:185`) so they're unit-testable without a live editor — §0.4 forbids growing the
-    `MainWindow.*.cs` partials, and §4.3 means a keystroke can't be verified headlessly anyway.
+- [x] **P2** **Editor line/word editing shortcuts + reclaim `Ctrl+W`** — **done + user-QA'd 2026-08-06.**
+  All three land through the input pipeline (§9.2): commands in `CommandIds` + `KeymapDefaults`, no ad-hoc
+  `OnKeyDown` branches. New pure helper `Bearing.Sql/TextDeleter.cs` (+`DeleteRange`) returns the *span to
+  remove* rather than a rewritten buffer — unlike `LineCommenter`, which replaces the whole document — so
+  the single `Document.Remove` keeps AvaloniaEdit's undo granular. 15 tests in `TextDeleterTests.cs`, 2 in
+  `KeybindingTests.cs`; the `MainWindow.Commands.cs` side is ~15 lines (`EditorSpan` + `ApplyDelete`), and
+  `ToggleLineComment` was refactored onto the shared `EditorSpan` helper.
+  - **`Ctrl+U` = delete to the beginning of the line** (`editor.deleteToLineStart`) — **not** delete-line as
+    originally scoped; readline `unix-line-discard` is what was wanted. Column 0 is the stop, not the
+    indentation. With a selection the span runs from the start of the selection's *first* line to the
+    selection's end, so a multi-line selection never survives in fragments. At column 0 it is a no-op.
+  - **`Ctrl+W` = delete word before the caret** (`editor.deleteWordBack`) — readline `unix-word-rubout`:
+    **whitespace**-delimited, not identifier-delimited, so `public.orders` dies whole. That is deliberately
+    *different* from Avalonia's built-in `Ctrl+Backspace` (word characters), which is what earns it a
+    binding. Trade-off: a quoted identifier containing a space takes two presses.
+  - Both are **line-local by construction** — neither can join lines, so a stray `Ctrl+W` at column 0 does
+    nothing instead of silently merging with the line above. Editor scope resolves on the tunnel path and
+    `KeyDispatcher` sets `e.Handled` before running, so AvaloniaEdit's inherited `Ctrl+U` case-conversion
+    never fires.
+  - **`Ctrl+F4` = close script** — `CommandIds.TabClose` moved off `Ctrl+W` (`KeymapDefaults.cs:25`).
+    `SyncMenuGestures` picks it up automatically (`DisplayGesture` → `KeyGesture.Parse("Ctrl+F4")`), pinned
+    by a test. `Ctrl+W` is now unbound in Global and Grid scope, so tab-close can't fire from the grid or
+    sidebar.
 - [ ] **P2** **Autocomplete popup: icons, styling, and schema completion.** The engine is schema-aware but
   the popup is stock AvaloniaEdit chrome showing plain strings, and schemas are absent from completion
   entirely. Three parts, independent enough to land separately:
@@ -323,6 +327,8 @@ switch and telling you about a finish you didn't watch.
   - **Write-confirm dialog** — showing the SQL and reworking Preview SQL are one job.
   - **`ConnectionInfo.Options` handling** — the P3 factory item is a prerequisite for the Entra tenant fix.
   - **Settings framework** — gates four items (query-log retention, idle timeout, TLS preference, base font size).
-  - **Editor text ops** — the `Ctrl+U`/`Ctrl+W` helpers and carving up `MainWindow.Commands.cs` touch the same code.
+  - **Editor text ops** — the `Ctrl+U`/`Ctrl+W` helpers landed as `Bearing.Sql/TextDeleter.cs`; carving up
+    `MainWindow.Commands.cs` still touches the same code, and `EditorSpan`/`ApplyDelete` are the shape the
+    rest of the editor ops should be pulled into.
 - The `SELECT … INTO` write-guard case and the recent-project pruning were partially informed by, and
   partially close, review findings — cross-check before re-doing.

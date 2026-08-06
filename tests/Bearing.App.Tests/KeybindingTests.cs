@@ -112,6 +112,26 @@ public class KeybindingTests
     }
 
     [Fact]
+    public void Ctrl_W_is_the_editors_delete_word_and_no_longer_closes_the_tab()
+    {
+        // Reclaimed from tab.close, which moved to Ctrl+F4 — so Ctrl+W must be unbound in every other
+        // scope, or closing a tab stays one stray keystroke away from the grid/sidebar.
+        Assert.Equal(CommandIds.EditorDeleteWordBack, Defaults.Resolve(KeyScope.Editor, KeyModifiers.Control, Key.W, NoPhys));
+        Assert.Null(Defaults.Resolve(KeyScope.Global, KeyModifiers.Control, Key.W, NoPhys));
+        Assert.Null(Defaults.Resolve(KeyScope.Grid, KeyModifiers.Control, Key.W, NoPhys));
+
+        Assert.Equal(CommandIds.TabClose, Defaults.Resolve(KeyScope.Global, KeyModifiers.Control, Key.F4, NoPhys));
+        Assert.Equal("Ctrl+F4", Defaults.DisplayGesture(CommandIds.TabClose)); // what the File menu shows
+    }
+
+    [Fact]
+    public void Ctrl_U_is_editor_scoped_so_the_tunnel_claims_it_before_AvaloniaEdit()
+    {
+        Assert.Equal(CommandIds.EditorDeleteToLineStart, Defaults.Resolve(KeyScope.Editor, KeyModifiers.Control, Key.U, NoPhys));
+        Assert.Null(Defaults.Resolve(KeyScope.Global, KeyModifiers.Control, Key.U, NoPhys));
+    }
+
+    [Fact]
     public void Fold_matches_physical_bracket_regardless_of_logical_key()
     {
         // On a non-US layout the physical [ key reports a different logical Key; the physical binding must

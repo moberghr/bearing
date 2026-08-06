@@ -22,7 +22,7 @@ public static class KeymapDefaults
         yield return G(CommandIds.FileOpen, "Ctrl+O");
         yield return G(CommandIds.TabNew, "Ctrl+N"); // primary (shown in menu); Ctrl+T is the alias
         yield return G(CommandIds.TabNew, "Ctrl+T");
-        yield return G(CommandIds.TabClose, "Ctrl+W");
+        yield return G(CommandIds.TabClose, "Ctrl+F4"); // Windows MDI convention; Ctrl+W is the editor's delete-word
         yield return G(CommandIds.TabRename, "F2");
         yield return G(CommandIds.ViewToggleSidePane, "Ctrl+B");
         yield return G(CommandIds.ViewToggleResults, "Ctrl+R");
@@ -54,6 +54,10 @@ public static class KeymapDefaults
         yield return E(CommandIds.EditorUnfoldCurrent, "Ctrl+Shift+PhysBracketRight");
         yield return E(CommandIds.EditorFoldAll, "Ctrl+Shift+-");
         yield return E(CommandIds.EditorUnfoldAll, "Ctrl+Shift+=");
+        // Readline-style backward deletes. Editor scope resolves on the tunnel path and marks the event
+        // handled, so AvaloniaEdit's own Ctrl+U (case conversion, inherited from WPF) never fires.
+        yield return E(CommandIds.EditorDeleteToLineStart, "Ctrl+U");
+        yield return E(CommandIds.EditorDeleteWordBack, "Ctrl+W");
 
         // ---- Grid (resolved in the results grid's tunnel handler) ----
         yield return R(CommandIds.GridCopy, "Ctrl+C");

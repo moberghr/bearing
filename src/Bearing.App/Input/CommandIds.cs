@@ -48,6 +48,8 @@ public static class CommandIds
     public const string EditorUnfoldCurrent = "editor.unfoldCurrent";
     public const string EditorFoldAll = "editor.foldAll";
     public const string EditorUnfoldAll = "editor.unfoldAll";
+    public const string EditorDeleteToLineStart = "editor.deleteToLineStart";
+    public const string EditorDeleteWordBack = "editor.deleteWordBack";
 
     // Grid
     public const string GridCopy = "grid.copy";

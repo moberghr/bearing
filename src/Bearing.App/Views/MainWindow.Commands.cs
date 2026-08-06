@@ -148,6 +148,10 @@ public partial class MainWindow
         r.Register(KeyCommand.Sync(CommandIds.EditorUnfoldCurrent, "Unfold current", KeyScope.Editor, "Editor", () => _folding.UnfoldCurrent()));
         r.Register(KeyCommand.Sync(CommandIds.EditorFoldAll, "Fold all", KeyScope.Editor, "Editor", () => _folding.FoldAll()));
         r.Register(KeyCommand.Sync(CommandIds.EditorUnfoldAll, "Unfold all", KeyScope.Editor, "Editor", () => _folding.UnfoldAll()));
+        r.Register(KeyCommand.Sync(CommandIds.EditorDeleteToLineStart, "Delete to line start", KeyScope.Editor, "Editor",
+            () => ApplyDelete(TextDeleter.ToLineStart)));
+        r.Register(KeyCommand.Sync(CommandIds.EditorDeleteWordBack, "Delete word before caret", KeyScope.Editor, "Editor",
+            () => ApplyDelete(TextDeleter.WordBefore)));
 
         // Navigation/focus commands are claimed in a window tunnel handler so the framework's own tab
         // traversal and the editor/grid don't swallow them first.
@@ -181,11 +185,29 @@ public partial class MainWindow
         Editor.TextArea.Caret.BringCaretToView();
     }
 
+    /// <summary>The editor's (start, end) offsets: the selection when there is one, else the caret twice.</summary>
+    private (int Start, int End) EditorSpan() => Editor.SelectionLength > 0
+        ? (Editor.SelectionStart, Editor.SelectionStart + Editor.SelectionLength)
+        : (Editor.CaretOffset, Editor.CaretOffset);
+
+    /// <summary>Ctrl+U / Ctrl+W: apply a <see cref="TextDeleter"/> span as one document edit, so undo
+    /// stays granular and the caret lands where the removed text began.</summary>
+    private void ApplyDelete(Func<string, int, int, DeleteRange> op)
+    {
+        var (start, end) = EditorSpan();
+        var range = op(Editor.Text, start, end);
+        if (range.IsEmpty) return;
+
+        Editor.TextArea.ClearSelection();
+        Editor.Document.Remove(range.Start, range.Length);
+        Editor.CaretOffset = range.Start;
+        Editor.TextArea.Caret.BringCaretToView();
+    }
+
     /// <summary>Ctrl+/: toggle <c>-- </c> comments over the lines the caret/selection touches.</summary>
     private void ToggleLineComment()
     {
-        var start = Editor.SelectionLength > 0 ? Editor.SelectionStart : Editor.CaretOffset;
-        var end = Editor.SelectionLength > 0 ? Editor.SelectionStart + Editor.SelectionLength : Editor.CaretOffset;
+        var (start, end) = EditorSpan();
         var result = Bearing.Sql.LineCommenter.Toggle(Editor.Text, start, end);
         if (result.Text == Editor.Text) return;
 
