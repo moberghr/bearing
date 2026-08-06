@@ -14,11 +14,34 @@ namespace Bearing.App.Services;
 /// refactor (docs/mvvm-refactor-plan.md) — the code-behind stops knowing concrete dialog types.
 /// Implementations with no window (headless/tests) proceed/return sensibly (see <see cref="ConfirmWriteAsync"/>).
 /// </summary>
+/// <summary>
+/// What the user chose when asked about closing a tab that holds unsaved work.
+/// <see cref="Cancel"/> is deliberately the zero value: a dialog dismissed via the title bar returns
+/// <c>default</c>, and "don't close" is the only safe reading of a dismissal.
+/// </summary>
+public enum CloseChoice
+{
+    /// <summary>Don't close.</summary>
+    Cancel = 0,
+
+    /// <summary>Save first, then close. A scratch tab still needs a destination picked.</summary>
+    Save,
+
+    /// <summary>Close and throw the work away.</summary>
+    Discard,
+}
+
 public interface IDialogService
 {
     /// <summary>Confirm a risky write/DDL batch against a guarded connection. True = proceed.
     /// Implementations with no window (headless/tests) proceed silently.</summary>
     Task<bool> ConfirmWriteAsync(ConnectionInfo connection, IReadOnlyList<string> verbs);
+
+    /// <summary>Ask whether to save before closing a tab that holds unsaved work.
+    /// <paramref name="tabName"/> is the tab header, so the prompt names what is about to be lost.
+    /// Implementations with no window (headless/tests) return <see cref="CloseChoice.Discard"/> —
+    /// the pre-prompt behaviour, so a headless close still closes.</summary>
+    Task<CloseChoice> ConfirmCloseTabAsync(string tabName);
 
     /// <summary>Open the add/edit connection dialog. Returns the dialog result (add/update or delete), or
     /// null if cancelled. <paramref name="test"/> backs the dialog's Test button.</summary>

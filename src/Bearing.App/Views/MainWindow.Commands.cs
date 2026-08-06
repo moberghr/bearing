@@ -50,9 +50,19 @@ public partial class MainWindow
     }
 
     private async void OnSaveAsClick(object? sender, RoutedEventArgs e) => await SaveAsAsync();
-    private void OnCloseCurrentTabClick(object? sender, RoutedEventArgs e)
+    private async void OnCloseCurrentTabClick(object? sender, RoutedEventArgs e)
     {
-        if (Vm?.Workspace.SelectedTab is { } tab) Vm.Workspace.CloseTab(tab);
+        if (Vm?.Workspace.SelectedTab is { } tab) await CloseTabAsync(tab);
+    }
+
+    /// <summary>The one close path for every entry point (Ctrl+F4, File ▸ Close Tab, the tab strip's ✕).
+    /// Flushes the live editor into the selected tab first — only that tab's buffer lives in the control,
+    /// so without this a "Save" on close would write the last-synced text, not what's on screen.</summary>
+    private async Task CloseTabAsync(EditorTabViewModel tab)
+    {
+        if (Vm is null) return;
+        FlushActiveEditor();
+        if (await Vm.Workspace.CloseTabAsync(tab)) LoadEditorFromSelectedTab();
     }
     private async void OnMenuRenameTabClick(object? sender, RoutedEventArgs e)
     {
@@ -100,8 +110,8 @@ public partial class MainWindow
         r.Register(new KeyCommand(CommandIds.FileSaveAs, "Save As…", KeyScope.Global, "File", async () => await SaveAsAsync()));
         r.Register(new KeyCommand(CommandIds.FileOpen, "Open…", KeyScope.Global, "File", async () => await OpenAsync()));
         r.Register(KeyCommand.Sync(CommandIds.TabNew, "New tab", KeyScope.Global, "File", () => Vm?.Workspace.NewTab()));
-        r.Register(KeyCommand.Sync(CommandIds.TabClose, "Close tab", KeyScope.Global, "File",
-            () => { if (Vm?.Workspace.SelectedTab is { } tab) Vm.Workspace.CloseTab(tab); }, canRun: () => Vm?.Workspace.SelectedTab is not null));
+        r.Register(new KeyCommand(CommandIds.TabClose, "Close tab", KeyScope.Global, "File",
+            async () => { if (Vm?.Workspace.SelectedTab is { } tab) await CloseTabAsync(tab); }, canRun: () => Vm?.Workspace.SelectedTab is not null));
         r.Register(new KeyCommand(CommandIds.TabRename, "Rename tab…", KeyScope.Global, "File",
             async () => { if (Vm?.Workspace.SelectedTab is { } tab) await RenameTabAsync(tab); }, canRun: () => Vm?.Workspace.SelectedTab is not null));
         r.Register(KeyCommand.Sync(CommandIds.ViewToggleSidePane, "Toggle side pane", KeyScope.Global, "View",

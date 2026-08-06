@@ -31,6 +31,11 @@ public sealed class DialogService : IDialogService
             ? new ConfirmWriteDialog(connection, verbs).ShowDialog<bool>(window)
             : Task.FromResult(true);
 
+    public Task<CloseChoice> ConfirmCloseTabAsync(string tabName)
+        => Owner is { } window
+            ? new ConfirmCloseDialog(tabName).ShowDialog<CloseChoice>(window)
+            : Task.FromResult(CloseChoice.Discard); // no window → close as it did before the prompt existed
+
     public Task<ConnectionDialogResult?> ShowConnectionDialogAsync(
         ConnectionInfo? existing,
         string? existingPassword,

@@ -32,9 +32,9 @@ public partial class MainWindow
 
     private void OnNewTabClick(object? sender, RoutedEventArgs e) => Vm?.Workspace.NewTab();
 
-    private void OnCloseTabPressed(object? sender, PointerPressedEventArgs e)
+    private async void OnCloseTabPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (sender is Control { DataContext: EditorTabViewModel tab }) { Vm?.Workspace.CloseTab(tab); e.Handled = true; }
+        if (sender is Control { DataContext: EditorTabViewModel tab }) { e.Handled = true; await CloseTabAsync(tab); }
     }
 
     private async void OnTabHeaderDoubleTapped(object? sender, TappedEventArgs e)

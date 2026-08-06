@@ -157,6 +157,13 @@ public sealed partial class EditorTabViewModel : ObservableObject
     /// <summary>True while backed by an unsaved scratch buffer.</summary>
     public bool IsScratch => ScriptPath is null;
 
+    /// <summary>
+    /// True when closing this tab would lose work, and therefore must prompt: a scratch buffer with
+    /// content (nowhere on disk to recover it from), or a file-backed script with unsaved edits.
+    /// Whitespace-only scratch counts as empty, so closing an untouched new tab stays one keystroke.
+    /// </summary>
+    public bool HasUnsavedWork => IsScratch ? Text.Trim().Length > 0 : IsDirty;
+
     partial void OnScriptPathChanged(string? value) => UpdateHeader();
     partial void OnDisplayNameChanged(string value) => UpdateHeader();
 

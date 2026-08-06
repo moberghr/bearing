@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Bearing.App.Services;
 using Bearing.App.Workspace;
 using Bearing.Core.Workspace;
 
@@ -26,13 +27,16 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     private readonly WorkspaceContext _ctx;
     private readonly ScriptsViewModel _scripts;
     private readonly ConnectionsViewModel _connections;
+    private readonly IDialogService? _dialogs;
     private int _scratchCounter;
 
-    public WorkspaceViewModel(WorkspaceContext ctx, ScriptsViewModel scripts, ConnectionsViewModel connections)
+    public WorkspaceViewModel(WorkspaceContext ctx, ScriptsViewModel scripts, ConnectionsViewModel connections,
+        IDialogService? dialogs = null)
     {
         _ctx = ctx;
         _scripts = scripts;
         _connections = connections;
+        _dialogs = dialogs;
         // Re-raise the binding notification when the selection changes underneath us (the context is the
         // single owner; the connections concern also listens to the same event).
         _ctx.SelectedTabChanged += () => OnPropertyChanged(nameof(SelectedTab));
@@ -63,7 +67,59 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         return tab;
     }
 
-    public void CloseTab(EditorTabViewModel tab)
+    /// <summary>
+    /// Close a tab, asking first when that would lose work (<see cref="EditorTabViewModel.HasUnsavedWork"/>).
+    /// Returns true when the tab actually closed — false means the user cancelled, or a save they asked for
+    /// didn't happen, and the tab is still open. Every close path funnels through here (the Ctrl+F4 command,
+    /// the File menu, and the tab strip's ✕) so the prompt can't be routed around.
+    /// <para>
+    /// Quitting and switching projects deliberately do <b>not</b> come through here: both call
+    /// <c>SaveWorkspace</c> first, which round-trips every buffer — scratch text included — through
+    /// <c>session.json</c>, so nothing is lost and a prompt would be pure friction.
+    /// </para>
+    /// </summary>
+    public async Task<bool> CloseTabAsync(EditorTabViewModel tab)
+    {
+        if (!Tabs.Contains(tab)) return false;
+
+        if (tab.HasUnsavedWork && _dialogs is { } dialogs)
+        {
+            switch (await dialogs.ConfirmCloseTabAsync(tab.Header))
+            {
+                case CloseChoice.Cancel:
+                    return false;
+                case CloseChoice.Save when !await SaveForCloseAsync(tab, dialogs):
+                    return false; // save failed, or the destination picker was dismissed — keep the tab
+            }
+        }
+
+        Remove(tab);
+        return true;
+    }
+
+    /// <summary>Save on the way out. A file-backed tab writes to its own path; a scratch tab has none, so
+    /// it needs a destination first — dismissing that picker aborts the close rather than losing the text.
+    /// Returns false if the work is still unsaved.</summary>
+    private async Task<bool> SaveForCloseAsync(EditorTabViewModel tab, IDialogService dialogs)
+    {
+        var path = tab.ScriptPath ?? await dialogs.PickSaveScriptAsync($"{tab.DisplayName}.sql", _ctx.Project?.ScriptsDirectory);
+        if (path is null) return false;
+
+        try
+        {
+            await SaveScriptAsync(tab, path, tab.Text);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            // A failed write must not take the buffer down with it.
+            _ctx.SetStatus($"Could not save {Path.GetFileName(path)}: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>Remove the tab and settle the selection. The workspace always keeps at least one tab.</summary>
+    private void Remove(EditorTabViewModel tab)
     {
         var index = Tabs.IndexOf(tab);
         if (index < 0) return;
@@ -132,10 +188,15 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         _ctx.SetStatus($"Opened {Path.GetFileName(absolutePath)}.");
     }
 
-    public async Task SaveSelectedScriptAsync(string absolutePath, string text)
+    public Task SaveSelectedScriptAsync(string absolutePath, string text)
+        => SaveScriptAsync(SelectedTab ?? NewTab(text), absolutePath, text);
+
+    /// <summary>Write <paramref name="text"/> to disk and rebind <paramref name="tab"/> to it as its clean
+    /// baseline. Per-tab rather than selection-based, because closing a background tab has to save that
+    /// tab, not whichever one happens to be focused.</summary>
+    public async Task SaveScriptAsync(EditorTabViewModel tab, string absolutePath, string text)
     {
         await _ctx.ScriptStore.WriteTextAsync(absolutePath, text, CancellationToken.None);
-        var tab = SelectedTab ?? NewTab(text);
         tab.Text = text;
         tab.ScriptPath = absolutePath;
         tab.MarkSaved(text);

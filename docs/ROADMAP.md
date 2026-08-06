@@ -95,27 +95,50 @@ switch and telling you about a finish you didn't watch.
   in this roadmap — query-log retention, the 30-min idle timeout, TLS/`sslmode` preference, restore-window-size —
   which should migrate into this screen rather than staying file-edit-only or hard-coded constants. Model the
   UI after the existing code-built `KeybindingsWindow` (Keyboard Shortcuts already lives under Edit ▸).
-- [ ] **P2** **Back scratch scripts with real files + autosave.** Today a scratch buffer has no file at all —
-  `EditorTabViewModel.IsScratch => ScriptPath is null`, and its text is inlined into `session.json` as
-  `OpenEditor.ScratchText`. Instead: give every new tab a real file on disk from the moment it's created,
-  autosave it as you type, and park it in a dedicated subfolder of the project's `scripts/`
-  (`ProjectManifest.ScriptsDirectory`) named by number/date (e.g. `scripts/scratch/2026-08-04-01.sql`).
-  On rename, **move** the file out to the scripts root — or to whichever subfolder the user picks — so
-  naming a script is what promotes it out of scratch.
-  Seams to think through: `IsScratch` stops meaning "no path" and becomes "lives in the scratch folder",
-  which also shifts `IsDirty => !IsScratch && IsModified` (autosaved scratch is never dirty); `ScratchText`/
-  `ScratchName` in `OpenEditor` can then go away, shrinking session state to just paths; the scripts tree
-  (`ScriptsViewModel`, `BuildScriptNodes`) needs to either surface or deliberately hide the scratch folder;
-  and abandoned scratch files need a retention/cleanup story so the folder doesn't grow forever. Decide
-  whether the scratch folder is gitignored (it's per-user noise, unlike saved scripts).
-  **Either way, closing a non-empty scratch tab must not silently drop the text** — today it does. Two
-  acceptable outcomes, and the choice is the whole design decision here: the file-backed route above
-  (nothing to prompt about, the text is already on disk), *or* a Save / Don't save / Cancel prompt on close
-  when the buffer is non-empty. The prompt is the cheaper fix and the safety net; file-backing is the real
-  one. If both land, the prompt disappears by construction. Gate it on non-empty — closing an untouched
-  blank tab must stay a single keystroke with no dialog. Seam: the tab-close path behind
-  `CommandIds.TabClose` (now `Ctrl+F4`, see the editor-shortcuts item) plus window close, which has to walk
-  every open scratch tab, not just the active one.
+### Scratch scripts — never lose work (3 phases, agreed 2026-08-06)
+
+Confirmed intent: (1) closing a tab must never silently drop work, file-backed *or* scratch; (2) scratch
+buffers should be **real files** so they can be committed and grepped, but parked **out of the way** of the
+curated scripts; (3) autosave should exist and be **configurable** (on edit / on execute / off).
+
+**Scoping fact that shapes all three** — quitting and switching projects already lose nothing.
+`BuildSession` writes `ScratchText = t.Text` for *every* tab, file-backed included, and `RestoreTabsAsync`
+reloads that buffer with the on-disk text as the clean baseline, so unsaved edits come back marked modified
+(`WorkspaceViewModel.cs:88-94`, `ShellViewModel.Session.cs:36-44`). The only lossy path is **explicit tab
+close**: `CloseTab` (`WorkspaceViewModel.cs:66-74`) removes the tab, full stop. So the prompt belongs on tab
+close, *not* on window close — prompting at quit would be friction for zero safety gain, and it leaves the
+`OnClosing` hook to Stage E's running-query confirm, which is the one thing that genuinely needs it.
+
+- [x] **P2 · Phase 1 — close prompt** — **done + user-QA'd 2026-08-06.** `CloseTab` → `CloseTabAsync`
+  returning "did it actually close", gated on the new pure `EditorTabViewModel.HasUnsavedWork`
+  (scratch: non-blank text; file-backed: `IsDirty`). Whitespace-only scratch counts as empty, so closing an
+  untouched tab stays one keystroke. New `CloseChoice` + `IDialogService.ConfirmCloseTabAsync` +
+  code-built `Views/ConfirmCloseDialog`; **`CloseChoice.Cancel` is the zero value on purpose** — a title-bar
+  dismissal returns `default`, and "don't close" is the only safe reading of that. Save on a scratch tab
+  routes through the destination picker, and dismissing it aborts the close rather than losing the text; a
+  failed write does the same. The gate sits at the `CloseTabAsync` boundary so all three entry points
+  (`Ctrl+F4`, File ▸ Close Tab, the strip's ✕) funnel through it, and the view flushes the live editor
+  first so a background tab saves *its* buffer, not the focused one. New `SaveScriptAsync(tab, path, text)`
+  is the per-tab save; `SaveSelectedScriptAsync` now delegates to it. 11 tests in `CloseTabPromptTests.cs`
+  (+ `FakeDialogs`). **Covers the case the original item missed** — a dirty *saved* script was being dropped
+  just as silently as scratch — and for that reason **does not become redundant when Phase 2 lands.**
+- [ ] **P2 · Phase 2 — file-backed scratch.** Give every new tab a real file at creation under a dedicated
+  subfolder of `ProjectManifest.ScriptsDirectory` (e.g. `scripts/scratch/2026-08-06-01.sql`), so scratch work
+  is committable and greppable while staying out of the curated tree. Rename **moves** the file to the
+  scripts root (or a chosen subfolder) — naming a script is what promotes it out of scratch.
+  Seams: `IsScratch` stops meaning "no path" (`EditorTabViewModel.cs:158`) and becomes "lives under the
+  scratch folder", which also shifts `IsDirty => !IsScratch && IsModified` (`:42`); `ScratchText`/`ScratchName`
+  can leave `OpenEditor`, shrinking session state to paths; the scripts tree (`ScriptsViewModel.RefreshScripts`,
+  `BuildScriptNodes`) must deliberately surface-or-hide the scratch folder — "out of the way" is the
+  requirement, so hidden-by-default with a toggle is the likely answer. Decide retention/cleanup for
+  abandoned scratch files and whether the folder is gitignored (per-user noise vs. committable — the stated
+  intent is *committable*, so probably not ignored).
+- [ ] **P2 · Phase 3 — configurable autosave.** Modes: autosave on edit (debounced), save on execute, off.
+  Applies to **all** tabs, not just scratch. **Depends on the settings framework item below** — this is the
+  fifth tenant of it, and the mode needs a real home before it can be anything but a constant. Interaction
+  to settle: with autosave on edit, `IsDirty` and the tab-strip dot lose meaning for saved scripts, and
+  Phase 1's prompt stops firing for everything — so the prompt must stay correct under every mode, not be
+  deleted once autosave exists.
 - [ ] **P3** **A failed schema expand is sticky until Refresh.** `EnsureChildrenAsync` sets `_loaded = true`
   *before* the load (`SchemaNodes.cs:73`), so collapsing and re-expanding a node that errored replays the
   stale error instead of retrying. Refresh server metadata does clear it, so this is a papercut, not a
@@ -297,11 +320,13 @@ switch and telling you about a finish you didn't watch.
   `HistoryWindow`, the `Watermark` warnings, half of `JsonSessionStore`, the VM decomposition) while their
   entries still read as open.
 - Cross-cutting overlaps worth batching rather than doing twice:
-  - **Window-closing hook** — Stage E's quit-confirm and the scratch-tab save-prompt both need it.
+  - **Window-closing hook** — Stage E's quit-confirm needs it. The scratch save-prompt turned out **not**
+    to: quitting already round-trips every buffer through `session.json`, so the prompt is tab-close only.
   - **Write-confirm dialog** — showing the SQL and reworking Preview SQL are one job.
   - **`ConnectionInfo.Options` handling** — the P3 factory item is the prerequisite for any app-level
     (`entra.*`) option key, since unknown keys currently reach Npgsql and throw.
-  - **Settings framework** — gates four items (query-log retention, idle timeout, TLS preference, base font size).
+  - **Settings framework** — gates five items (query-log retention, idle timeout, TLS preference, base font
+    size, and the scratch Phase 3 autosave mode).
   - **Editor text ops** — the `Ctrl+U`/`Ctrl+W` helpers landed as `Bearing.Sql/TextDeleter.cs`; carving up
     `MainWindow.Commands.cs` still touches the same code, and `EditorSpan`/`ApplyDelete` are the shape the
     rest of the editor ops should be pulled into.

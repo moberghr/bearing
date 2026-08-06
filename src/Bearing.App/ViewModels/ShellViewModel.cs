@@ -75,7 +75,7 @@ public sealed partial class ShellViewModel : ObservableObject
         // The workspace owns the tabs and coordinates with the scripts concern (refresh tree / rename file)
         // and the connections concern (connection-display); it holds both directly (they're already built
         // and don't reference it back).
-        _workspace = new WorkspaceViewModel(_ctx, _scripts, _connections);
+        _workspace = new WorkspaceViewModel(_ctx, _scripts, _connections, dialogs);
         _execution = new ExecutionViewModel(_ctx, dialogs);
         History = new HistoryPanelViewModel(SearchHistoryAsync, ColorForConnection);
     }

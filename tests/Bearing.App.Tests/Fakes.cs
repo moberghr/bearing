@@ -212,3 +212,47 @@ internal sealed class ThrowingEntraTokens : IEntraTokenProvider
     public Task<Credential> GetTokenAsync(ConnectionInfo info, CancellationToken ct)
         => throw new InvalidOperationException("token provider should not be called");
 }
+
+/// <summary>
+/// Scriptable <see cref="IDialogService"/> for close-prompt tests: the caller decides what the user
+/// "chose" and where a Save-As lands, and the fake records what it was asked so a test can assert the
+/// prompt did (or did not) appear.
+/// </summary>
+internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
+{
+    private readonly Bearing.App.Services.CloseChoice _choice;
+    private readonly string? _saveAsPath;
+
+    public FakeDialogs(Bearing.App.Services.CloseChoice choice = Bearing.App.Services.CloseChoice.Discard,
+        string? saveAsPath = null)
+    {
+        _choice = choice;
+        _saveAsPath = saveAsPath;
+    }
+
+    /// <summary>Tab names the close prompt was raised for, in order.</summary>
+    public List<string> ClosePrompts { get; } = new();
+
+    public int SavePickerCalls { get; private set; }
+
+    public Task<Bearing.App.Services.CloseChoice> ConfirmCloseTabAsync(string tabName)
+    {
+        ClosePrompts.Add(tabName);
+        return Task.FromResult(_choice);
+    }
+
+    public Task<string?> PickSaveScriptAsync(string suggestedName, string? startDir)
+    {
+        SavePickerCalls++;
+        return Task.FromResult(_saveAsPath);
+    }
+
+    public Task<bool> ConfirmWriteAsync(ConnectionInfo connection, IReadOnlyList<string> verbs) => Task.FromResult(true);
+    public Task<Bearing.App.Views.ConnectionDialogResult?> ShowConnectionDialogAsync(ConnectionInfo? existing, string? existingPassword,
+        Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test, bool secretStorageSecure)
+        => Task.FromResult<Bearing.App.Views.ConnectionDialogResult?>(null);
+    public Task<string?> ShowTextPromptAsync(string prompt, string initial = "") => Task.FromResult<string?>(null);
+    public Task<string?> PickFolderAsync(string title) => Task.FromResult<string?>(null);
+    public Task<string?> PickOpenScriptAsync(string? startDir) => Task.FromResult<string?>(null);
+    public void ShowSqlPreview(string sql, string title = "SQL preview — changes to save") { }
+}
