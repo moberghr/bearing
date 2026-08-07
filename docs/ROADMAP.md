@@ -122,23 +122,44 @@ close, *not* on window close — prompting at quit would be friction for zero sa
   is the per-tab save; `SaveSelectedScriptAsync` now delegates to it. 11 tests in `CloseTabPromptTests.cs`
   (+ `FakeDialogs`). **Covers the case the original item missed** — a dirty *saved* script was being dropped
   just as silently as scratch — and for that reason **does not become redundant when Phase 2 lands.**
-- [ ] **P2 · Phase 2 — file-backed scratch.** Give every new tab a real file at creation under a dedicated
-  subfolder of `ProjectManifest.ScriptsDirectory` (e.g. `scripts/scratch/2026-08-06-01.sql`), so scratch work
-  is committable and greppable while staying out of the curated tree. Rename **moves** the file to the
-  scripts root (or a chosen subfolder) — naming a script is what promotes it out of scratch.
-  Seams: `IsScratch` stops meaning "no path" (`EditorTabViewModel.cs:158`) and becomes "lives under the
-  scratch folder", which also shifts `IsDirty => !IsScratch && IsModified` (`:42`); `ScratchText`/`ScratchName`
-  can leave `OpenEditor`, shrinking session state to paths; the scripts tree (`ScriptsViewModel.RefreshScripts`,
-  `BuildScriptNodes`) must deliberately surface-or-hide the scratch folder — "out of the way" is the
-  requirement, so hidden-by-default with a toggle is the likely answer. Decide retention/cleanup for
-  abandoned scratch files and whether the folder is gitignored (per-user noise vs. committable — the stated
-  intent is *committable*, so probably not ignored).
+- [x] **P2 · Phase 2 — file-backed scratch** — **done 2026-08-06** *(live QA)*. Scratch buffers live in
+  `Project.ScratchDirectory` (`scripts/scratch/`) as `yyyy-MM-dd-NN.sql`, autosaved as you type, so unnamed
+  work is committable and greppable. Naming a tab **promotes** it: the file moves out to the scripts root
+  and the tab stops being scratch.
+  - **Files are created lazily, on first non-blank content — not when the tab opens.** Deliberate departure
+    from the original "at creation" wording: with no cleanup pass (by decision), eager creation would leave
+    an empty file behind for every tab anyone ever opened. Opening a tab and never typing leaves no trace.
+  - `IsScratch` is now a **set flag, not a derivation** from `ScriptPath` (`EditorTabViewModel`) — it's
+    re-derived from folder membership (`ScratchNaming.IsUnderScratch`) by everything that repoints a path:
+    save, load, rename, and the scripts-tree move/rename. Dragging a file into or out of `scratch/` changes
+    what the tab *is*, not just where it lives.
+  - New `Workspace/ScratchAutosave.cs` (debounced, best-effort per §5.2) + pure `Workspace/ScratchNaming.cs`
+    (dated names fill gaps; membership is by folder, so `scratchpad/` doesn't false-positive). Flushed on
+    tab close, project switch, and — narrowly — shutdown: `FlushExistingBlocking` only rewrites tabs that
+    *already* have a file, because creating one there would raise `ScriptPath` change notifications on a
+    thread that's tearing the app down. A brand-new buffer loses nothing by being skipped; its text is in
+    `session.json` and it gets a file on the next keystroke after restart.
+  - Scripts tree: scratch is **pinned first**, collapsed by default, dimmed file glyph + an `auto` chip
+    (`ScriptFolderViewModel.IsScratch`, `SidebarView.axaml`). Its files behave like any other script.
+  - **Correction to the plan above: `ScratchText`/`ScratchName` did *not* leave `OpenEditor`.** `ScratchText`
+    is what carries unsaved edits for *named* scripts across a restart (see
+    `Unsaved_script_edits_survive_reload_and_stay_marked_dirty`) — it was never scratch-only, so the session
+    format is unchanged and pre-Phase-2 sessions restore as before, migrating to a file on the next edit.
+  - **Phase 1's prompt stopped firing for scratch, exactly as predicted** — `CloseTabAsync` flushes the
+    pending write and there's nothing to lose. The prompt now guards dirty *named* scripts, plus the
+    backstop case of a scratch buffer that never reached a file (no project / failed write).
+  - 24 tests (`ScratchNamingTests` 13, `ScratchFileTests` 11); 5 close-prompt tests rewritten for the new
+    behaviour. **Not done, by decision:** retention/cleanup of abandoned scratch files, and gitignore.
 - [ ] **P2 · Phase 3 — configurable autosave.** Modes: autosave on edit (debounced), save on execute, off.
-  Applies to **all** tabs, not just scratch. **Depends on the settings framework item below** — this is the
-  fifth tenant of it, and the mode needs a real home before it can be anything but a constant. Interaction
-  to settle: with autosave on edit, `IsDirty` and the tab-strip dot lose meaning for saved scripts, and
-  Phase 1's prompt stops firing for everything — so the prompt must stay correct under every mode, not be
-  deleted once autosave exists.
+  Extends autosave to **named scripts**, which today still save explicitly — Phase 2 deliberately left
+  scratch as the only autosaved thing, since being file-backed is what scratch *is*. **Depends on the
+  settings framework item below** — this is the fifth tenant of it, and the mode needs a real home before it
+  can be anything but a constant. Seam: `ScratchAutosave` already owns the debounce, per-tab scheduling, and
+  the flush-on-close/switch/shutdown paths; generalising it means dropping the `IsScratch` filter in
+  `OnTabPropertyChanged`/`SaveAsync` and gating on the mode instead. Interactions to settle: with autosave
+  on edit, `IsDirty` and the tab-strip dot lose meaning for named scripts, and Phase 1's prompt stops firing
+  for everything — the prompt must stay correct under **every** mode (including "off"), not be deleted once
+  autosave exists.
 - [ ] **P3** **A failed schema expand is sticky until Refresh.** `EnsureChildrenAsync` sets `_loaded = true`
   *before* the load (`SchemaNodes.cs:73`), so collapsing and re-expanding a node that errored replays the
   stale error instead of retrying. Refresh server metadata does clear it, so this is a papercut, not a
@@ -149,6 +170,19 @@ close, *not* on window close — prompting at quit would be friction for zero sa
   to reproduce; this half stands on its own and is independent of credentials.)
 - [ ] **P2** Remove / delete projects. Delete a project from the recent list, and optionally from disk (with confirm). Also prune stale/missing entries from the recent list (see the P3 recent-projects item below).
 - [ ] **P3** Restore last window size on startup; persist size only and let the window manager handle placement/position. (Add to session or app-settings state; apply in `App`/`MainWindow`.)
+- [ ] **P2** **"Show <X> panel" does nothing when the sidebar is collapsed and that panel is already the
+  active one.** Reported 2026-08-07 against Scripts; the same fault covers Connections and History. The
+  commands set `ActivePanel` and rely on a *side effect* to reveal the pane — `OnActivePanelChanged` does
+  `SidePaneOpen = true` (`ShellViewModel.cs:117-121`). But `[ObservableProperty]`'s setter short-circuits on
+  an unchanged value, so when `ActivePanel` is already `Scripts` the changed-handler never runs and the pane
+  stays collapsed. Panel *switching* works, which is why it looks like "only switches focus".
+  Fix: make revealing explicit rather than a notification side effect — set `ActivePanel` **and**
+  `SidePaneOpen = true` at each site. Note this is *not* `ActivateOrTogglePanel`
+  (`ShellViewModel.cs:110-115`): that deliberately collapses on re-activation, which is right for a rail
+  tile but wrong for a command named "Show …". Five call sites, all in `MainWindow.Commands.cs` — the three
+  palette commands (`:142-147`) and the two View-menu handlers `OnMenuSchemaClick` / `OnMenuScriptsClick`
+  (`:61-62`). Consider a single `ShowPanel(SidePanel)` on the shell so there's one reveal path, and drop the
+  implicit open from `OnActivePanelChanged` once every caller is explicit.
 - [ ] **P3** Selecting a script that's already open should focus its existing tab (not open a duplicate / no-op). `OpenScriptInNewTabAsync` already focuses an existing tab on open; verify the single-click/select path in the scripts tree does the same. `ShellViewModel.Scripts` / `SidebarView`.
 - [ ] **P2** Keyboard shortcuts for result-grid editing — save changes / discard / add row. Delete-row and begin-edit already have grid commands (`grid.delete`, `grid.beginEdit`); add `grid.save` / `grid.discard` / `grid.addRow` to `CommandIds` + `KeymapDefaults`, register them in `ResultView`'s grid scope (`RegisterGridCommands`), gated on `IsEditable`/`HasPendingChanges`.
 - [x] **P2** **Editor line/word editing shortcuts + reclaim `Ctrl+W`** — **done + user-QA'd 2026-08-06.**

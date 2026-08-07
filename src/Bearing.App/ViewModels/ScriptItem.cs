@@ -30,4 +30,8 @@ public sealed partial class ScriptFolderViewModel : ObservableObject
     [ObservableProperty] private int _count;
 
     [ObservableProperty] private bool _isExpanded = true;
+
+    /// <summary>True for the project's scratch folder — the one folder the app owns rather than the user.
+    /// Pinned to the top of the tree and styled apart so it reads as a holding pen, not a curated folder.</summary>
+    public bool IsScratch { get; init; }
 }

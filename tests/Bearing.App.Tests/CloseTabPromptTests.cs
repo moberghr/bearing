@@ -65,49 +65,42 @@ public class CloseTabPromptTests : IDisposable
         Assert.Empty(dialogs.ClosePrompts);
     }
 
-    // ---- scratch tab with content ----
+    // ---- scratch ----
+    //
+    // Since phase 2 a scratch tab is backed by a real file, so closing one loses nothing and must NOT
+    // prompt — CloseTabAsync flushes the pending write instead. That path is covered in ScratchFileTests.
+    // What remains here is the backstop: a scratch buffer that could not reach a file at all (no project,
+    // or a failed write) still has to be caught, because its text exists nowhere else.
 
     [Fact]
-    public async Task Discarding_a_scratch_tab_closes_it_and_drops_the_text()
-    {
-        var dialogs = new FakeDialogs(CloseChoice.Discard);
-        var vm = await Project(dialogs);
-        var tab = vm.Workspace.NewTab();
-        tab.Text = "select * from film;";
-
-        Assert.True(tab.HasUnsavedWork);
-        Assert.True(await vm.Workspace.CloseTabAsync(tab));
-        Assert.Equal(tab.Header, Assert.Single(dialogs.ClosePrompts));  // prompt named the tab
-        Assert.DoesNotContain(tab, vm.Workspace.Tabs);
-    }
-
-    [Fact]
-    public async Task Cancelling_keeps_the_tab_and_its_text()
+    public async Task Scratch_that_never_reached_a_file_still_prompts()
     {
         var dialogs = new FakeDialogs(CloseChoice.Cancel);
-        var vm = await Project(dialogs);
+        var vm = NewVm(dialogs);          // deliberately no project → autosave has nowhere to write
         var tab = vm.Workspace.NewTab();
-        tab.Text = "select * from film;";
+        tab.Text = "select 42;";
 
+        Assert.Null(tab.ScriptPath);
+        Assert.True(tab.HasUnsavedWork);
         Assert.False(await vm.Workspace.CloseTabAsync(tab));
+        Assert.Equal(tab.Header, Assert.Single(dialogs.ClosePrompts));   // prompt named the tab
         Assert.Contains(tab, vm.Workspace.Tabs);
-        Assert.Equal("select * from film;", tab.Text);
+        Assert.Equal("select 42;", tab.Text);
     }
 
     [Fact]
-    public async Task Saving_a_scratch_tab_writes_the_picked_file_then_closes()
+    public async Task Saving_unbacked_scratch_writes_the_picked_file_then_closes()
     {
         var vm0 = await Project(new FakeDialogs());
         var dest = Path.Combine(vm0.ScriptsDirectory!, "picked.sql");
 
         var dialogs = new FakeDialogs(CloseChoice.Save, saveAsPath: dest);
-        var vm = NewVm(dialogs);
-        await vm.InitializeAsync(vm0.ProjectDirectory!);
+        var vm = NewVm(dialogs);          // no project, so the tab has no scratch file
         var tab = vm.Workspace.NewTab();
         tab.Text = "select 42;";
 
         Assert.True(await vm.Workspace.CloseTabAsync(tab));
-        Assert.Equal(1, dialogs.SavePickerCalls);            // scratch has no path, so it must ask
+        Assert.Equal(1, dialogs.SavePickerCalls);            // no path of its own, so it must ask
         Assert.Equal("select 42;", await File.ReadAllTextAsync(dest));
         Assert.DoesNotContain(tab, vm.Workspace.Tabs);
     }
@@ -117,7 +110,7 @@ public class CloseTabPromptTests : IDisposable
     {
         // Save chosen, but the file picker is dismissed — the text has nowhere to go, so the tab must stay.
         var dialogs = new FakeDialogs(CloseChoice.Save, saveAsPath: null);
-        var vm = await Project(dialogs);
+        var vm = NewVm(dialogs);
         var tab = vm.Workspace.NewTab();
         tab.Text = "select 42;";
 
@@ -205,8 +198,10 @@ public class CloseTabPromptTests : IDisposable
     {
         var dialogs = new FakeDialogs(CloseChoice.Discard);
         var vm = await Project(dialogs);
-        var tab = vm.Workspace.NewTab();
-        tab.Text = "select 1;";
+        vm.Workspace.NewTab();
+        var tab = vm.Workspace.Tabs[0];
+        await vm.Workspace.SaveScriptAsync(tab, Path.Combine(vm.ScriptsDirectory!, "r.sql"), "select 1;");
+        tab.Text = "select 1; -- WIP";
 
         Assert.True(await vm.Workspace.CloseTabAsync(tab));
         Assert.False(await vm.Workspace.CloseTabAsync(tab));   // double-click on ✕ must not re-ask

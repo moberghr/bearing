@@ -85,6 +85,7 @@ public sealed partial class ShellViewModel
         if (_project is not null && string.Equals(Path.GetFullPath(projectDirectory), _project.Directory, StringComparison.Ordinal))
             return;
 
+        await _workspace.FlushScratchAsync();   // land pending scratch writes before the tab list is cleared
         SaveWorkspace();
         // Reset (not dispose) the shared managers — they are reused for the next project. DisposeAsync
         // retires the session manager for good, which would make every later query throw.
@@ -98,6 +99,7 @@ public sealed partial class ShellViewModel
 
     public async Task NewProjectAsync(string projectDirectory, string name)
     {
+        await _workspace.FlushScratchAsync();   // as in OpenProjectAsync — don't drop a debounced write
         SaveWorkspace();
         // Reset (not dispose) the shared managers — they are reused for the next project (see OpenProjectAsync).
         await _sessions.CloseAllAsync();

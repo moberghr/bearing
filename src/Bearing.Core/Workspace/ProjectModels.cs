@@ -21,6 +21,14 @@ public sealed class Project
 
     /// <summary>Shared, committable SQL scripts live here.</summary>
     public string ScriptsDirectory => Path.Combine(Directory, "scripts");
+
+    /// <summary>
+    /// Scratch buffers get real files here, so unnamed work is still committable and greppable. A
+    /// subfolder of <see cref="ScriptsDirectory"/> rather than a sibling: it shows in the scripts tree like
+    /// any other folder (pinned first), but keeps unnamed work out of the curated set. Naming a scratch tab
+    /// moves its file out of here.
+    /// </summary>
+    public string ScratchDirectory => Path.Combine(ScriptsDirectory, "scratch");
 }
 
 /// <summary>One open editor tab in the per-user session (never shared).</summary>

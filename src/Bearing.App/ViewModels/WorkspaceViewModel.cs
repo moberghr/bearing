@@ -28,19 +28,31 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     private readonly ScriptsViewModel _scripts;
     private readonly ConnectionsViewModel _connections;
     private readonly IDialogService? _dialogs;
+    private readonly ScratchAutosave _autosave;
     private int _scratchCounter;
 
     public WorkspaceViewModel(WorkspaceContext ctx, ScriptsViewModel scripts, ConnectionsViewModel connections,
-        IDialogService? dialogs = null)
+        IDialogService? dialogs = null, ScratchAutosave? autosave = null)
     {
         _ctx = ctx;
         _scripts = scripts;
         _connections = connections;
         _dialogs = dialogs;
+        _autosave = autosave ?? new ScratchAutosave(ctx);
+        // A new scratch file appears in the tree; updates to an existing one don't move anything.
+        _autosave.Saved += _scripts.RefreshScripts;
         // Re-raise the binding notification when the selection changes underneath us (the context is the
         // single owner; the connections concern also listens to the same event).
         _ctx.SelectedTabChanged += () => OnPropertyChanged(nameof(SelectedTab));
     }
+
+    /// <summary>Write any pending scratch buffers now — the project-switch path, where a debounced write
+    /// would otherwise be dropped when the tab list is cleared.</summary>
+    public Task FlushScratchAsync() => _autosave.FlushAllAsync();
+
+    /// <summary>The shutdown counterpart: synchronous, and only for scratch tabs that already have a file.
+    /// See <see cref="ScratchAutosave.FlushExistingBlocking"/> for why it's narrower.</summary>
+    public void FlushScratchBlocking() => _autosave.FlushExistingBlocking();
 
     /// <summary>The open editor tabs (bound as the tab strip's ItemsSource).</summary>
     public ObservableCollection<EditorTabViewModel> Tabs => _ctx.Tabs;
@@ -54,10 +66,13 @@ public sealed partial class WorkspaceViewModel : ObservableObject
 
     // ---- Tab lifecycle -----------------------------------------------------------------------
 
+    /// <summary>Open a tab. With no <paramref name="scriptPath"/> it's a scratch buffer, which autosave
+    /// backs with a real file in the scratch folder as soon as it has content.</summary>
     public EditorTabViewModel NewTab(string text = "", string? scriptPath = null)
     {
         var inherit = SelectedTab?.ConnectionId ?? _ctx.DefaultConnectionId;
-        var tab = new EditorTabViewModel($"Scratch {++_scratchCounter}", text, scriptPath)
+        var isScratch = scriptPath is null || ScratchNaming.IsUnderScratch(scriptPath, _ctx.Project?.ScratchDirectory);
+        var tab = new EditorTabViewModel($"Scratch {++_scratchCounter}", text, scriptPath, isScratch)
         {
             ConnectionId = inherit,
         };
@@ -81,6 +96,10 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     public async Task<bool> CloseTabAsync(EditorTabViewModel tab)
     {
         if (!Tabs.Contains(tab)) return false;
+
+        // Land any debounced scratch write before deciding: a scratch tab whose text reached its file has
+        // nothing to lose and must close without a prompt.
+        if (tab.IsScratch) await _autosave.FlushAsync(tab);
 
         if (tab.HasUnsavedWork && _dialogs is { } dialogs)
         {
@@ -145,12 +164,17 @@ public sealed partial class WorkspaceViewModel : ObservableObject
                 // content as the clean baseline so an unsaved script comes back marked modified.
                 var disk = await _ctx.ScriptStore.ReadTextAsync(abs, CancellationToken.None);
                 var buffer = e.ScratchText ?? disk;
-                tab = NewTab(buffer, abs);
+                tab = NewTab(buffer, abs);   // NewTab re-derives IsScratch from where the file lives
                 tab.MarkSaved(disk);
                 tab.CaretOffset = Math.Clamp(e.CaretOffset, 0, buffer.Length);
+                // A scratch file keeps its label rather than showing its generated filename.
+                if (tab.IsScratch && e.ScratchName is { Length: > 0 } label) tab.DisplayName = label;
             }
             else
             {
+                // No file: either a pre-Phase-2 session with inlined scratch text, or a scratch file that
+                // has since been deleted. Either way it comes back as a scratch buffer and autosave will
+                // give it a fresh file on the next keystroke.
                 tab = NewTab(e.ScratchText ?? "");
                 tab.CaretOffset = Math.Clamp(e.CaretOffset, 0, tab.Text.Length);
                 if (e.ScratchName is { Length: > 0 } name) tab.DisplayName = name;
@@ -183,6 +207,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         var tab = SelectedTab ?? NewTab();
         tab.Text = text;
         tab.ScriptPath = absolutePath;
+        SyncScratchFlag(tab);
         tab.MarkSaved(text);
         _scripts.RefreshScripts();
         _ctx.SetStatus($"Opened {Path.GetFileName(absolutePath)}.");
@@ -199,16 +224,44 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         await _ctx.ScriptStore.WriteTextAsync(absolutePath, text, CancellationToken.None);
         tab.Text = text;
         tab.ScriptPath = absolutePath;
+        SyncScratchFlag(tab);   // saving somewhere the user chose promotes the tab out of scratch
         tab.MarkSaved(text);
         _scripts.RefreshScripts();
         _ctx.SetStatus($"Saved {Path.GetFileName(absolutePath)}.");
     }
 
-    /// <summary>Rename the selected tab: a scratch label, or the backing .sql file on disk (via scripts).</summary>
+    /// <summary>Re-derive scratch membership from where the tab's file now lives. Anything that repoints
+    /// <see cref="EditorTabViewModel.ScriptPath"/> must call this — a buffer is scratch because of the
+    /// folder it sits in, so a save, load, or move can promote it (or, moving the other way, demote it).</summary>
+    private void SyncScratchFlag(EditorTabViewModel tab)
+    {
+        if (tab.ScriptPath is null) return;   // no file yet: still an unnamed scratch buffer
+        tab.IsScratch = ScratchNaming.IsUnderScratch(tab.ScriptPath, _ctx.Project?.ScratchDirectory);
+    }
+
+    /// <summary>
+    /// Rename a tab. For a named script that's a file rename in place. For a scratch tab it's a
+    /// <b>promotion</b>: the pending buffer is flushed, then its file moves out of the scratch folder to
+    /// the scripts root under the new name — naming a scratch buffer is what makes it a curated script.
+    /// An empty scratch tab has no file to promote, so it just takes the new label and stays scratch.
+    /// </summary>
     public async Task RenameTabAsync(EditorTabViewModel tab, string newName)
     {
         if (string.IsNullOrWhiteSpace(newName)) return;
-        if (tab.IsScratch) tab.DisplayName = newName.Trim();
-        else if (tab.ScriptPath is { } path) await _scripts.RenameScriptAsync(path, newName.Trim());
+        newName = newName.Trim();
+
+        if (!tab.IsScratch)
+        {
+            if (tab.ScriptPath is { } named) await _scripts.RenameScriptAsync(named, newName);
+            return;
+        }
+
+        await _autosave.FlushAsync(tab);   // make sure there's a file to move, and that it's current
+        tab.DisplayName = newName;
+        if (tab.ScriptPath is not { } path || _ctx.Project is not { } project) return;
+
+        await _scripts.RenameScriptAsync(path, newName, project.ScriptsDirectory);
+        // Only leave scratch if the move actually happened (a name clash leaves the file where it was).
+        tab.IsScratch = ScratchNaming.IsUnderScratch(tab.ScriptPath, project.ScratchDirectory);
     }
 }

@@ -25,6 +25,7 @@ public sealed partial class ShellViewModel
     public void SaveWorkspace()
     {
         if (_project is null) return;
+        _workspace.FlushScratchBlocking();   // land the last keystrokes in the scratch files themselves
         try { _sessionStore.Save(_project.Directory, BuildSession()); }
         catch { /* best-effort on shutdown */ }
     }

@@ -14,12 +14,13 @@ namespace Bearing.App.ViewModels;
 /// </summary>
 public sealed partial class EditorTabViewModel : ObservableObject
 {
-    public EditorTabViewModel(string displayName, string text = "", string? scriptPath = null)
+    public EditorTabViewModel(string displayName, string text = "", string? scriptPath = null, bool isScratch = false)
     {
         _displayName = displayName;
         _text = text;
         _savedText = text;   // opened/created content is the clean baseline
         _scriptPath = scriptPath;
+        _isScratch = isScratch;
         UpdateHeader();
     }
 
@@ -31,17 +32,22 @@ public sealed partial class EditorTabViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsDirty))]
-    private string? _scriptPath;   // absolute path, or null for a scratch buffer
+    private string? _scriptPath;   // absolute path; null until a scratch tab's file is created
 
     /// <summary>True when the buffer differs from the last-saved content (drives the modified marker).</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsDirty))]
+    [NotifyPropertyChangedFor(nameof(HasUnsavedWork))]
     private bool _isModified;
 
-    /// <summary>Modified indicator applies to file-backed scripts (scratch buffers are always unsaved).</summary>
+    /// <summary>Modified indicator applies to named scripts; scratch is autosaved, so it never shows one.</summary>
     public bool IsDirty => !IsScratch && IsModified;
 
-    partial void OnTextChanged(string value) => IsModified = value != _savedText;
+    partial void OnTextChanged(string value)
+    {
+        IsModified = value != _savedText;
+        OnPropertyChanged(nameof(HasUnsavedWork)); // scratch's answer depends on the text itself, not IsModified
+    }
 
     /// <summary>Record <paramref name="savedText"/> as the clean baseline (on open/save) and recompute dirty state.</summary>
     public void MarkSaved(string savedText)
@@ -154,19 +160,31 @@ public sealed partial class EditorTabViewModel : ObservableObject
     /// <summary>Denormalized environment badge color for the header; null = neutral.</summary>
     [ObservableProperty] private string? _connectionColor;
 
-    /// <summary>True while backed by an unsaved scratch buffer.</summary>
-    public bool IsScratch => ScriptPath is null;
+    /// <summary>
+    /// True while this is a scratch buffer — an unnamed tab, whose file (once autosave creates one) lives
+    /// in the project's scratch folder. Set by the workspace, not derived from <see cref="ScriptPath"/>:
+    /// scratch tabs are file-backed now, so "has no path" no longer identifies them. Naming a scratch tab
+    /// moves its file out of the scratch folder and clears this.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsDirty))]
+    [NotifyPropertyChangedFor(nameof(HasUnsavedWork))]
+    private bool _isScratch;
 
     /// <summary>
-    /// True when closing this tab would lose work, and therefore must prompt: a scratch buffer with
-    /// content (nowhere on disk to recover it from), or a file-backed script with unsaved edits.
-    /// Whitespace-only scratch counts as empty, so closing an untouched new tab stays one keystroke.
+    /// True when closing this tab would lose work, and therefore must prompt. A file-backed script with
+    /// unsaved edits qualifies; a scratch tab does not once autosave has put its text on disk — the file
+    /// stays in the scratch folder after the tab closes. Scratch text that hasn't reached a file yet
+    /// (autosave debounce still pending, or the write failed) is the one case left to protect.
     /// </summary>
-    public bool HasUnsavedWork => IsScratch ? Text.Trim().Length > 0 : IsDirty;
+    public bool HasUnsavedWork => IsScratch ? ScriptPath is null && Text.Trim().Length > 0 : IsDirty;
 
-    partial void OnScriptPathChanged(string? value) => UpdateHeader();
+    partial void OnScriptPathChanged(string? value) { UpdateHeader(); OnPropertyChanged(nameof(HasUnsavedWork)); }
     partial void OnDisplayNameChanged(string value) => UpdateHeader();
+    partial void OnIsScratchChanged(bool value) => UpdateHeader();
 
+    /// <summary>A scratch tab shows its label ("Scratch 1"), not its generated <c>2026-08-06-01.sql</c>
+    /// filename — the file is an implementation detail until the tab is named and promoted.</summary>
     private void UpdateHeader()
-        => Header = ScriptPath is null ? DisplayName : Path.GetFileName(ScriptPath);
+        => Header = IsScratch || ScriptPath is null ? DisplayName : Path.GetFileName(ScriptPath);
 }

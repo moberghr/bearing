@@ -57,24 +57,39 @@ public sealed partial class ScriptsViewModel : ObservableObject
         bool Matches(string name) => filter.Length == 0 || name.Contains(filter, StringComparison.OrdinalIgnoreCase);
         ScriptItem Make(ScriptFileRef f) => new(f.Name, f.Path) { IsUnsaved = unsaved.Contains(f.Path) };
 
-        BuildScriptNodes(tree, ScriptNodes, filter, Matches, Make);
+        var scratchDir = _ctx.Project?.ScratchDirectory;
+        bool IsScratchFolder(string path) => scratchDir is not null
+            && string.Equals(Path.GetFullPath(path), Path.GetFullPath(scratchDir), StringComparison.OrdinalIgnoreCase);
+
+        BuildScriptNodes(tree, ScriptNodes, filter, Matches, Make, IsScratchFolder);
     }
 
     /// <summary>Recursively fill <paramref name="target"/> with subfolders (each nested) then scripts;
     /// returns how many scripts (matching the filter) are under this node. Also feeds the flat
     /// <see cref="Scripts"/> list. Empty folders show when unfiltered; while filtering, a folder shows
-    /// only if it has a matching descendant.</summary>
+    /// only if it has a matching descendant. The scratch folder is pinned above the curated folders
+    /// (it's the app's, not the user's) and collapsed by default so it stays out of the way.</summary>
     private int BuildScriptNodes(ScriptTree node, IList<object> target,
-        string filter, Func<string, bool> matches, Func<ScriptFileRef, ScriptItem> make)
+        string filter, Func<string, bool> matches, Func<ScriptFileRef, ScriptItem> make,
+        Func<string, bool> isScratchFolder)
     {
         var total = 0;
         foreach (var sub in node.Folders)
         {
-            var folder = new ScriptFolderViewModel(sub.Name, sub.Path) { IsExpanded = filter.Length > 0 };
-            var n = BuildScriptNodes(sub, folder.Children, filter, matches, make);
+            var scratch = isScratchFolder(sub.Path);
+            var folder = new ScriptFolderViewModel(sub.Name, sub.Path)
+            {
+                IsExpanded = filter.Length > 0 || !scratch,
+                IsScratch = scratch,
+            };
+            var n = BuildScriptNodes(sub, folder.Children, filter, matches, make, isScratchFolder);
             folder.Count = n;
             total += n;
-            if (n > 0 || filter.Length == 0) target.Add(folder);
+            if (n > 0 || filter.Length == 0)
+            {
+                if (scratch) target.Insert(0, folder); // pinned first; files are appended after all folders
+                else target.Add(folder);
+            }
         }
         foreach (var file in node.Files)
         {
@@ -123,14 +138,16 @@ public sealed partial class ScriptsViewModel : ObservableObject
         catch (Exception ex) { _ctx.SetStatus($"Move failed: {ex.Message}"); return; }
 
         foreach (var t in Tabs)
-            if (string.Equals(t.ScriptPath, sourcePath, StringComparison.Ordinal)) t.ScriptPath = dest;
+            if (string.Equals(t.ScriptPath, sourcePath, StringComparison.Ordinal)) Repoint(t, dest);
         RefreshScripts();
         _ctx.SetStatus($"Moved {Path.GetFileName(sourcePath)}.");
     }
 
-    public async Task RenameScriptAsync(string oldPath, string newName)
+    /// <summary>Rename a script, optionally relocating it to <paramref name="targetDir"/> in the same move
+    /// — that combination is how naming a scratch tab promotes its file out of the scratch folder.</summary>
+    public async Task RenameScriptAsync(string oldPath, string newName, string? targetDir = null)
     {
-        var dir = Path.GetDirectoryName(oldPath);
+        var dir = targetDir ?? Path.GetDirectoryName(oldPath);
         if (dir is null) return;
         if (!newName.EndsWith(".sql", StringComparison.OrdinalIgnoreCase)) newName += ".sql";
         var newPath = Path.Combine(dir, newName);
@@ -141,9 +158,17 @@ public sealed partial class ScriptsViewModel : ObservableObject
         catch (Exception ex) { _ctx.SetStatus($"Rename failed: {ex.Message}"); return; }
 
         foreach (var t in Tabs)
-            if (string.Equals(t.ScriptPath, oldPath, StringComparison.Ordinal)) t.ScriptPath = newPath;
+            if (string.Equals(t.ScriptPath, oldPath, StringComparison.Ordinal)) Repoint(t, newPath);
         RefreshScripts();
         _updateTitle();
         _ctx.SetStatus($"Renamed to {newName}.");
+    }
+
+    /// <summary>Point an open tab at a file's new location and re-derive whether it's still scratch —
+    /// dragging a file into or out of the scratch folder changes what the tab is, not just where it lives.</summary>
+    private void Repoint(EditorTabViewModel tab, string newPath)
+    {
+        tab.ScriptPath = newPath;
+        tab.IsScratch = Bearing.App.Workspace.ScratchNaming.IsUnderScratch(newPath, _ctx.Project?.ScratchDirectory);
     }
 }

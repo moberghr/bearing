@@ -104,11 +104,24 @@
                         <MenuItem Header="New script here…" Click="OnNewScriptInFolderClick"/>
                       </ContextMenu>
                     </Grid.ContextMenu>
+                    <!-- Curated folders get the amber folder glyph; the app-owned scratch folder is dimmed
+                         and marked so it reads as a holding pen rather than something the user curated. -->
                     <Path Grid.Column="0" Data="{StaticResource Icon.Folder}" Stroke="#E3B457"
                           StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round" Stretch="Uniform"
-                          Width="15" Height="15" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                    <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center"
-                               Foreground="{DynamicResource Text.Primary}"/>
+                          Width="15" Height="15" VerticalAlignment="Center" Margin="0,0,6,0"
+                          IsVisible="{Binding !IsScratch}"/>
+                    <Path Grid.Column="0" Data="{StaticResource Icon.File}" Stroke="{DynamicResource Text.Dim}"
+                          StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round" Stretch="Uniform"
+                          Width="15" Height="15" VerticalAlignment="Center" Margin="0,0,6,0"
+                          IsVisible="{Binding IsScratch}"/>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                      <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
+                                 Foreground="{DynamicResource Text.Primary}"/>
+                      <Border IsVisible="{Binding IsScratch}" VerticalAlignment="Center"
+                              Background="{DynamicResource Bg.TileActive}" CornerRadius="3" Padding="4,0">
+                        <TextBlock Text="auto" FontSize="10" Foreground="{DynamicResource Text.Dim}"/>
+                      </Border>
+                    </StackPanel>
                     <TextBlock Grid.Column="2" Text="{Binding Count}" VerticalAlignment="Center"
                                FontSize="11" Margin="6,0,4,0" Foreground="{DynamicResource Text.Faint}"/>
                   </Grid>
