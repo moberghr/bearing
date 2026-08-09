@@ -134,6 +134,11 @@ public sealed partial class ExecutionViewModel : ObservableObject
             }
         }
 
+        // AutosaveMode.OnExecute writes the buffer at the moment it runs, so what's on disk is what was
+        // executed. Before the run, not after: a query that errors or is cancelled still reflects the text
+        // that produced it. No-op in the other modes.
+        if (_ctx.Autosave is { } autosave) await autosave.OnExecutedAsync(tab);
+
         await RunExclusiveAsync(tab, async ct =>
         {
             // Push a server-side LIMIT for a single read-only SELECT so a remote server produces only

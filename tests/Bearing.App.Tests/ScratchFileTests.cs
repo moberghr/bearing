@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Bearing.App.Services;
 using Bearing.App.ViewModels;
 using Bearing.App.Workspace;
+using Bearing.Core.Workspace;
 using Bearing.Data;
 using Bearing.Persistence;
 using Xunit;
@@ -22,18 +23,19 @@ public class ScratchFileTests : IDisposable
 
     public void Dispose() { try { if (Directory.Exists(_root)) Directory.Delete(_root, true); } catch { } }
 
-    private ShellViewModel NewVm(IDialogService? dialogs = null) => new(
+    private ShellViewModel NewVm(IDialogService? dialogs = null, AutosaveMode mode = AutosaveMode.OnEdit) => new(
         new ProviderRegistry(),
         new JsonProjectStore(),
         new JsonSessionStore(),
         new SqliteQueryLog(Path.Combine(_root, "log.sqlite")),
         new FileRecentProjects(Path.Combine(_root, "recent.json")),
-        dialogs: dialogs ?? new FakeDialogs());
+        dialogs: dialogs ?? new FakeDialogs(),
+        settings: new AppSettings { AutosaveMode = mode });
 
     private async Task<ShellViewModel> Project([System.Runtime.CompilerServices.CallerMemberName] string name = "",
-        IDialogService? dialogs = null)
+        IDialogService? dialogs = null, AutosaveMode mode = AutosaveMode.OnEdit)
     {
-        var vm = NewVm(dialogs);
+        var vm = NewVm(dialogs, mode);
         await vm.InitializeAsync(Path.Combine(_root, name));
         return vm;
     }
@@ -168,21 +170,25 @@ public class ScratchFileTests : IDisposable
     }
 
     [Fact]
-    public async Task A_promoted_tab_stops_autosaving_and_starts_going_dirty()
+    public async Task A_promoted_tab_follows_the_named_script_rules()
     {
-        var vm = await Project();
+        // Autosave off, so "no longer scratch" is observable: a scratch buffer is written at checkpoints
+        // whatever the mode, whereas a promoted script obeys the mode like any other named file.
+        var vm = await Project(mode: AutosaveMode.Off);
         var tab = vm.Workspace.SelectedTab!;
         tab.Text = "select 1;";
-        await WaitForPath(tab);
+        await vm.Workspace.FlushScratchAsync();   // scratch reaches disk even with autosave off
+        Assert.NotNull(tab.ScriptPath);
         await vm.Workspace.RenameTabAsync(tab, "named");
         var path = tab.ScriptPath!;
 
         tab.Text = "select 1; -- edited";
         await vm.Workspace.FlushScratchAsync();
 
-        Assert.True(tab.IsDirty);                                      // named scripts save explicitly
+        Assert.False(tab.IsScratch);
+        Assert.True(tab.IsDirty);                                      // named scripts save explicitly now
         Assert.True(tab.HasUnsavedWork);
-        Assert.Equal("select 1;", await File.ReadAllTextAsync(path));   // untouched by autosave
+        Assert.Equal("select 1;", await File.ReadAllTextAsync(path));   // the checkpoint skipped it
     }
 
     [Fact]

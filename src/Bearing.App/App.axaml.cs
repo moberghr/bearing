@@ -59,7 +59,8 @@ public partial class App : Application
 
             var vm = new ShellViewModel(providers, projectStore, sessionStore, queryLog, recentProjects,
                 dialogs: new Views.DialogService(),
-                credentialPrompt: new Views.DialogCredentialPrompt());
+                credentialPrompt: new Views.DialogCredentialPrompt(),
+                settings: settings);
             LogStartup("vm created");
             var window = new MainWindow { DataContext = vm };
             LogStartup("window constructed");

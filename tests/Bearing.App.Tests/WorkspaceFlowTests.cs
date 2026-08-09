@@ -36,7 +36,9 @@ public class WorkspaceFlowTests : IDisposable
         new JsonSessionStore(),
         new SqliteQueryLog(Path.Combine(_root, "log.sqlite")),
         new FileRecentProjects(Path.Combine(_root, "recent.json")),
-        new FileFallbackSecretStore(Path.Combine(_root, "secrets")));
+        new FileFallbackSecretStore(Path.Combine(_root, "secrets")),
+        // Autosave off so dirty-state assertions stay meaningful; the modes have their own suite.
+        settings: new Bearing.Core.Workspace.AppSettings { AutosaveMode = Bearing.Core.Workspace.AutosaveMode.Off });
 
     private static async Task<bool> Reachable()
     {

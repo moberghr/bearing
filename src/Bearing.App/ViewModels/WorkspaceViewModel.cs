@@ -28,30 +28,35 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     private readonly ScriptsViewModel _scripts;
     private readonly ConnectionsViewModel _connections;
     private readonly IDialogService? _dialogs;
-    private readonly ScratchAutosave _autosave;
+    private readonly TabAutosave _autosave;
     private int _scratchCounter;
 
     public WorkspaceViewModel(WorkspaceContext ctx, ScriptsViewModel scripts, ConnectionsViewModel connections,
-        IDialogService? dialogs = null, ScratchAutosave? autosave = null)
+        IDialogService? dialogs = null, TabAutosave? autosave = null)
     {
         _ctx = ctx;
         _scripts = scripts;
         _connections = connections;
         _dialogs = dialogs;
-        _autosave = autosave ?? new ScratchAutosave(ctx);
+        _autosave = autosave ?? new TabAutosave(ctx);
+        _ctx.Autosave = _autosave;   // the execution concern signals runs through the context
         // A new scratch file appears in the tree; updates to an existing one don't move anything.
-        _autosave.Saved += _scripts.RefreshScripts;
+        _autosave.FileCreated += _scripts.RefreshScripts;
         // Re-raise the binding notification when the selection changes underneath us (the context is the
         // single owner; the connections concern also listens to the same event).
         _ctx.SelectedTabChanged += () => OnPropertyChanged(nameof(SelectedTab));
     }
 
-    /// <summary>Write any pending scratch buffers now — the project-switch path, where a debounced write
-    /// would otherwise be dropped when the tab list is cleared.</summary>
+    /// <summary>The autosave coordinator. Also reached by the execution concern through
+    /// <see cref="WorkspaceContext.Autosave"/> to signal a run for <see cref="AutosaveMode.OnExecute"/>.</summary>
+    public TabAutosave Autosave => _autosave;
+
+    /// <summary>Write any pending buffers now — the project-switch path, where a debounced write would
+    /// otherwise be dropped when the tab list is cleared.</summary>
     public Task FlushScratchAsync() => _autosave.FlushAllAsync();
 
-    /// <summary>The shutdown counterpart: synchronous, and only for scratch tabs that already have a file.
-    /// See <see cref="ScratchAutosave.FlushExistingBlocking"/> for why it's narrower.</summary>
+    /// <summary>The shutdown counterpart: synchronous, and only for tabs that already have a file.
+    /// See <see cref="TabAutosave.FlushExistingBlocking"/> for why it's narrower.</summary>
     public void FlushScratchBlocking() => _autosave.FlushExistingBlocking();
 
     /// <summary>The open editor tabs (bound as the tab strip's ItemsSource).</summary>
@@ -97,9 +102,10 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     {
         if (!Tabs.Contains(tab)) return false;
 
-        // Land any debounced scratch write before deciding: a scratch tab whose text reached its file has
-        // nothing to lose and must close without a prompt.
-        if (tab.IsScratch) await _autosave.FlushAsync(tab);
+        // Land any debounced write before deciding: a tab whose text already reached its file has nothing
+        // to lose and must close without a prompt. FlushAsync itself respects the autosave mode, so this
+        // can't quietly save a named script the user asked never to autosave.
+        await _autosave.FlushAsync(tab);
 
         if (tab.HasUnsavedWork && _dialogs is { } dialogs)
         {

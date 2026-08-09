@@ -91,10 +91,13 @@ switch and telling you about a finish you didn't watch.
     bundle `docs/design/editor-4a/`, left verbatim as a dated snapshot.
 - [ ] **P2** Settings screen + framework. Build a real settings window (the `Settings…` menu is still a
   "coming soon" stub) backed by a general settings framework: a typed settings model, load/save via
-  `AppSettingsStore`, and a UI that groups options by category. First tenants already have homes elsewhere
-  in this roadmap — query-log retention, the 30-min idle timeout, TLS/`sslmode` preference, restore-window-size —
-  which should migrate into this screen rather than staying file-edit-only or hard-coded constants. Model the
-  UI after the existing code-built `KeybindingsWindow` (Keyboard Shortcuts already lives under Edit ▸).
+  `AppSettingsStore`, and a UI that groups options by category. **The persistence half already exists** —
+  `Core/Workspace/AppSettings.cs` + `Persistence/AppSettingsStore.cs` (atomic write, defaults on a bad file);
+  what's missing is the window. Tenants already living in `settings.json` with **no UI**: query-log retention
+  and `AutosaveMode` (scratch phase 3). Tenants still hard-coded or unbuilt: the 30-min idle timeout,
+  TLS/`sslmode` preference, restore-window-size, base font size. Model the UI after the existing code-built
+  `KeybindingsWindow` (Keyboard Shortcuts already lives under Edit ▸).
+
 ### Scratch scripts — never lose work (3 phases, agreed 2026-08-06)
 
 Confirmed intent: (1) closing a tab must never silently drop work, file-backed *or* scratch; (2) scratch
@@ -150,16 +153,30 @@ close, *not* on window close — prompting at quit would be friction for zero sa
     backstop case of a scratch buffer that never reached a file (no project / failed write).
   - 24 tests (`ScratchNamingTests` 13, `ScratchFileTests` 11); 5 close-prompt tests rewritten for the new
     behaviour. **Not done, by decision:** retention/cleanup of abandoned scratch files, and gitignore.
-- [ ] **P2 · Phase 3 — configurable autosave.** Modes: autosave on edit (debounced), save on execute, off.
-  Extends autosave to **named scripts**, which today still save explicitly — Phase 2 deliberately left
-  scratch as the only autosaved thing, since being file-backed is what scratch *is*. **Depends on the
-  settings framework item below** — this is the fifth tenant of it, and the mode needs a real home before it
-  can be anything but a constant. Seam: `ScratchAutosave` already owns the debounce, per-tab scheduling, and
-  the flush-on-close/switch/shutdown paths; generalising it means dropping the `IsScratch` filter in
-  `OnTabPropertyChanged`/`SaveAsync` and gating on the mode instead. Interactions to settle: with autosave
-  on edit, `IsDirty` and the tab-strip dot lose meaning for named scripts, and Phase 1's prompt stops firing
-  for everything — the prompt must stay correct under **every** mode (including "off"), not be deleted once
-  autosave exists.
+- [x] **P2 · Phase 3 — configurable autosave** — **done 2026-08-07** *(live QA)*. `AppSettings.AutosaveMode`
+  (`OnEdit` / `OnExecute` / `Off`), read from `settings.json`. `ScratchAutosave` generalised and renamed
+  **`TabAutosave`** — it now covers named scripts too, gated on the mode instead of on `IsScratch`.
+  - **`OnEdit` is the default, so named scripts now write themselves as you type.** That is the behaviour
+    change to know about: under the default, a saved `.sql` never goes dirty, the tab-strip dot effectively
+    never appears, and Phase 1's close prompt never fires for it. Git is the undo. Anyone who wants the old
+    behaviour sets `"autosaveMode": "Off"`.
+  - **Scratch is exempt from the mode.** Its file is the buffer's only home, so it is still written at the
+    checkpoints that would otherwise lose it (tab close, project switch, shutdown) in **every** mode, `Off`
+    included — but under `Off` it no longer writes on each keystroke, only at those checkpoints. Named
+    scripts get no checkpoint writes: `FlushAsync`/`FlushExistingBlocking` both bail for them under `Off`,
+    so a checkpoint can't sneak past the setting.
+  - `OnExecute` fires from `ExecutionViewModel.ExecuteAsync` **after** its guards and the write-confirm, at
+    the point of no return — a run blocked by "no connection" or a cancelled write-confirm never happened,
+    so it doesn't save. Reached via `WorkspaceContext.Autosave` so the execution concern needn't depend on
+    the workspace VM.
+  - Phase 1's prompt is still correct under every mode, as required: `Off` → the guard for dirty named
+    scripts; `OnExecute` → guards edits made since the last run; `OnEdit` → only the unbacked-scratch
+    backstop is left. There's a test per mode.
+  - 14 tests (`AutosaveModeTests`), including a `SkippableFact` that covers the `ExecuteAsync` wiring
+    through a real run — the in-process tests exercise `OnExecutedAsync` directly, which can't prove the
+    call site. 5 pre-existing tests now pin `AutosaveMode.Off` explicitly, since dirty state is only
+    observable when nothing is autosaving.
+  - **Still file-edit-only** — no UI. The settings screen below is where this mode should surface.
 - [ ] **P3** **A failed schema expand is sticky until Refresh.** `EnsureChildrenAsync` sets `_loaded = true`
   *before* the load (`SchemaNodes.cs:73`), so collapsing and re-expanding a node that errored replays the
   stale error instead of retrying. Refresh server metadata does clear it, so this is a papercut, not a
@@ -359,8 +376,9 @@ close, *not* on window close — prompting at quit would be friction for zero sa
   - **Write-confirm dialog** — showing the SQL and reworking Preview SQL are one job.
   - **`ConnectionInfo.Options` handling** — the P3 factory item is the prerequisite for any app-level
     (`entra.*`) option key, since unknown keys currently reach Npgsql and throw.
-  - **Settings framework** — gates five items (query-log retention, idle timeout, TLS preference, base font
-    size, and the scratch Phase 3 autosave mode).
+  - **Settings framework** — the model/store exist; only the UI is missing. Five options want a home in it
+    (query-log retention and autosave mode are live but file-edit-only; idle timeout, TLS preference, and
+    base font size aren't settings yet).
   - **Editor text ops** — the `Ctrl+U`/`Ctrl+W` helpers landed as `Bearing.Sql/TextDeleter.cs`; carving up
     `MainWindow.Commands.cs` still touches the same code, and `EditorSpan`/`ApplyDelete` are the shape the
     rest of the editor ops should be pulled into.

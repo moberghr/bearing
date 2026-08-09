@@ -65,10 +65,11 @@ public sealed partial class ShellViewModel : ObservableObject
         ISecretStore? secretStore = null,
         IDialogService? dialogs = null,
         Connections.ICredentialPrompt? credentialPrompt = null,
-        Connections.IEntraTokenProvider? entraTokens = null)
+        Connections.IEntraTokenProvider? entraTokens = null,
+        Core.Workspace.AppSettings? settings = null)
     {
         _ctx = new WorkspaceContext(providers, projectStore, sessionStore, queryLog, recentProjects, secretStore,
-            credentialPrompt: credentialPrompt, entraTokens: entraTokens);
+            credentialPrompt: credentialPrompt, entraTokens: entraTokens, settings: settings);
         _ctx.Status = text => StatusText = text;
         _connections = new ConnectionsViewModel(_ctx);
         _scripts = new ScriptsViewModel(_ctx, UpdateTitle);

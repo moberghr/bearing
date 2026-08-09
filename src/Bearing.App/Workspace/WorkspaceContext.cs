@@ -27,8 +27,10 @@ public sealed class WorkspaceContext
         ISecretStore? secrets = null,
         IScriptStore? scriptStore = null,
         ICredentialPrompt? credentialPrompt = null,
-        IEntraTokenProvider? entraTokens = null)
+        IEntraTokenProvider? entraTokens = null,
+        AppSettings? settings = null)
     {
+        Settings = settings ?? new AppSettings();
         Providers = providers;
         ProjectStore = projectStore;
         SessionStore = sessionStore;
@@ -56,6 +58,14 @@ public sealed class WorkspaceContext
     public CredentialResolver Credentials { get; }
     public IConnectionSessionManager Sessions { get; }
     public ISchemaBrowser Schema { get; }
+
+    /// <summary>User preferences loaded at startup (autosave mode, query-log retention). Defaults when
+    /// none were supplied, so headless/test construction behaves like a fresh install.</summary>
+    public AppSettings Settings { get; }
+
+    /// <summary>Writes buffers to disk without an explicit Save. Lives here so the execution concern can
+    /// signal a run (the <c>OnExecute</c> mode) without depending on the workspace view-model.</summary>
+    public TabAutosave? Autosave { get; set; }
 
     // ---- shared state -------------------------------------------------------------------------
     /// <summary>The open project (manifest + directory), or null before one is loaded.</summary>

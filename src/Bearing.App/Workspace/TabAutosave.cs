@@ -12,19 +12,26 @@ using Bearing.Core.Workspace;
 namespace Bearing.App.Workspace;
 
 /// <summary>
-/// Keeps every scratch tab backed by a real file under the project's scratch folder, written as you type
-/// (debounced). This is what makes unnamed work committable and greppable instead of living only inside
-/// <c>session.json</c>.
+/// Writes editor buffers to disk without an explicit Save. Two jobs that share one debounce:
 ///
-/// <para>The file is created <b>lazily, on first non-blank content</b> — not when the tab opens. Opening a
-/// tab you never type in would otherwise leave an empty file behind forever, and there is deliberately no
-/// cleanup pass to sweep them up.</para>
+/// <list type="bullet">
+/// <item><b>Scratch buffers</b> are kept backed by a real file under the project's scratch folder — that
+/// file is the buffer's only home, so it is written at the checkpoints that would otherwise lose it (tab
+/// close, project switch, shutdown) in <i>every</i> mode, <see cref="AutosaveMode.Off"/> included.</item>
+/// <item><b>Named scripts</b> are the user's, so they are written only when
+/// <see cref="AutosaveMode"/> says so. Under <see cref="AutosaveMode.Off"/> they go dirty and the
+/// close prompt is what guards them.</item>
+/// </list>
 ///
-/// <para>Writes are best-effort in the same spirit as the rest of the persistence layer: a failure leaves
+/// <para>A scratch file is created <b>lazily, on first non-blank content</b> — not when the tab opens.
+/// Opening a tab you never type in would otherwise leave an empty file behind forever, and there is
+/// deliberately no cleanup pass to sweep them up.</para>
+///
+/// <para>Writes are best-effort in the spirit of the rest of the persistence layer (§5.2): a failure leaves
 /// the buffer untouched and surfaces in the status bar, and the tab keeps its unsaved-work status so the
 /// close prompt still catches it.</para>
 /// </summary>
-public sealed class ScratchAutosave : IDisposable
+public sealed class TabAutosave : IDisposable
 {
     private readonly WorkspaceContext _ctx;
     private readonly TimeSpan _debounce;
@@ -33,7 +40,7 @@ public sealed class ScratchAutosave : IDisposable
     private readonly HashSet<EditorTabViewModel> _watched = new();
     private bool _disposed;
 
-    public ScratchAutosave(WorkspaceContext ctx, TimeSpan? debounce = null, Func<DateOnly>? today = null)
+    public TabAutosave(WorkspaceContext ctx, TimeSpan? debounce = null, Func<DateOnly>? today = null)
     {
         _ctx = ctx;
         _debounce = debounce ?? TimeSpan.FromMilliseconds(600);
@@ -42,8 +49,10 @@ public sealed class ScratchAutosave : IDisposable
         foreach (var tab in _ctx.Tabs) Watch(tab);
     }
 
-    /// <summary>Raised after a scratch file is created or updated, so the scripts tree can refresh.</summary>
-    public event Action? Saved;
+    private AutosaveMode Mode => _ctx.Settings.AutosaveMode;
+
+    /// <summary>Raised after a scratch file is created, so the scripts tree can pick it up.</summary>
+    public event Action? FileCreated;
 
     private void OnTabsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
@@ -68,7 +77,8 @@ public sealed class ScratchAutosave : IDisposable
     private void OnTabPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName != nameof(EditorTabViewModel.Text)) return;
-        if (sender is EditorTabViewModel { IsScratch: true } tab) Schedule(tab);
+        if (Mode != AutosaveMode.OnEdit) return;   // other modes don't write while typing
+        if (sender is EditorTabViewModel tab) Schedule(tab);
     }
 
     private void Schedule(EditorTabViewModel tab)
@@ -93,34 +103,41 @@ public sealed class ScratchAutosave : IDisposable
     }
 
     /// <summary>
-    /// Write one scratch tab's buffer now, bypassing the debounce — used on the paths that must not lose a
-    /// pending write (tab close, project switch, shutdown). No-op for a named script or an empty buffer.
+    /// Write one tab's buffer now, bypassing the debounce — the checkpoints that must not lose a pending
+    /// write (tab close, project switch). Scratch is written whatever the mode; a named script only when
+    /// the mode already writes it, so a checkpoint can't sneak past <see cref="AutosaveMode.Off"/>.
     /// </summary>
     public async Task FlushAsync(EditorTabViewModel tab)
     {
         if (_pending.Remove(tab, out var cts)) { cts.Cancel(); cts.Dispose(); }
+        if (!tab.IsScratch && Mode == AutosaveMode.Off) return;
         await SaveAsync(tab);
     }
 
-    /// <summary>Flush every watched scratch tab (project switch).</summary>
+    /// <summary>Flush every watched tab (project switch).</summary>
     public async Task FlushAllAsync()
     {
         foreach (var tab in _watched.ToList()) await FlushAsync(tab);
     }
 
+    /// <summary>The tab just ran its SQL — the write point for <see cref="AutosaveMode.OnExecute"/>.</summary>
+    public Task OnExecutedAsync(EditorTabViewModel tab)
+        => Mode == AutosaveMode.OnExecute ? SaveAsync(tab) : Task.CompletedTask;
+
     /// <summary>
     /// Synchronous last-chance write for the shutdown path, which can't await. Deliberately narrower than
-    /// <see cref="FlushAllAsync"/>: it only rewrites scratch tabs that <b>already have a file</b>, and it
-    /// touches no view-model property. Creating a file here would mean assigning <c>ScriptPath</c> — a
-    /// property change raised on whichever thread is tearing the app down, with bindings still live.
-    /// A brand-new scratch buffer loses nothing by being skipped: its text is in <c>session.json</c>, and
-    /// autosave gives it a file on the next keystroke after restart.
+    /// <see cref="FlushAllAsync"/>: it only rewrites tabs that <b>already have a file</b>, and it touches no
+    /// view-model property. Creating a file here would mean assigning <c>ScriptPath</c> — a property change
+    /// raised on whichever thread is tearing the app down, with bindings still live. A brand-new scratch
+    /// buffer loses nothing by being skipped: its text is in <c>session.json</c>, and it gets a file on the
+    /// next keystroke after restart.
     /// </summary>
     public void FlushExistingBlocking()
     {
         foreach (var tab in _watched.ToList())
         {
-            if (!tab.IsScratch || tab.ScriptPath is not { } path || tab.Text.Trim().Length == 0) continue;
+            if (!tab.IsScratch && Mode == AutosaveMode.Off) continue;
+            if (tab.ScriptPath is not { } path || tab.Text.Trim().Length == 0) continue;
             var text = tab.Text;
             try { Task.Run(() => _ctx.ScriptStore.WriteTextAsync(path, text, CancellationToken.None)).GetAwaiter().GetResult(); }
             catch { /* best-effort on shutdown (§5.2) */ }
@@ -129,28 +146,30 @@ public sealed class ScratchAutosave : IDisposable
 
     private async Task SaveAsync(EditorTabViewModel tab)
     {
-        if (!tab.IsScratch || _ctx.Project is not { } project) return;
-        if (tab.Text.Trim().Length == 0) return;   // nothing worth a file yet
+        if (tab.Text.Trim().Length == 0 && tab.ScriptPath is null) return;   // nothing worth a file yet
+        if (!tab.IsScratch && tab.ScriptPath is null) return;                // a named tab always has a path
+        if (tab.IsScratch && _ctx.Project is null) return;                   // nowhere to put a scratch file
 
         try
         {
-            var path = tab.ScriptPath ?? CreatePath(project);
+            var path = tab.ScriptPath ?? CreateScratchPath(_ctx.Project!);
             await _ctx.ScriptStore.WriteTextAsync(path, tab.Text, CancellationToken.None);
             var isNew = tab.ScriptPath is null;
             tab.ScriptPath = path;
             tab.MarkSaved(tab.Text);
-            if (isNew) Saved?.Invoke();            // a new file changes the tree; an update doesn't
+            if (isNew) FileCreated?.Invoke();      // a new file changes the tree; an update doesn't
         }
         catch (Exception ex)
         {
-            // Best-effort (§5.2): never take the buffer down with the write. HasUnsavedWork still reports
-            // true while ScriptPath is null, so the close prompt remains the backstop.
-            _ctx.SetStatus($"Could not autosave scratch: {ex.Message}");
+            // Best-effort (§5.2): never take the buffer down with the write. For scratch, HasUnsavedWork
+            // still reports true while ScriptPath is null; for a named script IsDirty stays true. Either
+            // way the close prompt remains the backstop.
+            _ctx.SetStatus($"Could not autosave {tab.Header}: {ex.Message}");
         }
     }
 
     /// <summary>Reserve the next free dated filename in the scratch folder.</summary>
-    private string CreatePath(Project project)
+    private string CreateScratchPath(Project project)
     {
         var dir = project.ScratchDirectory;
         _ctx.ScriptStore.CreateFolder(dir);
