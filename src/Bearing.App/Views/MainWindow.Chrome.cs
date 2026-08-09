@@ -102,10 +102,7 @@ public partial class MainWindow
         if (Vm is not null) Vm.ActivePanel = SidePanel.History;
     }
 
-    private void OnSettingsClick(object? sender, RoutedEventArgs e)
-    {
-        if (Vm is not null) Vm.StatusText = "Settings — coming soon.";
-    }
+    private async void OnSettingsClick(object? sender, RoutedEventArgs e) => await OpenSettingsAsync();
 
     // ---- database pill selection (driven in code; async ItemsSource defeats a plain binding) ----
     private bool _syncingDb;

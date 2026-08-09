@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Bearing.App.Services;
+using Bearing.App.Settings;
 using Bearing.App.ViewModels;
 using Bearing.Core.Workspace;
 using Bearing.Data;
@@ -31,7 +32,7 @@ public class CloseTabPromptTests : IDisposable
         // Autosave off: this class is about the prompt, which is what guards a named script when nothing
         // writes it automatically. Under the default OnEdit a named script never goes dirty (see
         // AutosaveModeTests), so there'd be nothing to prompt about.
-        settings: new AppSettings { AutosaveMode = AutosaveMode.Off });
+        settings: SettingsService.InMemory(new AppSettings { AutosaveMode = AutosaveMode.Off }));
 
     private async Task<ShellViewModel> Project(IDialogService dialogs, [System.Runtime.CompilerServices.CallerMemberName] string name = "")
     {

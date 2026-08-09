@@ -12,6 +12,16 @@ public partial class MainWindow
 
     private async void OnEditKeybindingsClick(object? sender, RoutedEventArgs e) => await EditKeybindingsAsync();
 
+    /// <summary>settings.open: the application settings dialog. Edits apply and persist as they're made,
+    /// so there is nothing to save here; the window only reports back when the user asked to jump to the
+    /// keyboard-shortcuts editor instead.</summary>
+    private async Task OpenSettingsAsync()
+    {
+        if (Vm is null) return;
+        var toKeybindings = await new SettingsWindow(Vm.SettingsService).ShowDialog<bool>(this);
+        if (toKeybindings) await EditKeybindingsAsync();
+    }
+
     /// <summary>settings.keybindings: edit the keymap, then persist the minimal diff, apply it live to the
     /// dispatcher, and refresh the menu gestures.</summary>
     private async Task EditKeybindingsAsync()

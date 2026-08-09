@@ -66,11 +66,13 @@ public sealed partial class ShellViewModel : ObservableObject
         IDialogService? dialogs = null,
         Connections.ICredentialPrompt? credentialPrompt = null,
         Connections.IEntraTokenProvider? entraTokens = null,
-        Core.Workspace.AppSettings? settings = null)
+        Settings.SettingsService? settings = null)
     {
         _ctx = new WorkspaceContext(providers, projectStore, sessionStore, queryLog, recentProjects, secretStore,
             credentialPrompt: credentialPrompt, entraTokens: entraTokens, settings: settings);
         _ctx.Status = text => StatusText = text;
+        EditorFontSize = _ctx.Settings.EditorFontSize;
+        _ctx.SettingsService.Changed += s => EditorFontSize = s.EditorFontSize;
         _connections = new ConnectionsViewModel(_ctx);
         _scripts = new ScriptsViewModel(_ctx, UpdateTitle);
         // The workspace owns the tabs and coordinates with the scripts concern (refresh tree / rename file)
@@ -86,6 +88,13 @@ public sealed partial class ShellViewModel : ObservableObject
     public ScriptsViewModel Scripts => _scripts;
     public WorkspaceViewModel Workspace => _workspace;
     public ExecutionViewModel Execution => _execution;
+
+    /// <summary>Owns the live preferences; the settings window writes through it and the shell mirrors
+    /// the bits the XAML binds to (see <see cref="EditorFontSize"/>).</summary>
+    public Settings.SettingsService SettingsService => _ctx.SettingsService;
+
+    /// <summary>Editor point size, mirrored from settings so the editor can bind it and re-size live.</summary>
+    [ObservableProperty] private double _editorFontSize = 14;
 
     [ObservableProperty] private string _statusText = "Not connected.";
 

@@ -25,7 +25,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
 {
     private readonly IProviderRegistry _providers;
     private readonly Func<CredentialResolver?> _credentials;
-    private readonly TimeSpan _idleTimeout;
+    private TimeSpan _idleTimeout;
     private readonly Func<DateTime> _clock;
     private readonly Timer? _sweepTimer;
 
@@ -61,14 +61,32 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         _credentials = credentials;
         _idleTimeout = idleTimeout ?? DefaultIdleTimeout;
         _clock = clock ?? (() => DateTime.UtcNow);
-        // Sweep roughly every minute (never more often than needed to catch the timeout). Tests pass
-        // runSweepTimer:false and drive SweepIdleAsync directly.
+        // Tests pass runSweepTimer:false and drive SweepIdleAsync directly.
         if (runSweepTimer)
         {
-            var period = TimeSpan.FromMilliseconds(Math.Clamp(_idleTimeout.TotalMilliseconds / 4, 15_000, 60_000));
-            _sweepTimer = new Timer(_ => _ = SweepIdleAsync(), null, period, period);
+            _sweepTimer = new Timer(_ => _ = SweepIdleAsync(), null, SweepPeriod, SweepPeriod);
         }
     }
+
+    /// <summary>
+    /// How long an unused, unleased session is kept before the sweep closes it. Settable so the setting
+    /// applies to the running app: the next sweep uses the new value, and the sweep's own cadence is
+    /// rescheduled so a shortened timeout isn't waited out at the old period.
+    /// </summary>
+    public TimeSpan IdleTimeout
+    {
+        get => _idleTimeout;
+        set
+        {
+            if (value <= TimeSpan.Zero || value == _idleTimeout) return;
+            _idleTimeout = value;
+            _sweepTimer?.Change(SweepPeriod, SweepPeriod);
+        }
+    }
+
+    // Sweep roughly every minute — often enough to catch the timeout, never busier than needed.
+    private TimeSpan SweepPeriod
+        => TimeSpan.FromMilliseconds(Math.Clamp(_idleTimeout.TotalMilliseconds / 4, 15_000, 60_000));
 
     public Task<ConnectionSession> GetOrConnectAsync(ConnectionInfo info, CancellationToken ct)
     {

@@ -107,7 +107,10 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         // can't quietly save a named script the user asked never to autosave.
         await _autosave.FlushAsync(tab);
 
-        if (tab.HasUnsavedWork && _dialogs is { } dialogs)
+        // ConfirmTabClose off means the user has accepted that a close discards unsaved work — the one
+        // setting whose whole purpose is to remove a safety net, so it gates only the prompt, never the
+        // autosave flush above.
+        if (tab.HasUnsavedWork && _ctx.Settings.ConfirmTabClose && _dialogs is { } dialogs)
         {
             switch (await dialogs.ConfirmCloseTabAsync(tab.Header))
             {

@@ -38,6 +38,7 @@ public static class CommandIds
     public const string PanelHistory = "panel.history";
     public const string ConnectionNew = "connection.new";
     public const string SettingsKeybindings = "settings.keybindings";
+    public const string SettingsOpen = "settings.open";
 
     // Editor
     public const string EditorOpenLineBelow = "editor.openLineBelow";

@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Bearing.App.Services;
+using Bearing.App.Settings;
 using Bearing.App.ViewModels;
 using Bearing.App.Workspace;
 using Bearing.Core.Workspace;
@@ -30,7 +31,7 @@ public class ScratchFileTests : IDisposable
         new SqliteQueryLog(Path.Combine(_root, "log.sqlite")),
         new FileRecentProjects(Path.Combine(_root, "recent.json")),
         dialogs: dialogs ?? new FakeDialogs(),
-        settings: new AppSettings { AutosaveMode = mode });
+        settings: SettingsService.InMemory(new AppSettings { AutosaveMode = mode }));
 
     private async Task<ShellViewModel> Project([System.Runtime.CompilerServices.CallerMemberName] string name = "",
         IDialogService? dialogs = null, AutosaveMode mode = AutosaveMode.OnEdit)

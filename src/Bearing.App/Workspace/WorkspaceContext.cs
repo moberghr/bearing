@@ -2,6 +2,7 @@ using System;
 using System.Collections.ObjectModel;
 using System.Linq;
 using Bearing.App.Connections;
+using Bearing.App.Settings;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
 using Bearing.Core.Logging;
@@ -28,9 +29,9 @@ public sealed class WorkspaceContext
         IScriptStore? scriptStore = null,
         ICredentialPrompt? credentialPrompt = null,
         IEntraTokenProvider? entraTokens = null,
-        AppSettings? settings = null)
+        SettingsService? settings = null)
     {
-        Settings = settings ?? new AppSettings();
+        SettingsService = settings ?? SettingsService.InMemory();
         Providers = providers;
         ProjectStore = projectStore;
         SessionStore = sessionStore;
@@ -41,9 +42,17 @@ public sealed class WorkspaceContext
         // Credential resolution reads the secret store lazily (via () => Secrets) so a late
         // AttachSecretStore still applies; prompted passwords / Entra tokens are cached in-memory here.
         Credentials = new CredentialResolver(() => Secrets, credentialPrompt, entraTokens ?? new EntraTokenProvider());
-        Sessions = new ConnectionSessionManager(providers, () => Credentials);
+        var sessions = new ConnectionSessionManager(providers, () => Credentials, IdleTimeout(Settings));
+        Sessions = sessions;
         Schema = new SchemaBrowser(providers, () => Credentials);
+
+        // The idle sweep is the one service that caches a setting rather than reading it per use, so it
+        // has to be told when the setting changes.
+        SettingsService.Changed += s => sessions.IdleTimeout = IdleTimeout(s);
     }
+
+    private static TimeSpan IdleTimeout(AppSettings s)
+        => TimeSpan.FromMinutes(Math.Max(1, s.ConnectionIdleTimeoutMinutes));
 
     // ---- services -----------------------------------------------------------------------------
     public IProviderRegistry Providers { get; }
@@ -59,9 +68,15 @@ public sealed class WorkspaceContext
     public IConnectionSessionManager Sessions { get; }
     public ISchemaBrowser Schema { get; }
 
-    /// <summary>User preferences loaded at startup (autosave mode, query-log retention). Defaults when
-    /// none were supplied, so headless/test construction behaves like a fresh install.</summary>
-    public AppSettings Settings { get; }
+    /// <summary>Owns the live user preferences: edits, persistence, and the change broadcast. Defaults
+    /// backed by nothing when none were supplied, so headless/test construction behaves like a fresh
+    /// install.</summary>
+    public SettingsService SettingsService { get; }
+
+    /// <summary>The preferences in force right now. A property, not a snapshot — every read goes through
+    /// the service, so a setting changed in the settings window takes effect at the next read with no
+    /// subscription needed. Only cache this if you also subscribe to the service's Changed event.</summary>
+    public AppSettings Settings => SettingsService.Current;
 
     /// <summary>Writes buffers to disk without an explicit Save. Lives here so the execution concern can
     /// signal a run (the <c>OnExecute</c> mode) without depending on the workspace view-model.</summary>

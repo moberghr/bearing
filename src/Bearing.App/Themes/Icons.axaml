@@ -25,8 +25,9 @@
   <!-- History: a clock -->
   <StreamGeometry x:Key="Icon.History">M4,12 a8,8 0 1 1 16,0 a8,8 0 1 1 -16,0 M12,7 v5.3 l3.5,2</StreamGeometry>
 
-  <!-- Settings: a gear (center ring + spokes) -->
-  <StreamGeometry x:Key="Icon.Settings">M9.5,12 a2.5,2.5 0 1 1 5,0 a2.5,2.5 0 1 1 -5,0 M12,3 v3 M12,18 v3 M3,12 h3 M18,12 h3 M5.6,5.6 l2.1,2.1 M16.3,16.3 l2.1,2.1 M18.4,5.6 l-2.1,2.1 M5.6,18.4 l2.1,-2.1</StreamGeometry>
+  <!-- Settings: a cog — closed 6-tooth outline (tips r=9.8, roots r=7.0, arc between teeth) + centre hole.
+       Detached radial spokes were tried first and read as a brightness/light-dark toggle, not a cog. -->
+  <StreamGeometry x:Key="Icon.Settings">M9.26,5.56 L9.80,2.45 L14.20,2.45 L14.74,5.56 A7.00,7.00 0 0 1 16.21,6.41 L19.17,5.32 L21.37,9.13 L18.95,11.15 A7.00,7.00 0 0 1 18.95,12.85 L21.37,14.87 L19.17,18.68 L16.21,17.59 A7.00,7.00 0 0 1 14.74,18.44 L14.20,21.55 L9.80,21.55 L9.26,18.44 A7.00,7.00 0 0 1 7.79,17.59 L4.83,18.68 L2.63,14.87 L5.05,12.85 A7.00,7.00 0 0 1 5.05,11.15 L2.63,9.13 L4.83,5.32 L7.79,6.41 A7.00,7.00 0 0 1 9.26,5.56 Z M8.80,12.00 a3.2,3.2 0 1 0 6.4,0 a3.2,3.2 0 1 0 -6.4,0</StreamGeometry>
 
   <!-- Search: magnifier -->
   <StreamGeometry x:Key="Icon.Search">M10,4 a6,6 0 1 1 0,12 a6,6 0 1 1 0,-12 M14.5,14.5 l5,5</StreamGeometry>

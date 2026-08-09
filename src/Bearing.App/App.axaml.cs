@@ -3,6 +3,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
@@ -53,17 +54,34 @@ public partial class App : Application
             var providers = new ProviderRegistry();
             IProjectStore projectStore = new JsonProjectStore();
             ISessionStore sessionStore = new JsonSessionStore();
-            var settings = new AppSettingsStore().Load();
-            IQueryLog queryLog = new SqliteQueryLog(retentionDays: settings.QueryLogRetentionDays);
+            var settings = new Settings.SettingsService(new AppSettingsStore());
+            IQueryLog queryLog = new SqliteQueryLog(retentionDays: settings.Current.QueryLogRetentionDays);
             IRecentProjects recentProjects = new FileRecentProjects();
 
             var vm = new ShellViewModel(providers, projectStore, sessionStore, queryLog, recentProjects,
                 dialogs: new Views.DialogService(),
                 credentialPrompt: new Views.DialogCredentialPrompt(),
                 settings: settings);
+            // A settings file that can't be written is a status-bar problem, not a crash (§5.2).
+            settings.SaveFailed = message => vm.StatusText = message;
             LogStartup("vm created");
             var window = new MainWindow { DataContext = vm };
             LogStartup("window constructed");
+
+            // Window size is persisted state, not a preference — the setting only decides whether it is
+            // replayed. Position is deliberately left to the window manager (Wayland won't honour it
+            // anyway), and a maximized window isn't recorded, so un-maximizing returns to a real size.
+            if (settings.Current is { RestoreWindowSize: true, WindowWidth: { } w, WindowHeight: { } h }
+                && w > 200 && h > 200)
+            {
+                window.Width = w;
+                window.Height = h;
+            }
+            window.Closing += (_, _) =>
+            {
+                if (window.WindowState != WindowState.Normal) return;
+                settings.Update(s => s with { WindowWidth = window.Width, WindowHeight = window.Height });
+            };
 
             // Persist the session on every exit path, exactly once. A window close fires Closing on
             // the UI thread; a killed process (Ctrl+C in the terminal, IDE stop) shuts the runtime

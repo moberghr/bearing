@@ -7,12 +7,14 @@ namespace Bearing.Persistence;
 /// Reads/writes <see cref="AppSettings"/> as <c>settings.json</c> in the config dir. Best-effort: a
 /// missing or malformed file yields defaults so a bad edit can never stop the app from starting.
 /// </summary>
-public sealed class AppSettingsStore
+public sealed class AppSettingsStore : IAppSettingsStore
 {
     private readonly string _path;
 
     public AppSettingsStore(string? path = null)
         => _path = path ?? Path.Combine(BearingPaths.ConfigDir, "settings.json");
+
+    public string Location => _path;
 
     public AppSettings Load()
     {

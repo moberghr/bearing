@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Bearing.App.Services;
+using Bearing.App.Settings;
 using Bearing.App.ViewModels;
 using Bearing.Core.Workspace;
 using Bearing.Data;
@@ -30,7 +31,7 @@ public class AutosaveModeTests : IDisposable
         new FileRecentProjects(Path.Combine(_root, "recent.json")),
         new FileFallbackSecretStore(Path.Combine(_root, "secrets")),
         dialogs: dialogs ?? new FakeDialogs(),
-        settings: new AppSettings { AutosaveMode = mode });
+        settings: SettingsService.InMemory(new AppSettings { AutosaveMode = mode }));
 
     private async Task<ShellViewModel> Project(AutosaveMode mode, IDialogService? dialogs = null,
         [System.Runtime.CompilerServices.CallerMemberName] string name = "")

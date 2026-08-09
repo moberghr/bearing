@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -255,4 +256,32 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
     public Task<string?> PickFolderAsync(string title) => Task.FromResult<string?>(null);
     public Task<string?> PickOpenScriptAsync(string? startDir) => Task.FromResult<string?>(null);
     public void ShowSqlPreview(string sql, string title = "SQL preview — changes to save") { }
+}
+
+/// <summary>
+/// In-memory <see cref="IAppSettingsStore"/> that records every write, so a test can assert what actually
+/// reached disk (and how often) rather than only what the service holds. Set <see cref="ThrowOnSave"/> to
+/// exercise the unwritable-file path.
+/// </summary>
+internal sealed class FakeSettingsStore : IAppSettingsStore
+{
+    private AppSettings _settings;
+
+    public FakeSettingsStore(AppSettings? initial = null) => _settings = initial ?? new AppSettings();
+
+    /// <summary>Every value handed to <see cref="Save"/>, in order.</summary>
+    public List<AppSettings> Saves { get; } = new();
+
+    public bool ThrowOnSave { get; set; }
+
+    public string Location => "(fake)";
+
+    public AppSettings Load() => _settings;
+
+    public void Save(AppSettings settings)
+    {
+        if (ThrowOnSave) throw new IOException("disk full");
+        Saves.Add(settings);
+        _settings = settings;
+    }
 }

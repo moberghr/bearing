@@ -30,6 +30,20 @@ public interface ISessionStore
     void Save(string projectDirectory, SessionState state);
 }
 
+/// <summary>
+/// Reads and writes the app-global preferences file. Best-effort in both directions: a missing or
+/// malformed file loads as defaults, so a hand-edit can never stop the app from starting.
+/// </summary>
+public interface IAppSettingsStore
+{
+    AppSettings Load();
+    void Save(AppSettings settings);
+
+    /// <summary>Where the file lives — shown in the settings window, since a few options are still
+    /// file-edit only.</summary>
+    string Location { get; }
+}
+
 public interface IRecentProjects
 {
     Task<IReadOnlyList<string>> ListAsync(CancellationToken ct);

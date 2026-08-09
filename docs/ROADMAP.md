@@ -11,6 +11,9 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done.
 > closed them. The working tree is clean — **everything described here as done is committed on `main`.**
 > Verified this pass: clean build, **3 warnings**; tests **Sql 159 · App 184 · Persistence 14** green, plus
 > **Data 14 all skipped** (no live Postgres — run `BEARING_TEST_PG_PORT=5434 dotnet test` to exercise them).
+>
+> **2026-08-09:** settings window landed (see below). Same 3 warnings; tests now **Sql 159 · App 267 ·
+> Persistence 14** green, Data 14 still skipped.
 > Items tagged *(live QA)* are committed but never eyeball-checked in the running app (§4.3 — Wayland).
 
 ---
@@ -89,14 +92,44 @@ switch and telling you about a finish you didn't watch.
     `app=squirrel` attribute are not found under `app=bearing` — those passwords need re-entering.
   - **Not renamed:** the repo directory and git remote (still `squirrel`), and the historical design
     bundle `docs/design/editor-4a/`, left verbatim as a dated snapshot.
-- [ ] **P2** Settings screen + framework. Build a real settings window (the `Settings…` menu is still a
-  "coming soon" stub) backed by a general settings framework: a typed settings model, load/save via
-  `AppSettingsStore`, and a UI that groups options by category. **The persistence half already exists** —
-  `Core/Workspace/AppSettings.cs` + `Persistence/AppSettingsStore.cs` (atomic write, defaults on a bad file);
-  what's missing is the window. Tenants already living in `settings.json` with **no UI**: query-log retention
-  and `AutosaveMode` (scratch phase 3). Tenants still hard-coded or unbuilt: the 30-min idle timeout,
-  TLS/`sslmode` preference, restore-window-size, base font size. Model the UI after the existing code-built
-  `KeybindingsWindow` (Keyboard Shortcuts already lives under Edit ▸).
+- [x] **P2** **Settings screen + framework** — **done 2026-08-09** *(live QA)*. Edit ▸ Settings…, the rail
+  gear, and the `settings.open` palette command all open `Views/SettingsWindow` (code-built, like
+  `KeybindingsWindow`): category nav, search box, and one row per setting with an inline Reset.
+  - **The window is generic — it contains no per-setting code.** It renders from
+    `Core/Workspace/SettingsCatalog.cs`, a list of `SettingDescriptor`s (`BoolSetting` / `IntSetting` /
+    `EnumSetting`) carrying title, description, keywords, range/options and **typed** get/set lambdas over
+    `AppSettings`. No reflection and no runtime key lookup, so a renamed property breaks the build rather
+    than the window. **Adding a setting is two edits in one folder** — a property on `AppSettings` and a
+    descriptor in the catalog — and it then renders, searches, persists and resets for free. A new *kind*
+    of value costs one subclass plus one arm in `BuildControl`.
+  - **`SettingsCatalogTests` enforces that contract**, most usefully
+    `Every_setting_is_either_described_or_declared_hidden`: an `AppSettings` property with neither a
+    descriptor nor an entry in the test's `HiddenState` list fails the build's test run. That's the guard
+    against the catalog quietly drifting behind the model.
+  - **Edits apply immediately — there is no Save/Cancel** (deliberately unlike `KeybindingsWindow`, which
+    edits a keymap as one unit): a control change goes through the new `App/Settings/SettingsService`,
+    which applies, persists and broadcasts `Changed`. A no-op edit neither writes nor broadcasts. Rows
+    that *can't* take effect at once (query-log retention, page size) carry an `AppliesNote` saying so,
+    and a test asserts those two have one.
+  - **An unwritable settings file reports and keeps the edit** rather than reverting under the cursor
+    (§5.2) — `SaveFailed` goes to the status bar, nothing throws.
+  - `WorkspaceContext.Settings` is now a *property* over the service (`=> SettingsService.Current`), not a
+    snapshot, so every existing `_ctx.Settings.X` read became live with no subscription. Only consumers
+    that genuinely cache subscribe: the idle sweep (see below) and the shell's `EditorFontSize` mirror.
+  - **Six settings ship, four of them newly wired**: autosave mode and query-log retention (previously
+    file-edit only), plus editor font size (was a hard-coded `FontSize="14"`), connection idle timeout
+    (`ConnectionSessionManager.IdleTimeout` is now settable and reschedules its sweep), result page size
+    (`ExecutionViewModel.PageSize` const → read-per-use property), and confirm-on-tab-close.
+  - `SettingsSearch` (pure, in `App/Settings/`) does token-substring matching over title/description/
+    keywords/key with a fuzzy-subsequence fallback on the title, reusing `PaletteFilter.Score`. Sections
+    keep declaration order; ranking applies within a section; empty sections drop out.
+  - Store side: `IAppSettingsStore` added to `Core` (`AppSettingsStore` already had atomic write +
+    defaults-on-bad-file), plus `FakeSettingsStore` in `Fakes.cs` and `SettingsService.InMemory(...)` for
+    headless construction. `ShellViewModel`'s `settings:` parameter is now a `SettingsService`.
+  - 31 tests across `SettingsCatalogTests` / `SettingsServiceTests` / `SettingsSearchTests` /
+    `SettingsWiringTests` — the last one proving each setting changes what the app *does* mid-session.
+  - **Not done:** TLS/`sslmode` preference and completion toggles (neither exists to configure yet); a
+    Completion section will appear when they do.
 
 ### Scratch scripts — never lose work (3 phases, agreed 2026-08-06)
 
@@ -176,7 +209,8 @@ close, *not* on window close — prompting at quit would be friction for zero sa
     through a real run — the in-process tests exercise `OnExecutedAsync` directly, which can't prove the
     call site. 5 pre-existing tests now pin `AutosaveMode.Off` explicitly, since dirty state is only
     observable when nothing is autosaving.
-  - **Still file-edit-only** — no UI. The settings screen below is where this mode should surface.
+  - **Now has a UI** (2026-08-09): Settings ▸ Editor ▸ Autosave, as three named choices. The mode was
+    file-edit-only when this shipped.
 - [ ] **P3** **A failed schema expand is sticky until Refresh.** `EnsureChildrenAsync` sets `_loaded = true`
   *before* the load (`SchemaNodes.cs:73`), so collapsing and re-expanding a node that errored replays the
   stale error instead of retrying. Refresh server metadata does clear it, so this is a papercut, not a
@@ -186,7 +220,11 @@ close, *not* on window close — prompting at quit would be friction for zero sa
   what defeats that intent. (Surfaced 2026-08-06 while chasing an Entra connection error that turned out not
   to reproduce; this half stands on its own and is independent of credentials.)
 - [ ] **P2** Remove / delete projects. Delete a project from the recent list, and optionally from disk (with confirm). Also prune stale/missing entries from the recent list (see the P3 recent-projects item below).
-- [ ] **P3** Restore last window size on startup; persist size only and let the window manager handle placement/position. (Add to session or app-settings state; apply in `App`/`MainWindow`.)
+- [x] **P3** Restore last window size on startup — **done 2026-08-09** *(live QA)*, with the settings work.
+  `AppSettings.WindowWidth`/`WindowHeight` are persisted state (no catalog row) and the visible toggle is
+  `general.restoreWindowSize`. Written from `App.axaml.cs` on `Closing` and only when the window is in the
+  `Normal` state, so un-maximizing doesn't come back at the maximized size. **Position is deliberately not
+  persisted** — left to the window manager, which is also the only thing that works under Wayland.
 - [ ] **P2** **"Show <X> panel" does nothing when the sidebar is collapsed and that panel is already the
   active one.** Reported 2026-08-07 against Scripts; the same fault covers Connections and History. The
   commands set `ActivePanel` and rely on a *side effect* to reveal the pane — `OnActivePanelChanged` does
@@ -340,7 +378,7 @@ close, *not* on window close — prompting at quit would be friction for zero sa
     line count hid, the concerns didn't separate. Extract types, and leave thin delegating members so the
     binding surface is unchanged.
 - [x] **P3** Remove dead `Views/HistoryWindow.axaml(.cs)` — **done**, the files are gone; the inline History panel is the only history UI.
-- [~] **P3** The "coming soon" stubs. *(`About` done — `Views/AboutDialog.cs` shows name/tagline/version from `<Version>` in `Directory.Build.props`.)* **Two** remain, and both belong to other items rather than here: **Settings** (`MainWindow.Chrome.cs:107`, sets the status text "Settings — coming soon") → the Settings-framework item above; **Export** (`ResultView.Cells.cs:304`, a rendered-but-unwired `⭳ Export` button) → the export item above. Nothing to do in this entry except not forget the third stub exists.
+- [~] **P3** The "coming soon" stubs. *(`About` done — `Views/AboutDialog.cs` shows name/tagline/version from `<Version>` in `Directory.Build.props`. `Settings` done 2026-08-09 — the rail gear and Edit ▸ Settings… open the real window.)* **One** remains and it belongs to another item: **Export** (`ResultView.Cells.cs:304`, a rendered-but-unwired `⭳ Export` button) → the export item above.
 - [~] **P3** Clear build warnings — **3 remain**, verified this pass; the obsolete `TextBox.Watermark` → `PlaceholderText` set is **fixed**. Left: `CS0108` `StatementMargin.Width` hides `Layoutable.Width` (`Editing/StatementMargin.cs:16`), and `xUnit2013` ×2 (`HistoryPanelTests.cs:51,53` — use `Assert.Single`).
 
 ---
@@ -350,7 +388,8 @@ close, *not* on window close — prompting at quit would be friction for zero sa
 - [ ] **P1** Encrypt the fallback secret store and/or add platform keychains (DPAPI / macOS Keychain). Today: base64 fallback, libsecret on Linux only. (documented, warned in UI)
 - [ ] **P2** Query-log privacy: file perms (0600), optional encryption, and/or PII/literal stripping. Retention exists (default 180d); no stripping. `SqliteQueryLog.cs`.
 - [ ] **P2** Enforce/prompt TLS (`sslmode`) — currently only set if the user adds the option manually.
-- [ ] **P3** Settings UI for query-log retention (file-edit only today) and the 30-min idle timeout (currently a fixed constant).
+- [x] **P3** Settings UI for query-log retention and the idle timeout — **done 2026-08-09** with the
+  settings window; the idle timeout is no longer a fixed constant and applies without a restart.
 - [ ] **P3** CI pipeline (build + `dotnet test`). Previously skipped.
 - [x] **P3** Deeper VM decomposition — **done for the VM half**: the stateful coordinators
   (connections / execution / tabs / panels) now live in `ConnectionsViewModel`, `ExecutionViewModel`,
@@ -376,9 +415,9 @@ close, *not* on window close — prompting at quit would be friction for zero sa
   - **Write-confirm dialog** — showing the SQL and reworking Preview SQL are one job.
   - **`ConnectionInfo.Options` handling** — the P3 factory item is the prerequisite for any app-level
     (`entra.*`) option key, since unknown keys currently reach Npgsql and throw.
-  - **Settings framework** — the model/store exist; only the UI is missing. Five options want a home in it
-    (query-log retention and autosave mode are live but file-edit-only; idle timeout, TLS preference, and
-    base font size aren't settings yet).
+  - **Settings framework** — **built** (2026-08-09). Anything that wants to become configurable now costs
+    a property plus a catalog entry; see the settings item above. The one option still wanted and not
+    there is the TLS/`sslmode` preference, which needs the connection-level work first.
   - **Editor text ops** — the `Ctrl+U`/`Ctrl+W` helpers landed as `Bearing.Sql/TextDeleter.cs`; carving up
     `MainWindow.Commands.cs` still touches the same code, and `EditorSpan`/`ApplyDelete` are the shape the
     rest of the editor ops should be pulled into.

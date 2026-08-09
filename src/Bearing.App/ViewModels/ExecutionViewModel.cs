@@ -31,8 +31,10 @@ public sealed record PendingStatement(string Kind, string Sql);
 /// </summary>
 public sealed partial class ExecutionViewModel : ObservableObject
 {
-    /// <summary>Default page size: first page and each "load more" fetch this many rows.</summary>
-    public const int PageSize = 100;
+    /// <summary>Page size: first page and each "load more" fetch this many rows. Read per use (not
+    /// cached) so a change in the settings window applies to the next run without a restart; a result set
+    /// already on screen keeps the page size it was built with, which is why the setting says so.</summary>
+    public int PageSize => _ctx.Settings.ResultPageSize;
 
     private readonly WorkspaceContext _ctx;
     private readonly IDialogService? _dialogs;

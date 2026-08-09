@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Bearing.App.Settings;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
 using Bearing.Data;
@@ -38,7 +39,7 @@ public class WorkspaceFlowTests : IDisposable
         new FileRecentProjects(Path.Combine(_root, "recent.json")),
         new FileFallbackSecretStore(Path.Combine(_root, "secrets")),
         // Autosave off so dirty-state assertions stay meaningful; the modes have their own suite.
-        settings: new Bearing.Core.Workspace.AppSettings { AutosaveMode = Bearing.Core.Workspace.AutosaveMode.Off });
+        settings: SettingsService.InMemory(new Bearing.Core.Workspace.AppSettings { AutosaveMode = Bearing.Core.Workspace.AutosaveMode.Off }));
 
     private static async Task<bool> Reachable()
     {
@@ -107,13 +108,13 @@ public class WorkspaceFlowTests : IDisposable
         var rs = vm.Workspace.SelectedTab!.LastResult!;
         Assert.True(rs.Success, vm.StatusText);
         Assert.True(rs.IsPageable);
-        Assert.Equal(ExecutionViewModel.PageSize, rs.Loaded);
+        Assert.Equal(vm.Execution.PageSize, rs.Loaded);
         Assert.True(rs.HasMore);                       // pagila.film has 1000 rows
         Assert.Null(rs.TotalCount);
 
         // Load more appends the next page in place.
         await vm.Execution.LoadMoreAsync(rs);
-        Assert.Equal(ExecutionViewModel.PageSize * 2, rs.Loaded);
+        Assert.Equal(vm.Execution.PageSize * 2, rs.Loaded);
         Assert.True(rs.HasMore);
 
         // Count fills in the total and retires the [Count] affordance.
