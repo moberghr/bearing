@@ -24,6 +24,14 @@ public sealed partial class EditorTabViewModel : ObservableObject
         UpdateHeader();
     }
 
+    /// <summary>
+    /// Directory of the project this tab belongs to, fixed for the tab's whole life. Switching projects
+    /// parks tabs rather than closing them, so "the active project" is not the right answer for a tab's
+    /// scratch folder, session entry or connection lookup — this is. Null only for a tab created before a
+    /// project was loaded. Not bound; nothing displays it.
+    /// </summary>
+    public string? ProjectDirectory { get; set; }
+
     /// <summary>The content last persisted to disk (for a script) — the baseline for dirty detection.</summary>
     private string _savedText;
 

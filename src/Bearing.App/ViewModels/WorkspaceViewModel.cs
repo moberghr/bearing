@@ -59,8 +59,17 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     /// See <see cref="TabAutosave.FlushExistingBlocking"/> for why it's narrower.</summary>
     public void FlushScratchBlocking() => _autosave.FlushExistingBlocking();
 
-    /// <summary>The open editor tabs (bound as the tab strip's ItemsSource).</summary>
+    /// <summary>The active project's editor tabs (bound as the tab strip's ItemsSource).</summary>
     public ObservableCollection<EditorTabViewModel> Tabs => _ctx.Tabs;
+
+    /// <summary>Every live tab across every open project — parked ones included. Tab navigation and the
+    /// strip deliberately stay inside <see cref="Tabs"/>; this is for the things that must not lose sight
+    /// of a tab just because its project isn't showing (the quit guard, background-run reporting).</summary>
+    public IEnumerable<EditorTabViewModel> AllTabs => _ctx.AllTabs;
+
+    /// <summary>The project that owns a tab's files — its own, not whichever is active (tabs outlive a
+    /// project switch). Falls back to the active project for a tab created before any project loaded.</summary>
+    private Project? ProjectOf(EditorTabViewModel tab) => _ctx.ProjectOf(tab) ?? _ctx.Project;
 
     /// <summary>The active editor tab (two-way binding target for the tab strip's SelectedItem).</summary>
     public EditorTabViewModel? SelectedTab
@@ -80,6 +89,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         var tab = new EditorTabViewModel($"Scratch {++_scratchCounter}", text, scriptPath, isScratch)
         {
             ConnectionId = inherit,
+            ProjectDirectory = _ctx.Project?.Directory,   // fixed for the tab's life; survives project switches
         };
         _connections.ApplyConnectionDisplay(tab);
         Tabs.Add(tab);
@@ -88,10 +98,11 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Close a tab, asking first when that would lose work (<see cref="EditorTabViewModel.HasUnsavedWork"/>).
-    /// Returns true when the tab actually closed — false means the user cancelled, or a save they asked for
-    /// didn't happen, and the tab is still open. Every close path funnels through here (the Ctrl+F4 command,
-    /// the File menu, and the tab strip's ✕) so the prompt can't be routed around.
+    /// Close a tab, asking first when that would lose work — a query still running on it, or unsaved text
+    /// (<see cref="EditorTabViewModel.HasUnsavedWork"/>). Returns true when the tab actually closed — false
+    /// means the user cancelled, or a save they asked for didn't happen, and the tab is still open. Every
+    /// close path funnels through here (the Ctrl+F4 command, the File menu, and the tab strip's ✕) so the
+    /// prompts can't be routed around.
     /// <para>
     /// Quitting and switching projects deliberately do <b>not</b> come through here: both call
     /// <c>SaveWorkspace</c> first, which round-trips every buffer — scratch text included — through
@@ -101,6 +112,16 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     public async Task<bool> CloseTabAsync(EditorTabViewModel tab)
     {
         if (!Tabs.Contains(tab)) return false;
+
+        // A query in flight is work in progress too, and closing its tab would abandon it. Asked before the
+        // unsaved-work prompt: no point deciding what to save on a tab the user then chooses to keep. Not
+        // gated on ConfirmTabClose — that setting is about discarding *text*, which the user can weigh up
+        // by looking at it; a running query's cost isn't visible the same way.
+        if (tab.IsRunning && _dialogs is { } runDialogs)
+        {
+            if (!await runDialogs.ConfirmCancelRunningAsync(1, tab.Header)) return false;
+            tab.CancelRun();
+        }
 
         // Land any debounced write before deciding: a tab whose text already reached its file has nothing
         // to lose and must close without a prompt. FlushAsync itself respects the autosave mode, so this
@@ -130,7 +151,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     /// Returns false if the work is still unsaved.</summary>
     private async Task<bool> SaveForCloseAsync(EditorTabViewModel tab, IDialogService dialogs)
     {
-        var path = tab.ScriptPath ?? await dialogs.PickSaveScriptAsync($"{tab.DisplayName}.sql", _ctx.Project?.ScriptsDirectory);
+        var path = tab.ScriptPath ?? await dialogs.PickSaveScriptAsync($"{tab.DisplayName}.sql", ProjectOf(tab)?.ScriptsDirectory);
         if (path is null) return false;
 
         try
@@ -245,7 +266,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     private void SyncScratchFlag(EditorTabViewModel tab)
     {
         if (tab.ScriptPath is null) return;   // no file yet: still an unnamed scratch buffer
-        tab.IsScratch = ScratchNaming.IsUnderScratch(tab.ScriptPath, _ctx.Project?.ScratchDirectory);
+        tab.IsScratch = ScratchNaming.IsUnderScratch(tab.ScriptPath, ProjectOf(tab)?.ScratchDirectory);
     }
 
     /// <summary>
@@ -267,7 +288,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
 
         await _autosave.FlushAsync(tab);   // make sure there's a file to move, and that it's current
         tab.DisplayName = newName;
-        if (tab.ScriptPath is not { } path || _ctx.Project is not { } project) return;
+        if (tab.ScriptPath is not { } path || ProjectOf(tab) is not { } project) return;
 
         await _scripts.RenameScriptAsync(path, newName, project.ScriptsDirectory);
         // Only leave scratch if the move actually happened (a name clash leaves the file where it was).

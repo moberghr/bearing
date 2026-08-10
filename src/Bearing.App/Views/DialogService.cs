@@ -31,6 +31,11 @@ public sealed class DialogService : IDialogService
             ? new ConfirmWriteDialog(connection, verbs).ShowDialog<bool>(window)
             : Task.FromResult(true);
 
+    public Task<bool> ConfirmCancelRunningAsync(int runningCount, string? tabName = null)
+        => Owner is { } window
+            ? new ConfirmCancelRunningDialog(runningCount, tabName).ShowDialog<bool>(window)
+            : Task.FromResult(true); // no window → proceed, as every other confirmation does here
+
     public Task<CloseChoice> ConfirmCloseTabAsync(string tabName)
         => Owner is { } window
             ? new ConfirmCloseDialog(tabName).ShowDialog<CloseChoice>(window)

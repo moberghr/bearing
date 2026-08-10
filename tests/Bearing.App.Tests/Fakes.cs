@@ -236,6 +236,18 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
 
     public int SavePickerCalls { get; private set; }
 
+    /// <summary>What the running-query prompt answers. False keeps the query (and the tab/window).</summary>
+    public bool CancelRunningAnswer { get; set; } = true;
+
+    /// <summary>Tab names the running-query prompt was raised for; null entries are the quit variant.</summary>
+    public List<string?> CancelRunningPrompts { get; } = new();
+
+    public Task<bool> ConfirmCancelRunningAsync(int runningCount, string? tabName = null)
+    {
+        CancelRunningPrompts.Add(tabName);
+        return Task.FromResult(CancelRunningAnswer);
+    }
+
     public Task<Bearing.App.Services.CloseChoice> ConfirmCloseTabAsync(string tabName)
     {
         ClosePrompts.Add(tabName);

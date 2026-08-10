@@ -46,8 +46,10 @@ public interface IConnectionSessionManager : IAsyncDisposable
     /// <summary>Drop and dispose the session for an id (e.g. after the connection is edited or deleted).</summary>
     Task EvictAsync(Guid connectionId);
 
-    /// <summary>Close and dispose every live/in-flight session — e.g. on a project switch — while keeping
-    /// the manager usable for the next project. Unlike <see cref="IAsyncDisposable.DisposeAsync"/> (which
-    /// retires the manager for good), the manager can connect again afterwards.</summary>
+    /// <summary>Close every live/in-flight session — e.g. on a project switch — while keeping the manager
+    /// usable for the next project. Unlike <see cref="IAsyncDisposable.DisposeAsync"/> (which retires the
+    /// manager for good and ignores leases), this honors an outstanding <see cref="SessionLease"/>: a
+    /// session a background query is still using leaves the live map but is disposed only once that query
+    /// releases it.</summary>
     Task CloseAllAsync();
 }

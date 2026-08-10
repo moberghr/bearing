@@ -37,6 +37,12 @@ public interface IDialogService
     /// Implementations with no window (headless/tests) proceed silently.</summary>
     Task<bool> ConfirmWriteAsync(ConnectionInfo connection, IReadOnlyList<string> verbs);
 
+    /// <summary>Confirm throwing away queries that are still running, before an action that would cancel
+    /// them. <paramref name="tabName"/> null asks about quitting (<paramref name="runningCount"/> tabs);
+    /// non-null asks about closing that one tab. True = cancel the run(s) and proceed.
+    /// Implementations with no window (headless/tests) proceed — a headless close still closes.</summary>
+    Task<bool> ConfirmCancelRunningAsync(int runningCount, string? tabName = null);
+
     /// <summary>Ask whether to save before closing a tab that holds unsaved work.
     /// <paramref name="tabName"/> is the tab header, so the prompt names what is about to be lost.
     /// Implementations with no window (headless/tests) return <see cref="CloseChoice.Discard"/> —

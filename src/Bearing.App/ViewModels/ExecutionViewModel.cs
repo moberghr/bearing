@@ -23,6 +23,19 @@ namespace Bearing.App.ViewModels;
 public sealed record PendingStatement(string Kind, string Sql);
 
 /// <summary>
+/// A run that finished on a tab the user wasn't looking at. Its terminal message would otherwise be
+/// written to a status bar describing a different tab, so it is raised as a toast instead.
+/// </summary>
+/// <param name="TabName">Header of the tab the run belonged to.</param>
+/// <param name="Message">The status line the run would have posted (summary, error, or cancellation).</param>
+/// <param name="TabStillOpen">False when the tab was closed before the run finished — the results were
+/// dropped and this notification is all that's left of it. Switching projects does <b>not</b> close a tab
+/// (it parks it), so a background project's run still reports true here.</param>
+/// <param name="Tab">The tab itself, so the view can bring it back on screen when the toast is clicked —
+/// switching project first if it belongs to one that isn't showing. Null only when the tab is gone.</param>
+public sealed record BackgroundCompletion(string TabName, string Message, bool TabStillOpen, EditorTabViewModel? Tab = null);
+
+/// <summary>
 /// The execution concern: running the selected tab's SQL, paging, count, foreign-key navigation, and the
 /// inline-edit save/discard/preview. Owns the in-flight cancellation and the busy flag. Extracted from the
 /// shell (docs/mvvm-refactor-plan.md phase 3); coordinates through <see cref="WorkspaceContext"/> and reads
@@ -62,6 +75,32 @@ public sealed partial class ExecutionViewModel : ObservableObject
     [ObservableProperty] private string _elapsedText = "";
 
     private EditorTabViewModel? Selected => _ctx.SelectedTab;
+
+    /// <summary>Raised when a run finishes on a tab that is not the one on screen — a background tab, or a
+    /// tab closed / left behind by a project switch while its query was still going. The view turns this
+    /// into a toast; nothing else in the app is a notification sink. May be raised off the UI thread.</summary>
+    public event Action<BackgroundCompletion>? BackgroundCompleted;
+
+    /// <summary>Progress text from a run on <paramref name="tab"/>. Reaches the status bar only while that
+    /// tab is the selected one: with tabs running concurrently, a background run's "Running…" would
+    /// otherwise overwrite what the user is actually looking at.</summary>
+    private void RunStatus(EditorTabViewModel tab, string text)
+    {
+        if (ReferenceEquals(_ctx.SelectedTab, tab)) _ctx.SetStatus(text);
+    }
+
+    /// <summary>A run's terminal message (summary, error, or cancellation): the status bar when its tab is
+    /// on screen, a completion toast when it isn't. Every path that ends a run goes through here, so a
+    /// background query can't finish silently.</summary>
+    private void RunFinished(EditorTabViewModel tab, string text)
+    {
+        if (ReferenceEquals(_ctx.SelectedTab, tab)) { _ctx.SetStatus(text); return; }
+        // "Still open" spans every open project, not just the visible one: a tab parked by a project switch
+        // is alive and holding its results, so the toast must offer to go back to it rather than claim the
+        // run was thrown away.
+        var stillOpen = _ctx.AllTabs.Contains(tab);
+        BackgroundCompleted?.Invoke(new BackgroundCompletion(tab.Header, text, stillOpen, stillOpen ? tab : null));
+    }
 
     /// <summary>Whether the *selected* tab has a query in flight — drives the toolbar Run/Cancel button
     /// and Esc. Background tabs run concurrently and independently; this reflects only the focused tab.</summary>
@@ -159,7 +198,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             {
                 _ctx.Credentials.Invalidate(info.Id);
                 await _ctx.Sessions.EvictAsync(info.Id);
-                _ctx.SetStatus("Reauthenticating…");
+                RunStatus(tab, "Reauthenticating…");
                 await RunFetchAsync(info, tab, sql, fetchSql, final: true, ct);
             }
         }, "Query cancelled by user.", "Execution error");
@@ -183,7 +222,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
         {
             if (!final && LooksLikeAuthFailure(ex)) return RunOutcome.AuthFailed;
             _ctx.IsConnected = false;
-            _ctx.SetStatus(ex.Message);
+            RunFinished(tab, ex.Message);
             return RunOutcome.Failed;
         }
 
@@ -195,7 +234,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // with no connect-on-tab-switch anymore this run is the first thing to load it.
             var schemaWarm = _ctx.Sessions.EnsureSchemaAsync(session, CancellationToken.None);
 
-            _ctx.SetStatus("Running…");
+            RunStatus(tab, "Running…");
             var results = await session.Executor.ExecuteAsync(fetchSql, new QueryOptions { MaxRows = PageSize }, ct);
             wall.Stop();
 
@@ -208,11 +247,14 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // run per session waits (the snapshot is cached thereafter); best-effort so a schema-load
             // failure still shows the rows, just non-editable.
             if (session.Snapshot is null) { try { await schemaWarm; } catch { /* results still show */ } }
+            // Results always route to the tab that started the run, never to whichever tab is focused now.
+            // A tab that has since been closed (or dropped by a project switch) is dead but harmless to
+            // assign to — RunFinished is what tells the user the run ended, with TabStillOpen false.
             tab.SetFreshResults(ResultSetBuilder.BuildResultSets(results, sql, session.Snapshot));
             LogExecution(info, sql, results);
             var summary = ResultSetBuilder.DescribeResults(results, wall.Elapsed);
             // On success, lead with the connection so the status bar reads e.g. "pagila (local) · 88 ms".
-            _ctx.SetStatus(results.Any(r => !r.Success) ? summary : $"{info.Name} · {summary}");
+            RunFinished(tab, results.Any(r => !r.Success) ? summary : $"{info.Name} · {summary}");
             return results.Any(r => !r.Success) ? RunOutcome.Failed : RunOutcome.Success;
         }
     }
@@ -251,11 +293,14 @@ public sealed partial class ExecutionViewModel : ObservableObject
     {
         var ct = tab.BeginRun();
         try { await body(ct); }
-        catch (OperationCanceledException) { _ctx.SetStatus(cancelled); }
+        // Cancellation only ever comes from the user (Esc, the Run/Cancel button, closing the tab, quitting),
+        // so it reports through RunStatus, not RunFinished: telling someone their query stopped right after
+        // they asked it to stop is noise, and it would toast on exactly the paths where the tab is going away.
+        catch (OperationCanceledException) { RunStatus(tab, cancelled); }
         // Cancelling an in-flight Npgsql query surfaces as a PostgresException (SQLSTATE 57014), not an
         // OperationCanceledException — treat any failure while the token is cancelled as the user's cancel.
-        catch (Exception) when (ct.IsCancellationRequested) { _ctx.SetStatus(cancelled); }
-        catch (Exception ex) { _ctx.SetStatus($"{failed}: {ex.Message}"); }
+        catch (Exception) when (ct.IsCancellationRequested) { RunStatus(tab, cancelled); }
+        catch (Exception ex) { RunFinished(tab, $"{failed}: {ex.Message}"); }
         finally { tab.EndRun(); }
     }
 
@@ -295,7 +340,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
         await RunExclusiveAsync(tab, async ct =>
         {
             rs.TotalCount = await session.Executor.CountAsync(rs.SourceSql, ct);
-            _ctx.SetStatus(rs.TotalCount is not null ? "Counted total." : "Count unavailable for this query.");
+            RunFinished(tab, rs.TotalCount is not null ? "Counted total." : "Count unavailable for this query.");
         }, "Count cancelled.", "Count failed");
     }
 
@@ -329,10 +374,10 @@ public sealed partial class ExecutionViewModel : ObservableObject
         var sql = ResultEditModel.BuildForeignKeySelect(target, row);
         await RunExclusiveAsync(tab, async ct =>
         {
-            _ctx.SetStatus("Opening referenced row…");
+            RunStatus(tab, "Opening referenced row…");
             var results = await session.Executor.ExecuteAsync(sql, new QueryOptions { MaxRows = PageSize }, ct);
             tab.PushResults(ResultSetBuilder.BuildResultSets(results, sql, session.Snapshot));
-            _ctx.SetStatus(ResultSetBuilder.DescribeResults(results));
+            RunFinished(tab, ResultSetBuilder.DescribeResults(results));
         }, "Navigation cancelled.", "Navigation failed");
     }
 
@@ -367,13 +412,13 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
         await RunExclusiveAsync(tab, async ct =>
         {
-            _ctx.SetStatus($"Saving {changes.Count} change(s)…");
+            RunStatus(tab, $"Saving {changes.Count} change(s)…");
             var results = await session.Executor.ExecuteWriteAsync(changes.Select(c => c.Command).ToList(), ct);
             if (results.FirstOrDefault(r => !r.Success) is { } failed)
-            { _ctx.SetStatus($"Save failed: {failed.Error?.Message}"); return; } // rows/pending untouched
+            { RunFinished(tab, $"Save failed: {failed.Error?.Message}"); return; } // rows/pending untouched
 
             ResultEditModel.ApplySavedChanges(rs, target, changes, results);
-            _ctx.SetStatus($"Saved {changes.Count} change(s).");
+            RunFinished(tab, $"Saved {changes.Count} change(s).");
         }, "Save cancelled.", "Save failed");
     }
 

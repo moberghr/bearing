@@ -59,7 +59,12 @@ public sealed class TabAutosave : IDisposable
         foreach (var tab in e.NewItems?.OfType<EditorTabViewModel>() ?? Enumerable.Empty<EditorTabViewModel>())
             Watch(tab);
         foreach (var tab in e.OldItems?.OfType<EditorTabViewModel>() ?? Enumerable.Empty<EditorTabViewModel>())
-            Unwatch(tab);
+        {
+            // Leaving the visible tab list is not the same as being closed: a project switch parks tabs,
+            // and a parked tab is still live (it may even have a query running). Only stop watching a tab
+            // that has left every open project.
+            if (!_ctx.AllTabs.Contains(tab)) Unwatch(tab);
+        }
     }
 
     private void Watch(EditorTabViewModel tab)
@@ -148,11 +153,15 @@ public sealed class TabAutosave : IDisposable
     {
         if (tab.Text.Trim().Length == 0 && tab.ScriptPath is null) return;   // nothing worth a file yet
         if (!tab.IsScratch && tab.ScriptPath is null) return;                // a named tab always has a path
-        if (tab.IsScratch && _ctx.Project is null) return;                   // nowhere to put a scratch file
+
+        // A scratch file belongs in the scratch folder of the tab's *own* project — a parked tab still
+        // autosaves while another project is on screen, and its text must not land in that project's folder.
+        var owner = _ctx.ProjectOf(tab) ?? _ctx.Project;
+        if (tab.IsScratch && owner is null) return;                          // nowhere to put a scratch file
 
         try
         {
-            var path = tab.ScriptPath ?? CreateScratchPath(_ctx.Project!);
+            var path = tab.ScriptPath ?? CreateScratchPath(owner!);
             await _ctx.ScriptStore.WriteTextAsync(path, tab.Text, CancellationToken.None);
             var isNew = tab.ScriptPath is null;
             tab.ScriptPath = path;
@@ -175,8 +184,9 @@ public sealed class TabAutosave : IDisposable
         _ctx.ScriptStore.CreateFolder(dir);
         var existing = _ctx.ScriptStore.ReadTree(dir)?.Files.Select(f => f.Name) ?? Enumerable.Empty<string>();
         // Names already claimed by other open tabs count as taken — two tabs typing on the same day must
-        // not race onto the same file before either has been written.
-        var claimed = _ctx.Tabs.Where(t => t.ScriptPath is not null)
+        // not race onto the same file before either has been written. Scanned across every open project's
+        // tabs (parked included), since they can share this scratch folder.
+        var claimed = _ctx.AllTabs.Where(t => t.ScriptPath is not null)
             .Select(t => Path.GetFileName(t.ScriptPath!));
         return Path.Combine(dir, ScratchNaming.NextFileName(_today(), existing.Concat(claimed)));
     }

@@ -232,9 +232,11 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         foreach (var id in leftLive) RaiseLiveChanged(id); // idle/expired connections left the live map
     }
 
-    /// <summary>Close and dispose every live/in-flight session (e.g. on a project switch) but keep the
-    /// manager usable — it can connect again for the next project. In-flight queries are expected to be
-    /// cancelled by the caller first; leases are not honored here.</summary>
+    /// <summary>Close every live/in-flight session (e.g. on a project switch) but keep the manager usable —
+    /// it can connect again for the next project. Lease-aware: a session a background query still holds is
+    /// retired rather than disposed, so it leaves the live map immediately (nothing new attaches to it) and
+    /// is freed at that query's last lease release. Shutdown goes through
+    /// <see cref="DisposeAsync"/> instead, which ignores leases so a stuck query can't wedge quit.</summary>
     public Task CloseAllAsync() => CloseAllAsync(retire: false);
 
     public async ValueTask DisposeAsync()
@@ -247,6 +249,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     private async Task CloseAllAsync(bool retire)
     {
         ConnectionSession[] all;
+        List<ConnectionSession> toDispose = new();
         lock (_gate)
         {
             if (retire) _disposed = true;
@@ -254,8 +257,16 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             _live.Clear();
             _inflight.Clear();
             _schemaInflight.Clear();
+            foreach (var s in all)
+            {
+                // Shutdown tears everything down regardless of leases — a genuinely stuck query must not
+                // wedge quit. A project switch honors them: a query started in the old project keeps running
+                // on its already-open connection, and the retired session is freed at its last release.
+                if (retire || s.LeaseCount == 0) toDispose.Add(s);
+                else s.Retired = true;
+            }
         }
-        foreach (var s in all) await SafeDisposeAsync(s);
+        foreach (var s in toDispose) await SafeDisposeAsync(s);
         // On a project switch the manager stays usable, so tell listeners those ids went away. On retire
         // (shutdown) skip it — the app is tearing down and handlers may already be gone.
         if (!retire) foreach (var s in all) RaiseLiveChanged(s.ConnectionId);

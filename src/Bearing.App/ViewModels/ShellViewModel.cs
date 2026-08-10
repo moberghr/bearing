@@ -22,10 +22,11 @@ using Bearing.Sql;
 namespace Bearing.App.ViewModels;
 
 /// <summary>
-/// Shell view-model: owns the open project, its named connections, editor tabs, and query
+/// Shell view-model: owns the open projects, their named connections, editor tabs, and query
 /// execution + logging. Each tab targets its own connection; a <see cref="ConnectionSessionManager"/>
-/// resolves that to a live, reusable session on first Run. Switching projects saves the current
-/// session, disposes live connections, and restores the target project's tabs.
+/// resolves that to a live, reusable session on first Run. Every project opened stays open —
+/// switching saves sessions to disk and swaps which project's tabs are on screen, keeping the others'
+/// tabs, results and pooled connections alive (see <see cref="OpenProjectAsync"/>).
 /// </summary>
 public sealed partial class ShellViewModel : ObservableObject
 {
@@ -150,6 +151,22 @@ public sealed partial class ShellViewModel : ObservableObject
     public string? CurrentProjectName => _project?.Manifest.Name;
 
     public void AttachSecretStore(ISecretStore secretStore) => _secretStore = secretStore;
+
+    /// <summary>
+    /// Bring a tab back on screen — the click target of a completion toast. A tab whose project isn't the
+    /// active one is parked, so the project has to be switched to first; that is shell business (it moves
+    /// the whole workspace), which is why this lives here rather than in the code-behind (§2.2).
+    /// </summary>
+    public async Task RevealTabAsync(EditorTabViewModel tab)
+    {
+        if (tab.ProjectDirectory is { } dir &&
+            !string.Equals(dir, _project?.Directory, StringComparison.Ordinal))
+            await OpenProjectAsync(dir);
+
+        // Only select a tab that actually made it onto the strip: the switch may have failed, or the tab
+        // may have been closed between the toast being posted and the user clicking it.
+        if (_workspace.Tabs.Contains(tab)) _workspace.SelectedTab = tab;
+    }
 
     /// <summary>True when secrets go to a real OS keychain; false when they fall back to a plaintext-equivalent file.</summary>
     public bool SecretStorageSecure => _secretStore?.IsSecure == true;

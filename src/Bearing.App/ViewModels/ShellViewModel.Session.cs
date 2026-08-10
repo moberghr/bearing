@@ -22,36 +22,67 @@ public sealed partial class ShellViewModel
 {
     // ---- Session persistence (synchronous; safe on the close path) ---------------------------
 
+    /// <summary>
+    /// Write <c>session.json</c> for <b>every</b> open project, not just the one on screen. Projects stay
+    /// open across a switch (their tabs are parked, not closed), so a shutdown or switch that only saved
+    /// the active project would silently drop the others' tab lists.
+    /// </summary>
     public void SaveWorkspace()
     {
         if (_project is null) return;
         _workspace.FlushScratchBlocking();   // land the last keystrokes in the scratch files themselves
-        try { _sessionStore.Save(_project.Directory, BuildSession()); }
-        catch { /* best-effort on shutdown */ }
+
+        // The active project's tabs are in the live list; every other open project's are parked. Each save
+        // is independently best-effort (§5.2) so one unwritable project can't skip the rest.
+        Save(_project, BuildSession(_project, _workspace.Tabs, IndexOf(_workspace.SelectedTab),
+            _ctx.DefaultConnectionId, SidePaneOpen, SidePaneWidth, ResultsViewMode));
+
+        foreach (var parked in _ctx.OpenProjects)
+        {
+            if (ReferenceEquals(parked.Project, _project)) continue;
+            Save(parked.Project, BuildSession(parked.Project, parked.ParkedTabs, parked.SelectedIndex,
+                parked.DefaultConnectionId, parked.SidePaneOpen, parked.SidePaneWidth, parked.ResultsViewMode));
+        }
+
+        void Save(Project project, SessionState state)
+        {
+            try { _sessionStore.Save(project.Directory, state); }
+            catch { /* best-effort on shutdown */ }
+        }
     }
 
-    private SessionState BuildSession()
+    private int IndexOf(EditorTabViewModel? tab)
+        => tab is null ? 0 : Math.Max(0, _workspace.Tabs.IndexOf(tab));
+
+    private static SessionState BuildSession(
+        Project project,
+        IReadOnlyList<EditorTabViewModel> tabs,
+        int selectedIndex,
+        Guid? defaultConnectionId,
+        bool sidePaneOpen,
+        double sidePaneWidth,
+        ResultsViewMode resultsViewMode)
     {
-        var editors = _workspace.Tabs.Select(t => new OpenEditor
+        var editors = tabs.Select(t => new OpenEditor
         {
-            ScriptPath = t.ScriptPath is not null && _project is not null
-                ? Path.GetRelativePath(_project.Directory, t.ScriptPath)
-                : null,
+            ScriptPath = t.ScriptPath is not null ? Path.GetRelativePath(project.Directory, t.ScriptPath) : null,
             ScratchText = t.Text,
             ScratchName = t.IsScratch ? t.DisplayName : null,
             CaretOffset = t.CaretOffset,
             ConnectionId = t.ConnectionId,
         }).ToList();
 
+        var selected = selectedIndex >= 0 && selectedIndex < tabs.Count ? tabs[selectedIndex] : null;
+
         return new SessionState
         {
-            ActiveConnectionId = _workspace.SelectedTab?.ConnectionId ?? _ctx.DefaultConnectionId,
+            ActiveConnectionId = selected?.ConnectionId ?? defaultConnectionId,
             OpenEditors = editors,
-            SelectedEditorIndex = _workspace.SelectedTab is null ? 0 : Math.Max(0, _workspace.Tabs.IndexOf(_workspace.SelectedTab)),
+            SelectedEditorIndex = Math.Max(0, selectedIndex),
             LastOpenedUtc = DateTime.UtcNow.ToString("o"),
-            SidePaneOpen = SidePaneOpen,
-            SidePaneWidth = SidePaneWidth,
-            ResultsViewMode = ResultsViewMode,
+            SidePaneOpen = sidePaneOpen,
+            SidePaneWidth = sidePaneWidth,
+            ResultsViewMode = resultsViewMode,
         };
     }
 

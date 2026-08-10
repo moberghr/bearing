@@ -11,6 +11,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using Bearing.App.Connections;
 using Bearing.App.Formatting;
 using Bearing.App.Results;
+using Bearing.App.Workspace;
 using Bearing.Core.Data;
 using Bearing.Core.Logging;
 using Bearing.Core.Schema;
@@ -18,6 +19,7 @@ using Bearing.Core.Workspace;
 using Bearing.Sql;
 
 namespace Bearing.App.ViewModels;
+
 public sealed partial class ShellViewModel
 {
     // ---- Project lifecycle -------------------------------------------------------------------
@@ -27,6 +29,7 @@ public sealed partial class ShellViewModel
         try
         {
             _project = await OpenOrCreate(projectDirectory);
+            _ctx.GetOrAdd(_project);   // register before any tab exists — NewTab stamps tabs with this project
             await _recentProjects.AddAsync(_project.Directory, CancellationToken.None);
             await RefreshRecentAsync();
 
@@ -79,35 +82,69 @@ public sealed partial class ShellViewModel
         await InitializeAsync(fallbackDir);
     }
 
-    /// <summary>Save the current session, dispose live connections, then switch project directory.</summary>
+    /// <summary>
+    /// Switch to another project. This is a <b>view</b> change, not a lifecycle event: the outgoing
+    /// project's tabs are parked (same view-model instances, so their results, FK history, pending edits
+    /// and in-flight queries all survive), its live sessions and schema readers stay in the pools under
+    /// the usual idle/expiry rules, and switching back unparks exactly what was left behind. Nothing here
+    /// closes a connection or discards a result — only closing a tab or quitting does that.
+    /// <para>
+    /// Sessions are keyed by connection id (§9.4) and ids are Guids, so two projects' pools coexist in the
+    /// one manager without collision.
+    /// </para>
+    /// </summary>
     public async Task OpenProjectAsync(string projectDirectory)
     {
         if (_project is not null && string.Equals(Path.GetFullPath(projectDirectory), _project.Directory, StringComparison.Ordinal))
             return;
 
-        await _workspace.FlushScratchAsync();   // land pending scratch writes before the tab list is cleared
+        await _workspace.FlushScratchAsync();   // land pending scratch writes before the tabs leave the strip
         SaveWorkspace();
-        // Reset (not dispose) the shared managers — they are reused for the next project. DisposeAsync
-        // retires the session manager for good, which would make every later query throw.
-        await _sessions.CloseAllAsync();
-        await _schemaBrowser.DisposeAsync();
-        _ctx.IsConnected = false;
+        _ctx.Park(SidePaneOpen, SidePaneWidth, ResultsViewMode);
         _ctx.DefaultConnectionId = null;
-        _workspace.Tabs.Clear();
-        await InitializeAsync(projectDirectory);
+        if (_ctx.Find(projectDirectory) is { } known) await ActivateAsync(known);
+        else await InitializeAsync(projectDirectory);
+    }
+
+    /// <summary>Bring an already-open project back on screen from its parked state. Deliberately does not
+    /// touch <c>session.json</c>: the in-memory tabs are newer than anything on disk (unsaved buffer edits
+    /// included), and rebuilding them is exactly what would throw the results away.</summary>
+    private async Task ActivateAsync(ProjectWorkspace known)
+    {
+        _ctx.Restore(known);           // sets _ctx.Project and re-selects the tab that was active
+        SidePaneOpen = known.SidePaneOpen;
+        SidePaneWidth = known.SidePaneWidth;
+        ResultsViewMode = known.ResultsViewMode;
+        _ctx.DefaultConnectionId = known.DefaultConnectionId
+                              ?? _project?.Manifest.Connections.FirstOrDefault()?.Id;
+
+        RefreshConnections();
+        RefreshScripts();
+        foreach (var tab in _workspace.Tabs) ApplyConnectionDisplay(tab);
+        UpdateTitle();
+        OnPropertyChanged(nameof(ProjectDirectory));
+        OnPropertyChanged(nameof(CurrentProjectName));
+        // Awaited, not fire-and-forget: this rebuilds RecentProjects, and a rebuild that lands *after* the
+        // switch has been announced leaves the project switcher with no selection (see RefreshRecentAsync).
+        await TouchRecentAsync(known.Project.Directory);
+        StatusText = $"Project '{known.Project.Manifest.Name}'.";
+    }
+
+    /// <summary>Bump a project to the top of the recent list and re-read it.</summary>
+    private async Task TouchRecentAsync(string directory)
+    {
+        await _recentProjects.AddAsync(directory, CancellationToken.None);
+        await RefreshRecentAsync();
     }
 
     public async Task NewProjectAsync(string projectDirectory, string name)
     {
         await _workspace.FlushScratchAsync();   // as in OpenProjectAsync — don't drop a debounced write
         SaveWorkspace();
-        // Reset (not dispose) the shared managers — they are reused for the next project (see OpenProjectAsync).
-        await _sessions.CloseAllAsync();
-        await _schemaBrowser.DisposeAsync();
-        _ctx.IsConnected = false;
+        _ctx.Park(SidePaneOpen, SidePaneWidth, ResultsViewMode);
         _ctx.DefaultConnectionId = null;
-        _workspace.Tabs.Clear();
         _project = await _projectStore.CreateAsync(projectDirectory, name, CancellationToken.None);
+        _ctx.GetOrAdd(_project);
         await _recentProjects.AddAsync(_project.Directory, CancellationToken.None);
         await RefreshRecentAsync();
         RefreshConnections();
@@ -124,6 +161,10 @@ public sealed partial class ShellViewModel
         var list = await _recentProjects.ListAsync(CancellationToken.None);
         RecentProjects.Clear();
         foreach (var p in list) RecentProjects.Add(new RecentProjectItem(p, await ResolveProjectName(p)));
+        // Rebuilding the list drops the switcher's selection (clearing an ItemsSource nulls SelectedItem)
+        // and the entries are fresh instances, so re-announce the current project: the switcher resolves
+        // its selection from ProjectDirectory and would otherwise sit blank until the next project change.
+        OnPropertyChanged(nameof(ProjectDirectory));
     }
 
     /// <summary>Display name for a recent project: its manifest name, falling back to the folder name.</summary>

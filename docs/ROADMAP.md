@@ -42,32 +42,59 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done.
 
 ---
 
-## 🚧 Next feature — Stage E: background execution
+## ✅ Stage E — background execution (done 2026-08-09)
 
 Design: `docs/background-execution-plan.md`. Scope (confirmed): concurrent per-tab queries that survive
 project switches + a completion toast (**no** background-jobs panel), per-tab cancel, quit-confirm.
-
-**Two of the five already landed** — per-tab execution is real today; what's missing is surviving a project
-switch and telling you about a finish you didn't watch.
+**All five items are in.** *(live QA — the toast and both prompts are Wayland-blocked, §4.3.)*
 
 - [x] **P2** Per-tab run state + concurrent `ExecuteAsync` — done. Each tab owns its `_runCts` +
   `IsRunning` + run clock (`EditorTabViewModel.cs:99-135`), and `ExecutionViewModel.IsBusy` /
-  `RunButtonText` are now an explicit **façade over the selected tab** (`ExecutionViewModel.cs:51-92`),
-  re-raised on selection change and on the watched tab's `IsRunning`. Background tabs run concurrently and
-  independently; the global gate is gone.
+  `RunButtonText` are an explicit **façade over the selected tab**, re-raised on selection change and on the
+  watched tab's `IsRunning`. Background tabs run concurrently and independently; the global gate is gone.
 - [x] **P2** Per-tab cancel (Esc / stop button) — done, via the same per-tab CTS
   (`EditorTabViewModel.cs:135`); Esc and the Run/Cancel button act on the selected tab
   (`MainWindow.Commands.cs:41`, `MainWindow.Chrome.cs:95`).
-- [ ] **P2** App-lifetime sessions — still open: `ShellViewModel.Projects.cs:91,103` calls
-  `_sessions.CloseAllAsync()` on project switch, so a query dies when you change project. This is the one
-  remaining piece of "queries survive project switches", and it has to land before the toast is worth much.
-- [ ] **P2** Completion toast — still open, and it's the whole notification story: there is **no**
-  `WindowNotificationManager` anywhere in `src/` yet. Per-tab result routing already works (results attach to
-  the originating tab's VM); what's missing is telling the user about a run that finished while they were
-  looking elsewhere. *(live QA)*
-- [ ] **P2** Quit/tab-close confirm-then-cancel when a query is running — still open: no `OnClosing`
-  override exists in `MainWindow`, so quitting mid-query just drops it. Note this now overlaps the scratch-tab
-  save-on-close prompt below — both need the same window-closing hook, so build the hook once. *(live QA)*
+- [x] **P2** App-lifetime sessions — done. Landed first as *lease-aware `CloseAllAsync`* (teardown kept, but
+  a session a running query holds leaves the live map at once and is disposed at that query's last lease
+  release), then **superseded by non-destructive project switching** (below): `OpenProjectAsync` /
+  `NewProjectAsync` no longer call `CloseAllAsync` or `SchemaBrowser.DisposeAsync` at all. Both pools are
+  app-lifetime; the idle sweep and credential-expiry eviction are the only things that reclaim a connection.
+  `CloseAllAsync` stays lease-aware and is now shutdown-only. `DisposeAsync` (shutdown) still ignores leases,
+  so a stuck query can't wedge quit.
+- [x] **P2** Non-destructive project switching — **done 2026-08-09** *(live QA)*. QA found the switch was a
+  teardown: tabs cleared, sessions closed, so a query that outlived the switch reported *"the tab was closed,
+  so the results were discarded"*, and returning rebuilt every tab from `session.json` — losing result grids,
+  FK history and pending inline edits, on a disconnected project. A switch is now a **view** change. Every
+  project opened stays open: `WorkspaceContext` keeps a `ProjectWorkspace` registry and **parks** the outgoing
+  project's tabs (same view-model instances) rather than closing them. `Tabs` still means "the active
+  project's tabs" (strip, tab navigation, session save); new `AllTabs` is the union, used by autosave,
+  `QuitGuard` and `RunFinished`'s still-open test. A tab carries `ProjectDirectory` for life, so its scratch
+  file, session entry and connection lookup resolve through *its own* project — `FindConnection` searches the
+  registry, not just the foreground manifest. `SaveWorkspace` writes `session.json` for every open project.
+  Hidden projects get **no** UI indicator by choice: their tabs are invisible until you switch back, and the
+  toast is the only cross-project affordance. 9 tests in `ProjectSwitchTests.cs`.
+- [x] **P2** Completion toast — done, and with it the **status-bar routing that made it necessary**. A run's
+  progress and terminal text now go through `RunStatus` / `RunFinished` (`ExecutionViewModel`), which write to
+  the status bar only while the run's own tab is selected — before this, a background run's "Running…" and
+  summary overwrote the status of the tab actually on screen. When the tab isn't selected the terminal message
+  is raised as `BackgroundCompleted(TabName, Message, TabStillOpen, Tab)` and shown by
+  `Controls/CompletionToastHost` (Avalonia `WindowNotificationManager`, bottom-right, 5 max). The toast
+  **never auto-dismisses** (`TimeSpan.Zero`) — a background result is the whole point of the notification, and
+  timing out means missing it — and **clicking it goes to the query**: `ShellViewModel.RevealTabAsync`
+  switches project if the tab is parked in another one, selects it, and the window activates. Only a genuinely
+  closed tab reads `TabStillOpen: false` (a project switch parks, it doesn't close); that toast says the
+  results were discarded and isn't clickable, since there is nowhere to go.
+  **A cancel never toasts** — cancellation only ever comes from the user, so it stays a status line.
+- [x] **P2** Quit / tab-close confirm-then-cancel — done. `MainWindow.OnClosing` blocks the close while any
+  tab is running and asks (`Views/QuitGuard` + `Views/ConfirmCancelRunningDialog`); the block path
+  **deliberately does not call `base`**, because that is what raises `Closing`, whose handlers save the session
+  and dispose every live connection — running them for a close that isn't happening would kill the queries the
+  user just chose to keep. Tab close asks the same question in `WorkspaceViewModel.CloseTabAsync`, before the
+  unsaved-work prompt and **not** gated on `ConfirmTabClose` (that setting is about discarding text you can see;
+  a running query's cost isn't visible the same way).
+- 8 tests in `BackgroundExecutionTests.cs` (status routing, orphaned-tab completion, lease-aware
+  `CloseAllAsync`, both prompts and a declined one), on top of `ConcurrentExecutionTests`.
 
 ---
 
@@ -410,8 +437,10 @@ close, *not* on window close — prompting at quit would be friction for zero sa
   `HistoryWindow`, the `Watermark` warnings, half of `JsonSessionStore`, the VM decomposition) while their
   entries still read as open.
 - Cross-cutting overlaps worth batching rather than doing twice:
-  - **Window-closing hook** — Stage E's quit-confirm needs it. The scratch save-prompt turned out **not**
-    to: quitting already round-trips every buffer through `session.json`, so the prompt is tab-close only.
+  - **Window-closing hook** — **built** by Stage E (`MainWindow.OnClosing`, quit-while-running confirm).
+    Anything else that needs to intervene at quit hangs off it; note the not-calling-`base` contract above.
+    The scratch save-prompt turned out **not** to need it: quitting already round-trips every buffer through
+    `session.json`, so that prompt is tab-close only.
   - **Write-confirm dialog** — showing the SQL and reworking Preview SQL are one job.
   - **`ConnectionInfo.Options` handling** — the P3 factory item is the prerequisite for any app-level
     (`entra.*`) option key, since unknown keys currently reach Npgsql and throw.

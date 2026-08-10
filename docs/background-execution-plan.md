@@ -1,7 +1,49 @@
 # Background execution plan (Stage E)
 
-Status: **planned, not started.** Foundation (session leasing + 30-min idle eviction) already landed in
-`ConnectionSessionManager` (Stage A) and is what this builds on.
+Status: **DONE 2026-08-09** — all five work items shipped; see `docs/ROADMAP.md` ▸ Stage E for what
+actually landed and where it departed from this plan. The toast and the two confirm dialogs are Wayland-
+blocked and need eyeball QA (§4.3). Kept as the design record.
+
+Two deliberate departures from the plan below:
+- **Item 1** did not stop disposing sessions on a project switch. `CloseAllAsync` became *lease-aware*
+  instead, so idle connections are still reclaimed immediately and only the in-flight query's session
+  survives. The schema browser is still disposed — no query path uses it.
+  **Superseded 2026-08-09** (see *Amendment* below): item 1 landed as originally written after all.
+- **Item 3/4** grew a piece the plan didn't call out: **status-bar routing**. Once tabs run concurrently, a
+  background run's status text overwrites the status of the tab on screen, so all run status goes through
+  `RunStatus`/`RunFinished` and only reaches the bar while its own tab is selected. A cancel never toasts.
+
+Foundation (session leasing + 30-min idle eviction) already landed in `ConnectionSessionManager` (Stage A)
+and is what this builds on.
+
+## Amendment — non-destructive project switching (2026-08-09)
+
+Stage E kept the assumption that a project switch *closes* the outgoing project: tabs cleared, sessions
+closed, schema browser disposed. QA showed why that assumption doesn't hold. A long query started before
+a switch survived, but its tab did not, so the completion toast reported *"the tab was closed, so the
+results were discarded"* — and returning to the project rebuilt every tab from `session.json`, throwing
+away result grids, FK history and pending inline edits, on a disconnected project.
+
+A project switch is now a **view** change:
+
+- Every project opened stays open. `WorkspaceContext` keeps a registry of `ProjectWorkspace` entries;
+  switching **parks** the outgoing project's tabs on its entry and unparks the incoming project's.
+  `WorkspaceContext.Tabs` remains "the active project's tabs" (what the strip, tab navigation and session
+  save use); `AllTabs` is the union across projects, for anything that must not lose sight of a parked
+  tab — autosave, `QuitGuard`, and `RunFinished`'s "is the tab still open" test.
+- `OpenProjectAsync`/`NewProjectAsync` no longer call `CloseAllAsync` or `SchemaBrowser.DisposeAsync`
+  (item 1 as originally planned). Both pools are app-lifetime; the idle sweep and credential-expiry
+  eviction are the only things that reclaim a connection, exactly as if the project were still on screen.
+- A tab carries `ProjectDirectory` for life. Its scratch file, session entry and connection lookup resolve
+  through *that* project, not whichever is active — otherwise a parked tab's autosave would write into the
+  foreground project's scratch folder.
+- `SaveWorkspace` writes `session.json` for **every** open project, not just the visible one.
+- Completion toasts no longer auto-dismiss (`TimeSpan.Zero`), and clicking one calls
+  `ShellViewModel.RevealTabAsync` — switching project if the tab is parked in another, then selecting it.
+
+Covered by `tests/Bearing.App.Tests/ProjectSwitchTests.cs`. Hidden projects deliberately get **no** UI
+indicator (user's call): other projects' tabs are invisible until you switch back, and the toast is the
+only cross-project affordance.
 
 ## Goal (user-confirmed scope)
 

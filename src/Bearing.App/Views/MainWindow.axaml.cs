@@ -43,6 +43,8 @@ public partial class MainWindow : Window
     private readonly EditorTextBehavior _editorText;   // editor <-> SelectedTab buffer/caret sync
     private readonly Bearing.App.Services.IDialogService _dialogs = new DialogService(); // owns dialog/picker construction
     private bool _suppressProjectChange;   // guards the project combo during programmatic updates
+    private CompletionToastHost? _toasts;  // built once the window is open (its manager needs a top level)
+    private bool _closeConfirmed;          // set once the quit-while-running prompt has been answered "yes"
 
     public MainWindow()
     {
@@ -195,6 +197,10 @@ public partial class MainWindow : Window
         Vm.Connections.PropertyChanged += OnViewModelPropertyChanged;
         Vm.Connections.TabDatabases.CollectionChanged -= OnTabDatabasesChanged;
         Vm.Connections.TabDatabases.CollectionChanged += OnTabDatabasesChanged;
+        // A run that finishes on a tab the user isn't looking at can't use the status bar (that describes
+        // the tab on screen), so it toasts instead — the only notification sink in the app.
+        Vm.Execution.BackgroundCompleted -= OnBackgroundCompleted;
+        Vm.Execution.BackgroundCompleted += OnBackgroundCompleted;
         ResultsView.ViewMode = Vm.ResultsViewMode; // seed before the first results render
         LoadEditorFromSelectedTab();
         SyncProjectCombo();
@@ -215,6 +221,64 @@ public partial class MainWindow : Window
 
     private void OnTabDatabasesChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
         => SyncDbPicker();
+
+    /// <summary>Build the notification sink as soon as the window is on screen (its manager attaches to the
+    /// top level, so it can't exist earlier). Deliberately not deferred to the first completion: a host
+    /// constructed and shown in one turn drops that first toast (see <see cref="CompletionToastHost"/>).</summary>
+    protected override void OnOpened(EventArgs e)
+    {
+        base.OnOpened(e);
+        _toasts ??= new CompletionToastHost(this, RevealCompletedTab);
+    }
+
+    /// <summary>Toast a run that finished off screen. Marshalled: the completion is raised from whatever
+    /// thread the query's continuation landed on.</summary>
+    private void OnBackgroundCompleted(BackgroundCompletion completion)
+        => Dispatcher.UIThread.Post(() =>
+            (_toasts ??= new CompletionToastHost(this, RevealCompletedTab)).Show(completion));
+
+    /// <summary>Clicking a completion toast goes to the query that finished: the view-model switches project
+    /// if the tab is parked in another one and selects it, and the window brings itself forward.</summary>
+    private void RevealCompletedTab(BackgroundCompletion completion)
+    {
+        if (Vm is not { } vm || completion.Tab is not { } tab) return;
+        CrashReporter.Observe(Reveal(), "toast.reveal-tab");
+
+        async Task Reveal()
+        {
+            await vm.RevealTabAsync(tab);
+            Activate();
+            Editor.TextArea.Focus();
+        }
+    }
+
+    /// <summary>
+    /// Quitting is the one action that can throw away a query still in flight — tab and project switches
+    /// both leave it running — so ask before letting the close proceed.
+    /// <para>
+    /// The block path deliberately does <b>not</b> call <c>base</c>: that is what raises <c>Closing</c>, and
+    /// the handlers on it save the session and dispose every live connection. Running them for a close that
+    /// isn't happening would kill the very queries the user just chose to keep.
+    /// </para>
+    /// </summary>
+    protected override void OnClosing(WindowClosingEventArgs e)
+    {
+        var running = QuitGuard.RunningCount(Vm);
+        if (!_closeConfirmed && running > 0 && Vm is { } vm)
+        {
+            e.Cancel = true;
+            _ = ConfirmQuitAsync(vm, running);
+            return;
+        }
+        base.OnClosing(e);
+    }
+
+    private async Task ConfirmQuitAsync(ShellViewModel vm, int running)
+    {
+        if (!await QuitGuard.ConfirmAsync(vm, _dialogs, running)) return;
+        _closeConfirmed = true;
+        Close();
+    }
 
     /// <summary>Apply the (cheap) editor chrome synchronously so first paint is already dark; the
     /// (expensive) TextMate grammar registry is installed later via <see cref="InstallSqlHighlighting"/>.</summary>
