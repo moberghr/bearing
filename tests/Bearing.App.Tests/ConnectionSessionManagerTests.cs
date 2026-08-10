@@ -340,4 +340,51 @@ public class ConnectionSessionManagerTests
         await Assert.ThrowsAsync<ObjectDisposedException>(
             () => mgr.GetOrConnectAsync(Conn(Guid.NewGuid()), CancellationToken.None));
     }
+
+    /// <summary>
+    /// A schema load in flight for one database must not be handed to a session on another. Sessions are keyed
+    /// by connection id (§9.4) and a DB switch replaces the session, but the in-flight schema map was keyed by
+    /// id alone — so the new session joined the old load and adopted the *old* database's snapshot, which is
+    /// what decides editability and FK targets.
+    /// </summary>
+    [Fact]
+    public async Task A_schema_load_in_flight_for_one_database_is_not_reused_for_another()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new FakeProvider { MetadataGate = gate };
+        await using var mgr = new ConnectionSessionManager(provider, () => null);
+        var id = Guid.NewGuid();
+
+        var oldSession = await mgr.GetOrConnectAsync(Conn(id, db: "old"), CancellationToken.None);
+        var loadOld = mgr.EnsureSchemaAsync(oldSession, CancellationToken.None);   // held by the gate
+
+        // Same connection, different database → new session, and it must start its own load.
+        var newSession = await mgr.GetOrConnectAsync(Conn(id, db: "new"), CancellationToken.None);
+        var loadNew = mgr.EnsureSchemaAsync(newSession, CancellationToken.None);
+        Assert.NotSame(loadOld, loadNew);
+
+        gate.SetResult();
+
+        Assert.Equal("new", (await loadNew)!.Database);
+        Assert.Equal("old", (await loadOld)!.Database);
+    }
+
+    /// <summary>Two callers on the *same* session still share one load — the fix narrows the key, it doesn't
+    /// give up single-flighting.</summary>
+    [Fact]
+    public async Task Concurrent_schema_loads_for_the_same_session_still_share_one_read()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new FakeProvider { MetadataGate = gate };
+        await using var mgr = new ConnectionSessionManager(provider, () => null);
+        var session = await mgr.GetOrConnectAsync(Conn(Guid.NewGuid()), CancellationToken.None);
+
+        var a = mgr.EnsureSchemaAsync(session, CancellationToken.None);
+        var b = mgr.EnsureSchemaAsync(session, CancellationToken.None);
+        Assert.Same(a, b);
+
+        gate.SetResult();
+        Assert.Equal("app", (await a)!.Database);
+        Assert.Equal(1, ((FakeMetadata)session.Metadata).LoadCount);
+    }
 }

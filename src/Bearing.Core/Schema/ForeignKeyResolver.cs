@@ -38,6 +38,11 @@ public static class ForeignKeyResolver
             // Only the referencing side navigates, and only when the clicked column is part of it.
             if (fk.ParentTableId != col.BaseTableId || !fk.ParentOrdinals.Contains(col.BaseColumnOrdinal)) continue;
 
+            // A composite FK pairs its columns one-to-one, so the two ordinal lists must be the same length.
+            // If the catalog hands back a mismatch, the pairing is meaningless — skip the constraint rather
+            // than indexing off the end of the shorter list (this used to throw IndexOutOfRange mid-click).
+            if (fk.ParentOrdinals.Count != fk.ReferencedOrdinals.Count) continue;
+
             var refTable = FindTable(snapshot, fk.ReferencedTableId);
             if (refTable is null) continue;
             var refCols = snapshot.ColumnsOf(fk.ReferencedTableId);

@@ -52,7 +52,7 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             sw.Stop();
-            return new[] { Failure(sw.Elapsed, new QueryError(ex.Message, null, null)) };
+            return new[] { Failure(sw.Elapsed, new QueryError(SafeErrorText.Of(ex), null, null)) };
         }
     }
 
@@ -76,7 +76,7 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             sw.Stop();
-            return Failure(sw.Elapsed, new QueryError(ex.Message, null, null));
+            return Failure(sw.Elapsed, new QueryError(SafeErrorText.Of(ex), null, null));
         }
     }
 
@@ -138,7 +138,7 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             sw.Stop();
-            return new[] { Failure(sw.Elapsed, new QueryError(ex.Message, null, null)) };
+            return new[] { Failure(sw.Elapsed, new QueryError(SafeErrorText.Of(ex), null, null)) };
         }
     }
 

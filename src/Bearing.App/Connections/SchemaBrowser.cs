@@ -65,6 +65,19 @@ public sealed class SchemaBrowser : ISchemaBrowser
             if (_readers.TryGetValue(key, out var existing)) return existing;
             var task = BuildAsync(connection, database, ct);
             _readers[key] = task;
+            // Don't cache a failed (or cancelled) build — the next expand should retry, e.g. after fixing
+            // credentials. Evict only if this attempt is *still* the cached one: the unconditional Remove
+            // this replaced could drop a concurrent replacement, leaking that reader's factory forever.
+            _ = task.ContinueWith(
+                t =>
+                {
+                    lock (_gate)
+                        if (_readers.TryGetValue(key, out var current) && ReferenceEquals(current, t))
+                            _readers.Remove(key);
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.NotOnRanToCompletion,
+                TaskScheduler.Default);
             return task;
         }
     }
@@ -72,18 +85,11 @@ public sealed class SchemaBrowser : ISchemaBrowser
     private async Task<Reader> BuildAsync(ConnectionInfo connection, string database, CancellationToken ct)
     {
         await Task.Yield();
-        try
-        {
-            var clone = connection with { Database = database };
-            var (provider, factory, _) = await ConnectionFactoryBuilder.BuildAsync(_providers, _credentials(), clone, forceRefresh: false, ct);
-            return new Reader(factory, provider.CreateMetadataReader(factory));
-        }
-        catch
-        {
-            // Don't cache a failed build — let the next expand retry (e.g. after fixing credentials).
-            lock (_gate) _readers.Remove((connection.Id, database));
-            throw;
-        }
+        // Eviction of a failed build is the caller's continuation (see GetReaderAsync), so that it can check
+        // this task is still the cached one before removing it.
+        var clone = connection with { Database = database };
+        var (provider, factory, _) = await ConnectionFactoryBuilder.BuildAsync(_providers, _credentials(), clone, forceRefresh: false, ct);
+        return new Reader(factory, provider.CreateMetadataReader(factory));
     }
 
     public async Task InvalidateAsync(Guid connectionId)

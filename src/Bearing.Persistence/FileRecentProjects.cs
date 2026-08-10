@@ -27,7 +27,19 @@ public sealed class FileRecentProjects : IRecentProjects
         list.RemoveAll(p => string.Equals(p, full, StringComparison.Ordinal));
         list.Insert(0, full);
         if (list.Count > MaxEntries) list = list.Take(MaxEntries).ToList();
+        await WriteAsync(list, ct).ConfigureAwait(false);
+    }
 
+    public async Task RemoveAsync(string directory, CancellationToken ct)
+    {
+        var full = Path.GetFullPath(directory);
+        var list = (await ListAsync(ct).ConfigureAwait(false)).ToList();
+        if (list.RemoveAll(p => string.Equals(p, full, StringComparison.Ordinal)) == 0) return; // nothing to do
+        await WriteAsync(list, ct).ConfigureAwait(false);
+    }
+
+    private async Task WriteAsync(List<string> list, CancellationToken ct)
+    {
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
         var tmp = _path + ".tmp";
         await using (var stream = File.Create(tmp))

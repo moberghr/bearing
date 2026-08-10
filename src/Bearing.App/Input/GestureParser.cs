@@ -48,7 +48,7 @@ public static class GestureParser
         var keyToken = parts[^1];
         if (keyToken.StartsWith("Phys", StringComparison.Ordinal))
         {
-            if (!Enum.TryParse<PhysicalKey>(keyToken[4..], ignoreCase: true, out var phys)) return false;
+            if (!TryParseKeyName<PhysicalKey>(keyToken[4..], out var phys) || phys == PhysicalKey.None) return false;
             gesture = Gesture.ForPhysical(mods, phys);
             return true;
         }
@@ -56,12 +56,26 @@ public static class GestureParser
         var alias = Aliases.FirstOrDefault(a => a.Text == keyToken);
         if (alias.Text is not null) { gesture = Gesture.ForKey(mods, alias.Key); return true; }
 
-        if (Enum.TryParse<Key>(keyToken, ignoreCase: true, out var key) && key != Key.None)
+        if (TryParseKeyName<Key>(keyToken, out var key) && key != Key.None)
         {
             gesture = Gesture.ForKey(mods, key);
             return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Parse a key <em>name</em>. <see cref="Enum.TryParse{T}(string, bool, out T)"/> alone is too permissive
+    /// for user-authored bindings: it accepts numbers, so <c>Ctrl+16</c> used to bind <c>(Key)16</c> — which is
+    /// a real value (<c>ImeAccept</c>), just not remotely what anyone typing "16" meant. Requiring a
+    /// letter-leading token rejects <c>16</c>/<c>0x10</c>/<c>-1</c>, and <c>IsDefined</c> then rejects a name
+    /// that parses to a value outside the enum.
+    /// </summary>
+    private static bool TryParseKeyName<T>(string token, out T value) where T : struct, Enum
+    {
+        value = default;
+        if (token.Length == 0 || !char.IsLetter(token[0])) return false;
+        return Enum.TryParse(token, ignoreCase: true, out value) && Enum.IsDefined(value);
     }
 
     public static Gesture Parse(string text) =>

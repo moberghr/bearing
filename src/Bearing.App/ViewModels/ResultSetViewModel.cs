@@ -125,6 +125,11 @@ public sealed partial class ResultSetViewModel : ObservableObject
     private readonly HashSet<object?[]> _newRows = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<object?[]> _deleted = new(ReferenceEqualityComparer.Instance);
 
+    /// <summary>Rows whose pending edit was set aside when they were marked for deletion (delete supersedes
+    /// an edit at save time). Kept so un-marking restores the edit instead of losing it — the grid still shows
+    /// the edited values, so silently dropping them meant displaying changes that would never be saved.</summary>
+    private readonly HashSet<object?[]> _editedUnderDelete = new(ReferenceEqualityComparer.Instance);
+
     public bool HasPendingChanges => _edited.Count + _newRows.Count + _deleted.Count > 0;
     public int PendingCount => _edited.Count + _newRows.Count + _deleted.Count;
     public string PendingText => PendingCount == 1 ? "1 pending change" : $"{PendingCount} pending changes";
@@ -190,10 +195,17 @@ public sealed partial class ResultSetViewModel : ObservableObject
             RaisePending();
             return;
         }
-        if (!_deleted.Remove(row))   // not marked → mark it (delete supersedes pending edits)
+        if (_deleted.Remove(row))
         {
+            // Un-marked: give the row its pending edit back, if the mark had taken one away.
+            if (_editedUnderDelete.Remove(row)) _edited.Add(row);
+        }
+        else
+        {
+            // Marked: delete supersedes a pending edit at save time, but remember the edit so a second
+            // toggle can restore it (and so RevertPending still knows to roll those cells back).
             _deleted.Add(row);
-            _edited.Remove(row);
+            if (_edited.Remove(row)) _editedUnderDelete.Add(row);
         }
         RaisePending();
     }
@@ -219,7 +231,9 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// <summary>Revert all pending changes in place: restore edited cells, drop new rows, un-mark deletes.</summary>
     public void RevertPending()
     {
-        foreach (var row in _edited)
+        // Both sets hold rows whose cells were changed in the buffer — including edits currently parked by a
+        // delete mark, which a revert must roll back too (they're on screen).
+        foreach (var row in _edited.Concat(_editedUnderDelete))
             if (_originals.TryGetValue(row, out var original))
                 Array.Copy(original, row, Math.Min(original.Length, row.Length));
         foreach (var row in _newRows)
@@ -237,6 +251,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
         _edited.Clear();
         _newRows.Clear();
         _deleted.Clear();
+        _editedUnderDelete.Clear();
         RaisePending();
     }
 

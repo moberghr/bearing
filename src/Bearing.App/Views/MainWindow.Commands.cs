@@ -243,12 +243,10 @@ public partial class MainWindow
     protected override void OnKeyUp(KeyEventArgs e)
     {
         base.OnKeyUp(e);
-        // Releasing Ctrl ends a Ctrl+Tab MRU cycle and commits the landed tab as most-recent.
-        if (e.Key is Key.LeftCtrl or Key.RightCtrl && _mruCycling)
-        {
-            _mruCycling = false;
-            if (Vm?.Workspace.SelectedTab is { } t) _tabMru.Use(t);
-        }
+        // Releasing the modifier the MRU binding holds ends the cycle and commits the landed tab as
+        // most-recent. Which modifier that is comes from the keymap (tab.mruNext is rebindable).
+        if (_mruCycling && MruCycle.EndsCycle(MruCycle.ModifiersOf(_dispatcher.Keymap), e.Key))
+            EndMruCycle();
         if (e.Key is Key.LeftAlt or Key.RightAlt && _altAlone && Vm is not null)
         {
             _altAlone = false;
@@ -337,6 +335,18 @@ public partial class MainWindow
         if (!_mruCycling) { _mruCycling = true; _mruIndex = 0; }
         _mruIndex = (_mruIndex + dir + items.Count) % items.Count;
         Vm.Workspace.SelectedTab = items[_mruIndex];
+
+        // A binding that holds no modifier (someone rebinds this to F6) gets no key-up to end the cycle, so
+        // commit immediately — each press then steps from the current tab, the only coherent reading of a
+        // modifier-less cycle, instead of leaving the flag stuck and MRU order frozen.
+        if (MruCycle.ModifiersOf(_dispatcher.Keymap) == KeyModifiers.None) EndMruCycle();
+    }
+
+    /// <summary>Finish an MRU cycle: stop cycling and record the landed tab as the most-recently used.</summary>
+    private void EndMruCycle()
+    {
+        _mruCycling = false;
+        if (Vm?.Workspace.SelectedTab is { } t) _tabMru.Use(t);
     }
 
     /// <summary>tab.goto{n}: jump to tab n (1-based); n=9 is "last tab" (browser convention). Clamps.</summary>

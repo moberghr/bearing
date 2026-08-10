@@ -11,6 +11,16 @@ public sealed class NpgsqlConnectionFactory : IDbConnectionFactory
 {
     private readonly NpgsqlDataSource _dataSource;
 
+    /// <summary>Connection-string keywords <see cref="ConnectionInfo.Options"/> is not allowed to set:
+    /// identity and credentials come from the connection record plus the secret store, never from an option
+    /// bag that travels in the shared project.json.</summary>
+    private static readonly HashSet<string> Reserved = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "password", "passwd", "pwd",
+        "host", "server", "port", "database", "db",
+        "username", "user", "user id", "userid", "uid", "user name",
+    };
+
     public NpgsqlConnectionFactory(ConnectionInfo info, string? password)
     {
         var csb = new NpgsqlConnectionStringBuilder
@@ -33,7 +43,19 @@ public sealed class NpgsqlConnectionFactory : IDbConnectionFactory
                 case "search_path":
                     csb.SearchPath = value;
                     break;
+                case var k when Reserved.Contains(k):
+                    // Identity and credentials come from ConnectionInfo + the secret store. An Options entry
+                    // must never override them — a stray "Password" key would beat the stored secret, and
+                    // silently at that.
+                    break;
+                case var k when !csb.ContainsKey(k):
+                    // Not a driver keyword: Options doubles as app-level config (the documented `entra.*`
+                    // keys live here), and those used to reach Npgsql and throw an unwrapped exception at
+                    // connect time, which made the feature unusable. Ignore what the driver doesn't own.
+                    break;
                 default:
+                    // A real Npgsql keyword: apply it, and let a bad *value* still throw — that's a typo
+                    // worth surfacing, unlike an unknown key.
                     csb[key] = value;
                     break;
             }

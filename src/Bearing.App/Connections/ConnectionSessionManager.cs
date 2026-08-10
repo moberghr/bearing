@@ -43,7 +43,10 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     // Value carries the target Info so a connect in flight for one database isn't reused for another
     // (the toolbar can switch DB on the same connection id while the first connect is still running).
     private readonly Dictionary<Guid, (ConnectionInfo Info, Task<ConnectionSession> Task)> _inflight = new();
-    private readonly Dictionary<Guid, Task<ISchemaSnapshot?>> _schemaInflight = new();
+    // Keyed by (connection, database) — NOT by connection id alone. Sessions are per-connection by design
+    // (§9.4) and a database switch replaces the session, so an id-only key let the new session (db B) join
+    // the old session's in-flight load (db A) and adopt A's snapshot — which drives editability and FK nav.
+    private readonly Dictionary<(Guid Id, string Database), Task<ISchemaSnapshot?>> _schemaInflight = new();
     private bool _disposed;
 
     /// <summary>Default idle timeout before an unused connection is closed.</summary>
@@ -170,9 +173,10 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         lock (_gate)
         {
             if (session.Snapshot is not null) return Task.FromResult<ISchemaSnapshot?>(session.Snapshot);
-            if (_schemaInflight.TryGetValue(session.ConnectionId, out var pending)) return pending;
+            var key = (session.ConnectionId, session.Info.Database);
+            if (_schemaInflight.TryGetValue(key, out var pending)) return pending;
             var task = LoadSchemaAsync(session, ct);
-            _schemaInflight[session.ConnectionId] = task;
+            _schemaInflight[key] = task;
             return task;
         }
     }
@@ -303,7 +307,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             catch (Exception ex)
             {
                 await SafeDisposeFactoryAsync(factory);
-                throw new ConnectionFailedException(Describe(info, ex.Message), ex);
+                throw new ConnectionFailedException(Describe(info, Bearing.Core.Data.SafeErrorText.Of(ex)), ex);
             }
             if (!ok)
             {
@@ -347,7 +351,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         }
         finally
         {
-            lock (_gate) _schemaInflight.Remove(session.ConnectionId);
+            lock (_gate) _schemaInflight.Remove((session.ConnectionId, session.Info.Database));
         }
     }
 

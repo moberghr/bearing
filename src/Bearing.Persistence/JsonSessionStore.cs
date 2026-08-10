@@ -14,8 +14,19 @@ public sealed class JsonSessionStore : ISessionStore
         var path = SessionPath(projectDirectory);
         if (!File.Exists(path)) return null;
 
-        await using var stream = File.OpenRead(path);
-        return await JsonSerializer.DeserializeAsync<SessionState>(stream, BearingJson.Options, ct).ConfigureAwait(false);
+        try
+        {
+            await using var stream = File.OpenRead(path);
+            return await JsonSerializer.DeserializeAsync<SessionState>(stream, BearingJson.Options, ct).ConfigureAwait(false);
+        }
+        // A truncated or hand-edited session.json used to throw straight out of project open, so a corrupt
+        // *cache* of window state stopped the project from opening at all. Session state is disposable by
+        // definition — fall back to "no session" (defaults + one empty tab), matching AppSettingsStore.
+        // Cancellation is the caller's business and still propagates.
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
     }
 
     public async Task SaveAsync(string projectDirectory, SessionState state, CancellationToken ct)

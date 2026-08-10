@@ -36,7 +36,19 @@ public sealed class SecretToolSecretStore : ISecretStore
     }
 
     public async Task DeleteAsync(Guid connectionId, CancellationToken ct)
-        => await RunAsync(new[] { "clear", "app", App, "connection", connectionId.ToString() }, stdin: null, ct).ConfigureAwait(false);
+    {
+        var (exit, _, err) = await RunAsync(
+            new[] { "clear", "app", App, "connection", connectionId.ToString() }, stdin: null, ct).ConfigureAwait(false);
+        if (exit == 0) return;
+
+        // `clear` exits 1 for "nothing matched" *and* for a real failure (locked or absent keyring), with an
+        // empty stderr in the first case — so the exit code alone can't be trusted either way. Check the
+        // postcondition instead: if the secret is gone, the delete did its job; if it's still there, the
+        // caller must hear about it rather than believe a credential was removed when it wasn't.
+        if (await GetPasswordAsync(connectionId, ct).ConfigureAwait(false) is not null)
+            throw new InvalidOperationException(
+                $"secret-tool clear failed — the password is still in the keyring{(err.Length > 0 ? $": {err}" : ".")}");
+    }
 
     /// <summary>Store→lookup→clear a probe secret to confirm a keyring is actually reachable.</summary>
     public static async Task<bool> IsAvailableAsync(CancellationToken ct)

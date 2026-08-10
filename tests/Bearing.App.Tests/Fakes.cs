@@ -38,7 +38,12 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
 
     public string? LastPassword;
 
-    public IMetadataReader CreateMetadataReader(IDbConnectionFactory factory) => new FakeMetadata((FakeFactory)factory);
+    /// <summary>When set, every metadata reader's snapshot load blocks on this gate — lets a test hold a
+    /// schema load in flight while the session underneath it is replaced (DB switch).</summary>
+    public TaskCompletionSource? MetadataGate;
+
+    public IMetadataReader CreateMetadataReader(IDbConnectionFactory factory)
+        => new FakeMetadata((FakeFactory)factory) { Gate = MetadataGate };
 
     /// <summary>When set, every session built by this provider shares this executor (so a test can gate
     /// concurrent runs across tabs). Otherwise each session gets a fresh no-op <see cref="FakeExecutor"/>.</summary>
@@ -76,10 +81,14 @@ internal sealed class FakeMetadata : IMetadataReader
     public Task<IReadOnlyList<string>> GetDatabasesAsync(CancellationToken ct)
         => Task.FromResult<IReadOnlyList<string>>(new[] { "app" });
 
-    public Task<ISchemaSnapshot> LoadSnapshotAsync(string database, CancellationToken ct)
+    /// <summary>When set, the load waits for the test to release it (see FakeProvider.MetadataGate).</summary>
+    public TaskCompletionSource? Gate;
+
+    public async Task<ISchemaSnapshot> LoadSnapshotAsync(string database, CancellationToken ct)
     {
         Interlocked.Increment(ref LoadCount);
-        return Task.FromResult<ISchemaSnapshot>(new FakeSnapshot(database));
+        if (Gate is not null) await Gate.Task.WaitAsync(ct);
+        return new FakeSnapshot(database);
     }
 
     public Task<IReadOnlyList<RoutineInfo>> GetRoutinesAsync(CancellationToken ct)

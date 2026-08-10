@@ -137,8 +137,12 @@ internal static class ResultEditModel
         foreach (var c in t.Columns)
         {
             if (c.ResultIndex >= row.Length || c.ResultIndex >= original.Length) continue;
-            if (Equals(row[c.ResultIndex], original[c.ResultIndex])) continue;
-            list.Add(new ColumnValue(c.BaseColumn, Coerce(row[c.ResultIndex], rs.Columns[c.ResultIndex].ClrType)));
+            // Compare *coerced* to original: the grid writes strings, so a cell holding "5" never equalled the
+            // typed 5 it came from and every touched cell produced an assignment — re-writing values that
+            // hadn't changed (and re-touching audit triggers on those columns).
+            var value = Coerce(row[c.ResultIndex], rs.Columns[c.ResultIndex].ClrType);
+            if (Equals(value, original[c.ResultIndex])) continue;
+            list.Add(new ColumnValue(c.BaseColumn, value));
         }
         return list;
     }

@@ -71,4 +71,8 @@ public interface IRecentProjects
 {
     Task<IReadOnlyList<string>> ListAsync(CancellationToken ct);
     Task AddAsync(string directory, CancellationToken ct);
+
+    /// <summary>Drop an entry from the list — used to prune projects that no longer exist on disk, so a
+    /// deleted folder stops being offered after the first time it's noticed.</summary>
+    Task RemoveAsync(string directory, CancellationToken ct);
 }

@@ -17,9 +17,17 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done.
 >
 > **2026-08-10:** the *(live QA)* backlog is **cleared — the user QA'd everything** through Stage E, so those
 > tags below are historical, not outstanding. Both open **P1**s closed this pass (honest `CountAsync`, and
-> no-keyring passwords are no longer written to disk). Tests **Sql 159 · App 291 · Persistence 18 · Data 15**,
-> the last run live against Postgres on 5434 (`BEARING_TEST_PG_PORT=5434 dotnet test` — 0 skipped); same 3
-> warnings. New work from here still needs its own eyeball pass (§4.3 — Wayland).
+> no-keyring passwords are no longer written to disk).
+>
+> **2026-08-10 (later): the 🔴 correctness & security section is empty.** Both remaining **P2**s and the whole
+> **P3** tail were fixed in one pass, along with the `ConfigureAwait`/UI-thread item in 🟡. Three entries came
+> out **narrower or different from how they were written** — read those before trusting the old wording: the
+> `ex.Message` leak (credentials redacted, endpoint kept on purpose), the `secret-tool` delete (its exit code
+> is *unusable*, so the postcondition is verified instead), and `GestureParser` (`(Key)16` is a real member, so
+> `IsDefined` alone fixed nothing). Tests **Sql 160 · App 312 · Data 27 · Persistence 25**, run live against
+> Postgres on 5434 (`BEARING_TEST_PG_PORT=5434 dotnet test` — 0 skipped); build clean with the **same 3
+> warnings** (verified with `--no-incremental`; an incremental build re-emits none, which is easy to misread as
+> "fixed"). New work still needs its own eyeball pass (§4.3 — Wayland).
 
 ---
 
@@ -384,7 +392,13 @@ close, *not* on window close — prompting at quit would be friction for zero sa
   tests (`CountTotalTests`, new `PageableExecutor` fake).
 - [x] **P1** `StatementSplitter`: trailing `-- line comment` swallows the auto-appended `;` (merges statements → syntax error); blank-line heuristic mis-splits a single statement with a blank line at paren depth 0. `StatementSplitter.cs`. **Fixed:** `EnsureSeparated` puts the `;` on its own line after a fragment ending in a line comment; the blank-line split now fires only when the next token starts a statement (`StartsStatement`) and the previous token isn't a set operator (`EndsWithSetOperator`), so a statement continued by `and`/`order by`/`union` no longer mis-splits. (+4 tests)
 - [x] **P1** `CellFormat.FormatArray` throws on multi-dimensional Postgres arrays (uses `arr.Length` with single-index `GetValue`). `Formatting/CellFormat.cs:36-41`. **Fixed:** `foreach` flattens any rank in row-major order instead of single-index `GetValue`. (+1 test)
-- [ ] **P2** `EnsureSchemaAsync` inflight keyed by ConnectionId not (id, database) → wrong-DB snapshot across a rebuild. `ConnectionSessionManager.cs:155-157` (`_schemaInflight[session.ConnectionId]`). Note §9.4: sessions are keyed by connection Id by design, so the fix is the *inflight* key, not the session key.
+- [x] **P2** `EnsureSchemaAsync` inflight keyed by ConnectionId not (id, database) → wrong-DB snapshot across a
+  rebuild. **Fixed 2026-08-10:** `_schemaInflight` is now keyed by `(Id, Database)`, so a DB switch that
+  replaces the session starts its own load instead of joining the outgoing database's and adopting its
+  snapshot (which decides editability and FK targets). Session keying is untouched, per §9.4. The removal in
+  `LoadSchemaAsync`'s `finally` uses the same key, so a stale load can't evict its replacement's entry.
+  +2 tests (`ConnectionSessionManagerTests`) — one pinning the split, one pinning that two callers on the
+  *same* session still share a single read; the metadata fake gained a gate to hold a load in flight.
 - [x] **P2** Missing `ConfigureAwait(false)` in the data layer — **done 2026-08-10, and the original framing
   was wrong.** The entry claimed *deadlock risk for any sync-over-async caller*; there is no such caller. The
   only blocking wait in `src/` is `TabAutosave.cs:147`, already wrapped in `Task.Run(...)` (safe — no context
@@ -407,19 +421,74 @@ close, *not* on window close — prompting at quit would be friction for zero sa
   touch the socket — the async form bought an awaited state-machine hop per cell to await an
   always-completed task. +1 live test pinning that null cells still materialize as null without shifting
   their neighbours (`Null_cells_materialize_as_null_without_disturbing_their_neighbours`).
-- [ ] **P2** `ForeignKeyResolver` assumes equal-length parent/referenced attnum lists → `IndexOutOfRange` on a malformed composite FK. `Core/Schema/ForeignKeyResolver.cs:45-56`: the loop is bounded by `fk.ParentOrdinals.Count` (:48) but indexes `fk.ReferencedOrdinals[i]` (:50), so a shorter referenced list throws.
+- [x] **P2** `ForeignKeyResolver` assumed equal-length parent/referenced attnum lists → `IndexOutOfRange` on a
+  malformed composite FK. **Fixed 2026-08-10:** the counts are compared up front and a mismatched constraint
+  is skipped — a composite FK pairs its columns one-to-one, so unequal lists mean the pairing is meaningless,
+  not that it should be attempted halfway. +1 test in `ForeignKeyResolverTests`.
 - [x] **P2** Write-guard gap: inline result-grid saves bypass the confirm dialog. **Already fixed** (landed in the merged review-fixes) — `ExecutionViewModel.SaveChangesAsync:245-254` confirms via `ConfirmWriteAsync` when the connection has `RequireWriteConfirmation`, mirroring the `ExecuteAsync` gate.
-- [ ] **P3** `NpgsqlConnectionFactory` applies persisted options verbatim — unknown key throws unwrapped at connect; an `Options["Password"]` overrides the secret. `NpgsqlConnectionFactory.cs:26-40` (`default: csb[key] = value`). Note this also makes the *documented* `entra.resource` override unusable — setting it breaks the connection, because nothing filters app-level `entra.*` keys out before the rest go to `csb[key] = value`. Fixing the factory to ignore keys it doesn't own (or namespacing app options away from driver options) is the prerequisite for any future per-connection Entra option.
-- [ ] **P3** Raw `ex.Message` surfaced to the UI on generic catch paths (host/endpoint info leak). `PostgresQueryExecutor.cs:45,69,119`.
-- [ ] **P3** `SchemaBrowser.BuildAsync` catch removes the key unconditionally → can evict a concurrent replacement (pool leak). `SchemaBrowser.cs:80-86`. **Narrower than originally written:** not caching a failed build is deliberate and documented there (so the next expand can retry); only the concurrent-replacement race remains — remove the key *only if it still maps to this build's task*.
-- [~] **P3** `JsonSessionStore` — **the atomicity half is fixed**: both `SaveAsync` (:26-29) and the shutdown-path `Save` (:39-41) now write `<file>.tmp` then `File.Move(overwrite: true)`. **Still open:** `LoadAsync` (:12-19) has no try/catch, so a truncated or hand-edited `session.json` throws on project open instead of falling back to defaults — inconsistent with `AppSettingsStore`.
-- [ ] **P3** `secret-tool` delete ignores exit code → a failed clear leaves a stale credential after "delete". `SecretToolSecretStore.cs:35-36` (`DeleteAsync` discards the tuple, unlike `SetPasswordAsync` which throws on non-zero).
-- [ ] **P3** `ResultSetViewModel.ToggleDelete` un-delete drops a prior pending edit. `ResultSetViewModel.cs:183-197`: marking a row deleted also does `_edited.Remove(row)` (":193 — delete supersedes pending edits"), and un-marking can't restore it — so the grid still shows the edited values but they'll never be saved.
-- [ ] **P3** `ChangedAssignments` compares edited string vs typed original → emits no-op UPDATE assignments. `ResultEditModel.cs:140`: `Equals(row[i], original[i])` runs *before* `Coerce`, so a grid-written `"5"` never equals a typed `5`.
-- [ ] **P3** `GestureParser` accepts numeric/undefined enum values (`Ctrl+16` binds `(Key)16`). `Input/GestureParser.cs:51,59` — partially mitigated (`key != Key.None` now guards the one worst case) but `Enum.TryParse` still accepts numeric tokens and there's no `Enum.IsDefined` check on either `Key` or `PhysicalKey`.
-- [ ] **P3** MRU tab-cycle state hard-coupled to the Ctrl key — rebinding `tab.mruNext` freezes MRU ordering. Moved by the partial-class split: now `MainWindow.Commands.cs:214` (`e.Key is Key.LeftCtrl or Key.RightCtrl && _mruCycling`), flag declared at `MainWindow.axaml.cs:40`.
+- [x] **P3** `NpgsqlConnectionFactory` applied persisted options verbatim. **Fixed 2026-08-10:** the option bag
+  is now filtered in three ways — a `Reserved` set (password/host/port/database/user + aliases) can never be
+  overridden from `Options`, since identity and credentials come from `ConnectionInfo` + the secret store; keys
+  the driver doesn't own are ignored rather than thrown at connect, which is what made the documented
+  `entra.resource` override unusable; and a genuine Npgsql keyword is still applied, with a bad *value* still
+  throwing (a typo worth surfacing). This unblocks per-connection `entra.*` options. +4 tests
+  (`ConnectionOptionsTests`, three live: app-level key connects fine, an `Options["Password"]` can't displace
+  the real one, and `ApplicationName` set through `Options` is observable in `pg_stat_activity`).
+- [~] **P3** Raw `ex.Message` surfaced to the UI on generic catch paths. **Partly done 2026-08-10, and
+  deliberately narrower than written.** New pure `Core/Data/SafeErrorText` redacts `password=…` /
+  `pwd=…` values out of driver messages — the real hazard, since a connect- or parse-time failure can quote the
+  whole connection string, which then lands in the results pane, the status bar *and* the query log. Wired into
+  the executor's three generic catches and the connect-failure path (`ConnectionSessionManager`).
+  **Host/port/database are kept on purpose:** this is a local tool showing the user a server they configured
+  themselves, the connect path already names the endpoint by design (`Could not connect to 'x' (host:port/db)`),
+  and stripping it would remove the useful half of every DNS/TLS/network error while protecting nobody. If the
+  endpoint should genuinely be hidden, that's a separate decision — say so and it's a one-line change.
+  +5 tests (`SafeErrorTextTests`).
+- [x] **P3** `SchemaBrowser.BuildAsync` catch removed the cache key unconditionally → could evict a concurrent
+  replacement (pool leak). **Fixed 2026-08-10:** eviction moved out of `BuildAsync` into a
+  `NotOnRanToCompletion` continuation registered by `GetReaderAsync`, which removes the entry only while it is
+  still `ReferenceEquals` to *this* attempt's task. Retry-after-failure behaviour is unchanged (and now also
+  covers a cancelled build, which previously stayed cached). **Not directly tested** — reproducing it needs a
+  failing build racing a replacement through the credential path; the invariant is stated at the call site.
+- [x] **P3** `JsonSessionStore` — atomicity was already fixed; **`LoadAsync` resilience done 2026-08-10.** A
+  truncated, empty or hand-edited `session.json` now loads as "no session" (defaults + one empty tab) instead
+  of throwing out of project open — a disposable cache of window layout could stop a project from opening.
+  Matches `AppSettingsStore`; `OperationCanceledException` still propagates. +5 tests
+  (`StoreResilienceTests`, including a valid-file round-trip so the catch can't mask a real regression).
+- [x] **P3** `secret-tool` delete ignored its exit code → a failed clear left a stale credential after
+  "delete". **Fixed 2026-08-10, but not by checking the exit code:** measured on this machine, `secret-tool
+  clear` exits **1 both for a real failure and for "nothing matched"**, with an empty stderr in the latter case
+  — so trusting the code would make every delete of a password-less connection report an error. `DeleteAsync`
+  now verifies the *postcondition* on a non-zero exit: it looks the secret up, and throws only if it's still
+  there. +1 `SkippableFact` (`StoreResilienceTests`) that stores, deletes, verifies it's gone, and then deletes
+  twice more to prove "nothing to clear" is not an error; it ran live against the local keyring.
+- [x] **P3** `ResultSetViewModel.ToggleDelete` un-delete dropped a prior pending edit. **Fixed 2026-08-10:** the
+  superseded edit is parked in a new `_editedUnderDelete` set and restored when the row is un-marked, so the
+  values the grid is still displaying will actually be saved. `RevertPending` also rolls those cells back now
+  (it iterated `_edited` only, so a parked edit survived a revert on screen), and `ClearPending` clears the new
+  set. Delete still supersedes the edit at save time — that part was deliberate. +2 tests (`PendingEditTests`).
+- [x] **P3** `ChangedAssignments` compared the edited *string* against the typed original → no-op UPDATE
+  assignments. **Fixed 2026-08-10:** the value is coerced first and compared after, so a cell typed back to
+  what it already held generates no assignment (it used to re-write every touched column — and re-fire audit
+  triggers on them). The existing `assignments.Count > 0` guard means such a row now produces no UPDATE at all
+  rather than invalid SQL. +2 tests (`PendingEditTests`).
+- [x] **P3** `GestureParser` accepted numeric/undefined enum values. **Fixed 2026-08-10** via one
+  `TryParseKeyName<T>` helper used by both the logical and physical paths: the token must be letter-leading
+  (rejecting `16`, `0x10`, `-1`) *and* `Enum.IsDefined`. Worth knowing why `IsDefined` alone wasn't enough —
+  `(Key)16` is a real member (`ImeAccept`), so `Ctrl+16` silently bound a valid-but-unrelated IME key rather
+  than an invalid one. +10 theory cases (`InputRobustnessTests`), including four that must still parse.
+- [x] **P3** MRU tab-cycle state hard-coupled to the Ctrl key — rebinding `tab.mruNext` froze MRU ordering.
+  **Fixed 2026-08-10:** new pure `Input/MruCycle` (§2.5) derives the held modifier from the *keymap*'s bindings
+  for `tab.mruNext`/`tab.mruPrev` and answers whether a released key ends the cycle; `MainWindow` just asks.
+  Two subtleties are pinned by tests: Shift is excluded (it only picks direction, so releasing it mid-cycle
+  must not commit early), and a modifier-less binding reports `None`, where `CycleMru` commits immediately
+  because no key-up is ever coming. +4 tests (`InputRobustnessTests`).
 - [x] **P3** `StreamAsync` ignores `QueryOptions.MaxRows` — **closed by deleting the dead API.** No `StreamAsync` remains anywhere in the repo. (`QueryOptions.MaxRows` itself is live and honoured on the paging path: `PostgresQueryExecutor.cs:145`, set to `PageSize` by `ExecutionViewModel.cs:192,326`.)
-- [ ] **P3** Recent-projects dropdown isn't pruned of missing/empty dirs (resume skips them, but the list still shows them). Moved with the VM decomposition: now `ShellViewModel.Projects.cs:120-125` (`RefreshRecentAsync` adds every entry `ListAsync` returns, with no existence filter).
+- [x] **P3** Recent-projects dropdown wasn't pruned of missing dirs. **Fixed 2026-08-10:** `RefreshRecentAsync`
+  skips an entry whose directory is gone *and* drops it from the store (new `IRecentProjects.RemoveAsync`, so
+  it self-heals instead of re-checking forever). Pruning is on directory existence only, deliberately: a folder
+  that exists but has no manifest yet keeps its entry, so an unmounted path or a mid-rewrite manifest isn't
+  silently forgotten. +2 App tests (`RecentProjectsPruneTests`) + 1 Persistence test for `RemoveAsync`.
 
 ---
 

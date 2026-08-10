@@ -166,7 +166,18 @@ public sealed partial class ShellViewModel
     {
         var list = await _recentProjects.ListAsync(CancellationToken.None);
         RecentProjects.Clear();
-        foreach (var p in list) RecentProjects.Add(new RecentProjectItem(p, await ResolveProjectName(p)));
+        foreach (var p in list)
+        {
+            // Prune entries whose folder is gone (or was never a project): resume already skips these, so
+            // offering them in the switcher only produced a dead menu item that recreated an empty project
+            // when clicked. Dropped from the stored list too, so it self-heals instead of re-checking forever.
+            if (!Directory.Exists(p))
+            {
+                await _recentProjects.RemoveAsync(p, CancellationToken.None);
+                continue;
+            }
+            RecentProjects.Add(new RecentProjectItem(p, await ResolveProjectName(p)));
+        }
         // Rebuilding the list drops the switcher's selection (clearing an ItemsSource nulls SelectedItem)
         // and the entries are fresh instances, so re-announce the current project: the switcher resolves
         // its selection from ProjectDirectory and would otherwise sit blank until the next project change.
