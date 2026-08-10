@@ -31,6 +31,19 @@ public enum CloseChoice
     Discard,
 }
 
+/// <summary>
+/// Where a connection password would end up, as the connection editor needs to see it.
+/// <see cref="Secure"/> false + <see cref="CanStore"/> true is the opted-in file fallback (base64 on disk,
+/// warn loudly); both false is the default no-keyring posture, where a password can't be saved at all and
+/// the connection must prompt for it instead.
+/// </summary>
+public readonly record struct SecretStoragePosture(bool Secure, bool CanStore)
+{
+    /// <summary>The posture to assume when no store is attached yet (headless/tests): a real keychain, so
+    /// nothing warns and nothing is blocked.</summary>
+    public static SecretStoragePosture Keychain => new(Secure: true, CanStore: true);
+}
+
 public interface IDialogService
 {
     /// <summary>Confirm a risky write/DDL batch against a guarded connection. True = proceed.
@@ -50,12 +63,13 @@ public interface IDialogService
     Task<CloseChoice> ConfirmCloseTabAsync(string tabName);
 
     /// <summary>Open the add/edit connection dialog. Returns the dialog result (add/update or delete), or
-    /// null if cancelled. <paramref name="test"/> backs the dialog's Test button.</summary>
+    /// null if cancelled. <paramref name="test"/> backs the dialog's Test button; <paramref name="storage"/>
+    /// decides which credential kind a new connection starts on and what the dialog warns about.</summary>
     Task<ConnectionDialogResult?> ShowConnectionDialogAsync(
         ConnectionInfo? existing,
         string? existingPassword,
         Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
-        bool secretStorageSecure);
+        SecretStoragePosture storage);
 
     /// <summary>Prompt for a single line of text (rename, new folder/script, project name). Null if cancelled.</summary>
     Task<string?> ShowTextPromptAsync(string prompt, string initial = "");

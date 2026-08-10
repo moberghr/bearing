@@ -8,15 +8,31 @@ namespace Bearing.Persistence;
 /// Fallback for machines without a Secret Service: per-connection files in the user data dir
 /// (0600 where supported). Keeps secrets out of the SHARED project.json, but is NOT the OS keychain —
 /// <see cref="IsSecure"/> is false so the UI can warn.
+/// <para>
+/// <b>Writing is opt-in.</b> Base64 on disk is plaintext with extra steps, so by default this store
+/// refuses to take a new password (<see cref="CanStore"/> false) and connections are expected to prompt
+/// and hold the secret in memory instead. Reading and deleting always work, so secrets written before the
+/// opt-in was turned off keep resolving and can still be cleared.
+/// </para>
 /// </summary>
 public sealed class FileFallbackSecretStore : ISecretStore
 {
     private readonly string _dir;
+    private readonly Func<bool> _allowStore;
+
     public bool IsSecure => false;
 
-    public FileFallbackSecretStore(string? dir = null)
+    /// <summary>Read live, so toggling the setting takes effect without a restart (the settings window
+    /// applies edits immediately, and a store that lied about this would be worse than useless).</summary>
+    public bool CanStore => _allowStore();
+
+    /// <param name="dir">Where the per-connection files live; defaults to the user data dir.</param>
+    /// <param name="allowStore">Whether writing is permitted right now — the user's opt-in, read on every
+    /// call. Defaults to always-allowed so tests and callers that own the directory keep working.</param>
+    public FileFallbackSecretStore(string? dir = null, Func<bool>? allowStore = null)
     {
         _dir = dir ?? Path.Combine(BearingPaths.DataDir, "secrets");
+        _allowStore = allowStore ?? (static () => true);
         Directory.CreateDirectory(_dir);
     }
 
@@ -24,6 +40,12 @@ public sealed class FileFallbackSecretStore : ISecretStore
 
     public async Task SetPasswordAsync(Guid connectionId, string password, CancellationToken ct)
     {
+        if (!CanStore)
+            throw new SecretStorageRefusedException(
+                "No system keyring is available, so this password was not saved. Enable "
+                + "Settings ▸ Security ▸ \"Store passwords on disk when no keyring is available\" to save it "
+                + "unencrypted, or use the \"Prompt each time\" credential kind.");
+
         var path = PathFor(connectionId);
         var tmp = path + ".tmp";
         var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(password));

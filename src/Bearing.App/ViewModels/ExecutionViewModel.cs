@@ -260,9 +260,12 @@ public sealed partial class ExecutionViewModel : ObservableObject
     }
 
     /// <summary>Which credential kinds a fresh acquire can actually help: prompt (re-ask) and Entra
-    /// (re-mint). A stored password that didn't change would just fail identically, so we don't retry it.</summary>
-    private static bool CanRefreshCredential(ConnectionInfo info)
-        => info.CredentialKind is CredentialKind.EntraToken or CredentialKind.Prompt;
+    /// (re-mint). A stored password that didn't change would just fail identically, so we don't retry it —
+    /// unless the store can't hold passwords at all (no keyring), where "stored password" really means
+    /// "there is nothing stored" and the retry is what gets the user prompted for one.</summary>
+    private bool CanRefreshCredential(ConnectionInfo info)
+        => info.CredentialKind is CredentialKind.EntraToken or CredentialKind.Prompt
+        || (info.CredentialKind is CredentialKind.StoredPassword && _ctx.Secrets is { CanStore: false });
 
     /// <summary>True for the Postgres 28xxx authentication/authorization SQLSTATE class. Pure — unit-tested.</summary>
     internal static bool IsAuthFailure(string? sqlState)

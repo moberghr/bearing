@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Bearing.App.Services;
 using Bearing.Core.Data;
 
 namespace Bearing.App.Views;
@@ -19,7 +20,7 @@ public partial class ConnectionDialog : Window
 {
     private readonly Guid _id;
     private readonly Func<ConnectionInfo, string?, CancellationToken, Task<bool>> _test;
-    private readonly bool _secretStorageSecure;
+    private readonly SecretStoragePosture _storage;
 
     // Parameterless ctor for the XAML designer/loader.
     public ConnectionDialog() : this(null, null, (_, _, _) => Task.FromResult(false)) { }
@@ -28,12 +29,12 @@ public partial class ConnectionDialog : Window
         ConnectionInfo? existing,
         string? existingPassword,
         Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
-        bool secretStorageSecure = true)
+        SecretStoragePosture? storage = null)
     {
         InitializeComponent();
         _test = test;
         _id = existing?.Id ?? Guid.NewGuid();
-        _secretStorageSecure = secretStorageSecure;
+        _storage = storage ?? SecretStoragePosture.Keychain;
 
         if (existing is not null)
         {
@@ -55,7 +56,9 @@ public partial class ConnectionDialog : Window
             Title = "New connection";
             PortBox.Text = "5432";
             HostBox.Text = "localhost";
-            CredentialKindBox.SelectedIndex = 0;
+            // With nowhere to keep a password, a new connection starts on "prompt each time" rather than on
+            // a stored password it would silently fail to store.
+            CredentialKindBox.SelectedIndex = _storage.CanStore ? 0 : 1;
         }
         UpdateCredentialVisibility();
     }
@@ -69,15 +72,18 @@ public partial class ConnectionDialog : Window
 
     private void OnCredentialKindChanged(object? sender, SelectionChangedEventArgs e) => UpdateCredentialVisibility();
 
-    /// <summary>Only the stored-password kind shows the password box + the no-keyring warning; prompt and
-    /// Entra never persist a secret (nothing to store), and Entra shows the az hint instead.</summary>
+    /// <summary>Only the stored-password kind shows the password box + a no-keyring warning; prompt and
+    /// Entra never persist a secret (nothing to store), and Entra shows the az hint instead. Which warning
+    /// appears depends on the posture: with no keyring the password *can't* be saved (default), unless the
+    /// user has opted into the unencrypted file, in which case it can — badly.</summary>
     private void UpdateCredentialVisibility()
     {
         var kind = SelectedCredentialKind();
         var stored = kind == CredentialKind.StoredPassword;
         PasswordLabel.IsVisible = stored;
         PasswordBox.IsVisible = stored;
-        InsecureWarning.IsVisible = stored && !_secretStorageSecure;
+        InsecureWarning.IsVisible = stored && !_storage.Secure && _storage.CanStore;
+        NoStorageWarning.IsVisible = stored && !_storage.CanStore;
         EntraHint.IsVisible = kind == CredentialKind.EntraToken;
     }
 

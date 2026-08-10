@@ -200,10 +200,22 @@ internal sealed class FakeSnapshot : ISchemaSnapshot
 internal sealed class FakeSecretStore : ISecretStore
 {
     private readonly Dictionary<Guid, string> _store = new();
-    public bool IsSecure => true;
+    public bool IsSecure { get; init; } = true;
     public List<Guid> Fetched { get; } = new();
 
-    public Task SetPasswordAsync(Guid id, string password, CancellationToken ct) { _store[id] = password; return Task.CompletedTask; }
+    /// <summary>False models a machine with no keyring and no opt-in: writes are refused, reads still work.</summary>
+    public bool CanStore { get; init; } = true;
+
+    public Task SetPasswordAsync(Guid id, string password, CancellationToken ct)
+    {
+        if (!CanStore) throw new SecretStorageRefusedException("no keyring (fake)");
+        _store[id] = password;
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Seed a secret regardless of <see cref="CanStore"/> — models one written before the opt-in
+    /// was withdrawn, or by a keyring that later went away.</summary>
+    public void Seed(Guid id, string password) => _store[id] = password;
     public Task<string?> GetPasswordAsync(Guid id, CancellationToken ct)
     {
         Fetched.Add(id);
@@ -290,7 +302,8 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
 
     public Task<bool> ConfirmWriteAsync(ConnectionInfo connection, IReadOnlyList<string> verbs) => Task.FromResult(true);
     public Task<Bearing.App.Views.ConnectionDialogResult?> ShowConnectionDialogAsync(ConnectionInfo? existing, string? existingPassword,
-        Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test, bool secretStorageSecure)
+        Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
+        Bearing.App.Services.SecretStoragePosture storage)
         => Task.FromResult<Bearing.App.Views.ConnectionDialogResult?>(null);
     public Task<string?> ShowTextPromptAsync(string prompt, string initial = "") => Task.FromResult<string?>(null);
     public Task<string?> PickFolderAsync(string title) => Task.FromResult<string?>(null);

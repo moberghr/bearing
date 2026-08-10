@@ -46,6 +46,14 @@
                  Text="⚠ No system keyring found — this password will be stored unencrypted on disk (base64) in your data directory. Anyone who can read your files can recover it."/>
     </Border>
 
+    <!-- Default no-keyring posture: nothing is written to disk, so say what will happen instead. -->
+    <Border x:Name="NoStorageWarning" IsVisible="False"
+            Background="#2F2B22" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
+            Padding="8,6" Margin="0,4,0,0">
+      <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Warn.Amber}" FontSize="12"
+                 Text="⚠ No system keyring found — this password will NOT be saved. Bearing asks for it when you connect and keeps it in memory for this session only. Choose &quot;Prompt each time&quot; to make that explicit, or enable Settings ▸ Security ▸ &quot;Store passwords on disk…&quot; to save it unencrypted anyway."/>
+    </Border>
+
     <Separator Margin="0,4"/>
 
     <TextBlock Text="Environment" Opacity="0.8"/>

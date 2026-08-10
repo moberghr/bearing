@@ -43,34 +43,52 @@ public sealed class CredentialResolver
         switch (info.CredentialKind)
         {
             case CredentialKind.StoredPassword:
-            {
-                var store = _secrets();
-                var pw = store is null ? null : await store.GetPasswordAsync(info.Id, ct);
-                return new Credential(pw, null);
-            }
+                {
+                    var store = _secrets();
+                    var pw = store is null ? null : await store.GetPasswordAsync(info.Id, ct);
+                    if (pw is not null) return new Credential(pw, null);
+
+                    // No stored secret: either none was ever set, or this machine has no keyring and the password
+                    // was deliberately not written (see ISecretStore.CanStore). Reuse one typed earlier this
+                    // session if we have it, and on a forced refresh — i.e. the retry after an authentication
+                    // failure — ask for one. Kept in memory only, exactly like CredentialKind.Prompt.
+                    //
+                    // The first attempt deliberately goes out with no password rather than prompting, so a
+                    // passwordless connection (trust auth, .pgpass) still connects without being interrogated.
+                    if (!forceRefresh)
+                        return _cache.TryGetValue(info.Id, out var remembered) ? remembered : new Credential(null, null);
+
+                    if (_prompt is null) return new Credential(null, null);
+                    var typed = await _prompt.RequestPasswordAsync(info, null, ct);
+                    if (typed is null)
+                        throw new ConnectionFailedException($"Password entry cancelled for '{info.Name}'.");
+                    var prompted = new Credential(typed, null);
+                    _cache[info.Id] = prompted;
+                    return prompted;
+                }
 
             case CredentialKind.Prompt:
-            {
-                if (!forceRefresh && _cache.TryGetValue(info.Id, out var cached)) return cached;
-                if (_prompt is null)
-                    throw new ConnectionFailedException($"No password prompt is available for '{info.Name}'.");
-                var pw = await _prompt.RequestPasswordAsync(info, null, ct);
-                if (pw is null)
-                    throw new ConnectionFailedException($"Password entry cancelled for '{info.Name}'.");
-                var cred = new Credential(pw, null);
-                _cache[info.Id] = cred;
-                return cred;
-            }
+                {
+                    if (!forceRefresh && _cache.TryGetValue(info.Id, out var cached)) return cached;
+                    if (_prompt is null)
+                        throw new ConnectionFailedException($"No password prompt is available for '{info.Name}'.");
+                    var pw = await _prompt.RequestPasswordAsync(info, null, ct);
+                    if (pw is null)
+                        throw new ConnectionFailedException($"Password entry cancelled for '{info.Name}'.");
+                    var cred = new Credential(pw, null);
+                    _cache[info.Id] = cred;
+                    return cred;
+                }
 
             case CredentialKind.EntraToken:
-            {
-                if (!forceRefresh && _cache.TryGetValue(info.Id, out var cached)
-                    && !IsExpiring(cached.ExpiresAt, _now(), RefreshSkew))
-                    return cached;
-                var cred = await _tokens.GetTokenAsync(info, ct);
-                _cache[info.Id] = cred;
-                return cred;
-            }
+                {
+                    if (!forceRefresh && _cache.TryGetValue(info.Id, out var cached)
+                        && !IsExpiring(cached.ExpiresAt, _now(), RefreshSkew))
+                        return cached;
+                    var cred = await _tokens.GetTokenAsync(info, ct);
+                    _cache[info.Id] = cred;
+                    return cred;
+                }
 
             default:
                 throw new ConnectionFailedException($"Unknown credential kind '{info.CredentialKind}'.");

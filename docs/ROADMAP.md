@@ -14,7 +14,12 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done.
 >
 > **2026-08-09:** settings window landed (see below). Same 3 warnings; tests now **Sql 159 · App 267 ·
 > Persistence 14** green, Data 14 still skipped.
-> Items tagged *(live QA)* are committed but never eyeball-checked in the running app (§4.3 — Wayland).
+>
+> **2026-08-10:** the *(live QA)* backlog is **cleared — the user QA'd everything** through Stage E, so those
+> tags below are historical, not outstanding. Both open **P1**s closed this pass (honest `CountAsync`, and
+> no-keyring passwords are no longer written to disk). Tests **Sql 159 · App 291 · Persistence 18 · Data 15**,
+> the last run live against Postgres on 5434 (`BEARING_TEST_PG_PORT=5434 dotnet test` — 0 skipped); same 3
+> warnings. New work from here still needs its own eyeball pass (§4.3 — Wayland).
 
 ---
 
@@ -157,6 +162,9 @@ project switches + a completion toast (**no** background-jobs panel), per-tab ca
     `SettingsWiringTests` — the last one proving each setting changes what the app *does* mid-session.
   - **Not done:** TLS/`sslmode` preference and completion toggles (neither exists to configure yet); a
     Completion section will appear when they do.
+  - **Seventh setting added 2026-08-10** — a new **Security** section holds
+    `security.allowUnencryptedSecretFile` (see the fallback-secret-store item). It cost exactly what the
+    framework promised: one `AppSettings` property plus one catalog descriptor, no window changes.
 
 ### Scratch scripts — never lose work (3 phases, agreed 2026-08-06)
 
@@ -365,7 +373,15 @@ close, *not* on window close — prompting at quit would be friction for zero sa
 ## 🔴 Open — correctness & security (from review)
 
 - [x] **P1** `FileFallbackSecretStore` non-atomic write can corrupt/lose a stored password; `chmod 600` happens *after* a world-readable write (TOCTOU). `FileFallbackSecretStore.cs:25-31`. **Fixed:** write to `<file>.tmp`, `chmod 600` the temp, then atomic `File.Move(overwrite)` — a crash mid-write keeps the old secret, and the file is never world-readable. (+3 assertions)
-- [ ] **P1** `CountAsync` swallows all errors as "uncountable" → paging hides totals on real DB failure. `PostgresQueryExecutor.cs:83-86` (`catch { return null; }`).
+- [x] **P1** `CountAsync` swallowed all errors as "uncountable" → paging hid totals on a real DB failure.
+  **Fixed 2026-08-10.** Null now means only that the query's *shape* can't be wrapped in
+  `select count(*) from (…)` — matched on SQLSTATE `42601` (multi-statement / non-SELECT) and `0A000`
+  (data-modifying CTE, which must be top-level). Every other failure propagates, so the VM's existing
+  handler reports "Count failed: …" while `TotalCount` stays null and `CanCount` stays true, leaving
+  `[Count]` available to retry. The null-vs-throw contract is stated on `IDbProvider.CountAsync`.
+  +1 live `SkippableFact` (`PostgresExecutorTests`, verified against a real server: multi-statement and
+  `update` → null, undefined table → `42P01` thrown, cancelled token → thrown) and +3 headless status-bar
+  tests (`CountTotalTests`, new `PageableExecutor` fake).
 - [x] **P1** `StatementSplitter`: trailing `-- line comment` swallows the auto-appended `;` (merges statements → syntax error); blank-line heuristic mis-splits a single statement with a blank line at paren depth 0. `StatementSplitter.cs`. **Fixed:** `EnsureSeparated` puts the `;` on its own line after a fragment ending in a line comment; the blank-line split now fires only when the next token starts a statement (`StartsStatement`) and the previous token isn't a set operator (`EndsWithSetOperator`), so a statement continued by `and`/`order by`/`union` no longer mis-splits. (+4 tests)
 - [x] **P1** `CellFormat.FormatArray` throws on multi-dimensional Postgres arrays (uses `arr.Length` with single-index `GetValue`). `Formatting/CellFormat.cs:36-41`. **Fixed:** `foreach` flattens any rank in row-major order instead of single-index `GetValue`. (+1 test)
 - [ ] **P2** `EnsureSchemaAsync` inflight keyed by ConnectionId not (id, database) → wrong-DB snapshot across a rebuild. `ConnectionSessionManager.cs:155-157` (`_schemaInflight[session.ConnectionId]`). Note §9.4: sessions are keyed by connection Id by design, so the fix is the *inflight* key, not the session key.
@@ -412,7 +428,21 @@ close, *not* on window close — prompting at quit would be friction for zero sa
 
 ## 🔵 Open — hardening backlog (pre-existing)
 
-- [ ] **P1** Encrypt the fallback secret store and/or add platform keychains (DPAPI / macOS Keychain). Today: base64 fallback, libsecret on Linux only. (documented, warned in UI)
+- [~] **P1** Fallback secret storage. **The exposure is closed as of 2026-08-10, by not storing rather than by
+  encrypting** (user's call over keychains / machine-key / passphrase encryption): with no OS keyring,
+  `FileFallbackSecretStore` **refuses** a new password (`ISecretStore.CanStore` false, typed
+  `SecretStorageRefusedException`) instead of writing base64 to `~/.local/share/bearing/secrets/`. Such
+  connections keep the secret in memory for the session — a new connection defaults to *Prompt each time*,
+  the dialog warns instead of silently not-saving, saving reports "password not saved (no keyring); you'll be
+  asked when connecting", and a `StoredPassword` connection with nothing stored connects passwordless first
+  (so trust auth / `.pgpass` still work) and is prompted by the existing one-shot auth-retry. Reads and
+  deletes still work, so secrets written before the change keep resolving and can be cleared. The old
+  behaviour is one opt-in away: Settings ▸ Security ▸ "Store passwords on disk when no keyring is available"
+  (`AppSettings.AllowUnencryptedSecretFile`, read live — no restart), which keeps the amber
+  base64 warning. +4 `SecretStorePolicyTests`, +4 `NoKeyringConnectionTests`.
+  **Still open:** platform keychains (Windows DPAPI / macOS Keychain — Linux libsecret is the only real store
+  wired) and any actual encryption of the opt-in file. Both were declined as untestable here / not worth the
+  key-management story; the file path is now off by default, so neither is load-bearing.
 - [ ] **P2** Query-log privacy: file perms (0600), optional encryption, and/or PII/literal stripping. Retention exists (default 180d); no stripping. `SqliteQueryLog.cs`.
 - [ ] **P2** Enforce/prompt TLS (`sslmode`) — currently only set if the user adds the option manually.
 - [x] **P3** Settings UI for query-log retention and the idle timeout — **done 2026-08-09** with the
@@ -427,9 +457,11 @@ close, *not* on window close — prompting at quit would be friction for zero sa
 
 ## Notes
 
-- GUI can't be driven headlessly here (Wayland) — items tagged *(live QA)* need a manual pass. Several
-  **committed** features have never had one: the rename, credential sources, and the connection-status
-  toggle. Committed ≠ eyeball-verified.
+- GUI can't be driven headlessly here (Wayland), so every UI change needs a manual pass. **The backlog of
+  never-QA'd features is cleared (2026-08-10)** — the rename, credential sources, connection status, project
+  switching and Stage E have all been eyeballed. Keep tagging new UI work *(live QA)* until it has been.
+  Outstanding from this pass: the connection dialog's no-keyring warning and Settings ▸ Security only appear
+  on a machine without libsecret, so they can't be seen on the dev box at all without unsetting the keyring.
 - Keep this file honest by re-checking file:line references when you touch an item. The 2026-08-06
   reconciliation found the two systematic drifts to watch for: **the partial-class split** moved a lot of
   code (`MainWindowViewModel` → `ShellViewModel` + child VMs, `MainWindow`/`ResultView` into partials), so

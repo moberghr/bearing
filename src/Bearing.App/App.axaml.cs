@@ -110,15 +110,17 @@ public partial class App : Application
 
             // Resolve the keychain and restore the project OFF the UI thread — never block startup.
             // Observed so a failure to restore is logged + surfaced rather than lost.
-            CrashReporter.Observe(InitializeAsync(vm), "startup initialize");
+            CrashReporter.Observe(InitializeAsync(vm, settings), "startup initialize");
         }
 
         base.OnFrameworkInitializationCompleted();
     }
 
-    private static async Task InitializeAsync(ShellViewModel vm)
+    private static async Task InitializeAsync(ShellViewModel vm, Settings.SettingsService settings)
     {
-        var secretStore = await SecretStoreFactory.CreateAsync();
+        // The opt-in is read live (not captured), so flipping it in the settings window takes effect at once.
+        var secretStore = await SecretStoreFactory.CreateAsync(
+            allowUnencryptedFile: () => settings.Current.AllowUnencryptedSecretFile);
         vm.AttachSecretStore(secretStore);
         // Reopen the last-used project; fall back to the default project on first run (or if it's gone).
         await vm.ResumeLastProjectAsync(DefaultProjectDirectory());

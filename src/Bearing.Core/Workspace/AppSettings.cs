@@ -43,6 +43,14 @@ public sealed record AppSettings
     /// <summary>Whether the main window reopens at the size it was last closed at.</summary>
     public bool RestoreWindowSize { get; init; } = true;
 
+    /// <summary>
+    /// Whether passwords may be written to the local file fallback when no OS keyring is available. Off by
+    /// default: without a keyring there is nowhere safe to put a password, so connections prompt for it and
+    /// keep it in memory for the session instead of leaving a recoverable copy on disk. Turning this on
+    /// restores the old behaviour (base64 under the data dir) for anyone who wants it.
+    /// </summary>
+    public bool AllowUnencryptedSecretFile { get; init; }
+
     // ---- persisted state, not user-facing preferences (no catalog entry; see SettingsCatalogTests) ----
 
     /// <summary>Last main-window width, written on close. Null until a window has been closed once.</summary>

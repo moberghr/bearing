@@ -45,9 +45,9 @@ public sealed class DialogService : IDialogService
         ConnectionInfo? existing,
         string? existingPassword,
         Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
-        bool secretStorageSecure)
+        SecretStoragePosture storage)
         => Owner is { } window
-            ? new ConnectionDialog(existing, existingPassword, test, secretStorageSecure).ShowDialog<ConnectionDialogResult?>(window)
+            ? new ConnectionDialog(existing, existingPassword, test, storage).ShowDialog<ConnectionDialogResult?>(window)
             : Task.FromResult<ConnectionDialogResult?>(null);
 
     public Task<string?> ShowTextPromptAsync(string prompt, string initial = "")

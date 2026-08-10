@@ -9,6 +9,7 @@ using CommunityToolkit.Mvvm.Input;
 using Bearing.App.Connections;
 using Bearing.App.Workspace;
 using Bearing.Core.Data;
+using Bearing.Core.Workspace;
 
 namespace Bearing.App.ViewModels;
 
@@ -265,6 +266,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         if (idx >= 0) { networkChanged = !SameNetwork(list[idx], conn); list[idx] = conn; }
         else list.Add(conn);
 
+        var refusedSecret = false;
         try
         {
             if (_ctx.Secrets is not null && password is not null)
@@ -274,6 +276,14 @@ public sealed partial class ConnectionsViewModel : ObservableObject
             }
             await _ctx.ProjectStore.SaveAsync(_ctx.Project, CancellationToken.None);
         }
+        // A store with nowhere safe to put the password isn't a failure — the connection is still saved, and
+        // the password will be asked for at connect time and kept in memory. Say that, then finish the save.
+        catch (SecretStorageRefusedException)
+        {
+            refusedSecret = true;
+            try { await _ctx.ProjectStore.SaveAsync(_ctx.Project, CancellationToken.None); }
+            catch (Exception ex) { _ctx.SetStatus($"Saved connection but store failed: {ex.Message}"); }
+        }
         catch (Exception ex) { _ctx.SetStatus($"Saved connection but secret/store failed: {ex.Message}"); }
 
         if (networkChanged) await _ctx.Sessions.EvictAsync(conn.Id);
@@ -281,7 +291,9 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         RefreshConnections();
         foreach (var t in Tabs) if (t.ConnectionId == conn.Id) ApplyConnectionDisplay(t);
         OnPropertyChanged(nameof(SelectedTabConnection));
-        _ctx.SetStatus($"Saved connection '{conn.Name}'.");
+        _ctx.SetStatus(refusedSecret
+            ? $"Saved connection '{conn.Name}' — password not saved (no keyring); you'll be asked when connecting."
+            : $"Saved connection '{conn.Name}'.");
     }
 
     public async Task DeleteConnectionAsync(Guid id)
@@ -350,8 +362,12 @@ public sealed partial class ConnectionsViewModel : ObservableObject
             Id = Guid.NewGuid(),
             Name = $"{database} (local)",
             ProviderId = "postgres",
-            Host = host, Port = port, Database = database, User = user,
-            Environment = "local", EnvironmentColor = "#7AA89F",
+            Host = host,
+            Port = port,
+            Database = database,
+            User = user,
+            Environment = "local",
+            EnvironmentColor = "#7AA89F",
         };
         await AddOrUpdateConnectionAsync(conn, password);
         _ctx.DefaultConnectionId = conn.Id;

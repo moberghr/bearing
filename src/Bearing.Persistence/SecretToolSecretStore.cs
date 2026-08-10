@@ -15,6 +15,9 @@ public sealed class SecretToolSecretStore : ISecretStore
     private static string App => BearingPaths.AppDirName;
     public bool IsSecure => true;
 
+    /// <summary>Always: the keychain is where a password belongs, so there's nothing to opt into.</summary>
+    public bool CanStore => true;
+
     public async Task SetPasswordAsync(Guid connectionId, string password, CancellationToken ct)
     {
         var (exit, _, err) = await RunAsync(

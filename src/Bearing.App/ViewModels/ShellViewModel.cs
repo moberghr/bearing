@@ -171,6 +171,12 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>True when secrets go to a real OS keychain; false when they fall back to a plaintext-equivalent file.</summary>
     public bool SecretStorageSecure => _secretStore?.IsSecure == true;
 
+    /// <summary>What the connection editor needs to know about where a password would end up: whether the
+    /// store is a real keychain, and whether it will accept a password at all.</summary>
+    public SecretStoragePosture SecretStorage => new(
+        Secure: _secretStore?.IsSecure == true,
+        CanStore: _secretStore?.CanStore == true);
+
     /// <summary>Dispose all live connections (query sessions + schema-browser pools); safe to call fire-and-forget from the close path.</summary>
     public async ValueTask DisposeSessionsAsync()
     {

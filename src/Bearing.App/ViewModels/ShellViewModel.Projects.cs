@@ -49,10 +49,7 @@ public sealed partial class ShellViewModel
             UpdateTitle();
             OnPropertyChanged(nameof(ProjectDirectory));
             OnPropertyChanged(nameof(CurrentProjectName));
-            StatusText = $"Project '{_project.Manifest.Name}'. " +
-                         (_secretStore?.IsSecure == true
-                             ? "Secrets: OS keychain."
-                             : "⚠ No keyring — passwords stored unencrypted on disk.");
+            StatusText = $"Project '{_project.Manifest.Name}'. " + SecretPosture();
         }
         catch (Exception ex)
         {
@@ -60,6 +57,15 @@ public sealed partial class ShellViewModel
             if (_workspace.Tabs.Count == 0) _workspace.NewTab();
         }
     }
+
+    /// <summary>Where this session's passwords live, for the status bar. Three postures, because "no keyring"
+    /// no longer implies "on disk": by default nothing is written and connections prompt instead.</summary>
+    private string SecretPosture() => SecretStorage switch
+    {
+        { Secure: true } => "Secrets: OS keychain.",
+        { CanStore: true } => "⚠ No keyring — passwords stored unencrypted on disk.",
+        _ => "⚠ No keyring — passwords aren't saved; you'll be asked when connecting.",
+    };
 
     /// <summary>
     /// Startup entry: reopen the most-recently-used project that still exists on disk, falling back to
