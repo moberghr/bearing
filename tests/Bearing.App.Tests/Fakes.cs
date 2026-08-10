@@ -111,6 +111,34 @@ internal sealed class FakeExecutor : IQueryExecutor
         => Task.FromResult<IReadOnlyList<QueryResult>>(new[] { Empty });
 }
 
+/// <summary>An executor that returns a one-column result set — enough for <c>ResultSetBuilder</c> to treat it
+/// as pageable — and whose <see cref="CountAsync"/> is scripted: it returns <see cref="CountValue"/>, or
+/// throws <see cref="CountError"/> when one is set. Lets the count paths be driven without a live database.</summary>
+internal sealed class PageableExecutor : IQueryExecutor
+{
+    /// <summary>What a successful count reports; null means "this query can't be counted" (shape).</summary>
+    public long? CountValue { get; set; }
+
+    /// <summary>When set, <see cref="CountAsync"/> throws it — a real count failure, not an uncountable query.</summary>
+    public System.Exception? CountError { get; set; }
+
+    private static QueryResult OneColumn => new(
+        new[] { new ColumnDescriptor("n", "int4", typeof(int)) },
+        new object?[][] { new object?[] { 1 } },
+        1, System.TimeSpan.Zero, null, null, false);
+
+    public Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<QueryResult>>(new[] { OneColumn });
+
+    public Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct) => Task.FromResult(OneColumn);
+
+    public Task<long?> CountAsync(string sql, CancellationToken ct)
+        => CountError is not null ? Task.FromException<long?>(CountError) : Task.FromResult(CountValue);
+
+    public Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<QueryResult>>(new[] { OneColumn });
+}
+
 /// <summary>An executor whose <see cref="ExecuteAsync"/> blocks (per distinct SQL) until the test releases
 /// or the token is cancelled — so two tabs can be held mid-run at once to prove concurrency + per-tab
 /// cancellation. Non-blocking for the other operations (not exercised by the concurrency test).</summary>

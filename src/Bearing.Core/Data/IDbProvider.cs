@@ -60,7 +60,13 @@ public interface IQueryExecutor
     /// </summary>
     Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct);
 
-    /// <summary>Total row count of a single SELECT (<c>select count(*) from (&lt;sql&gt;)</c>); null if it can't be counted.</summary>
+    /// <summary>
+    /// Total row count of a single SELECT (<c>select count(*) from (&lt;sql&gt;)</c>). Null means the query's
+    /// <em>shape</em> can't be counted (a multi-statement batch, a non-SELECT, a data-modifying CTE) and the
+    /// caller should simply show no total. A real failure — connection lost, table dropped, permission
+    /// denied, timeout, cancellation — is <em>thrown</em>, never reported as a missing total, so the UI can
+    /// say the count failed instead of silently leaving the row count blank.
+    /// </summary>
     Task<long?> CountAsync(string sql, CancellationToken ct);
 
     /// <summary>

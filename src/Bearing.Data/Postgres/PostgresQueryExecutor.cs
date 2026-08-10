@@ -80,11 +80,23 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
             var scalar = await cmd.ExecuteScalarAsync(ct);
             return scalar is null or DBNull ? null : Convert.ToInt64(scalar);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (PostgresException pg) when (IsUncountableShape(pg))
         {
-            return null; // uncountable (e.g. multi-statement or non-SELECT) — caller just hides the total
+            return null; // this query can't be wrapped at all — caller just hides the total
         }
     }
+
+    /// <summary>
+    /// Whether the failure means the query's <em>shape</em> can't be wrapped in
+    /// <c>select count(*) from (…)</c> — the only case that may be reported as "no total available".
+    /// A multi-statement batch or a non-SELECT dies on <c>syntax_error</c>; a data-modifying CTE, which
+    /// must be top-level, on <c>feature_not_supported</c>. Everything else (server down mid-session,
+    /// table dropped under us, permission denied, statement timeout, and the <c>query_canceled</c> Npgsql
+    /// raises for a cancelled command) is a real failure and is left to propagate: swallowing it showed an
+    /// unpageable-looking result with no total instead of telling the user the count failed.
+    /// </summary>
+    private static bool IsUncountableShape(PostgresException pg)
+        => pg.SqlState is PostgresErrorCodes.SyntaxError or PostgresErrorCodes.FeatureNotSupported;
 
     public async Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(
         IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct)

@@ -339,6 +339,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
         await RunExclusiveAsync(tab, async ct =>
         {
+            // Null means the query can't be counted at all (shape), so "unavailable" is the honest report.
+            // A *failed* count throws instead and lands in RunExclusiveAsync's "Count failed: …" — TotalCount
+            // stays null, so CanCount stays true and the [Count] action is still there to retry.
             rs.TotalCount = await session.Executor.CountAsync(rs.SourceSql, ct);
             RunFinished(tab, rs.TotalCount is not null ? "Counted total." : "Count unavailable for this query.");
         }, "Count cancelled.", "Count failed");

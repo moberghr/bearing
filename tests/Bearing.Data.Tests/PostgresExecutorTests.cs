@@ -1,6 +1,7 @@
 using Bearing.Core.Data;
 using Bearing.Data;
 using Bearing.Data.Postgres;
+using Npgsql;
 using Xunit;
 using Xunit.Sdk;
 
@@ -88,6 +89,35 @@ public class PostgresExecutorTests
         Assert.False(result.Success);
         Assert.NotNull(result.Error);
         Assert.Equal("42P01", result.Error!.SqlState); // undefined_table
+    }
+
+    /// <summary>A count that can't be *shaped* reports null; a count that *fails* throws. Before this split
+    /// every failure returned null, so a dropped table or a dead connection looked exactly like an
+    /// uncountable query and the UI just showed no total.</summary>
+    [SkippableFact]
+    public async Task Count_reports_null_for_an_uncountable_shape_but_throws_on_a_real_failure()
+    {
+        var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
+        await using var factory = provider.CreateConnectionFactory(Info(), Password);
+        Skip.IfNot(await Reachable(factory), "No PostgreSQL reachable for integration test.");
+
+        var executor = provider.CreateQueryExecutor(factory);
+
+        // Uncountable shapes — the wrap itself is invalid SQL, nothing is wrong with the server.
+        Assert.Null(await executor.CountAsync("select 1; select 2;", CancellationToken.None));
+        Assert.Null(await executor.CountAsync("update film set title = title", CancellationToken.None));
+
+        // A real failure propagates instead of masquerading as "no total available".
+        var ex = await Assert.ThrowsAsync<PostgresException>(
+            () => executor.CountAsync("select * from no_such_table_here", CancellationToken.None));
+        Assert.Equal("42P01", ex.SqlState); // undefined_table
+
+        // Cancellation is a real failure too (Npgsql raises query_canceled, not OperationCanceledException),
+        // so it can never be mistaken for an uncountable query.
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        await Assert.ThrowsAnyAsync<Exception>(
+            () => executor.CountAsync("select film_id from film", cts.Token));
     }
 
     [SkippableFact]
