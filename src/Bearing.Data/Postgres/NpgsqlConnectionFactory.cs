@@ -46,7 +46,7 @@ public sealed class NpgsqlConnectionFactory : IDbConnectionFactory
 
     public async Task<bool> TestConnectionAsync(CancellationToken ct)
     {
-        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var conn = await _dataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
         return conn.State == System.Data.ConnectionState.Open;
     }
 

@@ -30,7 +30,7 @@ public sealed class FileScriptStore : IScriptStore
     {
         var dir = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        await File.WriteAllTextAsync(path, text, ct);
+        await File.WriteAllTextAsync(path, text, ct).ConfigureAwait(false);
     }
 
     public void CreateFolder(string path) => Directory.CreateDirectory(path);

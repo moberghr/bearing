@@ -6,7 +6,17 @@ using Bearing.Core.Data;
 
 namespace Bearing.Data.Postgres;
 
-/// <summary>Executes SQL against PostgreSQL and materializes (or streams) the result.</summary>
+/// <summary>
+/// Executes SQL against PostgreSQL and materializes (or streams) the result.
+/// <para>
+/// <b>Every await that can suspend carries <c>ConfigureAwait(false)</c>.</b> This layer is called straight
+/// from view-models running on Avalonia's UI thread, whose <c>SynchronizationContext</c> would otherwise be
+/// captured — and since the row loop awaits once per row, result materialization would resume on the UI
+/// thread and compete with rendering. (A synchronously-completed await posts nothing, so the plain
+/// <c>await using</c> disposals below are safe: by the time they run, an earlier configured await has
+/// already moved us off the UI context.)
+/// </para>
+/// </summary>
 public sealed class PostgresQueryExecutor : IQueryExecutor
 {
     private readonly NpgsqlConnectionFactory _factory;
@@ -19,17 +29,17 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         var results = new List<QueryResult>();
         try
         {
-            await using var conn = await _factory.DataSource.OpenConnectionAsync(ct);
+            await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var cmd = new NpgsqlCommand(sql, conn);
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
             // One QueryResult per statement's result set — NextResult walks a multi-statement batch.
             // withBaseTables: capture column origin (schema/table/column) for FK-nav + inline edit.
             do
             {
-                results.Add(await ReadResultSetAsync(reader, options, sw, ct, withBaseTables: true));
+                results.Add(await ReadResultSetAsync(reader, options, sw, ct, withBaseTables: true).ConfigureAwait(false));
             }
-            while (await reader.NextResultAsync(ct));
+            while (await reader.NextResultAsync(ct).ConfigureAwait(false));
 
             return results;
         }
@@ -52,10 +62,10 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         var sw = Stopwatch.StartNew();
         try
         {
-            await using var conn = await _factory.DataSource.OpenConnectionAsync(ct);
+            await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var cmd = new NpgsqlCommand(pageSql, conn);
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            return await ReadResultSetAsync(reader, new QueryOptions { MaxRows = null }, sw, ct);
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            return await ReadResultSetAsync(reader, new QueryOptions { MaxRows = null }, sw, ct).ConfigureAwait(false);
         }
         catch (PostgresException pg)
         {
@@ -75,9 +85,9 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         var wrapped = $"select count(*) from (\n{StripTrailingSemicolon(sql)}\n) as _sq";
         try
         {
-            await using var conn = await _factory.DataSource.OpenConnectionAsync(ct);
+            await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
             await using var cmd = new NpgsqlCommand(wrapped, conn);
-            var scalar = await cmd.ExecuteScalarAsync(ct);
+            var scalar = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
             return scalar is null or DBNull ? null : Convert.ToInt64(scalar);
         }
         catch (PostgresException pg) when (IsUncountableShape(pg))
@@ -103,9 +113,9 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
     {
         var sw = Stopwatch.StartNew();
         var results = new List<QueryResult>(commands.Count);
-        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct);
+        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
         // One transaction for the whole batch: any failure disposes the tx uncommitted → rollback.
-        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
         try
         {
             foreach (var c in commands)
@@ -113,10 +123,10 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
                 await using var cmd = new NpgsqlCommand(c.Sql, conn, tx);
                 foreach (var p in c.Parameters)
                     cmd.Parameters.Add(new NpgsqlParameter(p.Name, p.Value ?? DBNull.Value));
-                await using var reader = await cmd.ExecuteReaderAsync(ct);
-                results.Add(await ReadResultSetAsync(reader, new QueryOptions { MaxRows = null }, sw, ct));
+                await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                results.Add(await ReadResultSetAsync(reader, new QueryOptions { MaxRows = null }, sw, ct).ConfigureAwait(false));
             }
-            await tx.CommitAsync(ct);
+            await tx.CommitAsync(ct).ConfigureAwait(false);
             return results;
         }
         catch (PostgresException pg)
@@ -152,13 +162,16 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         var rows = new List<object?[]>();
         var truncated = false;
 
-        while (await reader.ReadAsync(ct))
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             if (options.MaxRows is { } max && rows.Count >= max) { truncated = true; break; }
 
             var row = new object?[reader.FieldCount];
+            // Sync IsDBNull, deliberately: the reader isn't in sequential-access mode, so ReadAsync has
+            // already buffered the whole row and the null check can't touch the socket. The async form
+            // cost an awaited state-machine hop per *cell* to await an always-completed task.
             for (var i = 0; i < reader.FieldCount; i++)
-                row[i] = await reader.IsDBNullAsync(i, ct) ? null : reader.GetValue(i);
+                row[i] = reader.IsDBNull(i) ? null : reader.GetValue(i);
             rows.Add(row);
         }
 

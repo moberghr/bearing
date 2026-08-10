@@ -16,14 +16,14 @@ public sealed class FileRecentProjects : IRecentProjects
     {
         if (!File.Exists(_path)) return Array.Empty<string>();
         await using var stream = File.OpenRead(_path);
-        return await JsonSerializer.DeserializeAsync<List<string>>(stream, BearingJson.Options, ct)
+        return await JsonSerializer.DeserializeAsync<List<string>>(stream, BearingJson.Options, ct).ConfigureAwait(false)
                ?? new List<string>();
     }
 
     public async Task AddAsync(string directory, CancellationToken ct)
     {
         var full = Path.GetFullPath(directory);
-        var list = (await ListAsync(ct)).ToList();
+        var list = (await ListAsync(ct).ConfigureAwait(false)).ToList();
         list.RemoveAll(p => string.Equals(p, full, StringComparison.Ordinal));
         list.Insert(0, full);
         if (list.Count > MaxEntries) list = list.Take(MaxEntries).ToList();
@@ -31,7 +31,7 @@ public sealed class FileRecentProjects : IRecentProjects
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
         var tmp = _path + ".tmp";
         await using (var stream = File.Create(tmp))
-            await JsonSerializer.SerializeAsync(stream, list, BearingJson.Options, ct);
+            await JsonSerializer.SerializeAsync(stream, list, BearingJson.Options, ct).ConfigureAwait(false);
         File.Move(tmp, _path, overwrite: true);
     }
 }

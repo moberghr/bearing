@@ -52,7 +52,7 @@ public sealed class FileFallbackSecretStore : ISecretStore
         // Write to a temp file, lock it down, then atomically rename into place. A crash mid-write
         // leaves the previous secret intact (never a truncated file), and restricting the mode BEFORE
         // the rename means the secret is never briefly world-readable (the old order chmod'd after).
-        await File.WriteAllTextAsync(tmp, encoded, ct);
+        await File.WriteAllTextAsync(tmp, encoded, ct).ConfigureAwait(false);
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             File.SetUnixFileMode(tmp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         File.Move(tmp, path, overwrite: true);
@@ -62,7 +62,7 @@ public sealed class FileFallbackSecretStore : ISecretStore
     {
         var path = PathFor(connectionId);
         if (!File.Exists(path)) return null;
-        var encoded = await File.ReadAllTextAsync(path, ct);
+        var encoded = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
         return Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
     }
 

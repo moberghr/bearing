@@ -91,6 +91,30 @@ public class PostgresExecutorTests
         Assert.Equal("42P01", result.Error!.SqlState); // undefined_table
     }
 
+    /// <summary>Null cells come back as CLR null, and a null never shifts the values around it. Pins the row
+    /// loop's sync <c>IsDBNull</c> — valid only because a non-sequential reader has the whole row buffered by
+    /// the time <c>ReadAsync</c> returns, which is exactly the assumption worth a test.</summary>
+    [SkippableFact]
+    public async Task Null_cells_materialize_as_null_without_disturbing_their_neighbours()
+    {
+        var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
+        await using var factory = provider.CreateConnectionFactory(Info(), Password);
+        Skip.IfNot(await Reachable(factory), "No PostgreSQL reachable for integration test.");
+
+        var executor = provider.CreateQueryExecutor(factory);
+        var result = Assert.Single(await executor.ExecuteAsync(
+            "select 1 as a, null::text as b, 'x' as c, null::int as d, 2 as e",
+            new QueryOptions(), CancellationToken.None));
+
+        Assert.True(result.Success, result.Error?.Message);
+        var row = result.Rows[0];
+        Assert.Equal(1, Convert.ToInt32(row[0]));
+        Assert.Null(row[1]);
+        Assert.Equal("x", row[2]);
+        Assert.Null(row[3]);
+        Assert.Equal(2, Convert.ToInt32(row[4]));
+    }
+
     /// <summary>A count that can't be *shaped* reports null; a count that *fails* throws. Before this split
     /// every failure returned null, so a dropped table or a dead connection looked exactly like an
     /// uncountable query and the UI just showed no total.</summary>

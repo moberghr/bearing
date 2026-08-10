@@ -385,7 +385,28 @@ close, *not* on window close — prompting at quit would be friction for zero sa
 - [x] **P1** `StatementSplitter`: trailing `-- line comment` swallows the auto-appended `;` (merges statements → syntax error); blank-line heuristic mis-splits a single statement with a blank line at paren depth 0. `StatementSplitter.cs`. **Fixed:** `EnsureSeparated` puts the `;` on its own line after a fragment ending in a line comment; the blank-line split now fires only when the next token starts a statement (`StartsStatement`) and the previous token isn't a set operator (`EndsWithSetOperator`), so a statement continued by `and`/`order by`/`union` no longer mis-splits. (+4 tests)
 - [x] **P1** `CellFormat.FormatArray` throws on multi-dimensional Postgres arrays (uses `arr.Length` with single-index `GetValue`). `Formatting/CellFormat.cs:36-41`. **Fixed:** `foreach` flattens any rank in row-major order instead of single-index `GetValue`. (+1 test)
 - [ ] **P2** `EnsureSchemaAsync` inflight keyed by ConnectionId not (id, database) → wrong-DB snapshot across a rebuild. `ConnectionSessionManager.cs:155-157` (`_schemaInflight[session.ConnectionId]`). Note §9.4: sessions are keyed by connection Id by design, so the fix is the *inflight* key, not the session key.
-- [ ] **P2** Missing `ConfigureAwait(false)` throughout the data layer (deadlock risk for any sync-over-async caller). Re-verified: **zero** occurrences in `PostgresQueryExecutor.cs`, `PostgresMetadataReader.cs`, `NpgsqlConnectionFactory.cs`.
+- [x] **P2** Missing `ConfigureAwait(false)` in the data layer — **done 2026-08-10, and the original framing
+  was wrong.** The entry claimed *deadlock risk for any sync-over-async caller*; there is no such caller. The
+  only blocking wait in `src/` is `TabAutosave.cs:147`, already wrapped in `Task.Run(...)` (safe — no context
+  inside), and `ISessionStore.Save` exists as a sync API precisely so shutdown never blocks on async. The
+  deadlock argument was future-proofing, not a live bug.
+  **The real cost was UI-thread scheduling.** Avalonia installs a `SynchronizationContext` on the UI thread
+  (unlike ASP.NET Core, which is where "you don't need `ConfigureAwait` anymore" comes from — .NET 10 changes
+  nothing here), and there is no `Task.Run` anywhere in the query path
+  (`MainWindow.Commands.RunAsync` → `ExecutionViewModel.ExecuteAsync` → executor). Since `ReadResultSetAsync`
+  awaits **once per row**, every await that actually suspended — buffer empty, next socket read — posted its
+  continuation to the dispatcher, so result materialization ran on the UI thread in bursts, competing with
+  rendering. Harmless at 100 rows/page; not harmless once **Fetch all rows** exists.
+  Applied to every suspending await in `Bearing.Data` + `Bearing.Persistence` (~85 call sites). Plain
+  `await using` declarations over *synchronously* constructed resources (`new NpgsqlCommand`, `File.Create`)
+  are deliberately left alone: a synchronously-completed await posts nothing, and their disposals run after an
+  earlier configured await has already moved off the UI context. The convention + that reasoning is documented
+  on `PostgresQueryExecutor`.
+  Also in the same loop: `await reader.IsDBNullAsync(i, ct)` per **cell** → sync `reader.IsDBNull(i)`. The
+  reader isn't in sequential-access mode, so `ReadAsync` has already buffered the row and the null check can't
+  touch the socket — the async form bought an awaited state-machine hop per cell to await an
+  always-completed task. +1 live test pinning that null cells still materialize as null without shifting
+  their neighbours (`Null_cells_materialize_as_null_without_disturbing_their_neighbours`).
 - [ ] **P2** `ForeignKeyResolver` assumes equal-length parent/referenced attnum lists → `IndexOutOfRange` on a malformed composite FK. `Core/Schema/ForeignKeyResolver.cs:45-56`: the loop is bounded by `fk.ParentOrdinals.Count` (:48) but indexes `fk.ReferencedOrdinals[i]` (:50), so a shorter referenced list throws.
 - [x] **P2** Write-guard gap: inline result-grid saves bypass the confirm dialog. **Already fixed** (landed in the merged review-fixes) — `ExecutionViewModel.SaveChangesAsync:245-254` confirms via `ConfirmWriteAsync` when the connection has `RequireWriteConfirmation`, mirroring the `ExecuteAsync` gate.
 - [ ] **P3** `NpgsqlConnectionFactory` applies persisted options verbatim — unknown key throws unwrapped at connect; an `Options["Password"]` overrides the secret. `NpgsqlConnectionFactory.cs:26-40` (`default: csb[key] = value`). Note this also makes the *documented* `entra.resource` override unusable — setting it breaks the connection, because nothing filters app-level `entra.*` keys out before the rest go to `csb[key] = value`. Fixing the factory to ignore keys it doesn't own (or namespacing app options away from driver options) is the prerequisite for any future per-connection Entra option.

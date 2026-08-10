@@ -13,25 +13,25 @@ public sealed class PostgresMetadataReader : IMetadataReader
 
     public async Task<IReadOnlyList<string>> GetDatabasesAsync(CancellationToken ct)
     {
-        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct);
+        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var cmd = new NpgsqlCommand(
             "select datname from pg_database where datistemplate = false order by datname", conn);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         var names = new List<string>();
-        while (await reader.ReadAsync(ct))
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
             names.Add(reader.GetString(0));
         return names;
     }
 
     public async Task<ISchemaSnapshot> LoadSnapshotAsync(string database, CancellationToken ct)
     {
-        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct);
+        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
 
-        var searchPath = await ReadSearchPathAsync(conn, ct);
-        var tables = await ReadTablesAsync(conn, ct);
-        var columns = await ReadColumnsAsync(conn, ct);
-        var fks = await ReadForeignKeysAsync(conn, ct);
+        var searchPath = await ReadSearchPathAsync(conn, ct).ConfigureAwait(false);
+        var tables = await ReadTablesAsync(conn, ct).ConfigureAwait(false);
+        var columns = await ReadColumnsAsync(conn, ct).ConfigureAwait(false);
+        var fks = await ReadForeignKeysAsync(conn, ct).ConfigureAwait(false);
 
         // Schemas ordered by search_path, then any remaining schemas that actually hold tables.
         var schemas = new List<string>(searchPath);
@@ -45,9 +45,9 @@ public sealed class PostgresMetadataReader : IMetadataReader
     private static async Task<List<string>> ReadSearchPathAsync(NpgsqlConnection conn, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand("select s from unnest(current_schemas(false)) s", conn);
-        await using var r = await cmd.ExecuteReaderAsync(ct);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         var list = new List<string>();
-        while (await r.ReadAsync(ct)) list.Add(r.GetString(0));
+        while (await r.ReadAsync(ct).ConfigureAwait(false)) list.Add(r.GetString(0));
         return list;
     }
 
@@ -63,9 +63,9 @@ public sealed class PostgresMetadataReader : IMetadataReader
             order by n.nspname, c.relname
             """;
         await using var cmd = new NpgsqlCommand(sql, conn);
-        await using var r = await cmd.ExecuteReaderAsync(ct);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         var list = new List<TableInfo>();
-        while (await r.ReadAsync(ct))
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
         {
             var id = r.GetInt64(0);
             var kind = MapRelKind(r.GetString(3)[0]);
@@ -95,9 +95,9 @@ public sealed class PostgresMetadataReader : IMetadataReader
             order by a.attrelid, a.attnum
             """;
         await using var cmd = new NpgsqlCommand(sql, conn);
-        await using var r = await cmd.ExecuteReaderAsync(ct);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         var list = new List<ColumnInfo>();
-        while (await r.ReadAsync(ct))
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
         {
             list.Add(new ColumnInfo(
                 TableId: r.GetInt64(0),
@@ -124,9 +124,9 @@ public sealed class PostgresMetadataReader : IMetadataReader
               and n.nspname not in ('pg_catalog','information_schema')
             """;
         await using var cmd = new NpgsqlCommand(sql, conn);
-        await using var r = await cmd.ExecuteReaderAsync(ct);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         var list = new List<ForeignKeyInfo>();
-        while (await r.ReadAsync(ct))
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
         {
             list.Add(new ForeignKeyInfo(
                 Id: r.GetInt64(0),
@@ -152,11 +152,11 @@ public sealed class PostgresMetadataReader : IMetadataReader
               and n.nspname not like 'pg\_temp%' and n.nspname not like 'pg\_toast%'
             order by n.nspname, p.proname
             """;
-        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct);
+        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var cmd = new NpgsqlCommand(sql, conn);
-        await using var r = await cmd.ExecuteReaderAsync(ct);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         var list = new List<RoutineInfo>();
-        while (await r.ReadAsync(ct))
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
         {
             list.Add(new RoutineInfo(
                 Id: r.GetInt64(0),
@@ -179,9 +179,9 @@ public sealed class PostgresMetadataReader : IMetadataReader
 
     private async Task<string> ScalarTextAsync(string sql, CancellationToken ct)
     {
-        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct);
+        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var cmd = new NpgsqlCommand(sql, conn);
-        var result = await cmd.ExecuteScalarAsync(ct);
+        var result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
         return result as string ?? "";
     }
 

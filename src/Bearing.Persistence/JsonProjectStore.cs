@@ -16,7 +16,7 @@ public sealed class JsonProjectStore : IProjectStore
         Directory.CreateDirectory(Path.Combine(directory, "scripts"));
 
         var project = new Project { Directory = directory, Manifest = new ProjectManifest { Name = name } };
-        await SaveAsync(project, ct);
+        await SaveAsync(project, ct).ConfigureAwait(false);
         return project;
     }
 
@@ -27,7 +27,7 @@ public sealed class JsonProjectStore : IProjectStore
             throw new FileNotFoundException($"No {ManifestFileName} in '{directory}'.", path);
 
         await using var stream = File.OpenRead(path);
-        var manifest = await JsonSerializer.DeserializeAsync<ProjectManifest>(stream, BearingJson.Options, ct)
+        var manifest = await JsonSerializer.DeserializeAsync<ProjectManifest>(stream, BearingJson.Options, ct).ConfigureAwait(false)
                        ?? new ProjectManifest();
         return new Project { Directory = directory, Manifest = manifest };
     }
@@ -40,7 +40,7 @@ public sealed class JsonProjectStore : IProjectStore
         var path = Path.Combine(project.Directory, ManifestFileName);
         var tmp = path + ".tmp";
         await using (var stream = File.Create(tmp))
-            await JsonSerializer.SerializeAsync(stream, project.Manifest, BearingJson.Options, ct);
+            await JsonSerializer.SerializeAsync(stream, project.Manifest, BearingJson.Options, ct).ConfigureAwait(false);
         File.Move(tmp, path, overwrite: true); // atomic-ish replace
     }
 }

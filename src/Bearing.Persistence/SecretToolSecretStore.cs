@@ -22,7 +22,7 @@ public sealed class SecretToolSecretStore : ISecretStore
     {
         var (exit, _, err) = await RunAsync(
             new[] { "store", "--label", $"Bearing connection {connectionId}", "app", App, "connection", connectionId.ToString() },
-            stdin: password, ct);
+            stdin: password, ct).ConfigureAwait(false);
         if (exit != 0)
             throw new InvalidOperationException($"secret-tool store failed: {err}");
     }
@@ -30,13 +30,13 @@ public sealed class SecretToolSecretStore : ISecretStore
     public async Task<string?> GetPasswordAsync(Guid connectionId, CancellationToken ct)
     {
         var (exit, stdout, _) = await RunAsync(
-            new[] { "lookup", "app", App, "connection", connectionId.ToString() }, stdin: null, ct);
+            new[] { "lookup", "app", App, "connection", connectionId.ToString() }, stdin: null, ct).ConfigureAwait(false);
         if (exit != 0) return null;                 // not found
         return stdout.TrimEnd('\n');
     }
 
     public async Task DeleteAsync(Guid connectionId, CancellationToken ct)
-        => await RunAsync(new[] { "clear", "app", App, "connection", connectionId.ToString() }, stdin: null, ct);
+        => await RunAsync(new[] { "clear", "app", App, "connection", connectionId.ToString() }, stdin: null, ct).ConfigureAwait(false);
 
     /// <summary>Store→lookup→clear a probe secret to confirm a keyring is actually reachable.</summary>
     public static async Task<bool> IsAvailableAsync(CancellationToken ct)
@@ -45,9 +45,9 @@ public sealed class SecretToolSecretStore : ISecretStore
         {
             var probe = Guid.NewGuid();
             var store = new SecretToolSecretStore();
-            await store.SetPasswordAsync(probe, "probe", ct);
-            var value = await store.GetPasswordAsync(probe, ct);
-            await store.DeleteAsync(probe, ct);
+            await store.SetPasswordAsync(probe, "probe", ct).ConfigureAwait(false);
+            var value = await store.GetPasswordAsync(probe, ct).ConfigureAwait(false);
+            await store.DeleteAsync(probe, ct).ConfigureAwait(false);
             return value == "probe";
         }
         catch
@@ -72,13 +72,13 @@ public sealed class SecretToolSecretStore : ISecretStore
         if (stdin is not null)
         {
             var bytes = Encoding.UTF8.GetBytes(stdin);
-            await proc.StandardInput.BaseStream.WriteAsync(bytes, ct);
+            await proc.StandardInput.BaseStream.WriteAsync(bytes, ct).ConfigureAwait(false);
             proc.StandardInput.Close();
         }
 
-        var stdout = await proc.StandardOutput.ReadToEndAsync(ct);
-        var stderr = await proc.StandardError.ReadToEndAsync(ct);
-        await proc.WaitForExitAsync(ct);
+        var stdout = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+        var stderr = await proc.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+        await proc.WaitForExitAsync(ct).ConfigureAwait(false);
         return (proc.ExitCode, stdout, stderr);
     }
 }

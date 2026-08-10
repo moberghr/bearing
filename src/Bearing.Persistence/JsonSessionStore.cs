@@ -15,7 +15,7 @@ public sealed class JsonSessionStore : ISessionStore
         if (!File.Exists(path)) return null;
 
         await using var stream = File.OpenRead(path);
-        return await JsonSerializer.DeserializeAsync<SessionState>(stream, BearingJson.Options, ct);
+        return await JsonSerializer.DeserializeAsync<SessionState>(stream, BearingJson.Options, ct).ConfigureAwait(false);
     }
 
     public async Task SaveAsync(string projectDirectory, SessionState state, CancellationToken ct)
@@ -25,7 +25,7 @@ public sealed class JsonSessionStore : ISessionStore
         var path = Path.Combine(dir, "session.json");
         var tmp = path + ".tmp";
         await using (var stream = File.Create(tmp))
-            await JsonSerializer.SerializeAsync(stream, state, BearingJson.Options, ct);
+            await JsonSerializer.SerializeAsync(stream, state, BearingJson.Options, ct).ConfigureAwait(false);
         File.Move(tmp, path, overwrite: true);
     }
 

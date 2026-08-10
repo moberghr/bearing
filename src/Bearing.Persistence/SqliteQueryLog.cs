@@ -95,7 +95,7 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
 
     private async Task WriteLoopAsync()
     {
-        await foreach (var entry in _channel.Reader.ReadAllAsync())
+        await foreach (var entry in _channel.Reader.ReadAllAsync().ConfigureAwait(false))
         {
             try { Insert(entry); }
             catch { /* logging must never surface an error to the app */ }
@@ -141,7 +141,7 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
     public async Task<IReadOnlyList<QueryLogEntry>> SearchAsync(QueryLogQuery query, CancellationToken ct)
     {
         await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
+        await conn.OpenAsync(ct).ConfigureAwait(false);
         using var cmd = conn.CreateCommand();
 
         var where = new List<string>();
@@ -166,8 +166,8 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
             " ORDER BY q.id DESC LIMIT $limit;";
 
         var results = new List<QueryLogEntry>();
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             results.Add(new QueryLogEntry
             {
@@ -191,7 +191,7 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _channel.Writer.TryComplete();
-        try { await _writerLoop; } catch { }
-        await _writeConnection.DisposeAsync();
+        try { await _writerLoop.ConfigureAwait(false); } catch { }
+        await _writeConnection.DisposeAsync().ConfigureAwait(false);
     }
 }

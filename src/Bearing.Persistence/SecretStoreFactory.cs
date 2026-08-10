@@ -11,7 +11,7 @@ public static class SecretStoreFactory
     public static async Task<ISecretStore> CreateAsync(
         Func<bool>? allowUnencryptedFile = null, CancellationToken ct = default)
     {
-        if (OperatingSystem.IsLinux() && await SecretToolSecretStore.IsAvailableAsync(ct))
+        if (OperatingSystem.IsLinux() && await SecretToolSecretStore.IsAvailableAsync(ct).ConfigureAwait(false))
             return new SecretToolSecretStore();
 
         // TODO: MacKeychainStore / WindowsDpapiStore on those platforms.
