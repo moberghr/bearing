@@ -349,11 +349,11 @@ close, *not* on window close — prompting at quit would be friction for zero sa
   overlay, and it looks bad. The generated DML should show up **automatically as part of the save
   confirmation** instead of being a manual pre-step; drop the standalone button (or demote it) once the
   confirm dialog carries the SQL. Folds into the write-confirm item above. `ResultView.PreviewSql` →
-  `MainWindow.ShowPendingScript` / `MainWindow.Overlays.cs`, `ResultView.Cells.cs:312`.
+  `MainWindow.ShowPendingScript` / `MainWindow.Overlays.cs`, `Controls/ResultEditToolbar.cs`.
 - [ ] **P2** **Export results to Excel** (+ CSV) with an "open containing folder" action after the export
   completes. Decide the xlsx route (a package vs. hand-rolled OOXML — note §0.1: nothing new in `Core`);
   export should offer loaded-rows vs. whole-result (needs the fetch-all item below). **The button already
-  exists and is deliberately dead** — `ResultView.Cells.cs:304` renders `⭳ Export` with the tooltip
+  exists and is deliberately dead** — `Controls/ResultEditToolbar.cs` renders `⭳ Export` with the tooltip
   "Export — coming soon" ("rendered; wired later (per decision)"), so this is wiring a present affordance,
   not adding one. Nothing else export-related exists in `src/`.
 - [ ] **P2** **Fetch all rows** button on a paged result — one action that loops `LoadMore` to completion
@@ -361,10 +361,54 @@ close, *not* on window close — prompting at quit would be friction for zero sa
   results. `ResultSetViewModel.IsPageable/HasMore/AppendPage`, `ExecutionViewModel.LoadMoreAsync` (`PageSize` 100).
 - [ ] **P2** **Copy as…** — extend grid copy beyond TSV: HTML, Markdown, JSON, CSV, and SQL (`INSERT`
   statements / `VALUES` list). Context menu + palette commands; pure formatters under `Results/`
-  (§2.5, testable without a grid) reusing the selection-rectangle logic in `ResultView.Selection.cs:209`.
+  (§2.5, testable without a grid) reusing `GridSelectionOps.Rectangle` / `Tsv`.
+- [ ] **P2** **Paste into the results grid (`Ctrl+V`)** — copy is done, paste doesn't exist. Requested
+  2026-08-11: copy the selected cells' values, then select one or more cells and paste, editing those rows.
+  Copy already works (`grid.copy`, `Ctrl+C`/`Ctrl+Insert` → `GridSelectionOps.Tsv`); there is **no**
+  `grid.paste` in `CommandIds` and nothing in `src/` reads the clipboard, so this is all new.
+  - **Fill semantics** (the requested case): a single clipboard value pasted over an N-cell selection writes
+    that value into every selected cell. A multi-cell TSV block anchors at the active cell and fills
+    right/down — **decide** whether it clips to the selection or extends past it (Excel extends from a
+    single-cell selection, clips/tiles when the selection is larger).
+  - **Route it through `ResultSetViewModel.SetCell(row, col, string)`** — the exact call the in-cell TextBox
+    editor makes (`ResultView.Grid.cs` `WireEditing` → `CellEditEnding`). Paste then inherits the whole
+    existing edit path for free: the `(null)` token ⇒ NULL, empty ⇒ `""` for text / NULL otherwise, and
+    per-column type coercion at save time (`ResultEditModel.Coerce`), plus the one transactional
+    `ExecuteWriteAsync` batch and Discard. Do **not** add a second value-parsing path.
+  - **Gate on `IsEditable` in `canRun`**, like `grid.delete` / `grid.beginEdit`. This is a real trap:
+    `SetCell` writes `row[column]` *before* calling `MarkEdited`, and `MarkEdited` is the part that no-ops
+    on a read-only result — so an ungated paste silently corrupts the displayed rows of a locked result
+    without marking anything pending.
+  - **Async/dispatch wrinkle:** the clipboard read is `IClipboard.GetTextAsync`, but grid commands are
+    registered `KeyCommand.Sync` and `GridTarget()` reads `_keyStrokeTarget`, which `OnGridKey` clears in its
+    `finally` the moment the dispatch returns. Capture the `(grid, result)` target **before** the first
+    `await`, or the continuation silently falls back to the selection-owner lookup.
+  - Repaint after writing (`ResultRowPainter.RefreshRowColors`) — otherwise pasted rows show no amber pending
+    tint until they happen to re-realize. Bool/checkbox columns can't be paste targets (selection skips them,
+    see the item below). Bind `Ctrl+V` + `Shift+Insert` to mirror the copy pair.
+  - Pure part → parsing clipboard TSV into a rectangle and mapping it onto the selection belongs beside
+    `Results/GridSelectionOps` (§2.5), unit-testable without a grid — the paste *shape* rules are exactly the
+    kind of thing Wayland stops us verifying by hand (§4.3).
+- [ ] **P2** **ISO dates in the grid and on the clipboard** — requested 2026-08-11. Copy and display share one
+  formatter (`GridSelectionOps.CellText` → `CellFormat.Display`), so **changing the three patterns in
+  `Formatting/CellFormat.cs` fixes both at once** — that's the "make it ISO when displaying as well"
+  simplification, not two changes. Today: `DateTimePattern` `dd.MM.yyyy HH:mm:ss`, `DatePattern`
+  `dd.MM.yyyy`, `TimePattern` `HH:mm:ss` (already `InvariantCulture`).
+  - **Decide the exact form**: `yyyy-MM-dd HH:mm:ss` (space, far more readable in a grid, still RFC 3339)
+    vs. strict `yyyy-MM-ddTHH:mm:ss`. Also decide fractional seconds — the current `TryParseExact` on
+    `dd.MM.yyyy HH:mm:ss` **fails** on any value carrying them and falls through to the lenient parse.
+  - **`DateTimeOffset` must keep its offset** (`…K`, or round-trip `o`). The current pattern drops it
+    entirely, so copying a `timestamptz` today loses the zone — an existing data-loss-on-copy bug that this
+    change is the natural moment to fix.
+  - **Round-trip gets strictly better**, which is the real argument: `CellFormat.TryParseDate` tries the
+    display pattern first, so an ISO display means an edited or pasted date re-parses unambiguously instead
+    of depending on which way the current culture reads `03.04.2026`.
+  - Rewrite `CellFormat`'s class doc comment — it currently *justifies* the day-first pattern ("`.NET`'s
+    culture data for day-first locales adds spaces/trailing dots"), so leaving it would contradict the code.
+    Update `CellFormatTests` (patterns are asserted there) and note the visible change for eyeball QA.
 - [ ] **P2** Checkbox (bool) cells don't take grid selection — clicking one toggles the value but leaves the
   cell/row selection where it was, so keyboard nav and copy act on the wrong cell. Make the bool cell set the
-  selection on click like every other cell. `ResultView.Cells.cs` `BoolCell` (~line 170).
+  selection on click like every other cell. `Controls/ResultCellFactory.cs` `BoolCell`.
 - [ ] **P2** `Tab` should move between rows/fields for view+edit in both table and pane (record) mode —
   a consistent forward/back field traversal (`Tab`/`Shift+Tab`) that commits the current cell and advances,
   wrapping to the next row at the end. Currently only spatial arrow nav exists in the grid.
