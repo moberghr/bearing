@@ -1,3 +1,4 @@
+using System.Linq;
 using Bearing.Sql;
 using Xunit;
 
@@ -78,5 +79,39 @@ public class WriteGuardTests
     {
         Assert.Equal(new[] { "SELECT INTO" },
             WriteGuard.FindRiskyStatements("with recent as (select * from rental) select * into snapshot from recent"));
+    }
+
+    // ---- Describe: the same scan, per statement, so a confirmation can show what is about to run ----
+
+    [Fact]
+    public void Describe_keeps_every_statement_in_execution_order_reads_included()
+    {
+        var described = WriteGuard.Describe("select 1;\ndelete from rental;\nselect 2;");
+
+        Assert.Equal(new[] { "SELECT", "DELETE", "SELECT" }, described.Select(s => s.Verb));
+        Assert.Equal(new[] { false, true, false }, described.Select(s => s.IsRisky));
+        Assert.Equal(new[] { "select 1;", "delete from rental;", "select 2;" }, described.Select(s => s.Text));
+    }
+
+    [Fact]
+    public void Describe_labels_a_read_by_its_verb_and_a_write_by_what_it_does()
+    {
+        var described = WriteGuard.Describe(
+            "with removed as (delete from rental returning *) select * into snapshot from removed;");
+
+        var only = Assert.Single(described);
+        Assert.Equal("WITH", only.Verb);                                  // leading keyword
+        Assert.Equal(new[] { "DELETE", "SELECT INTO" }, only.RiskyVerbs); // both writes hiding in it
+        Assert.Equal("DELETE + SELECT INTO", only.Label);
+    }
+
+    [Fact]
+    public void Describe_and_FindRiskyStatements_agree()
+    {
+        const string sql = "select 1; update film set title='x'; delete from rental; drop table t; update actor set x=1;";
+
+        Assert.Equal(
+            WriteGuard.FindRiskyStatements(sql),
+            WriteGuard.Describe(sql).SelectMany(s => s.RiskyVerbs).Distinct().ToArray());
     }
 }

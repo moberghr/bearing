@@ -254,14 +254,15 @@ close, *not* on window close — prompting at quit would be friction for zero sa
     observable when nothing is autosaving.
   - **Now has a UI** (2026-08-09): Settings ▸ Editor ▸ Autosave, as three named choices. The mode was
     file-edit-only when this shipped.
-- [ ] **P3** **A failed schema expand is sticky until Refresh.** `EnsureChildrenAsync` sets `_loaded = true`
-  *before* the load (`SchemaNodes.cs:73`), so collapsing and re-expanding a node that errored replays the
-  stale error instead of retrying. Refresh server metadata does clear it, so this is a papercut, not a
-  blocker — reset `_loaded = false` in the catch so re-expand retries too. Worth noting the layer below
-  **already intends** the retry: `SchemaBrowser.BuildAsync` deliberately evicts a failed build so "the next
-  expand retries (e.g. after fixing credentials)" (`SchemaBrowser.cs:80-86`) — the node's `_loaded` flag is
-  what defeats that intent. (Surfaced 2026-08-06 while chasing an Entra connection error that turned out not
-  to reproduce; this half stands on its own and is independent of credentials.)
+- [x] **P3** **A failed schema expand is sticky until Refresh** — **closed 2026-08-11 as won't-fix (user's
+  call).** The behaviour is unchanged and intentional: `EnsureChildrenAsync` still sets `_loaded = true`
+  *before* the load (`SchemaNodes.cs:75`), so collapse-and-re-expand replays the stale error rather than
+  retrying. **The retry that matters already exists and is one gesture away** — right-click the server ▸
+  *Refresh metadata* (`SidebarView.axaml:43` → `ConnectionsViewModel.RefreshServerMetadataAsync:325` →
+  `SchemaNodeViewModel.RefreshAsync:95`), which resets `_loaded = false` *and* drops the schema-browser's
+  per-database readers, so the retry runs on a fresh connection instead of the one that failed. Making
+  re-expand retry on its own would only duplicate that, and silently re-hit a dead connection on every
+  collapse. (Surfaced 2026-08-06 while chasing an Entra connection error that turned out not to reproduce.)
 - [ ] **P2** Remove / delete projects. Delete a project from the recent list, and optionally from disk (with confirm). Also prune stale/missing entries from the recent list (see the P3 recent-projects item below).
 - [x] **P3** Restore last window size on startup — **done 2026-08-09** *(live QA)*, with the settings work.
   `AppSettings.WindowWidth`/`WindowHeight` are persisted state (no catalog row) and the visible toggle is
@@ -341,15 +342,32 @@ close, *not* on window close — prompting at quit would be friction for zero sa
   - Seam: all engine-side work is pure and belongs in `Bearing.Sql` with tests next to
     `CompletionEngineTests.cs` / `JoinCompletionTests.cs` (§2.5); only the glyph/template half touches
     `Bearing.App`. §9.5 — re-run the existing completion tests when touching the antlr4-c3 path. *(live QA)*
-- [ ] **P2** Show the SQL in the write-confirm dialog. When `RequireWriteConfirmation` trips (`ExecuteAsync`
-  and the inline-edit `SaveChangesAsync` path), the confirm prompt should display the statements about to run,
-  not just ask yes/no — so "am I about to nuke prod" is answerable from the dialog. `ConfirmWriteAsync`
-  (`IDialogService`/`DialogService`), callers in `ExecutionViewModel`.
-- [ ] **P2** Rework the edit **Preview SQL** flow — currently a separate `[Preview SQL]` button that pops an
-  overlay, and it looks bad. The generated DML should show up **automatically as part of the save
-  confirmation** instead of being a manual pre-step; drop the standalone button (or demote it) once the
-  confirm dialog carries the SQL. Folds into the write-confirm item above. `ResultView.PreviewSql` →
-  `MainWindow.ShowPendingScript` / `MainWindow.Overlays.cs`, `Controls/ResultEditToolbar.cs`.
+- [x] **P2** Show the SQL in the write-confirm dialog — **done 2026-08-11** *(live QA)*, together with the
+  Preview-SQL rework below (they were one job). `ConfirmWriteAsync` no longer takes a connection + verb list
+  but a `Services/WriteConfirmation` — target connection, `WriteAction` (batch vs. inline save), verbs, and
+  **the statements about to run**, plus all the derived display text (heading / summary / warning / button
+  label / copyable script), which is where the coverage lives (`WriteConfirmationTests`) since the dialog
+  itself can't be driven headlessly. New `WriteGuard.Describe(sql)` → `StatementRisk` per statement (text,
+  leading verb, risky verbs found in it) is the same lexer scan `FindRiskyStatements` does, no longer
+  projected down to distinct verbs — that one is now a two-line projection over `Describe`, so the guard
+  can't drift from what the dialog shows. Reads in a mixed batch are listed too (dimmed, no tag colour):
+  the batch runs them, and "1 of the 12 statements below will modify data or schema" is the honest summary.
+  One behaviour change on the guarded path: **Enter no longer commits** when the connection requires write
+  confirmation (Cancel takes `IsDefault`, proceeding takes a click) — Enter-through defeats the point of the
+  guard (§1.2). An ordinary inline save keeps Enter on the confirm button.
+- [x] **P2** Rework the edit **Preview SQL** flow — **done 2026-08-11** *(live QA)*. **Inline saves now
+  always confirm** (user's call, 2026-08-11), so the DML preview sits on the path to committing instead of
+  being a step you had to remember to take: `SaveChangesAsync` builds the statements, confirms, *then* takes
+  the session lease (a modal prompt must not hold a session open while the user reads it — it did before).
+  A guarded connection gets an extra amber warning line, not the only prompt. Retired: the `‹ › Script`
+  button, `ResultView.PreviewSql`, `MainWindow.ShowPendingScript` / `MainWindow.Overlays.cs`,
+  `Controls/PendingChangesOverlay.cs`, and `ExecutionViewModel.PreviewChanges` (already dead). The panel's
+  line-numbered, kind-coloured rendering survives as `Controls/SqlStatementList` inside the dialog, capped at
+  100 rendered statements (with a "… and N more" line — Copy always carries the whole script).
+  `PreviewChangeStatements` → `PendingWriteStatements`, now returning `WriteStatement`s. Removing the
+  overlay also removed its five modal-key hacks from `MainWindow.Commands.cs` (Escape unwinding, the
+  swallow-globals-except-Escape branch, the nav-key block, the hide-on-rebuild call) — a real modal window
+  needs none of them.
 - [ ] **P2** **Export results to Excel** (+ CSV) with an "open containing folder" action after the export
   completes. Decide the xlsx route (a package vs. hand-rolled OOXML — note §0.1: nothing new in `Core`);
   export should offer loaded-rows vs. whole-result (needs the fetch-all item below). **The button already
@@ -618,7 +636,9 @@ close, *not* on window close — prompting at quit would be friction for zero sa
     Anything else that needs to intervene at quit hangs off it; note the not-calling-`base` contract above.
     The scratch save-prompt turned out **not** to need it: quitting already round-trips every buffer through
     `session.json`, so that prompt is tab-close only.
-  - **Write-confirm dialog** — showing the SQL and reworking Preview SQL are one job.
+  - **Write-confirm dialog** — **built** (2026-08-11). Showing the SQL and reworking Preview SQL were one
+    job, done as one. Anything else that wants to confirm a write builds a `Services/WriteConfirmation`;
+    anything that wants to *show* SQL statements reuses `Controls/SqlStatementList`.
   - **`ConnectionInfo.Options` handling** — the P3 factory item is the prerequisite for any app-level
     (`entra.*`) option key, since unknown keys currently reach Npgsql and throw.
   - **Settings framework** — **built** (2026-08-09). Anything that wants to become configurable now costs

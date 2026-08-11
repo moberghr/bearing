@@ -13,9 +13,11 @@ namespace Bearing.App.Controls;
 
 /// <summary>
 /// The right-hand side of an editable result's meta row: the always-visible ＋ Add / Delete / ⭳ Export
-/// actions, plus a commit group (● N pending · Script · Discard · Save) that reveals itself only while there
+/// actions, plus a commit group (● N pending · Discard · Save) that reveals itself only while there
 /// are unsaved changes — bound to <see cref="ResultSetViewModel.HasPendingChanges"/>, so it tracks edits made
 /// anywhere (a cell commit, a checkbox toggle, a keyboard delete) without this toolbar being told.
+/// <para>There is no Script/preview button: Save now shows the generated DML in its confirmation, so the
+/// preview is on the path to committing rather than a step the user had to remember to take.</para>
 /// </summary>
 public static class ResultEditToolbar
 {
@@ -23,7 +25,6 @@ public static class ResultEditToolbar
     public static Control Build(
         ResultSetViewModel result,
         DataGrid grid,
-        Action onPreviewSql,
         Func<Task> onSave,
         Func<Task> onDiscard)
     {
@@ -51,14 +52,13 @@ public static class ResultEditToolbar
         bar.Children.Add(add);
         bar.Children.Add(delete);
         bar.Children.Add(export);
-        bar.Children.Add(PendingGroup(result, onPreviewSql, onSave, onDiscard));
+        bar.Children.Add(PendingGroup(result, onSave, onDiscard));
         return bar;
     }
 
-    /// <summary>● N pending · ‹ › Script · Discard (red outline) · ✓ Save (green fill) — visible only while
-    /// the result has pending changes.</summary>
-    private static Control PendingGroup(
-        ResultSetViewModel result, Action onPreviewSql, Func<Task> onSave, Func<Task> onDiscard)
+    /// <summary>● N pending · Discard (red outline) · ✓ Save (green fill) — visible only while the result has
+    /// pending changes.</summary>
+    private static Control PendingGroup(ResultSetViewModel result, Func<Task> onSave, Func<Task> onDiscard)
     {
         var dot = new TextBlock
         {
@@ -75,9 +75,6 @@ public static class ResultEditToolbar
             Foreground = Res("Text.Primary"),
         };
         pending.Bind(TextBlock.TextProperty, new Binding(nameof(ResultSetViewModel.PendingText)));
-
-        var script = ResultChrome.SubtleButton("‹ › Script", "Preview the SQL a save would run");
-        script.Click += (_, _) => onPreviewSql();
 
         var discard = new Button
         {
@@ -112,7 +109,6 @@ public static class ResultEditToolbar
         };
         group.Children.Add(dot);
         group.Children.Add(pending);
-        group.Children.Add(script);
         group.Children.Add(discard);
         group.Children.Add(save);
         group.Bind(Visual.IsVisibleProperty, new Binding(nameof(ResultSetViewModel.HasPendingChanges)));

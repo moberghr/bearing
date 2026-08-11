@@ -85,9 +85,6 @@ public sealed partial class ResultView : UserControl
     /// <summary>Invoked to discard a result set's pending edits (the [Discard] button).</summary>
     public Func<ResultSetViewModel, Task>? DiscardChanges { get; set; }
 
-    /// <summary>Invoked to preview the SQL a save would run (the [Preview SQL] button).</summary>
-    public Action<ResultSetViewModel>? PreviewSql { get; set; }
-
     /// <summary>The shared keybinding pipeline (set once by the window). On assignment the grid's discrete
     /// commands register into the shared registry so the same matcher drives them; spatial cell navigation
     /// stays local (see <see cref="OnGridKey"/>).</summary>

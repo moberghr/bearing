@@ -41,7 +41,7 @@ public partial class MainWindow
         // Escape only claims the key when there's something to dismiss; otherwise it falls through.
         r.Register(KeyCommand.Sync(CommandIds.AppEscape, "Escape / cancel", KeyScope.Global, "View",
             () => HandleEscape(),
-            canRun: () => Vm is not null && (_palette.AnyOpen || _pendingPanel.IsOpen || Vm.IsMenuVisible || Vm.Execution.IsBusy)));
+            canRun: () => Vm is not null && (_palette.AnyOpen || Vm.IsMenuVisible || Vm.Execution.IsBusy)));
         r.Register(KeyCommand.Sync(CommandIds.PaletteOpen, "Command palette", KeyScope.Global, "View",
             () => { if (Vm is not null) _palette.TogglePalette(); }));
         r.Register(KeyCommand.Sync(CommandIds.TabNext, "Next tab (visual order)", KeyScope.Global, "Tabs", () => WithWorkspace(ws => _tabs.SelectAdjacent(ws, +1))));
@@ -118,9 +118,6 @@ public partial class MainWindow
         base.OnKeyDown(e);
         // While an overlay (palette / quick-pick) is up it owns the keyboard — don't fire globals under it.
         if (_palette.AnyOpen) return;
-        // The pending-changes panel is modal too, but has no local key handler: swallow every global
-        // shortcut under it EXCEPT Escape, which must reach the dispatcher so HandleEscape can close it.
-        if (_pendingPanel.IsOpen && e.Key is not Key.Escape) return;
         // Alt-tap tracking: a lone Alt press arms the menu toggle (fired on key-up); any other key cancels it.
         _altAlone = e.Key is Key.LeftAlt or Key.RightAlt;
         _dispatcher.TryHandle(e, KeyScope.Global); // Global scope; Editor/Grid scopes are handled in their tunnels
@@ -143,28 +140,26 @@ public partial class MainWindow
     private void OnWindowNavKey(object? sender, KeyEventArgs e)
     {
         // an overlay owns the keyboard while open (nav commands carry no Escape, so block all of them)
-        if (_palette.AnyOpen || _pendingPanel.IsOpen) return;
+        if (_palette.AnyOpen) return;
         _dispatcher.TryHandle(e, KeyScope.Global, _navCommands);
     }
 
     /// <summary>Tunnel-phase Escape → cancel the selected tab's in-flight query, pre-empting the grid's
-    /// clear-selection and AvaloniaEdit (which sit lower in the tunnel). Overlays / the pending-changes
-    /// panel / the Alt menu own Escape first — they're dismissed by the bubble-phase <see cref="HandleEscape"/>,
-    /// so we only claim it here once none of them are up.</summary>
+    /// clear-selection and AvaloniaEdit (which sit lower in the tunnel). Overlays / the Alt menu own Escape
+    /// first — they're dismissed by the bubble-phase <see cref="HandleEscape"/>, so we only claim it here
+    /// once none of them are up.</summary>
     private void OnWindowEscapeCancel(object? sender, KeyEventArgs e)
     {
         if (e.Handled || e.Key is not Key.Escape || Vm is null) return;
-        if (_palette.AnyOpen || _pendingPanel.IsOpen || Vm.IsMenuVisible) return;
+        if (_palette.AnyOpen || Vm.IsMenuVisible) return;
         if (Vm.Execution.IsBusy) { Vm.Execution.CancelExecution(); e.Handled = true; }
     }
 
-    /// <summary>Esc unwinds, most-modal first: an overlay → the pending-changes panel → the menu bar →
-    /// a running query.</summary>
+    /// <summary>Esc unwinds, most-modal first: an overlay → the menu bar → a running query.</summary>
     private bool HandleEscape()
     {
         if (Vm is null) return false;
         if (_palette.HideTopmost()) return true;
-        if (_pendingPanel.IsOpen) { _pendingPanel.Hide(); return true; }
         if (Vm.IsMenuVisible) { Vm.IsMenuVisible = false; return true; }
         if (Vm.Execution.IsBusy) { Vm.Execution.CancelExecution(); return true; }
         return false;
@@ -326,7 +321,6 @@ public partial class MainWindow
     /// <summary>Render the given tab's current result frame, plus the back-bar state (FK-nav history).</summary>
     internal void RebuildResults(EditorTabViewModel? tab)
     {
-        _pendingPanel.Hide(); // a new run / tab switch invalidates the pending-changes panel
         ResultsView.CanGoBack = tab?.CanGoBack ?? false;
         ResultsView.Results = tab?.Results; // assignment triggers the rebuild (reads CanGoBack)
         _resultsPane.SetVisible(tab?.Results is { Count: > 0 }); // reveal on results, collapse when none

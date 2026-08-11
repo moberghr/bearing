@@ -309,7 +309,18 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
         return Task.FromResult(_saveAsPath);
     }
 
-    public Task<bool> ConfirmWriteAsync(ConnectionInfo connection, IReadOnlyList<string> verbs) => Task.FromResult(true);
+    /// <summary>What the write/save confirmation answers. False cancels the write.</summary>
+    public bool ConfirmWriteAnswer { get; set; } = true;
+
+    /// <summary>Every write confirmation raised, in order — so a test can assert what the user was shown.</summary>
+    public List<Bearing.App.Services.WriteConfirmation> WriteConfirmations { get; } = new();
+
+    public Task<bool> ConfirmWriteAsync(Bearing.App.Services.WriteConfirmation request)
+    {
+        WriteConfirmations.Add(request);
+        return Task.FromResult(ConfirmWriteAnswer);
+    }
+
     public Task<Bearing.App.Views.ConnectionDialogResult?> ShowConnectionDialogAsync(ConnectionInfo? existing, string? existingPassword,
         Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
         Bearing.App.Services.SecretStoragePosture storage)

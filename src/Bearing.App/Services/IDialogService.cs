@@ -46,9 +46,10 @@ public readonly record struct SecretStoragePosture(bool Secure, bool CanStore)
 
 public interface IDialogService
 {
-    /// <summary>Confirm a risky write/DDL batch against a guarded connection. True = proceed.
-    /// Implementations with no window (headless/tests) proceed silently.</summary>
-    Task<bool> ConfirmWriteAsync(ConnectionInfo connection, IReadOnlyList<string> verbs);
+    /// <summary>Confirm a write — a risky batch on a guarded connection, or any inline-edit save — showing
+    /// the statements it is about to run. True = proceed. Implementations with no window (headless/tests)
+    /// proceed silently.</summary>
+    Task<bool> ConfirmWriteAsync(WriteConfirmation request);
 
     /// <summary>Confirm throwing away queries that are still running, before an action that would cancel
     /// them. <paramref name="tabName"/> null asks about quitting (<paramref name="runningCount"/> tabs);

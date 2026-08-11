@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Threading;
@@ -18,9 +17,6 @@ using Bearing.Core.Schema;
 using Bearing.Sql;
 
 namespace Bearing.App.ViewModels;
-
-/// <summary>One generated write statement, tagged INSERT/UPDATE/DELETE for the floating script panel.</summary>
-public sealed record PendingStatement(string Kind, string Sql);
 
 /// <summary>
 /// A run that finished on a tab the user wasn't looking at. Its terminal message would otherwise be
@@ -37,7 +33,7 @@ public sealed record BackgroundCompletion(string TabName, string Message, bool T
 
 /// <summary>
 /// The execution concern: running the selected tab's SQL, paging, count, foreign-key navigation, and the
-/// inline-edit save/discard/preview. Owns the in-flight cancellation and the busy flag. Extracted from the
+/// inline-edit save/discard. Owns the in-flight cancellation and the busy flag. Extracted from the
 /// shell (docs/mvvm-refactor-plan.md phase 3); coordinates through <see cref="WorkspaceContext"/> and reads
 /// the selected tab from it (moved into the context in phase 4). Pure DML/result shaping stays in Results/
 /// (ResultEditModel, ResultSetBuilder).
@@ -165,10 +161,13 @@ public sealed partial class ExecutionViewModel : ObservableObject
         if (info is null) { _ctx.SetStatus("Connection no longer exists."); return; }
 
         // Production write-guard: confirm before writing data / altering schema on a guarded connection.
+        // Describe (not FindRiskyStatements) so the prompt can list the statements it is about to run — the
+        // verbs alone can't answer "what exactly lands on prod".
         if (info.RequireWriteConfirmation && _dialogs is { } dialogs)
         {
-            var risky = WriteGuard.FindRiskyStatements(sql);
-            if (risky.Count > 0 && !await dialogs.ConfirmWriteAsync(info, risky))
+            var statements = WriteGuard.Describe(sql);
+            if (statements.Any(s => s.IsRisky)
+                && !await dialogs.ConfirmWriteAsync(WriteConfirmation.ForBatch(info, statements)))
             {
                 _ctx.SetStatus("Cancelled — write not confirmed.");
                 return;
@@ -396,25 +395,24 @@ public sealed partial class ExecutionViewModel : ObservableObject
         var tab = Selected;
         if (tab is null || tab.IsRunning) return;
         if (rs.EditTarget is not { } target || !rs.HasPendingChanges) return;
-        using var lease = ResolveLiveLease();
-        if (lease is null) return;
-        var session = lease.Session;
 
         var changes = ResultEditModel.BuildPendingChanges(rs, target);
         if (changes.Count == 0) { rs.ClearPending(); return; }
 
-        // Production write-guard: inline grid saves are always data-modifying (INSERT/UPDATE/DELETE),
-        // so confirm before committing them on a guarded connection — mirrors the ExecuteAsync gate.
-        if (_ctx.EffectiveConnection(tab) is { RequireWriteConfirmation: true } guarded
-            && _dialogs is { } dialogs)
+        // Every inline save confirms, showing the DML it is about to commit — this is the whole preview
+        // flow (there is no separate [Preview SQL] step any more), so it can't be conditional on the
+        // connection's write guard. A guarded connection gets the extra warning line, not the only prompt.
+        // Ahead of the lease: a modal dialog must not hold a session open while the user reads it.
+        if (_ctx.EffectiveConnection(tab) is { } connection && _dialogs is { } dialogs
+            && !await dialogs.ConfirmWriteAsync(WriteConfirmation.ForEdits(connection, WriteStatements(changes))))
         {
-            var verbs = changes.Select(c => c.Kind.ToString().ToUpperInvariant()).Distinct().ToList();
-            if (!await dialogs.ConfirmWriteAsync(guarded, verbs))
-            {
-                _ctx.SetStatus("Cancelled — write not confirmed.");
-                return;
-            }
+            _ctx.SetStatus("Cancelled — save not confirmed.");
+            return;
         }
+
+        using var lease = ResolveLiveLease();
+        if (lease is null) return;
+        var session = lease.Session;
 
         await RunExclusiveAsync(tab, async ct =>
         {
@@ -435,30 +433,22 @@ public sealed partial class ExecutionViewModel : ObservableObject
         return Task.CompletedTask;
     }
 
-    /// <summary>Render the write statements a save would run, values inlined, wrapped in a transaction.
-    /// Null when there's nothing pending. For preview only — the real save uses parameters.</summary>
-    public string? PreviewChanges(ResultSetViewModel rs)
+    /// <summary>The pending write statements for a result set, one per dirty row, values inlined and
+    /// kind-tagged — what the save confirmation lists. Empty when there's nothing pending. Display only:
+    /// the save itself runs the same statements parameterized.</summary>
+    public IReadOnlyList<WriteStatement> PendingWriteStatements(ResultSetViewModel rs)
     {
-        if (rs.EditTarget is not { } target || !rs.HasPendingChanges) return null;
-        var changes = ResultEditModel.BuildPendingChanges(rs, target);
-        if (changes.Count == 0) return null;
-
-        var sb = new StringBuilder();
-        sb.AppendLine("begin;");
-        foreach (var c in changes) sb.Append("  ").Append(ResultEditModel.InlineParameters(c.Command)).AppendLine(";");
-        sb.Append("commit;");
-        return sb.ToString();
+        if (rs.EditTarget is not { } target || !rs.HasPendingChanges) return Array.Empty<WriteStatement>();
+        return WriteStatements(ResultEditModel.BuildPendingChanges(rs, target));
     }
 
-    /// <summary>The pending write statements, one per dirty row, values inlined and kind-tagged (for the
-    /// color-coded pending-changes script panel). Empty when there's nothing pending. Preview only.</summary>
-    public IReadOnlyList<PendingStatement> PreviewChangeStatements(ResultSetViewModel rs)
-    {
-        if (rs.EditTarget is not { } target || !rs.HasPendingChanges) return Array.Empty<PendingStatement>();
-        return ResultEditModel.BuildPendingChanges(rs, target)
-            .Select(c => new PendingStatement(c.Kind.ToString().ToUpperInvariant(), ResultEditModel.InlineParameters(c.Command) + ";"))
+    private static IReadOnlyList<WriteStatement> WriteStatements(IReadOnlyList<ResultEditModel.PendingChange> changes)
+        => changes
+            .Select(c => new WriteStatement(
+                c.Kind.ToString().ToUpperInvariant(),
+                ResultEditModel.InlineParameters(c.Command) + ";",
+                IsRisky: true))
             .ToList();
-    }
 
     /// <summary>Schema for the selected tab's connection (drives completion); null when not yet loaded.</summary>
     public ISchemaSnapshot? SnapshotForSelectedTab()

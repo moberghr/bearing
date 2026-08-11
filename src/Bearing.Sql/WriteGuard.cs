@@ -5,6 +5,24 @@ using Antlr4.Runtime;
 namespace Bearing.Sql;
 
 /// <summary>
+/// One statement of a batch as the write-guard sees it: the statement text as written, its leading keyword,
+/// and the risky verbs found in it (empty for a plain read). Lets a caller show the user the batch it is
+/// about to run, not just the verdict — <see cref="WriteGuard.FindRiskyStatements"/> is this same scan
+/// projected down to the distinct risky verbs.
+/// </summary>
+/// <param name="Text">The statement as written (trimmed), comments and formatting intact.</param>
+/// <param name="Verb">Leading keyword, uppercased (<c>SELECT</c>, <c>WITH</c>, <c>DELETE</c>, …).</param>
+/// <param name="RiskyVerbs">Risky verbs found in this statement, first-seen order. Empty = reads only.</param>
+public sealed record StatementRisk(string Text, string Verb, IReadOnlyList<string> RiskyVerbs)
+{
+    /// <summary>True when this statement writes data or alters schema.</summary>
+    public bool IsRisky => RiskyVerbs.Count > 0;
+
+    /// <summary>How to label the statement: the risky verbs when it writes, else its leading keyword.</summary>
+    public string Label => IsRisky ? string.Join(" + ", RiskyVerbs) : Verb;
+}
+
+/// <summary>
 /// Classifies a (possibly multi-statement) SQL batch for statements that write data or alter schema,
 /// so a caller can require confirmation before running them against a guarded connection. Pure and
 /// lexer-based (reuses <see cref="PgParsing"/>); errs toward caution — a WITH/EXPLAIN preamble is
@@ -36,7 +54,19 @@ public static class WriteGuard
     public static IReadOnlyList<string> FindRiskyStatements(string sql)
     {
         var found = new List<string>();
-        if (string.IsNullOrWhiteSpace(sql)) return found;
+        foreach (var statement in Describe(sql))
+            foreach (var verb in statement.RiskyVerbs)
+                Add(found, verb);
+        return found;
+    }
+
+    /// <summary>Every statement in the batch, in execution order, each tagged with the risky verbs it
+    /// carries — so a confirmation can show what is about to run and which parts of it write. Reads are
+    /// included (with an empty <see cref="StatementRisk.RiskyVerbs"/>): the batch runs them too.</summary>
+    public static IReadOnlyList<StatementRisk> Describe(string sql)
+    {
+        var described = new List<StatementRisk>();
+        if (string.IsNullOrWhiteSpace(sql)) return described;
 
         foreach (var span in StatementSplitter.Split(sql))
         {
@@ -44,22 +74,30 @@ public static class WriteGuard
             if (keywords.Count == 0) continue;
 
             var first = keywords[0];
-            if (Risky.Contains(first)) { Add(found, first); continue; }
+            var risky = new List<string>();
+            if (Risky.Contains(first))
+            {
+                Add(risky, first); // a risky lead verb settles it — no need to scan the interior
+            }
+            else
+            {
+                // Only scan the interior of preamble statements; a plain SELECT that merely mentions an
+                // identifier called "update" must not trip the guard.
+                if (Preambles.Contains(first))
+                    foreach (var kw in keywords)
+                        if (Risky.Contains(kw)) { Add(risky, kw); break; }
 
-            // Only scan the interior of preamble statements; a plain SELECT that merely mentions an
-            // identifier called "update" must not trip the guard.
-            if (Preambles.Contains(first))
-                foreach (var kw in keywords)
-                    if (Risky.Contains(kw)) { Add(found, kw); break; }
+                // `SELECT … INTO tbl` (and `WITH … SELECT … INTO`) creates a table — a write that no
+                // leading verb reveals. Detect a top-level INTO for select-shaped statements only, so a
+                // subquery's `INTO` (PL/pgSQL, not top-level SQL) or nested selects don't false-positive.
+                if ((first.Equals("SELECT", StringComparison.OrdinalIgnoreCase) || Preambles.Contains(first))
+                    && HasTopLevelInto(span.Text))
+                    Add(risky, "SELECT INTO");
+            }
 
-            // `SELECT … INTO tbl` (and `WITH … SELECT … INTO`) creates a table — a write that no
-            // leading verb reveals. Detect a top-level INTO for select-shaped statements only, so a
-            // subquery's `INTO` (PL/pgSQL, not top-level SQL) or nested selects don't false-positive.
-            if ((first.Equals("SELECT", StringComparison.OrdinalIgnoreCase) || Preambles.Contains(first))
-                && HasTopLevelInto(span.Text))
-                Add(found, "SELECT INTO");
+            described.Add(new StatementRisk(span.Text.Trim(), first.ToUpperInvariant(), risky));
         }
-        return found;
+        return described;
     }
 
     /// <summary>True if the statement has an <c>INTO</c> keyword at paren depth 0 (the SELECT-INTO target).</summary>

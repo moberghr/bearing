@@ -26,9 +26,9 @@ public sealed class DialogService : IDialogService
     private static Window? Owner =>
         (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow;
 
-    public Task<bool> ConfirmWriteAsync(ConnectionInfo connection, IReadOnlyList<string> verbs)
+    public Task<bool> ConfirmWriteAsync(WriteConfirmation request)
         => Owner is { } window
-            ? new ConfirmWriteDialog(connection, verbs).ShowDialog<bool>(window)
+            ? new ConfirmWriteDialog(request).ShowDialog<bool>(window)
             : Task.FromResult(true);
 
     public Task<bool> ConfirmCancelRunningAsync(int runningCount, string? tabName = null)

@@ -11,8 +11,9 @@ using Xunit;
 
 namespace Bearing.App.Tests;
 
-/// <summary>PreviewChangeStatements turns a result set's pending state into kind-tagged, ordered SQL
-/// (deletes, then updates, then inserts) for the floating script panel. Pure — no database needed.</summary>
+/// <summary>PendingWriteStatements turns a result set's pending state into kind-tagged, ordered SQL
+/// (deletes, then updates, then inserts) — the statements the save confirmation lists before committing.
+/// Pure — no database needed.</summary>
 public class CommitScriptTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "bearing-commit", Guid.NewGuid().ToString("N"));
@@ -58,7 +59,7 @@ public class CommitScriptTests : IDisposable
             var added = rs.AddRow(); added[0] = "3"; added[1] = "7.50"; // insert
         });
 
-        var stmts = NewVm().Execution.PreviewChangeStatements(rs);
+        var stmts = NewVm().Execution.PendingWriteStatements(rs);
 
         Assert.Equal(new[] { "DELETE", "UPDATE", "INSERT" }, stmts.Select(s => s.Kind));
         Assert.All(stmts, s => Assert.EndsWith(";", s.Sql));
@@ -69,5 +70,5 @@ public class CommitScriptTests : IDisposable
 
     [Fact]
     public void No_pending_changes_yields_no_statements()
-        => Assert.Empty(NewVm().Execution.PreviewChangeStatements(EditableResultWith(_ => { })));
+        => Assert.Empty(NewVm().Execution.PendingWriteStatements(EditableResultWith(_ => { })));
 }

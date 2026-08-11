@@ -71,7 +71,6 @@ public partial class MainWindow : Window
 
         InstallWindowHandlers();
         WireSidebar();
-        _pendingPanel = new PendingChangesOverlay(this); // floating color-coded script panel (design §5)
         WireResultsView();
 
         // Editor buffer/caret ↔ SelectedTab sync (the documented AvaloniaEdit binding exception); this owns
@@ -152,7 +151,6 @@ public partial class MainWindow : Window
             await Vm.Execution.DiscardChangesAsync(rs);   // reverts pending changes in place
             RebuildResults(Vm.Workspace.SelectedTab);     // re-render the restored rows
         };
-        ResultsView.PreviewSql = ShowPendingScript;
     }
 
     private void HookViewModel()
