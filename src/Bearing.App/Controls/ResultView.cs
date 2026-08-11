@@ -1,26 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Primitives;
-using Avalonia.Controls.Templates;
-using Avalonia.Data;
-using Avalonia.Data.Converters;
-using Avalonia.Input;
-using Avalonia.Input.Platform;
-using Avalonia.Interactivity;
-using Avalonia.Layout;
-using Avalonia.Media;
-using Avalonia.Styling;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
-using Bearing.App.Formatting;
 using Bearing.App.Input;
-using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using Bearing.Core.Workspace;
-using Path = Avalonia.Controls.Shapes.Path;
 
 namespace Bearing.App.Controls;
 
@@ -28,19 +13,43 @@ namespace Bearing.App.Controls;
 /// Renders a query run's result sets inside the results dock (design RESULTS_GRID.md). Structure:
 /// a persistent dock header (RESULTS label + Stacked/Tabbed toggle), then the body — result sets
 /// stacked vertically (default) or as tabs. Each set has a meta row (Result · N rows · ms), a grid,
-/// an optional edit toolbar (editable sets) and a paging footer (single SELECT). All styling binds
-/// to the Bearing token brushes in Themes/Tokens.axaml. Self-contained: assign <see cref="Results"/>
-/// and it rebuilds.
+/// an optional edit toolbar (editable sets) and a quick-stats bar. Self-contained: assign
+/// <see cref="Results"/> and it rebuilds.
+/// <para>
+/// This class is the composition root for the dock and little else. The pieces it assembles own their own
+/// behavior: <see cref="GridSelectionController"/> (cell selection + keyboard cursor),
+/// <see cref="ResultCellFactory"/> (columns and cells), <see cref="InspectorPane"/> +
+/// <see cref="CellInspectorView"/> (the value inspector), <see cref="QuickStatsBar"/>,
+/// <see cref="ResultEditToolbar"/>, <see cref="ResultGridChrome"/>, <see cref="ResultRowPainter"/> and
+/// <see cref="ResultChrome"/>.
+/// </para>
 /// </summary>
 public sealed partial class ResultView : UserControl
 {
+    private readonly GridSelectionController _selection;
+    private readonly ResultCellFactory _cells;
+    private readonly InspectorPane _inspector = new();
+
+    public ResultView()
+    {
+        _selection = new GridSelectionController(this);
+        _selection.Changed += SyncStatsBars;
+        // The factory can't resolve these itself: the inspector is this view's pane, and the FK navigation
+        // callback is assigned by the shell after construction (so it must be read at click time, not now).
+        _cells = new ResultCellFactory(
+            _selection,
+            inspect: ShowInspector,
+            followForeignKey: (rs, col, row) => _ = NavigateForeignKey?.Invoke(rs, col, row));
+    }
+
     private IReadOnlyList<ResultSetViewModel>? _results;
 
     /// <summary>The result sets to display. Assigning replaces the rendered content.</summary>
     public IReadOnlyList<ResultSetViewModel>? Results
     {
         get => _results;
-        set { _results = value; _inspect = null; ClearSelection(); Rebuild(); } // a new run resets inspector + stats
+        // A new run resets the inspector + selection (and with it the stats bars).
+        set { _results = value; _inspector.Hide(); _selection.Clear(); Rebuild(); }
     }
 
     private ResultsViewMode _viewMode = ResultsViewMode.Stacked;
@@ -93,6 +102,10 @@ public sealed partial class ResultView : UserControl
     // single OnGridKey dispatch only (cleared in its finally), so it can never be read stale.
     private (DataGrid Grid, ResultSetViewModel Result)? _keyStrokeTarget;
 
+    /// <summary>The grid to hand keyboard focus to (region cycling); null when no results are shown.</summary>
+    public Control? FocusableGrid => _firstGrid;
+    private DataGrid? _firstGrid;
+
     /// <summary>The grid + result a grid command should act on: the grid the current keystroke is
     /// dispatching into, or — when a command runs without a keystroke (the command palette) — the grid that
     /// owns the current cell selection. Null when neither applies (nothing is selected and no key is in
@@ -100,44 +113,63 @@ public sealed partial class ResultView : UserControl
     private (DataGrid Grid, ResultSetViewModel Result)? GridTarget()
     {
         if (_keyStrokeTarget is { } t) return t;
-        if (_sel.Result is { } r && _gridsByResult.TryGetValue(r, out var g)) return (g, r);
+        if (_selection.Model.Result is { } r && _gridsByResult.TryGetValue(r, out var g)) return (g, r);
         return null;
     }
 
     private void RegisterGridCommands(CommandRegistry r)
     {
         r.Register(KeyCommand.Sync(CommandIds.GridCopy, "Copy", KeyScope.Grid, "Grid",
-            () => { if (GridTarget() is { } t) CopySelection(t.Result); }));
+            () => { if (GridTarget() is { } t) _selection.Copy(t.Result); }));
         r.Register(KeyCommand.Sync(CommandIds.GridSelectAll, "Select all", KeyScope.Grid, "Grid",
-            () => { if (GridTarget() is { } t) SelectAll(t.Result); }));
+            () => { if (GridTarget() is { } t) _selection.SelectAll(t.Result); }));
         r.Register(KeyCommand.Sync(CommandIds.GridDelete, "Delete rows", KeyScope.Grid, "Grid",
-            () => { if (GridTarget() is { } t) DeleteSelectedRows(t.Grid, t.Result); },
+            () => { if (GridTarget() is { } t) _selection.DeleteSelectedRows(t.Grid, t.Result); },
             canRun: () => GridTarget()?.Result.IsEditable == true));
         r.Register(KeyCommand.Sync(CommandIds.GridBeginEdit, "Edit cell", KeyScope.Grid, "Grid",
-            () => { if (GridTarget() is { } t) BeginEditActive(t.Grid, t.Result); },
+            () => { if (GridTarget() is { } t) _selection.BeginEditActive(t.Grid, t.Result); },
             canRun: () => GridTarget()?.Result.IsEditable == true));
         r.Register(KeyCommand.Sync(CommandIds.GridClearSelection, "Clear selection", KeyScope.Grid, "Grid",
-            () => { ClearSelection(); SelectionChanged(); },
-            canRun: () => _sel.Cells.Count > 0));
+            () => _selection.ClearAndNotify(),
+            canRun: () => _selection.Model.Cells.Count > 0));
         r.Register(KeyCommand.Sync(CommandIds.GridFollowFk, "Follow foreign key", KeyScope.Grid, "Grid",
-            FollowActiveFk, canRun: ActiveCellIsFk));
+            FollowActiveFk, canRun: _selection.ActiveCellIsFk));
         r.Register(KeyCommand.Sync(CommandIds.GridBack, "Back (foreign-key navigation)", KeyScope.Grid, "Grid",
             () => GoBack?.Invoke(), canRun: () => CanGoBack));
     }
 
-    /// <summary>The grid to hand keyboard focus to (region cycling); null when no results are shown.</summary>
-    public Control? FocusableGrid => _firstGrid;
-    private DataGrid? _firstGrid;
-
-    private bool ActiveCellIsFk()
-        => _sel.Result is { } r && _sel.Active is { } cell && r.ForeignKeyColumns.Contains(cell.Col);
-
     /// <summary>grid.followFk: drill into the row the active FK cell points to (same as clicking its ↗).</summary>
     private void FollowActiveFk()
     {
-        if (_sel.Result is not { } result || _sel.Active is not { } cell) return;
+        if (_selection.Model.Result is not { } result || _selection.Model.Active is not { } cell) return;
         if (!result.ForeignKeyColumns.Contains(cell.Col)) return;
         _ = NavigateForeignKey?.Invoke(result, cell.Col, cell.Row);
     }
 
+    // ---- inspector ---------------------------------------------------------------------------
+
+    private void ShowInspector(ResultSetViewModel result, int index, object?[] row)
+        => _inspector.Show(() => CellInspectorView.For(result, index, row, _inspector.Hide));
+
+    // ---- paging ------------------------------------------------------------------------------
+
+    private readonly HashSet<ResultSetViewModel> _autoLoading = new(); // paging fetch in flight (infinite scroll)
+
+    /// <summary>Fetch the next page when scrolled near the bottom (single-flight per result set).</summary>
+    private void TriggerAutoLoad(ResultSetViewModel result)
+    {
+        if (LoadMore is not { } f || !result.HasMore || !_autoLoading.Add(result)) return;
+        _ = LoadThenClear();
+        async Task LoadThenClear()
+        {
+            try { await f(result); } finally { _autoLoading.Remove(result); }
+        }
+    }
+
+    /// <summary>Re-apply pending-change row highlights (call after an in-place save clears pending state).</summary>
+    public void RefreshRowHighlights()
+        => Dispatcher.UIThread.Post(() =>
+        {
+            foreach (var (grid, result) in _editableGrids) ResultRowPainter.RefreshRowColors(grid, result);
+        });
 }

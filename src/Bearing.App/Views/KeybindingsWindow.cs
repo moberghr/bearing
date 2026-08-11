@@ -9,6 +9,7 @@ using Avalonia.Media;
 using Bearing.App.Input;
 using KeyBinding = Bearing.App.Input.KeyBinding; // disambiguate from Avalonia.Input.KeyBinding
 using Path = Avalonia.Controls.Shapes.Path;       // vector icons (the app font clips glyphs like ✕)
+using static Bearing.App.Controls.Tokens;
 
 namespace Bearing.App.Views;
 
@@ -27,7 +28,7 @@ public sealed class KeybindingsWindow : Window
     private string? _note;        // transient status message (e.g. a reassignment)
 
     private readonly StackPanel _list = new() { Spacing = 1 };
-    private readonly TextBlock _status = new() { Foreground = Brush("Text.Dim"), VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock _status = new() { Foreground = Res("Text.Dim"), VerticalAlignment = VerticalAlignment.Center };
 
     public KeybindingsWindow(Keymap current, Keymap defaults, IEnumerable<KeyCommand> commands)
     {
@@ -39,7 +40,7 @@ public sealed class KeybindingsWindow : Window
         Width = 640;
         Height = 660;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        Background = Brush("Bg.Window");
+        Background = Res("Bg.Window");
 
         var reset = new Button { Content = "Reset all to defaults" };
         reset.Click += (_, _) => { _edited.Clear(); _edited.AddRange(_defaults.Bindings); _capturing = null; _note = "Reset to defaults."; Refresh(); };
@@ -87,7 +88,7 @@ public sealed class KeybindingsWindow : Window
     private Control ScopeHeader(KeyScope scope) => new TextBlock
     {
         Text = scope.ToString().ToUpperInvariant(),
-        Foreground = Brush("Text.Faint"),
+        Foreground = Res("Text.Faint"),
         FontSize = 11,
         Margin = new Thickness(2, 12, 0, 4),
     };
@@ -126,13 +127,13 @@ public sealed class KeybindingsWindow : Window
 
     private Control BuildChip(KeyCommand cmd, Gesture g)
     {
-        var text = new TextBlock { Text = GestureParser.Format(g), VerticalAlignment = VerticalAlignment.Center, Foreground = Brush("Text.Primary") };
+        var text = new TextBlock { Text = GestureParser.Format(g), VerticalAlignment = VerticalAlignment.Center, Foreground = Res("Text.Primary") };
         var remove = new Button
         {
             Content = new Path
             {
                 Data = Geometry.Parse("M0,0 L7,7 M0,7 L7,0"), // drawn ✕ (glyph clips in the app font)
-                Stroke = Brush("Text.Dim"),
+                Stroke = Res("Text.Dim"),
                 StrokeThickness = 1.4,
                 Width = 7,
                 Height = 7,
@@ -158,8 +159,8 @@ public sealed class KeybindingsWindow : Window
             Margin = new Thickness(0, 0, 6, 0),
             Padding = new Thickness(6, 1),
             CornerRadius = new CornerRadius(4),
-            Background = Brush("Bg.Chrome"),
-            BorderBrush = Brush("Border"),
+            Background = Res("Bg.Chrome"),
+            BorderBrush = Res("Border"),
             BorderThickness = new Thickness(1),
             Child = sp,
         };
@@ -192,11 +193,10 @@ public sealed class KeybindingsWindow : Window
     private static bool IsModifierKey(Key k) => k is Key.LeftCtrl or Key.RightCtrl or Key.LeftShift
         or Key.RightShift or Key.LeftAlt or Key.RightAlt or Key.LWin or Key.RWin or Key.System;
 
-    private static IBrush Brush(string key) => (Application.Current?.FindResource(key) as IBrush) ?? Brushes.Transparent;
 
     private static IBrush Tint(string key, byte alpha)
     {
-        var c = (Brush(key) as ISolidColorBrush)?.Color ?? Colors.Transparent;
+        var c = (Res(key) as ISolidColorBrush)?.Color ?? Colors.Transparent;
         return new SolidColorBrush(Color.FromArgb(alpha, c.R, c.G, c.B));
     }
 }

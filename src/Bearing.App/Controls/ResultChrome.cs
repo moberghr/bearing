@@ -1,0 +1,293 @@
+using System;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Bearing.Core.Workspace;
+using static Bearing.App.Controls.Tokens;
+using Path = Avalonia.Controls.Shapes.Path;
+
+namespace Bearing.App.Controls;
+
+/// <summary>
+/// The small, stateless visual atoms the results dock is assembled from — badges, borderless buttons, the
+/// drawn glyph affordances, the read-only lock chip, the back bar and the dock header's Stacked/Tabbed
+/// toggle (design RESULTS_GRID). Each returns a fresh control and holds no state, so the composition code in
+/// <see cref="ResultView"/> is left with layout decisions only.
+/// <para>
+/// Every icon here is a vector <see cref="Path"/> rather than a font glyph: symbol glyphs (▸ ▾ ↗ ⤢ 🔒)
+/// render clipped in the app font.
+/// </para>
+/// </summary>
+public static class ResultChrome
+{
+    // Filled collapse triangles. Right = collapsed, down = expanded.
+    private const string ChevronRightData = "M0,0 L5,4 L0,8 Z";
+    private const string ChevronDownData = "M0,0 L8,0 L4,5 Z";
+
+    /// <summary>The collapse triangle's geometry for a given fold state (re-assigned as it toggles).</summary>
+    public static Geometry ChevronGeometry(bool collapsed)
+        => Geometry.Parse(collapsed ? ChevronRightData : ChevronDownData);
+
+    /// <summary>A collapse chevron plus its padded hit target. The caller wires the click (it owns the
+    /// fold state) and re-points <c>Glyph.Data</c> at <see cref="ChevronGeometry"/> when it flips.</summary>
+    public static (Border Hit, Path Glyph) Chevron(bool collapsed, bool visible)
+    {
+        var glyph = new Path
+        {
+            Fill = Res("Text.Faint"),
+            Data = ChevronGeometry(collapsed),
+            Stretch = Stretch.None,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var hit = new Border
+        {
+            Child = glyph,
+            Background = Brushes.Transparent,
+            Width = 16,
+            Height = 16,
+            Margin = new Thickness(0, 0, 4, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            IsVisible = visible,
+            Cursor = visible ? new Cursor(StandardCursorType.Hand) : Cursor.Default,
+        };
+        return (hit, glyph);
+    }
+
+    /// <summary>A 9px/700 tinted chip appended after a column name (teal PK, violet FK, mint jsonb) or used
+    /// as the inspector's type badge.</summary>
+    public static Control Badge(string text, string colorKey)
+        => new Border
+        {
+            Background = Tint(colorKey, 0x33),
+            CornerRadius = new CornerRadius(3),
+            Padding = new Thickness(4, 0),
+            Margin = new Thickness(5, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = new TextBlock
+            {
+                Text = text,
+                FontSize = 9,
+                FontWeight = FontWeight.Bold,
+                Foreground = Res(colorKey),
+            },
+        };
+
+    /// <summary>A borderless, dim, hand-cursor button for subtle inline actions. Each space-separated
+    /// token (icon glyph, word) is its own vertically-centered TextBlock so a tall icon glyph doesn't
+    /// enlarge the label's line-box and knock the words out of alignment with icon-less buttons.</summary>
+    public static Button SubtleButton(string content, string tip)
+    {
+        var tokens = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
+        foreach (var t in content.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            tokens.Children.Add(new TextBlock { Text = t, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+
+        var b = new Button
+        {
+            Content = tokens,
+            FontSize = 12,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(6, 2),
+            Foreground = Res("Text.Dim"),
+            Cursor = new Cursor(StandardCursorType.Hand),
+            VerticalAlignment = VerticalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(b, tip);
+        return b;
+    }
+
+    /// <summary>A borderless text/glyph button used for inspector controls (copy, close, toggles) and the
+    /// stats bar's Clear.</summary>
+    public static Button IconTextButton(string content, string tip)
+    {
+        var b = new Button
+        {
+            Content = content,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(6, 2),
+            Foreground = Res("Text.Dim"),
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        ToolTip.SetTip(b, tip);
+        return b;
+    }
+
+    /// <summary>A small drawn "⤢" inspect icon that opens the cell inspector.</summary>
+    public static Control InspectAffordance()
+        => GlyphButton("M1,6 V1 H6 M1,1 L6,6 M13,8 V13 H8 M13,13 L8,8", Res("Syntax.Table"),
+            width: 18, height: 16, margin: new Thickness(2, 0, 2, 0), tip: "Inspect value");
+
+    /// <summary>A drawn "↗" jump icon that navigates to a foreign key's referenced row.</summary>
+    public static Control JumpAffordance()
+        => GlyphButton("M1,9 L9,1 M4,1 L9,1 L9,6", LinkBrush,
+            width: 16, height: 16, margin: new Thickness(2, 0, 4, 0), tip: "Open referenced row");
+
+    /// <summary>A stroked vector glyph wrapped in a transparent Border so the whole box is the hit target.</summary>
+    private static Border GlyphButton(string data, IBrush stroke, double width, double height, Thickness margin, string tip)
+    {
+        var glyph = new Path
+        {
+            Data = Geometry.Parse(data),
+            Stroke = stroke,
+            StrokeThickness = 1.3,
+            StrokeLineCap = PenLineCap.Round,
+            StrokeJoin = PenLineJoin.Round,
+            Stretch = Stretch.None,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var box = new Border
+        {
+            Child = glyph,
+            Background = Brushes.Transparent,
+            Width = width,
+            Height = height,
+            Margin = margin,
+            VerticalAlignment = VerticalAlignment.Center,
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        ToolTip.SetTip(box, tip);
+        return box;
+    }
+
+    /// <summary>An amber padlock chip for a locked (read-only) result; the reason lives in the tooltip
+    /// (design RESULTS_GRID §8).</summary>
+    public static Control LockChip(string reason)
+    {
+        var padlock = new Path
+        {
+            Data = Geometry.Parse("M2,5 h7 v6 h-7 z M3.5,5 v-1.5 a2,2 0 0 1 4,0 v1.5"),
+            Stroke = Res("Accent.Brand"),
+            StrokeThickness = 1.2,
+            StrokeLineCap = PenLineCap.Round,
+            StrokeJoin = PenLineJoin.Round,
+            Stretch = Stretch.None,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var chip = new Border
+        {
+            Background = Tint("Accent.Brand", 0x1E),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(6, 3),
+            VerticalAlignment = VerticalAlignment.Center,
+            Cursor = new Cursor(StandardCursorType.Help),
+            Child = padlock,
+        };
+        ToolTip.SetTip(chip, $"Read-only — {reason}");
+        return chip;
+    }
+
+    /// <summary>A slim "‹ Back" bar that returns to the pre-navigation result (foreign-key history).</summary>
+    public static Control BackBar(Action onBack)
+    {
+        var arrow = new Path
+        {
+            Data = Geometry.Parse("M5,1 L1,5 L5,9 M1,5 L10,5"),
+            Stroke = LinkBrush,
+            StrokeThickness = 1.4,
+            StrokeLineCap = PenLineCap.Round,
+            StrokeJoin = PenLineJoin.Round,
+            Stretch = Stretch.None,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var inner = new StackPanel { Orientation = Orientation.Horizontal };
+        inner.Children.Add(arrow);
+        inner.Children.Add(new TextBlock { Text = "Back", Foreground = LinkBrush, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
+
+        var back = new Button
+        {
+            Content = inner,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(6, 2),
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        back.Click += (_, _) => onBack();
+
+        return new Border
+        {
+            Background = Res("Bg.Window"),
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            BorderBrush = SeparatorBrush,
+            Padding = new Thickness(6, 2),
+            Child = back,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+    }
+
+    /// <summary>The persistent dock header: a RESULTS label plus the segmented Stacked/Tabbed toggle.
+    /// <paramref name="onPick"/> fires only for a mode other than <paramref name="active"/>.</summary>
+    public static Control DockHeader(ResultsViewMode active, Action<ResultsViewMode> onPick)
+    {
+        var label = new TextBlock
+        {
+            Text = "RESULTS",
+            FontSize = 11,
+            FontWeight = FontWeight.Bold,
+            Foreground = Res("Text.Dim"),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var toggle = ViewToggle(active, onPick);
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        Grid.SetColumn(label, 0);
+        Grid.SetColumn(toggle, 1);
+        grid.Children.Add(label);
+        grid.Children.Add(toggle);
+
+        return new Border
+        {
+            Background = Res("Bg.Window"),
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            BorderBrush = SeparatorBrush,
+            Padding = new Thickness(10, 5),
+            Child = grid,
+        };
+    }
+
+    /// <summary>Segmented Stacked/Tabbed control: the active segment is filled with the tile highlight.</summary>
+    private static Control ViewToggle(ResultsViewMode active, Action<ResultsViewMode> onPick)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(Segment("▤ Stacked", ResultsViewMode.Stacked, active, onPick));
+        row.Children.Add(Segment("▭ Tabbed", ResultsViewMode.Tabbed, active, onPick));
+
+        return new Border
+        {
+            Background = Res("Bg.Window"),
+            BorderThickness = new Thickness(1),
+            BorderBrush = SeparatorBrush,
+            CornerRadius = new CornerRadius(7),
+            Padding = new Thickness(2),
+            Child = row,
+        };
+    }
+
+    private static Control Segment(string text, ResultsViewMode mode, ResultsViewMode active, Action<ResultsViewMode> onPick)
+    {
+        var isActive = active == mode;
+        var tb = new TextBlock
+        {
+            Text = text,
+            FontSize = 11,
+            FontWeight = isActive ? FontWeight.SemiBold : FontWeight.Normal,
+            Foreground = isActive ? Res("Text.Primary") : Res("Text.Dim"),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var seg = new Border
+        {
+            Child = tb,
+            Background = isActive ? Res("Bg.TileActive") : Brushes.Transparent,
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(9, 2),
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        seg.PointerPressed += (_, _) => { if (!isActive) onPick(mode); };
+        return seg;
+    }
+}

@@ -1,106 +1,66 @@
-using System;
 using System.Collections.Generic;
-using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Primitives;
-using Avalonia.Controls.Templates;
 using Avalonia.Data;
-using Avalonia.Data.Converters;
-using Avalonia.Input;
-using Avalonia.Input.Platform;
-using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Avalonia.Styling;
-using Avalonia.Threading;
-using Avalonia.VisualTree;
-using Bearing.App.Formatting;
-using Bearing.App.Input;
 using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using Bearing.Core.Workspace;
-using Path = Avalonia.Controls.Shapes.Path;
+using static Bearing.App.Controls.Tokens;
+using Avalonia.Controls.Primitives;
 
 namespace Bearing.App.Controls;
 
 public sealed partial class ResultView
 {
-    // ---- Dock header: RESULTS label + Stacked/Tabbed toggle (always shown when there are results) ----
+    // Editable grids currently rendered (grid + its result) — used to re-tint rows after an in-place save.
+    private readonly List<(DataGrid Grid, ResultSetViewModel Result)> _editableGrids = new();
+    // Every rendered result set → its grid, so a grid command invoked without a keystroke (the command
+    // palette) can find the grid owning the current selection. Rebuilt on every render.
+    private readonly Dictionary<ResultSetViewModel, DataGrid> _gridsByResult = new();
+    // One stats bar per rendered result set, re-synced whenever the selection changes.
+    private readonly List<QuickStatsBar> _statsBars = new();
+    // Result sets the user has collapsed in stacked view (keyed by VM reference; new runs reset it).
+    private readonly HashSet<ResultSetViewModel> _collapsed = new();
 
-    private Control BuildDockHeader()
+    private void SyncStatsBars()
     {
-        var label = new TextBlock
-        {
-            Text = "RESULTS",
-            FontSize = 11,
-            FontWeight = FontWeight.Bold,
-            Foreground = Res("Text.Dim"),
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-
-        var toggle = BuildViewToggle();
-
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
-        Grid.SetColumn(label, 0);
-        Grid.SetColumn(toggle, 1);
-        grid.Children.Add(label);
-        grid.Children.Add(toggle);
-
-        return new Border
-        {
-            Background = Res("Bg.Window"),
-            BorderThickness = new Thickness(0, 0, 0, 1),
-            BorderBrush = Separator,
-            Padding = new Thickness(10, 5),
-            Child = grid,
-        };
+        foreach (var bar in _statsBars) bar.Sync();
     }
 
-    /// <summary>Segmented Stacked/Tabbed control: active segment filled teal with dark text.</summary>
-    private Control BuildViewToggle()
+    /// <summary>Re-render the whole dock: back bar, header, body, and the inspector pane beside them. Called
+    /// on a new result assignment and on a view-mode flip — never merely to open/close the inspector or
+    /// re-tint rows, both of which would lose the grids' scroll position.</summary>
+    private void Rebuild()
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal };
-        row.Children.Add(Segment("▤ Stacked", ResultsViewMode.Stacked));
-        row.Children.Add(Segment("▭ Tabbed", ResultsViewMode.Tabbed));
+        _editableGrids.Clear();
+        _gridsByResult.Clear();
+        _statsBars.Clear();
+        _firstGrid = null;                    // re-captured as grids are built below (region-focus target)
+        _selection.DropRestyleListeners();    // old cells are being discarded; they re-subscribe as they rebuild
 
-        return new Border
-        {
-            Background = Res("Bg.Window"),
-            BorderThickness = new Thickness(1),
-            BorderBrush = Separator,
-            CornerRadius = new CornerRadius(7),
-            Padding = new Thickness(2),
-            Child = row,
-        };
-    }
+        var results = _results;
+        if (results is null || results.Count == 0) { Content = null; return; }
 
-    private Control Segment(string text, ResultsViewMode mode)
-    {
-        var active = ViewMode == mode;
-        var tb = new TextBlock
+        var root = new DockPanel { LastChildFill = true };
+        if (CanGoBack)
         {
-            Text = text,
-            FontSize = 11,
-            FontWeight = active ? FontWeight.SemiBold : FontWeight.Normal,
-            Foreground = active ? Res("Text.Primary") : Res("Text.Dim"),
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        var seg = new Border
+            var back = ResultChrome.BackBar(() => GoBack?.Invoke());
+            DockPanel.SetDock(back, Dock.Top);
+            root.Children.Add(back);
+        }
+
+        var header = ResultChrome.DockHeader(ViewMode, mode =>
         {
-            Child = tb,
-            Background = active ? Res("Bg.TileActive") : Brushes.Transparent,
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(9, 2),
-            Cursor = new Cursor(StandardCursorType.Hand),
-        };
-        seg.PointerPressed += (_, _) =>
-        {
-            if (ViewMode == mode) return;
             ViewMode = mode;               // triggers Rebuild (re-renders the toggle's active state)
             ViewModeChanged?.Invoke(mode); // persist on the VM
-        };
-        return seg;
+        });
+        DockPanel.SetDock(header, Dock.Top);
+        root.Children.Add(header);
+        root.Children.Add(BuildBody(results));
+
+        Content = _inspector.Wrap(root);
     }
 
     // ---- Body: single set, stacked, or tabbed ------------------------------------------------
@@ -116,7 +76,7 @@ public sealed partial class ResultView
             for (var i = 0; i < results.Count; i++)
                 tabs.Items.Add(new TabItem
                 {
-                    Header = TabHeader(i, results[i]),
+                    Header = ResultMetaText.TabHeader(i, results[i]),
                     Content = BuildSetContainer(results[i], null, collapsible: false, capHeight: false),
                 });
             tabs.SelectedIndex = 0;
@@ -142,62 +102,28 @@ public sealed partial class ResultView
         if (capHeight)
             body = new Border { Child = body, MaxHeight = 360 };
 
-        // Drawn triangle (▸/▾ glyphs render clipped in the app font — same reason the FK/back/inspect
-        // icons are vector Paths). Right = collapsed, down = expanded; wrapped in a padded hit target.
-        var chevronPath = new Path
-        {
-            Fill = Res("Text.Faint"),
-            Data = Geometry.Parse(_collapsed.Contains(result) ? ChevronRight : ChevronDown),
-            Stretch = Stretch.None,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        var chevron = new Border
-        {
-            Child = chevronPath,
-            Background = Brushes.Transparent,
-            Width = 16,
-            Height = 16,
-            Margin = new Thickness(0, 0, 4, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            IsVisible = collapsible,
-            Cursor = collapsible ? new Cursor(StandardCursorType.Hand) : Cursor.Default,
-        };
+        var (chevron, chevronGlyph) = ResultChrome.Chevron(_collapsed.Contains(result), collapsible);
 
         var left = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         left.Children.Add(chevron);
         if (result.HasGrid)
-        {
-            // "Result · " (static) + live "N rows · ms" bound to MetaDetail so the header count tracks
-            // infinite-scroll loads / count-on-demand, matching the footer and status bar.
-            left.Children.Add(new TextBlock { Text = $"{label ?? "Result"} · ", Foreground = Res("Text.Dim"), FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
-            var detail = new TextBlock { Foreground = Res("Text.Dim"), FontSize = 12, VerticalAlignment = VerticalAlignment.Center, DataContext = result };
-            detail.Bind(TextBlock.TextProperty, new Binding(nameof(ResultSetViewModel.MetaDetail)));
-            left.Children.Add(detail);
-
-            // Count-on-demand (was the footer's ∑ Count): shown only while the total is unknown.
-            if (result.IsPageable)
-            {
-                var countBtn = SubtleButton("∑ count", "Count all rows");
-                countBtn.Margin = new Thickness(6, 0, 0, 0);
-                countBtn.DataContext = result;
-                countBtn.Bind(IsVisibleProperty, new Binding(nameof(ResultSetViewModel.CanCount)));
-                countBtn.Click += async (_, _) => { if (CountTotal is { } f) await f(result); };
-                left.Children.Add(countBtn);
-            }
-        }
+            AddLiveMeta(left, result, label);
         else
-        {
-            left.Children.Add(new TextBlock { Text = MetaText(label, result), Foreground = Res("Text.Dim"), FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
-        }
+            left.Children.Add(new TextBlock
+            {
+                Text = ResultMetaText.Meta(label, result),
+                Foreground = Res("Text.Dim"),
+                FontSize = 12,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
 
         // Right of the meta row: subtle edit controls for an editable result, or a read-only lock chip
         // + reason for a locked one (design RESULTS_GRID §8). Undetermined results show neither.
         var metaRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         Grid.SetColumn(left, 0);
         metaRow.Children.Add(left);
-        Control? right = result.IsEditable && grid is not null ? EditControls(result, grid)
-            : result.LockReason is { } lockReason ? LockChip(lockReason)
+        Control? right = result.IsEditable && grid is not null ? BuildEditToolbar(result, grid)
+            : result.LockReason is { } lockReason ? ResultChrome.LockChip(lockReason)
             : null;
         if (right is not null)
         {
@@ -213,14 +139,14 @@ public sealed partial class ResultView
                 var collapsed = !_collapsed.Remove(result);
                 if (collapsed) _collapsed.Add(result);
                 body.IsVisible = !collapsed;
-                chevronPath.Data = Geometry.Parse(collapsed ? ChevronRight : ChevronDown);
+                chevronGlyph.Data = ResultChrome.ChevronGeometry(collapsed);
             };
 
         var bar = new Border
         {
             Background = Res("Bg.Chrome"),
             BorderThickness = new Thickness(0, 0, 0, 1),
-            BorderBrush = Separator,
+            BorderBrush = SeparatorBrush,
             Padding = new Thickness(10, 5),
             Child = metaRow,
         };
@@ -232,91 +158,41 @@ public sealed partial class ResultView
         return dock;
     }
 
-    /// <summary>An amber "🔒 Read-only — reason" chip for a locked result (drawn padlock, not a glyph).</summary>
-    private static Control LockChip(string reason)
+    /// <summary>"Result · " (static) + a live "N rows · ms" bound to <see cref="ResultSetViewModel.MetaDetail"/>
+    /// so the header count tracks infinite-scroll loads / count-on-demand, matching the status bar. A pageable
+    /// set whose total is still unknown also gets a ∑ count button.</summary>
+    private void AddLiveMeta(StackPanel left, ResultSetViewModel result, string? label)
     {
-        var amber = Res("Accent.Brand");
-        // A small padlock: rounded body + shackle arc (vector, to avoid emoji/glyph rendering issues).
-        var body = new Path
+        left.Children.Add(new TextBlock
         {
-            Data = Geometry.Parse("M2,5 h7 v6 h-7 z M3.5,5 v-1.5 a2,2 0 0 1 4,0 v1.5"),
-            Stroke = amber,
-            StrokeThickness = 1.2,
-            StrokeLineCap = PenLineCap.Round,
-            StrokeJoin = PenLineJoin.Round,
-            Stretch = Stretch.None,
+            Text = $"{label ?? "Result"} · ",
+            Foreground = Res("Text.Dim"),
+            FontSize = 12,
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 5, 0),
-        };
-        body.Margin = new Thickness(0); // icon-only chip; reason lives in the tooltip
-        var chip = new Border
+        });
+        var detail = new TextBlock
         {
-            Background = Tint("Accent.Brand", 0x1E),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(6, 3),
+            Foreground = Res("Text.Dim"),
+            FontSize = 12,
             VerticalAlignment = VerticalAlignment.Center,
-            Cursor = new Cursor(StandardCursorType.Help),
-            Child = body,
+            DataContext = result,
         };
-        ToolTip.SetTip(chip, $"Read-only — {reason}");
-        return chip;
+        detail.Bind(TextBlock.TextProperty, new Binding(nameof(ResultSetViewModel.MetaDetail)));
+        left.Children.Add(detail);
+
+        if (!result.IsPageable) return;
+        var countBtn = ResultChrome.SubtleButton("∑ count", "Count all rows");
+        countBtn.Margin = new Thickness(6, 0, 0, 0);
+        countBtn.DataContext = result;
+        countBtn.Bind(Visual.IsVisibleProperty, new Binding(nameof(ResultSetViewModel.CanCount)));
+        countBtn.Click += async (_, _) => { if (CountTotal is { } f) await f(result); };
+        left.Children.Add(countBtn);
     }
 
-    /// <summary>Meta-row text: "Result · 10 rows · 88 ms", or the message/error for non-grid results.</summary>
-    private static string MetaText(string? label, ResultSetViewModel result)
-    {
-        var name = label ?? "Result";
-        if (!result.Success) return $"{name} · error: {result.Error?.Message}";
-        if (result.Columns.Count == 0) return $"{name} · {result.Message ?? "Statement executed."}";
-        var ms = (long)Math.Round(result.Duration.TotalMilliseconds);
-        var rows = result.RowCount == 1 ? "1 row" : $"{result.RowCount} rows";
-        return $"{name} · {rows} · {ms} ms";
-    }
-
-    /// <summary>Prepend a slim "Back" bar (returns to the pre-navigation result) above the body.</summary>
-    private Control BuildBackBar()
-    {
-        var arrow = new Path
-        {
-            Data = Geometry.Parse("M5,1 L1,5 L5,9 M1,5 L10,5"),
-            Stroke = LinkBrush,
-            StrokeThickness = 1.4,
-            StrokeLineCap = PenLineCap.Round,
-            StrokeJoin = PenLineJoin.Round,
-            Stretch = Stretch.None,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        var caption = new TextBlock { Text = "Back", Foreground = LinkBrush, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-        var inner = new StackPanel { Orientation = Orientation.Horizontal };
-        inner.Children.Add(arrow);
-        inner.Children.Add(caption);
-
-        var back = new Button
-        {
-            Content = inner,
-            Background = Brushes.Transparent,
-            BorderThickness = new Thickness(0),
-            Padding = new Thickness(6, 2),
-            Cursor = new Cursor(StandardCursorType.Hand),
-        };
-        back.Click += (_, _) => GoBack?.Invoke();
-
-        return new Border
-        {
-            Background = Res("Bg.Window"),
-            BorderThickness = new Thickness(0, 0, 0, 1),
-            BorderBrush = Separator,
-            Padding = new Thickness(6, 2),
-            Child = back,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-        };
-    }
-
-    private static string TabHeader(int index, ResultSetViewModel result)
-    {
-        if (!result.Success) return $"Result {index + 1} · error";
-        if (result.Columns.Count == 0) return $"Result {index + 1} · {result.Message}";
-        return $"Result {index + 1} ({result.RowCount})";
-    }
-
+    private Control BuildEditToolbar(ResultSetViewModel result, DataGrid grid)
+        => ResultEditToolbar.Build(
+            result, grid,
+            onPreviewSql: () => PreviewSql?.Invoke(result),
+            onSave: async () => { if (SaveChanges is { } f) await f(result); },
+            onDiscard: async () => { if (DiscardChanges is { } f) await f(result); });
 }

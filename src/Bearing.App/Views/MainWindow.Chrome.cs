@@ -1,28 +1,9 @@
-using System.ComponentModel;
-using System.Linq;
-using System.Threading;
+using System;
 using System.Threading.Tasks;
-using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Primitives;
-using Avalonia.Controls.Templates;
-using Avalonia.Data;
-using Avalonia.Layout;
 using Avalonia.Input;
-using Avalonia.Input.Platform;
-using Avalonia.Media;
 using Avalonia.Interactivity;
-using Avalonia.Platform.Storage;
-using Avalonia.Threading;
-using Avalonia.VisualTree;
-using AvaloniaEdit.TextMate;
-using Bearing.App.Completion;
-using Bearing.App.Editing;
-using Bearing.App.Input;
 using Bearing.App.ViewModels;
-using Bearing.Core.Data;
-using Bearing.Sql;
-using TextMateSharp.Grammars;
 
 namespace Bearing.App.Views;
 
@@ -121,4 +102,27 @@ public partial class MainWindow
         if (DatabasePicker.SelectedItem is string db) Vm.Connections.SelectedTabDatabase = db;
     }
 
+    // ---- menu & rail click handlers ----
+
+    private async void OnSaveAsClick(object? sender, RoutedEventArgs e) => await SaveAsAsync();
+    private async void OnOpenClick(object? sender, RoutedEventArgs e) => await OpenAsync();
+    private async void OnSaveClick(object? sender, RoutedEventArgs e) => await SaveAsync();
+    private async void OnCloseCurrentTabClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm?.Workspace.SelectedTab is { } tab) await CloseTabAsync(tab);
+    }
+    private async void OnMenuRenameTabClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm?.Workspace.SelectedTab is { } tab) await RenameTabAsync(tab);
+    }
+    private void OnMenuSchemaClick(object? sender, RoutedEventArgs e) { if (Vm is not null) Vm.ActivePanel = SidePanel.Schema; }
+    private void OnMenuScriptsClick(object? sender, RoutedEventArgs e) { if (Vm is not null) Vm.ActivePanel = SidePanel.Scripts; }
+    private void OnAboutClick(object? sender, RoutedEventArgs e) => AboutDialog.Open(this);
+
+    // Rail tile clicked: activate that panel, or collapse the pane if its tile is re-clicked while open.
+    private void OnRailTileClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is not null && (sender as Control)?.Tag is string tag && Enum.TryParse<SidePanel>(tag, out var panel))
+            Vm.ActivateOrTogglePanel(panel);
+    }
 }

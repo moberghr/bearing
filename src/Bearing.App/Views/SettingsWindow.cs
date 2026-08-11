@@ -8,6 +8,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Bearing.App.Settings;
 using Bearing.Core.Workspace;
+using static Bearing.App.Controls.Tokens;
 
 namespace Bearing.App.Views;
 
@@ -35,7 +36,7 @@ public sealed class SettingsWindow : Window
         Margin = new Thickness(0, 0, 0, 10),
     };
     private readonly ListBox _categories = new() { Width = 150, Background = Brushes.Transparent };
-    private readonly TextBlock _status = new() { Foreground = Brush("Text.Faint"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock _status = new() { Foreground = Res("Text.Faint"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
 
     /// <summary>Set while pushing stored values into controls, so the controls' own change events don't
     /// write straight back and fight the user.</summary>
@@ -51,7 +52,7 @@ public sealed class SettingsWindow : Window
         Width = 780;
         Height = 620;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        Background = Brush("Bg.Window");
+        Background = Res("Bg.Window");
 
         _categories.ItemsSource = new[] { new SettingsCategory(AllCategories, "All") }
             .Concat(SettingsCatalog.Categories).ToList();
@@ -96,7 +97,7 @@ public sealed class SettingsWindow : Window
         var path = new TextBlock
         {
             Text = _settings.Location,
-            Foreground = Brush("Text.Faint"),
+            Foreground = Res("Text.Faint"),
             FontSize = 11,
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
@@ -147,7 +148,7 @@ public sealed class SettingsWindow : Window
             _list.Children.Add(new TextBlock
             {
                 Text = "No settings match that search.",
-                Foreground = Brush("Text.Dim"),
+                Foreground = Res("Text.Dim"),
                 Margin = new Thickness(2, 18, 0, 0),
             });
             return;
@@ -174,7 +175,7 @@ public sealed class SettingsWindow : Window
             new TextBlock
             {
                 Text = category.Title.ToUpperInvariant(),
-                Foreground = Brush("Text.Faint"),
+                Foreground = Res("Text.Faint"),
                 FontSize = 11,
             },
         },
@@ -183,12 +184,12 @@ public sealed class SettingsWindow : Window
     private Row BuildRow(SettingDescriptor descriptor)
     {
         var text = new StackPanel { Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
-        text.Children.Add(new TextBlock { Text = descriptor.Title, Foreground = Brush("Text.Primary"), TextWrapping = TextWrapping.Wrap });
+        text.Children.Add(new TextBlock { Text = descriptor.Title, Foreground = Res("Text.Primary"), TextWrapping = TextWrapping.Wrap });
         if (descriptor.Description.Length > 0)
             text.Children.Add(new TextBlock
             {
                 Text = descriptor.Description,
-                Foreground = Brush("Text.Dim"),
+                Foreground = Res("Text.Dim"),
                 FontSize = 11,
                 TextWrapping = TextWrapping.Wrap,
             });
@@ -196,7 +197,7 @@ public sealed class SettingsWindow : Window
             text.Children.Add(new TextBlock
             {
                 Text = note,
-                Foreground = Brush("Text.Faint"),
+                Foreground = Res("Text.Faint"),
                 FontSize = 11,
                 FontStyle = FontStyle.Italic,
                 TextWrapping = TextWrapping.Wrap,
@@ -206,7 +207,7 @@ public sealed class SettingsWindow : Window
 
         var reset = new Button
         {
-            Content = new TextBlock { Text = "Reset", FontSize = 11, Foreground = Brush("Text.Dim") },
+            Content = new TextBlock { Text = "Reset", FontSize = 11, Foreground = Res("Text.Dim") },
             Background = Brushes.Transparent,
             Padding = new Thickness(6, 2),
             VerticalAlignment = VerticalAlignment.Center,
@@ -270,7 +271,7 @@ public sealed class SettingsWindow : Window
                         panel.Children.Add(new TextBlock
                         {
                             Text = unit,
-                            Foreground = Brush("Text.Dim"),
+                            Foreground = Res("Text.Dim"),
                             FontSize = 11,
                             VerticalAlignment = VerticalAlignment.Center,
                         });
@@ -291,7 +292,7 @@ public sealed class SettingsWindow : Window
                 }
 
             default:
-                return (new TextBlock { Text = "(unsupported setting kind)", Foreground = Brush("Warn.Amber") }, () => { });
+                return (new TextBlock { Text = "(unsupported setting kind)", Foreground = Res("Warn.Amber") }, () => { });
         }
     }
 
@@ -320,5 +321,4 @@ public sealed class SettingsWindow : Window
 
     private sealed record Row(SettingDescriptor Descriptor, Control Visual, Action Push, Button Reset);
 
-    private static IBrush Brush(string key) => (Application.Current?.FindResource(key) as IBrush) ?? Brushes.Transparent;
 }

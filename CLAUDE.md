@@ -41,7 +41,7 @@ Highest-impact rules — most damaging when broken. Full standards live in `.cla
 - **§0.1 — IMPORTANT: NEVER add a package or project reference to `Bearing.Core`.** It is dependency-free abstractions (interfaces + records) only; every other project depends on it, not the reverse. (§2.1)
 - **§0.2 — IMPORTANT: NEVER claim UI or visual behavior is verified.** Wayland blocks headless GUI testing here — `dotnet build` + `dotnet test` is the ceiling for automated evidence; visual changes need the user's eyeball QA. (§4.3)
 - **§0.3 — NEVER log passwords or weaken the secret-store / `WriteGuard` posture without explicit approval.** (§1.1)
-- **§0.4 — WHEN adding UI code, DO NOT grow the `MainWindow.*.cs` or `ResultView.*.cs` partials.** They are split across files but each is still one oversized class (~1,300 and ~1,900 lines total) — extract into a View/Control, a coordinator, or a pure helper under `Results/` or `Input/`. (`ShellViewModel` has since been decomposed into child VMs and is no longer a god object.) (§9.1)
+- **§0.4 — WHEN adding UI code, DO NOT re-grow `MainWindow.*.cs` or `ResultView.*.cs`.** All three god objects were decomposed (2026-08-10): `ResultView` 1,902 → ~500 and `MainWindow` 1,167 → ~820, joining `ShellViewModel`. Both are now composition roots — extract new behavior into a View/Control, a coordinator, or a pure helper under `Results/` or `Input/` rather than appending. (§9.1)
 - **§0.5 — WHEN code touches a DB, connection, or SQL, DO NOT place it in a View or code-behind.** Logic belongs in a ViewModel or the `Core`/`Sql`/`Data` layers. (§2.2)
 
 ---

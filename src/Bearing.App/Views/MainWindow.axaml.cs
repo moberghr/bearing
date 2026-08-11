@@ -1,29 +1,18 @@
+using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
-using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Primitives;
-using Avalonia.Controls.Templates;
-using Avalonia.Data;
-using Avalonia.Layout;
 using Avalonia.Input;
-using Avalonia.Input.Platform;
-using Avalonia.Media;
 using Avalonia.Interactivity;
-using Avalonia.Platform.Storage;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
-using AvaloniaEdit.TextMate;
 using Bearing.App.Completion;
 using Bearing.App.Controls;
 using Bearing.App.Editing;
 using Bearing.App.Input;
 using Bearing.App.ViewModels;
-using Bearing.Core.Data;
 using Bearing.Sql;
-using TextMateSharp.Grammars;
 
 namespace Bearing.App.Views;
 
@@ -31,16 +20,16 @@ public partial class MainWindow : Window
 {
     private readonly CompletionController _completion;
     private readonly SqlFoldingController _folding;
-    private readonly StatementMargin _statementHighlight = new();
+    private readonly EditorTextCommands _text;              // statement-aware editor ops + Run's SQL
+    private readonly EditorTextBehavior _editorText;        // editor <-> SelectedTab buffer/caret sync
     private readonly CommandRegistry _commands = new();
     private readonly KeyDispatcher _dispatcher;
-    private readonly System.Collections.Generic.IReadOnlyList<string> _keymapWarnings;
+    private readonly CommandPaletteHost _palette;           // command palette + quick-pick overlays
+    private readonly TabNavigator _tabs;                    // visual / MRU / go-to-N tab switching
+    private readonly ResultsPaneController _resultsPane;    // editor / results split visibility
+    private readonly IReadOnlyList<string> _keymapWarnings;
     private bool _keymapWarningsShown;
-    private readonly MruList<EditorTabViewModel> _tabMru = new();
-    private bool _mruCycling;   // true while Ctrl is held during a Ctrl+Tab cycle
-    private int _mruIndex;
-    private System.Collections.Generic.HashSet<string> _navCommands = new();
-    private readonly EditorTextBehavior _editorText;   // editor <-> SelectedTab buffer/caret sync
+    private HashSet<string> _navCommands = new();
     private readonly Bearing.App.Services.IDialogService _dialogs = new DialogService(); // owns dialog/picker construction
     private bool _suppressProjectChange;   // guards the project combo during programmatic updates
     private CompletionToastHost? _toasts;  // built once the window is open (its manager needs a top level)
@@ -51,13 +40,22 @@ public partial class MainWindow : Window
         App.LogStartup("MainWindow ctor start");
         InitializeComponent();
         App.LogStartup("XAML loaded");
-        ApplyEditorChrome(Editor);
-        InstallSqlHighlighting();
+        // Cheap chrome first so first paint is already dark; the expensive TextMate registry follows.
+        EditorChrome.Apply(Editor);
+        EditorChrome.InstallSqlHighlighting(Editor);
         App.LogStartup("TextMate installed");
 
         _completion = new CompletionController(Editor, new CompletionEngine(), () => Vm?.Execution.SnapshotForSelectedTab());
         _folding = new SqlFoldingController(Editor); // installs the fold margin (left of the text)
-        Editor.TextArea.LeftMargins.Add(_statementHighlight); // its own column, right of the line numbers
+        _text = new EditorTextCommands(Editor);      // installs the statement-highlight margin
+
+        // These read the keymap lazily: the shortcuts editor can replace it at runtime, and they are built
+        // before the dispatcher exists (commands must be registered first).
+        // The null-forgiving `!` is the ordering, not a real nullable: both lambdas run long after the
+        // ctor has assigned _dispatcher, but they are created before it.
+        _tabs = new TabNavigator(() => _dispatcher!.Keymap);
+        _palette = new CommandPaletteHost(this, _commands, () => _dispatcher!.Keymap);
+        _resultsPane = new ResultsPaneController(WorkspaceGrid, ResultsSplitter, ResultsView);
 
         // One keybinding pipeline for the whole app: the registry holds command delegates, the keymap
         // maps gestures to command ids, the dispatcher resolves keystrokes per scope. Global + Editor
@@ -71,34 +69,64 @@ public partial class MainWindow : Window
         ResultsView.CommandDispatcher = _dispatcher;
         SyncMenuGestures();
 
+        InstallWindowHandlers();
+        WireSidebar();
+        _pendingPanel = new PendingChangesOverlay(this); // floating color-coded script panel (design §5)
+        WireResultsView();
+
+        // Editor buffer/caret ↔ SelectedTab sync (the documented AvaloniaEdit binding exception); this owns
+        // the load guard + write-back. The highlight/folding hooks below observe the same editor events.
+        _editorText = new EditorTextBehavior(Editor);
+        Editor.TextChanged += (_, _) => { _text.UpdateStatementHighlight(); _folding.Refresh(); };
+        Editor.TextArea.Caret.PositionChanged += (_, _) => _text.UpdateStatementHighlight();
+        Editor.TextArea.SelectionChanged += (_, _) => _text.UpdateStatementHighlight();
+
+        DataContextChanged += (_, _) => HookViewModel();
+        Loaded += (_, _) => HookViewModel();
+
+        _resultsPane.SetVisible(false); // no results yet → editor fills; the pane appears on the first run
+    }
+
+    private ShellViewModel? Vm => DataContext as ShellViewModel;
+
+    /// <summary>Window-level key/pointer handlers that must pre-empt the controls beneath them.</summary>
+    private void InstallWindowHandlers()
+    {
         // Claim navigation keys (tab switching, focus, pickers) in the tunnel phase so the framework's
         // tab traversal and the editor/grid don't consume them first.
-        AddHandler(KeyDownEvent, OnWindowNavKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        AddHandler(KeyDownEvent, OnWindowNavKey, RoutingStrategies.Tunnel);
 
         // Escape must cancel a running query no matter where focus sits (editor, results grid, Run button).
         // The grid's own Escape (clear selection) and AvaloniaEdit both sit below the window in the tunnel,
         // so claim it here first — see OnWindowEscapeCancel for the more-modal exceptions.
-        AddHandler(KeyDownEvent, OnWindowEscapeCancel, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        AddHandler(KeyDownEvent, OnWindowEscapeCancel, RoutingStrategies.Tunnel);
 
         // The Alt-toggled menu behaves like a real menu bar: auto-hide on a click outside it or once a
         // (leaf) menu item is invoked.
-        AddHandler(PointerPressedEvent, OnWindowPointerPressed, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        AddHandler(PointerPressedEvent, OnWindowPointerPressed, RoutingStrategies.Tunnel);
         MainMenu.AddHandler(MenuItem.ClickEvent, OnMenuItemInvoked);
 
         // Editor-editing shortcuts must pre-empt AvaloniaEdit, which consumes Enter/'/'/brackets on
         // its own KeyDown — so handle them during the tunnel phase, before the editor sees them.
-        Editor.AddHandler(KeyDownEvent, OnEditorKeyDown, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        Editor.AddHandler(KeyDownEvent, OnEditorKeyDown, RoutingStrategies.Tunnel);
+    }
 
-        // The sidebar (Connections/Scripts/History) is its own control; it owns its dialogs and tree
-        // interactions and hands back the three actions the shell still owns.
+    /// <summary>The sidebar (Connections/Scripts/History) is its own control; it owns its dialogs and tree
+    /// interactions and hands back the three actions the shell still owns.</summary>
+    private void WireSidebar()
+    {
         Sidebar.AddConnectionRequested = () => _ = AddConnectionAsync();
         Sidebar.EditorSyncRequested = LoadEditorFromSelectedTab;
         Sidebar.SqlPreviewRequested = _dialogs.ShowSqlPreview;
+    }
 
+    /// <summary>Bridge the results dock's callbacks to the shell view-model. <c>Vm</c> is resolved lazily at
+    /// invoke time — these are wired before a DataContext exists.</summary>
+    private void WireResultsView()
+    {
         // Stacked/Tabbed toggle persists on the VM (which round-trips it into the session).
         ResultsView.ViewModeChanged = mode => { if (Vm is not null) Vm.ResultsViewMode = mode; };
 
-        // Paging footer buttons call back into the shell VM (Vm is resolved lazily at click time).
         ResultsView.LoadMore = rs => Vm?.Execution.LoadMoreAsync(rs) ?? Task.CompletedTask;
         ResultsView.CountTotal = rs => Vm?.Execution.CountTotalAsync(rs) ?? Task.CompletedTask;
         ResultsView.NavigateForeignKey = async (rs, col, row) =>
@@ -116,7 +144,7 @@ public partial class MainWindow : Window
         {
             if (Vm is null) return;
             await Vm.Execution.SaveChangesAsync(rs);      // applies in one tx, updating affected rows in place
-            ResultsView.RefreshRowHighlights(); // clear the pending tints (no full rebuild → scroll kept)
+            ResultsView.RefreshRowHighlights();           // clear the pending tints (no full rebuild → scroll kept)
         };
         ResultsView.DiscardChanges = async rs =>
         {
@@ -124,63 +152,7 @@ public partial class MainWindow : Window
             await Vm.Execution.DiscardChangesAsync(rs);   // reverts pending changes in place
             RebuildResults(Vm.Workspace.SelectedTab);     // re-render the restored rows
         };
-        _pendingPanel = new PendingChangesOverlay(this); // floating color-coded script panel (design §5)
         ResultsView.PreviewSql = ShowPendingScript;
-
-        // Translucent selection so syntax-highlighted glyphs stay readable through it — the opaque
-        // default paints solid over the colored text. Bearing steel-blue at ~40% alpha.
-        Editor.TextArea.SelectionBrush = new SolidColorBrush(Color.FromArgb(0x66, 0x2B, 0x44, 0x55));
-
-        // Editor buffer/caret ↔ SelectedTab sync (the documented AvaloniaEdit binding exception); this owns
-        // the load guard + write-back. The highlight/folding hooks below observe the same editor events.
-        _editorText = new EditorTextBehavior(Editor);
-        Editor.TextChanged += (_, _) => { UpdateStatementHighlight(); _folding.Refresh(); };
-        Editor.TextArea.Caret.PositionChanged += (_, _) => UpdateStatementHighlight();
-        Editor.TextArea.SelectionChanged += (_, _) => UpdateStatementHighlight();
-
-        DataContextChanged += (_, _) => HookViewModel();
-        Loaded += (_, _) => HookViewModel();
-
-        SetResultsVisible(false); // no results yet → editor fills; the pane appears on the first run
-    }
-
-    private ShellViewModel? Vm => DataContext as ShellViewModel;
-
-    // Remembered editor/results split proportions, so hiding then re-showing the results pane (Ctrl+R)
-    // restores the user's dragged sizes rather than snapping back to the 2:3 default.
-    private GridLength _savedEditorRow = new(2, GridUnitType.Star);
-    private GridLength _savedResultsRow = new(3, GridUnitType.Star);
-
-    /// <summary>Show or collapse the results pane (grid row + splitter). When collapsed the editor
-    /// fills the whole workspace; there's no empty split. Called on every run/tab-switch and by Ctrl+R.</summary>
-    private void SetResultsVisible(bool visible)
-    {
-        var rows = WorkspaceGrid.RowDefinitions;
-        if (visible)
-        {
-            rows[0].Height = _savedEditorRow;
-            rows[1].Height = GridLength.Auto;
-            rows[2].Height = _savedResultsRow;
-        }
-        else
-        {
-            if (rows[2].Height.Value > 0) { _savedEditorRow = rows[0].Height; _savedResultsRow = rows[2].Height; }
-            rows[0].Height = new GridLength(1, GridUnitType.Star); // editor fills
-            rows[1].Height = new GridLength(0);
-            rows[2].Height = new GridLength(0);
-        }
-        ResultsSplitter.IsVisible = visible;
-        ResultsView.IsVisible = visible;
-    }
-
-    /// <summary>Ctrl+R: toggle the results pane, but only when there's actually a result to show. Hiding
-    /// the pane drops focus back to the editor (it may have been in the now-collapsed grid).</summary>
-    private void ToggleResultsVisible()
-    {
-        if (ResultsView.Results is not { Count: > 0 }) return;
-        var show = !ResultsView.IsVisible;
-        SetResultsVisible(show);
-        if (!show) Editor.TextArea.Focus();
     }
 
     private void HookViewModel()
@@ -206,8 +178,8 @@ public partial class MainWindow : Window
         SyncProjectCombo();
         SyncDbPicker();
         App.SetConnectionAccent(Vm.Connections.ActiveConnectionColor); // seed the accent for the initial tab
-        _tabMru.Sync(Vm.Workspace.Tabs);
-        if (Vm.Workspace.SelectedTab is { } seedTab) _tabMru.Use(seedTab);
+        _tabs.Sync(Vm.Workspace.Tabs);
+        if (Vm.Workspace.SelectedTab is { } seedTab) _tabs.Promote(seedTab);
 
         // Surface any keybindings.json problems once, in the status bar (non-fatal — defaults still applied).
         if (!_keymapWarningsShown && _keymapWarnings.Count > 0)
@@ -280,43 +252,14 @@ public partial class MainWindow : Window
         Close();
     }
 
-    /// <summary>Apply the (cheap) editor chrome synchronously so first paint is already dark; the
-    /// (expensive) TextMate grammar registry is installed later via <see cref="InstallSqlHighlighting"/>.</summary>
-    private void ApplyEditorChrome(AvaloniaEdit.TextEditor editor)
-    {
-        // Graphite surface (#1A2027), current-line highlight (#232B36), faint line numbers (#4E5865).
-        editor.Background = ThemeBrush("Bg.Editor");
-        editor.LineNumbersForeground = ThemeBrush("Text.Faint");
-        editor.Options.HighlightCurrentLine = true;
-        var lineActive = ((SolidColorBrush)ThemeBrush("Bg.LineActive")).Color;
-        editor.TextArea.TextView.CurrentLineBackground = new SolidColorBrush(lineActive);
-        editor.TextArea.TextView.CurrentLineBorder = new Pen(new SolidColorBrush(lineActive)); // no contrasting box
-    }
-
-    /// <summary>Install TextMate SQL syntax highlighting. Deferred off first paint — building the
-    /// grammar/theme registry is ~100ms+ and the editor renders plain (already dark) until it lands.
-    /// DarkPlus supplies token colors; exact Bearing syntax hues are deferred (needs internal TextMateSharp
-    /// APIs — docs/design/editor-4a/README.md §Fidelity).</summary>
-    private void InstallSqlHighlighting()
-    {
-        var options = new RegistryOptions(ThemeName.DarkPlus);
-        var installation = Editor.InstallTextMate(options);
-        var sql = options.GetLanguageByExtension(".sql");
-        if (sql is not null)
-            installation.SetGrammar(options.GetScopeByLanguageId(sql.Id));
-    }
-
-    /// <summary>Resolve a token brush from app resources (falls back to transparent if missing).</summary>
-    private IBrush ThemeBrush(string key)
-        => (Application.Current?.FindResource(key) as IBrush) ?? Brushes.Transparent;
-
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(WorkspaceViewModel.SelectedTab))
         {
             LoadEditorFromSelectedTab();
-            // Promote on a normal switch, but not while a Ctrl+Tab cycle is in flight (that commits on release).
-            if (!_mruCycling && Vm?.Workspace.SelectedTab is { } t) _tabMru.Use(t);
+            // Promote on a normal switch; TabNavigator ignores this while a Ctrl+Tab cycle is in flight
+            // (that commits on modifier release).
+            if (Vm?.Workspace.SelectedTab is { } t) _tabs.Promote(t);
         }
         else if (e.PropertyName == nameof(ConnectionsViewModel.ActiveConnectionColor))
             App.SetConnectionAccent(Vm?.Connections.ActiveConnectionColor); // recolor tab accent, dots, results, status line
@@ -333,36 +276,7 @@ public partial class MainWindow : Window
         var tab = Vm?.Workspace.SelectedTab;
         _editorText.Bind(tab);   // pushes text/caret into the editor under the load guard
         RebuildResults(tab);
-        UpdateStatementHighlight();
-    }
-
-    /// <summary>Mark the statement Run will execute — the selection if any, else the statement at
-    /// the caret — so the highlight always matches <see cref="RunAsync"/>.</summary>
-    private void UpdateStatementHighlight()
-    {
-        if (!string.IsNullOrEmpty(Editor.SelectedText))
-            _statementHighlight.SetSpan(-1, -1); // selection is its own indicator
-        else if (Bearing.Sql.StatementSplitter.StatementAt(Editor.Text, Editor.CaretOffset) is { } stmt)
-            _statementHighlight.SetSpan(stmt.TrimmedStart, stmt.TrimmedEnd);
-        else
-            _statementHighlight.SetSpan(-1, -1);
-    }
-
-    /// <summary>Alt+Up / Alt+Down: move the caret to the previous / next runnable statement.</summary>
-    private void MoveToAdjacentStatement(int direction)
-    {
-        var text = Editor.Text;
-        var spans = Bearing.Sql.StatementSplitter.Split(text)
-            .Where(s => !string.IsNullOrWhiteSpace(s.Text)).ToList();
-        if (spans.Count == 0) return;
-
-        var current = Bearing.Sql.StatementSplitter.StatementAt(text, Editor.CaretOffset);
-        var idx = current is null ? 0 : spans.FindIndex(s => s.Start == current.Start);
-        if (idx < 0) idx = 0;
-
-        var target = System.Math.Clamp(idx + direction, 0, spans.Count - 1);
-        Editor.CaretOffset = spans[target].TrimmedStart;
-        Editor.TextArea.Caret.BringCaretToView();
+        _text.UpdateStatementHighlight();
     }
 
     private void SyncProjectCombo()
@@ -372,5 +286,4 @@ public partial class MainWindow : Window
         ProjectCombo.SelectedItem = Vm.RecentProjects.FirstOrDefault(r => r.Directory == dir);
         _suppressProjectChange = false;
     }
-
 }

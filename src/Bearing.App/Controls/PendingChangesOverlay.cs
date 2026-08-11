@@ -10,6 +10,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Bearing.App.ViewModels;
+using static Bearing.App.Controls.Tokens;
 
 namespace Bearing.App.Controls;
 
@@ -71,23 +72,23 @@ public sealed class PendingChangesOverlay
         var count = new TextBlock
         {
             Text = statements.Count == 1 ? "1 statement" : $"{statements.Count} statements",
-            Foreground = ThemeBrush("Text.Dim"), FontSize = 11, FontWeight = FontWeight.Bold,
+            Foreground = Res("Text.Dim"), FontSize = 11, FontWeight = FontWeight.Bold,
             VerticalAlignment = VerticalAlignment.Center,
         };
-        var copy = new Button { Content = "⧉ Copy", Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = ThemeBrush("Text.Dim"), Padding = new Thickness(6, 2) };
+        var copy = new Button { Content = "⧉ Copy", Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = Res("Text.Dim"), Padding = new Thickness(6, 2) };
         copy.Click += (_, _) => TopLevel.GetTopLevel(_owner)?.Clipboard?.SetTextAsync(string.Join("\n", statements.Select(s => s.Sql)));
         var headerGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         Grid.SetColumn(copy, 1);
         headerGrid.Children.Add(count);
         headerGrid.Children.Add(copy);
-        var header = new Border { Padding = new Thickness(12, 8), BorderThickness = new Thickness(0, 0, 0, 1), BorderBrush = ThemeBrush("Border"), Child = headerGrid };
+        var header = new Border { Padding = new Thickness(12, 8), BorderThickness = new Thickness(0, 0, 0, 1), BorderBrush = Res("Border"), Child = headerGrid };
         DockPanel.SetDock(header, Dock.Top);
 
         // Body: line-numbered, kind-colored statements.
         var list = new StackPanel { Spacing = 2 };
         for (var i = 0; i < statements.Count; i++)
         {
-            var num = new TextBlock { Text = $"{i + 1,3} ", Foreground = ThemeBrush("Text.Faint"), FontFamily = MonoFont, VerticalAlignment = VerticalAlignment.Top };
+            var num = new TextBlock { Text = $"{i + 1,3} ", Foreground = Res("Text.Faint"), FontFamily = MonoFont, VerticalAlignment = VerticalAlignment.Top };
             var sql = new TextBlock { Text = statements[i].Sql, Foreground = KindBrush(statements[i].Kind), FontFamily = MonoFont, TextWrapping = TextWrapping.Wrap };
             var rowPanel = new StackPanel { Orientation = Orientation.Horizontal };
             rowPanel.Children.Add(num);
@@ -97,14 +98,14 @@ public sealed class PendingChangesOverlay
         var body = new ScrollViewer { Content = new Border { Padding = new Thickness(12, 8), Child = list } };
 
         // Footer: Discard + Run & save.
-        var discard = new Button { Content = "Discard", Margin = new Thickness(0, 0, 8, 0), Background = Brushes.Transparent, BorderBrush = ThemeBrush("Error.Red"), BorderThickness = new Thickness(1), Foreground = ThemeBrush("Error.Red") };
+        var discard = new Button { Content = "Discard", Margin = new Thickness(0, 0, 8, 0), Background = Brushes.Transparent, BorderBrush = Res("Error.Red"), BorderThickness = new Thickness(1), Foreground = Res("Error.Red") };
         discard.Click += async (_, _) => { Hide(); await onDiscard(); };
-        var run = new Button { Content = "✓ Run & save", Background = ThemeBrush("Ok.Green"), Foreground = ThemeBrush("Bg.Editor") };
+        var run = new Button { Content = "✓ Run & save", Background = Res("Ok.Green"), Foreground = Res("Bg.Editor") };
         run.Click += async (_, _) => { Hide(); await onSave(); };
         var footerButtons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         footerButtons.Children.Add(discard);
         footerButtons.Children.Add(run);
-        var footer = new Border { Padding = new Thickness(12, 8), BorderThickness = new Thickness(0, 1, 0, 0), BorderBrush = ThemeBrush("Border"), Child = footerButtons };
+        var footer = new Border { Padding = new Thickness(12, 8), BorderThickness = new Thickness(0, 1, 0, 0), BorderBrush = Res("Border"), Child = footerButtons };
         DockPanel.SetDock(footer, Dock.Bottom);
 
         var dock = new DockPanel { LastChildFill = true };
@@ -116,8 +117,8 @@ public sealed class PendingChangesOverlay
         {
             Width = 520,
             MaxHeight = 420,
-            Background = ThemeBrush("Bg.Chrome"),
-            BorderBrush = ThemeBrush("Border.Control"),
+            Background = Res("Bg.Chrome"),
+            BorderBrush = Res("Border.Control"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(9),
             BoxShadow = new BoxShadows(new BoxShadow { OffsetX = 0, OffsetY = 20, Blur = 50, Spread = -12, Color = Color.FromArgb(0xBF, 0, 0, 0) }),
@@ -130,12 +131,10 @@ public sealed class PendingChangesOverlay
     /// <summary>Statement color by kind: INSERT green, UPDATE amber, DELETE red (design §5).</summary>
     private static IBrush KindBrush(string kind) => kind switch
     {
-        "INSERT" => ThemeBrush("Ok.Green"),
+        "INSERT" => Res("Ok.Green"),
         "UPDATE" => new SolidColorBrush(Color.FromRgb(0xE3, 0xB4, 0x57)),
-        "DELETE" => ThemeBrush("Error.Red"),
-        _ => ThemeBrush("Text.Primary"),
+        "DELETE" => Res("Error.Red"),
+        _ => Res("Text.Primary"),
     };
 
-    private static IBrush ThemeBrush(string key)
-        => (Application.Current?.FindResource(key) as IBrush) ?? Brushes.Transparent;
 }

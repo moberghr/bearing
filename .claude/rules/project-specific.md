@@ -1,21 +1,31 @@
 # Project-Specific Rules (§9.x)
 
 ## §9.1 — God objects: extract, don't grow
-Two classes are already oversized and are the #1 place changes go wrong. Both were split into partial
-*files* but each is still a single class — the split hid the line count without separating concerns:
-- `src/Bearing.App/Controls/ResultView.*.cs` (~1,900 lines across 6 partials, one class)
-- `src/Bearing.App/Views/MainWindow.*.cs` (~1,300 lines across 6 partials, one class)
+**All three god objects were decomposed (2026-08-10). Keep them that way.** Splitting a class into partial
+*files* is what previously hid the problem: the line count moved, the concerns didn't. Extract *types*.
 
-(`ViewModels/ShellViewModel` — the former `MainWindowViewModel` — has since been genuinely decomposed
-into child VMs behind `WorkspaceContext` and is no longer a god object; follow that pattern.)
+The three, and the pattern each now demonstrates:
+- `ViewModels/ShellViewModel` (was `MainWindowViewModel`, 1,014) → child VMs behind `WorkspaceContext`.
+- `Controls/ResultView.*.cs` (1,902 → ~500 over 3 partials) → a composition root that assembles
+  `GridSelectionController`, `ResultCellFactory`, `ResultChrome`, `CellInspectorView` + `InspectorPane`,
+  `ResultEditToolbar`, `ResultGridChrome`, `QuickStatsBar`, `ResultRowPainter`, plus the pure
+  `Results/{GridSelectionOps, ResultMetaText, ColumnKinds}`.
+- `Views/MainWindow.*.cs` (1,167 → ~820 over 5 partials) → `.Commands` is the command table + key routing,
+  `.Chrome` the XAML-wired handlers; behavior lives in `Editing/EditorTextCommands`, `EditorChrome`,
+  `Views/CommandPaletteHost`, `Views/ResultsPaneController`, `Input/{TabNavigator, FocusRing}`.
 
-WHEN a change would add code to either god object, DO NOT append — extract:
+WHEN a change would add code to any of these, DO NOT append — extract:
 - Pure/stateless logic → helpers under `Results/`, `Input/`, or the `Sql` project (pattern:
-  `ResultSetBuilder`, `ResultEditModel`, `PaletteFilter`).
+  `GridSelectionOps`, `ResultSetBuilder`, `ResultEditModel`, `PaletteFilter`). This is also the only way to
+  get the behavior under test — Wayland blocks headless GUI testing (§4.3).
 - Self-contained visuals/overlays → their own `Views/`/`Controls/` class.
-- Stateful coordination (connections/execution/tabs/panels) → a dedicated coordinator in `Connections/`.
+- Stateful coordination (connections/execution/tabs/panels) → a dedicated coordinator.
 
-Keep the VM's public binding surface unchanged when splitting — leave thin delegating members behind.
+Keep the public binding / callback surface unchanged when splitting — leave thin delegating members behind.
+
+Code-built visuals resolve token brushes through `Controls/Tokens` (`Res` / `Tint`) — do not reintroduce a
+private `FindResource` helper; six of them were consolidated. `Theming.ThemeBrush.AtAlpha` is the one
+exception (it takes an explicit fallback colour, for converters and custom margins).
 
 ## §9.2 — Input goes through the unified pipeline
 - Keyboard handling flows through `src/Bearing.App/Input/` (`Gesture`/`GestureParser`, `Keymap`,

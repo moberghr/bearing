@@ -494,24 +494,35 @@ close, *not* on window close — prompting at quit would be friction for zero sa
 
 ## 🟡 Open — quality & maintainability
 
-- [~] **P2** Decompose the god objects — **the VM third is done; the two views are not.**
-  - **Done: `MainWindowViewModel` (1014) is gone.** Really decomposed, not just split: `ShellViewModel`
-    (153 + `.Session` 59 + `.Projects` 158) now delegates to child VMs behind `WorkspaceContext` —
-    `WorkspaceViewModel` 153, `ConnectionsViewModel` 423, `ExecutionViewModel` 422, `ScriptsViewModel` 149,
-    `HistoryPanelViewModel` 130. This is the pattern the remaining two should follow.
-  - [ ] **`Controls/ResultView`** — still **one** `sealed partial class` over 7 files, **~1,902 lines**:
-    `.Cells` 431, `.Selection` 339, `.Layout` 322, `.Inspector` 265, `.Grid` 224, `.Rendering` 178, root 143.
-    The JSON inspector is a self-contained overlay → its own control; cell factories and the
-    selection-rectangle math are pure enough to move under `Results/` (§2.5).
-  - [ ] **`Views/MainWindow`** — still **one** `partial class` over 6 files, **~1,053 lines**:
-    `.Commands` 440, `.axaml.cs` 312, `.Chrome` 127, `.Palette` 112, `.ConnectionCommands` 36,
-    `.Overlays` 26. The palette overlay and the editor text ops in `.Commands` are the separable parts
-    (the latter overlaps the editor-shortcuts item above — do them together).
-  - Note the split-into-partial-*files* move already happened for both and is what §9.1 warns against: the
-    line count hid, the concerns didn't separate. Extract types, and leave thin delegating members so the
-    binding surface is unchanged.
+- [x] **P2** Decompose the god objects — **done 2026-08-10.** All three are gone. Build clean, 562 tests green
+  (App 312 → 369), app launches clean 3/3 runs. **Both views still need eyeball QA** — Wayland blocks headless
+  GUI testing (§4.3), so nothing visual or interactive here is verified.
+  - **`MainWindowViewModel` (1014) — done earlier.** `ShellViewModel` (153 + `.Session` 59 + `.Projects` 158)
+    delegates to child VMs behind `WorkspaceContext` — `WorkspaceViewModel` 153, `ConnectionsViewModel` 423,
+    `ExecutionViewModel` 422, `ScriptsViewModel` 149, `HistoryPanelViewModel` 130. This was the pattern the
+    other two followed.
+  - [x] **`Controls/ResultView`** — **1,902 → 497** over 3 partials (root 175, `.Layout` 192, `.Grid` 130).
+    It is now the composition root for the dock and nothing else. Extracted: `GridSelectionController` 275
+    (+ pure `Results/GridSelectionOps` 146), `ResultCellFactory` 305, `ResultChrome` 293 (badges, buttons,
+    drawn glyphs, lock chip, back bar, dock header), `CellInspectorView` 219 + `InspectorPane` 95,
+    `ResultEditToolbar` 107, `ResultGridChrome` 102, `QuickStatsBar` 99, `ResultRowPainter` 58, and pure
+    `Results/{ResultMetaText 46, ColumnKinds 40}`.
+  - [x] **`Views/MainWindow`** — **1,167 → 823** over 5 partials (`.Commands` 334, `.axaml.cs` 289,
+    `.Chrome` 128, `.ConnectionCommands` 46, `.Overlays` 26). `.Commands` is now the command table plus key
+    routing; `.Chrome` is the XAML-wired handlers. Extracted: `Editing/EditorTextCommands` 143 (statement ops,
+    the Ctrl+U/W deletes, the statement-highlight margin, and "what SQL does Run execute"),
+    `Views/CommandPaletteHost` 136, `Input/TabNavigator` 91, `Views/ResultsPaneController` 65,
+    `Input/FocusRing` 60, `Editing/EditorChrome` 42.
+  - **Bonus:** six private copies of the token-brush lookup (`ResultView.Res`, `MainWindow.ThemeBrush`,
+    `SettingsWindow.Brush`, `KeybindingsWindow.Brush`, `FilterableListOverlay`, `PendingChangesOverlay`)
+    collapsed into `Controls/Tokens` (`Res` / `Tint`). `Theming.ThemeBrush.AtAlpha` deliberately stays — it
+    takes an explicit fallback colour for converter/margin contexts.
+  - **New tests (57)** over the logic that was previously unreachable inside the two classes:
+    `GridSelectionOpsTests` (cursor motion, rectangle coverage, TSV shape incl. non-rectangular gaps,
+    measure-column filtering), `ResultMetaTextTests`, `ColumnKindsTests`, `ShellNavigationTests`
+    (tab wrap/clamp, focus-ring order).
 - [x] **P3** Remove dead `Views/HistoryWindow.axaml(.cs)` — **done**, the files are gone; the inline History panel is the only history UI.
-- [~] **P3** The "coming soon" stubs. *(`About` done — `Views/AboutDialog.cs` shows name/tagline/version from `<Version>` in `Directory.Build.props`. `Settings` done 2026-08-09 — the rail gear and Edit ▸ Settings… open the real window.)* **One** remains and it belongs to another item: **Export** (`ResultView.Cells.cs:304`, a rendered-but-unwired `⭳ Export` button) → the export item above.
+- [~] **P3** The "coming soon" stubs. *(`About` done — `Views/AboutDialog.cs` shows name/tagline/version from `<Version>` in `Directory.Build.props`. `Settings` done 2026-08-09 — the rail gear and Edit ▸ Settings… open the real window.)* **One** remains and it belongs to another item: **Export** (`Controls/ResultEditToolbar.cs`, a rendered-but-unwired `⭳ Export` button) → the export item above.
 - [~] **P3** Clear build warnings — **3 remain**, verified this pass; the obsolete `TextBox.Watermark` → `PlaceholderText` set is **fixed**. Left: `CS0108` `StatementMargin.Width` hides `Layoutable.Width` (`Editing/StatementMargin.cs:16`), and `xUnit2013` ×2 (`HistoryPanelTests.cs:51,53` — use `Assert.Single`).
 
 ---

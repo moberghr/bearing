@@ -9,6 +9,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using static Bearing.App.Controls.Tokens;
 
 namespace Bearing.App.Controls;
 
@@ -78,8 +79,8 @@ public sealed class FilterableListOverlay<T>
         {
             Width = _width,
             Padding = new Thickness(10),
-            Background = ThemeBrush("Bg.Chrome"),
-            BorderBrush = ThemeBrush("Border"),
+            Background = Res("Bg.Chrome"),
+            BorderBrush = Res("Border"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(6),
             HorizontalAlignment = HorizontalAlignment.Center,
@@ -150,7 +151,4 @@ public sealed class FilterableListOverlay<T>
         }
     }
 
-    /// <summary>Resolve a token brush from app resources (falls back to transparent if missing).</summary>
-    private static IBrush ThemeBrush(string key)
-        => (Application.Current?.FindResource(key) as IBrush) ?? Brushes.Transparent;
 }
