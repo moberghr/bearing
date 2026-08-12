@@ -1,6 +1,8 @@
+using System.Collections.Generic;
 using System.Linq;
 using Avalonia.Input;
 using Bearing.App.Input;
+using Bearing.App.Results;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -85,6 +87,28 @@ public class KeymapLoaderTests
         var r = Apply(new KeyBindingEntry { Key = "Ctrl+R", Command = "does.not.exist" });
         Assert.Single(r.Warnings);
         Assert.Equal(Defaults().Bindings.Count, r.Keymap.Bindings.Count); // nothing added
+    }
+
+    [Fact]
+    public void Grid_commands_that_ship_unbound_are_bindable_once_the_loader_knows_them()
+    {
+        // Copy as ▸ / Export ▸ / Fetch all ship with no gesture, so the only thing that makes them bindable is
+        // the registry being populated *before* keybindings.json is read — which is why MainWindow registers
+        // the grid's commands ahead of the load. Without that, this is the "unknown command" path.
+        var id = CommandIds.GridCopyAs(CopyFormat.Csv);
+        Assert.Equal("grid.copyAs.csv", id);
+        Assert.Equal("grid.copyAs.sqlInsert", CommandIds.GridCopyAs(CopyFormat.SqlInsert));
+        Assert.Equal("grid.export.xlsx", CommandIds.GridExport(ExportFormat.Xlsx));
+
+        var unknown = KeymapLoader.Apply(Defaults(), [new KeyBindingEntry { Key = "Ctrl+Shift+K", Command = id, Scope = "Grid" }]);
+        Assert.Single(unknown.Warnings);
+
+        var known = KeymapLoader.Apply(
+            Defaults(),
+            [new KeyBindingEntry { Key = "Ctrl+Shift+K", Command = id, Scope = "Grid" }],
+            knownCommands: new HashSet<string> { id });
+        Assert.Empty(known.Warnings);
+        Assert.Equal(id, known.Keymap.Resolve(KeyScope.Grid, KeyModifiers.Control | KeyModifiers.Shift, Key.K, NoPhys));
     }
 
     [Fact]

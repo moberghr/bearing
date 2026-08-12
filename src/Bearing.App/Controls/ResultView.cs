@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using Bearing.App.Input;
+using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using Bearing.Core.Workspace;
 
@@ -70,6 +71,12 @@ public sealed partial class ResultView : UserControl
     /// <summary>Invoked when the user requests the total count of a pageable result set.</summary>
     public Func<ResultSetViewModel, Task>? CountTotal { get; set; }
 
+    /// <summary>Invoked when the user asks for every remaining page of a pageable result set at once.</summary>
+    public Func<ResultSetViewModel, Task>? FetchAll { get; set; }
+
+    /// <summary>Invoked to export a result set to a file (the format is picked from the Export menu).</summary>
+    public Func<ResultSetViewModel, ExportFormat, Task>? Export { get; set; }
+
     /// <summary>Invoked when a foreign-key cell is clicked: (result set, column index, row values).</summary>
     public Func<ResultSetViewModel, int, object?[], Task>? NavigateForeignKey { get; set; }
 
@@ -85,13 +92,18 @@ public sealed partial class ResultView : UserControl
     /// <summary>Invoked to discard a result set's pending edits (the [Discard] button).</summary>
     public Func<ResultSetViewModel, Task>? DiscardChanges { get; set; }
 
-    /// <summary>The shared keybinding pipeline (set once by the window). On assignment the grid's discrete
-    /// commands register into the shared registry so the same matcher drives them; spatial cell navigation
-    /// stays local (see <see cref="OnGridKey"/>).</summary>
+    /// <summary>The shared keybinding pipeline (set once by the window), used to resolve a keystroke that
+    /// lands in a grid. Spatial cell navigation stays local (see <see cref="OnGridKey"/>).
+    /// <para>
+    /// Registration is <see cref="RegisterGridCommands"/>, deliberately not a side effect of this setter: the
+    /// window has to register every command <i>before</i> it loads <c>keybindings.json</c>, because that load
+    /// rejects bindings for ids it doesn't know — and the dispatcher can't exist until the keymap does.
+    /// </para>
+    /// </summary>
     public KeyDispatcher? CommandDispatcher
     {
         get => _dispatcher;
-        set { _dispatcher = value; if (value is not null) RegisterGridCommands(value.Registry); }
+        set => _dispatcher = value;
     }
     private KeyDispatcher? _dispatcher;
 
@@ -114,10 +126,33 @@ public sealed partial class ResultView : UserControl
         return null;
     }
 
-    private void RegisterGridCommands(CommandRegistry r)
+    /// <summary>Register the grid's discrete commands into the shared registry, so the same matcher (and the
+    /// command palette) drives them. Called by the window before the keymap is loaded; safe to call twice.</summary>
+    public void RegisterGridCommands(CommandRegistry r)
     {
         r.Register(KeyCommand.Sync(CommandIds.GridCopy, "Copy", KeyScope.Grid, "Grid",
             () => { if (GridTarget() is { } t) _selection.Copy(t.Result); }));
+        // Copy as ▸ — one command per format so each is bindable and palette-reachable on its own. They ship
+        // unbound (the gesture space is crowded and TSV owns Ctrl+C); the context menu is the discoverable path.
+        foreach (var format in CopyRenderer.Alternatives)
+        {
+            var captured = format;
+            r.Register(KeyCommand.Sync(CommandIds.GridCopyAs(captured), $"Copy as {CopyRenderer.Label(captured)}",
+                KeyScope.Grid, "Grid",
+                () => { if (GridTarget() is { } t) _selection.CopyAs(t.Result, captured); },
+                canRun: () => GridTarget() is { } t && _selection.HasSelection(t.Result)));
+        }
+        r.Register(new KeyCommand(CommandIds.GridFetchAll, "Fetch all rows", KeyScope.Grid, "Grid",
+            async () => { if (GridTarget() is { } t && FetchAll is { } f) await f(t.Result); },
+            canRun: () => GridTarget()?.Result is { IsPageable: true, HasMore: true }));
+        foreach (var format in new[] { ExportFormat.Csv, ExportFormat.Xlsx })
+        {
+            var captured = format;
+            r.Register(new KeyCommand(CommandIds.GridExport(captured), $"Export result to {ResultExport.Label(captured)}",
+                KeyScope.Grid, "Grid",
+                async () => { if (GridTarget() is { } t && Export is { } f) await f(t.Result, captured); },
+                canRun: () => GridTarget()?.Result.HasGrid == true));
+        }
         r.Register(KeyCommand.Sync(CommandIds.GridSelectAll, "Select all", KeyScope.Grid, "Grid",
             () => { if (GridTarget() is { } t) _selection.SelectAll(t.Result); }));
         r.Register(KeyCommand.Sync(CommandIds.GridDelete, "Delete rows", KeyScope.Grid, "Grid",

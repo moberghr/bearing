@@ -40,6 +40,13 @@ public sealed record AppSettings
     /// <summary>Rows fetched per page, both for a query's first page and for each Load more.</summary>
     public int ResultPageSize { get; init; } = 100;
 
+    /// <summary>
+    /// Where "Fetch all rows" stops. It pages until the result is exhausted, so without a ceiling a
+    /// mistyped query against a billion-row table would page until the app runs out of memory. Hitting the
+    /// ceiling is reported, never silent — the rows fetched so far stay loaded.
+    /// </summary>
+    public int ResultFetchAllMaxRows { get; init; } = 200_000;
+
     /// <summary>Whether the main window reopens at the size it was last closed at.</summary>
     public bool RestoreWindowSize { get; init; } = true;
 

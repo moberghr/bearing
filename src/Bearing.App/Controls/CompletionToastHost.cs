@@ -60,4 +60,19 @@ internal sealed class CompletionToastHost
             expiration: TimeSpan.Zero,
             onClick: clickable ? () => _activate(completion) : null));
     }
+
+    /// <summary>Post an arbitrary notification (a finished export, and anything else that has a follow-up
+    /// action a status line can't carry). Must be called on the UI thread.</summary>
+    /// <param name="clickHint">Appended on its own line when <paramref name="onClick"/> is set — a toast that
+    /// does something on click has to say so, or nobody clicks it.</param>
+    /// <param name="onClick">Invoked if the user clicks it; null makes the toast inert.</param>
+    /// <param name="expiration">Null keeps it until dismissed, as completions do.</param>
+    public void Show(
+        string title, string message, string? clickHint = null, Action? onClick = null, TimeSpan? expiration = null)
+        => _manager.Show(new Notification(
+            title,
+            onClick is not null && clickHint is not null ? $"{message}\n{clickHint}" : message,
+            NotificationType.Information,
+            expiration: expiration ?? TimeSpan.Zero,
+            onClick: onClick));
 }

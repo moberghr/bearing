@@ -32,6 +32,14 @@ namespace Bearing.App.ViewModels;
 public sealed record BackgroundCompletion(string TabName, string Message, bool TabStillOpen, EditorTabViewModel? Tab = null);
 
 /// <summary>
+/// A finished export. Raised rather than acted on because the useful follow-up — offering to open the
+/// containing folder — is a notification, and the view owns those (§2.3).
+/// </summary>
+/// <param name="Path">The file that was written.</param>
+/// <param name="RowCount">Rows in it, excluding the header.</param>
+public sealed record ExportCompletion(string Path, int RowCount, ExportFormat Format);
+
+/// <summary>
 /// The execution concern: running the selected tab's SQL, paging, count, foreign-key navigation, and the
 /// inline-edit save/discard. Owns the in-flight cancellation and the busy flag. Extracted from the
 /// shell (docs/mvvm-refactor-plan.md phase 3); coordinates through <see cref="WorkspaceContext"/> and reads
@@ -330,6 +338,51 @@ public sealed partial class ExecutionViewModel : ObservableObject
         }, "Load cancelled.", "Load more failed");
     }
 
+    /// <summary>
+    /// Page a result set to the end in one action (the ⤓ all button) instead of scrolling through it.
+    /// Cancelable like any run (Esc / the Run button), reports progress as it goes, and stops at
+    /// <see cref="AppSettings.ResultFetchAllMaxRows"/> so a mistyped query can't page until the app dies.
+    /// </summary>
+    /// <returns>True when the result is fully loaded (or was already) — false if the fetch was cancelled,
+    /// failed, or stopped at the row ceiling. Callers that follow a fetch with something else (Export) use
+    /// this to avoid acting on half a result.</returns>
+    public async Task<bool> FetchAllAsync(ResultSetViewModel rs)
+    {
+        var tab = Selected;
+        if (tab is null || tab.IsRunning || !rs.IsPageable || rs.SourceSql is null) return false;
+        if (!rs.HasMore) return true;
+        using var lease = ResolveLiveLease();
+        if (lease is null) return false;
+        var session = lease.Session;
+        var cap = Math.Max(1, _ctx.Settings.ResultFetchAllMaxRows);
+        var complete = false;
+
+        await RunExclusiveAsync(tab, async ct =>
+        {
+            while (rs.HasMore)
+            {
+                if (rs.Loaded >= cap)
+                {
+                    // Deliberately not silent: a truncated fetch that reported success would make the row
+                    // count — and any export taken from it — quietly wrong.
+                    RunFinished(tab, $"Stopped at {rs.Loaded:N0} rows (the Fetch all limit). "
+                                   + "Raise it in Settings ▸ Results if you need more.");
+                    return;
+                }
+                ct.ThrowIfCancellationRequested();
+                var page = await session.Executor.ExecutePageAsync(PageSql.Page(rs.SourceSql, rs.Loaded, PageSize), ct);
+                rs.AppendPage(page.Rows, page.RowCount == PageSize);
+                RunStatus(tab, $"Fetching all rows… {rs.Loaded:N0} so far (Esc to stop)");
+            }
+            complete = true;
+            // The total is now known for certain — it's what we loaded — so [Count] retires without a query.
+            rs.TotalCount = rs.Loaded;
+            RunFinished(tab, $"Fetched all {rs.Loaded:N0} rows.");
+        }, "Fetch all cancelled.", "Fetch all failed");
+
+        return complete;
+    }
+
     /// <summary>Fill in the total row count for a pageable result set (the [Count] action).</summary>
     public async Task CountTotalAsync(ResultSetViewModel rs)
     {
@@ -347,6 +400,57 @@ public sealed partial class ExecutionViewModel : ObservableObject
             rs.TotalCount = await session.Executor.CountAsync(rs.SourceSql, ct);
             RunFinished(tab, rs.TotalCount is not null ? "Counted total." : "Count unavailable for this query.");
         }, "Count cancelled.", "Count failed");
+    }
+
+    /// <summary>Raised after a result set has been written to a file, so the view can offer to open the
+    /// containing folder. Not raised for a cancelled or failed export.</summary>
+    public event Action<ExportCompletion>? ExportCompleted;
+
+    /// <summary>
+    /// Export a result set to a file the user picks.
+    /// <para>
+    /// A paged result is <b>fetched to the end first</b>: "export" that quietly wrote the 100 rows that
+    /// happened to be on screen is the kind of silent truncation that gets acted on downstream. The fetch is
+    /// the same cancelable, capped one behind the ⤓ all button, and if it doesn't complete the export is
+    /// abandoned rather than writing part of the answer.
+    /// </para>
+    /// </summary>
+    public async Task ExportAsync(ResultSetViewModel rs, ExportFormat format)
+    {
+        var tab = Selected;
+        if (tab is null) { _ctx.SetStatus("No editor."); return; }
+        if (tab.IsRunning) { _ctx.SetStatus("Wait for the running query to finish before exporting."); return; }
+        if (!rs.HasGrid) { _ctx.SetStatus("Nothing to export."); return; }
+        if (_dialogs is not { } dialogs) return;
+
+        if (rs.HasMore && !await FetchAllAsync(rs))
+        {
+            _ctx.SetStatus("Export stopped — the result isn't fully loaded.");
+            return;
+        }
+
+        var suggested = ResultExport.SuggestedName(rs, tab.Header, DateTime.Now, format);
+        if (await dialogs.PickExportFileAsync(suggested, format) is not { } path) return;
+
+        // Snapshot the rows on this (UI) thread — Rows is an observable collection the grid keeps mutating —
+        // then format and write off it: a 200k-row workbook is seconds of pure CPU, and doing that on the
+        // dispatcher would freeze the window (the same reasoning as the data layer's ConfigureAwait pass).
+        var block = TableBlock.ForResult(rs);
+        var sheet = ResultExport.SheetName(rs);
+        _ctx.SetStatus($"Exporting {block.Rows.Count:N0} rows…");
+        try
+        {
+            await Task.Run(() => ResultExport.Write(path, block, format, sheet));
+        }
+        catch (Exception ex)
+        {
+            // Best-effort like every other write in the app (§5.2): report it, don't take the app down.
+            _ctx.SetStatus($"Export failed: {ex.Message}");
+            return;
+        }
+
+        _ctx.SetStatus($"Exported {block.Rows.Count:N0} rows to {System.IO.Path.GetFileName(path)}.");
+        ExportCompleted?.Invoke(new ExportCompletion(path, block.Rows.Count, format));
     }
 
     /// <summary>A lease on the already-connected session for the selected tab (paging/count/nav/save run

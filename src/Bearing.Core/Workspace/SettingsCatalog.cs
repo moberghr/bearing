@@ -113,6 +113,20 @@ public static class SettingsCatalog
             Get = s => s.ResultPageSize,
             Set = (s, v) => s with { ResultPageSize = v },
         },
+        new IntSetting
+        {
+            Key = "results.fetchAllMaxRows",
+            CategoryId = Results,
+            Title = "Stop “Fetch all rows” at",
+            Description = "Fetch all rows keeps paging until the query is exhausted; this is where it gives "
+                        + "up instead. Reaching the limit is reported and the rows already fetched stay loaded.",
+            Keywords = "fetch all limit cap maximum rows memory export",
+            Min = 1_000,
+            Max = 5_000_000,
+            Unit = "rows",
+            Get = s => s.ResultFetchAllMaxRows,
+            Set = (s, v) => s with { ResultFetchAllMaxRows = v },
+        },
 
         // ---- Connections -----------------------------------------------------------------------
         new IntSetting

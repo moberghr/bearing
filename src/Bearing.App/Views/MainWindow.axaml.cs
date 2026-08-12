@@ -11,6 +11,7 @@ using Bearing.App.Completion;
 using Bearing.App.Controls;
 using Bearing.App.Editing;
 using Bearing.App.Input;
+using Bearing.App.Services;
 using Bearing.App.ViewModels;
 using Bearing.Sql;
 
@@ -61,8 +62,12 @@ public partial class MainWindow : Window
         // maps gestures to command ids, the dispatcher resolves keystrokes per scope. Global + Editor
         // commands register here; the results grid registers its own into the shared registry.
         RegisterCommands(_commands);
+        // The grid's commands register here too, before the keymap is read: the ones that ship unbound
+        // (Copy as ▸, Export ▸, Fetch all) are only bindable from keybindings.json if the loader has already
+        // seen their ids, and it takes them from the registry.
+        ResultsView.RegisterGridCommands(_commands);
         // user keybindings.json layered over defaults; pass the registered ids so config can bind
-        // palette-only commands (grid commands all have defaults, so they're known either way).
+        // commands that ship unbound (palette-only).
         var keymap = KeymapLoader.LoadFromConfig(KeymapDefaults.Build(), _commands.All.Select(c => c.Id).ToHashSet());
         _dispatcher = new KeyDispatcher(keymap.Keymap, _commands);
         _keymapWarnings = keymap.Warnings;
@@ -128,6 +133,8 @@ public partial class MainWindow : Window
 
         ResultsView.LoadMore = rs => Vm?.Execution.LoadMoreAsync(rs) ?? Task.CompletedTask;
         ResultsView.CountTotal = rs => Vm?.Execution.CountTotalAsync(rs) ?? Task.CompletedTask;
+        ResultsView.FetchAll = async rs => { if (Vm is not null) await Vm.Execution.FetchAllAsync(rs); };
+        ResultsView.Export = (rs, format) => Vm?.Execution.ExportAsync(rs, format) ?? Task.CompletedTask;
         ResultsView.NavigateForeignKey = async (rs, col, row) =>
         {
             if (Vm is null) return;
@@ -171,6 +178,10 @@ public partial class MainWindow : Window
         // the tab on screen), so it toasts instead — the only notification sink in the app.
         Vm.Execution.BackgroundCompleted -= OnBackgroundCompleted;
         Vm.Execution.BackgroundCompleted += OnBackgroundCompleted;
+        // A finished export toasts too: the status line can't carry the one action anyone wants next, which
+        // is "show me the file".
+        Vm.Execution.ExportCompleted -= OnExportCompleted;
+        Vm.Execution.ExportCompleted += OnExportCompleted;
         ResultsView.ViewMode = Vm.ResultsViewMode; // seed before the first results render
         LoadEditorFromSelectedTab();
         SyncProjectCombo();
@@ -206,6 +217,19 @@ public partial class MainWindow : Window
     private void OnBackgroundCompleted(BackgroundCompletion completion)
         => Dispatcher.UIThread.Post(() =>
             (_toasts ??= new CompletionToastHost(this, RevealCompletedTab)).Show(completion));
+
+    /// <summary>Toast a finished export, with the containing folder one click away. Marshalled: the write ran
+    /// on a thread-pool thread.</summary>
+    private void OnExportCompleted(ExportCompletion export)
+        => Dispatcher.UIThread.Post(() =>
+            (_toasts ??= new CompletionToastHost(this, RevealCompletedTab)).Show(
+                title: "Export complete",
+                message: $"{export.RowCount:N0} rows → {System.IO.Path.GetFileName(export.Path)}",
+                clickHint: "Click to open the folder.",
+                onClick: () => FileReveal.OpenContainingFolder(export.Path),
+                // Unlike a query completion, this one is redundant the moment it's read — the file is already
+                // on disk and the status bar says so too — so it doesn't sit there until dismissed.
+                expiration: TimeSpan.FromSeconds(10)));
 
     /// <summary>Clicking a completion toast goes to the query that finished: the view-model switches project
     /// if the tab is parked in another one and selects it, and the window brings itself forward.</summary>

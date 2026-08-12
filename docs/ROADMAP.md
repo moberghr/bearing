@@ -19,6 +19,16 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done.
 > tags below are historical, not outstanding. Both open **P1**s closed this pass (honest `CountAsync`, and
 > no-keyring passwords are no longer written to disk).
 >
+> **2026-08-11: the results-grid "data out" batch landed** — ISO dates, Copy as ▸, Fetch all rows, Export to
+> CSV/Excel (see the four items below). They were done together because they share one seam: a pure
+> `Results/TableBlock` + `Results/TableFormats`, which both a cell selection and a whole result set render
+> through. Tests **Sql 163 · App 442 · Data 27 · Persistence 25** (657 total, 0 skipped), run live against
+> Postgres on 5434; build clean with the **same 3 warnings** (`--no-incremental`). The xlsx writer is
+> hand-rolled and was checked by opening its output in LibreOffice. **Nothing visual here is verified** (§4.3)
+> — and the date change alters every timestamp on screen, so it wants a real look. The one **P3** left in 🟡 is
+> two `Assert.Single` calls in `HistoryPanelTests`; `CS0108` on `StatementMargin` is fixed (the private const
+> was renamed `GutterWidth` — it was shadowing `Layoutable.Width`).
+>
 > **2026-08-10 (later): the 🔴 correctness & security section is empty.** Both remaining **P2**s and the whole
 > **P3** tail were fixed in one pass, along with the `ConfigureAwait`/UI-thread item in 🟡. Three entries came
 > out **narrower or different from how they were written** — read those before trusting the old wording: the
@@ -368,22 +378,115 @@ close, *not* on window close — prompting at quit would be friction for zero sa
   overlay also removed its five modal-key hacks from `MainWindow.Commands.cs` (Escape unwinding, the
   swallow-globals-except-Escape branch, the nav-key block, the hide-on-rebuild call) — a real modal window
   needs none of them.
-- [ ] **P2** **Export results to Excel** (+ CSV) with an "open containing folder" action after the export
-  completes. Decide the xlsx route (a package vs. hand-rolled OOXML — note §0.1: nothing new in `Core`);
-  export should offer loaded-rows vs. whole-result (needs the fetch-all item below). **The button already
-  exists and is deliberately dead** — `Controls/ResultEditToolbar.cs` renders `⭳ Export` with the tooltip
-  "Export — coming soon" ("rendered; wired later (per decision)"), so this is wiring a present affordance,
-  not adding one. Nothing else export-related exists in `src/`.
-- [ ] **P2** **Fetch all rows** button on a paged result — one action that loops `LoadMore` to completion
-  (cancelable, with progress/row count) instead of clicking through pages. Guard the obvious foot-gun on huge
-  results. `ResultSetViewModel.IsPageable/HasMore/AppendPage`, `ExecutionViewModel.LoadMoreAsync` (`PageSize` 100).
-- [ ] **P2** **Copy as…** — extend grid copy beyond TSV: HTML, Markdown, JSON, CSV, and SQL (`INSERT`
-  statements / `VALUES` list). Context menu + palette commands; pure formatters under `Results/`
-  (§2.5, testable without a grid) reusing `GridSelectionOps.Rectangle` / `Tsv`.
+- [x] **P2** **Export results to Excel** (+ CSV) — **done 2026-08-11** *(live QA)*. The `⭳ Export` button is
+  wired and now opens a format menu (CSV / Excel workbook); a finished export **toasts with the containing
+  folder one click away** (`Services/FileReveal`, `explorer /select,` · `open -R` · `xdg-open`), which is why
+  `CompletionToastHost` gained a general `Show(title, message, clickHint, onClick, expiration)` — that toast
+  expires after 10 s, unlike a query completion, because the file is already on disk and the status bar says
+  so too.
+  - **xlsx is hand-rolled OOXML** (`Results/XlsxWriter.cs`, ~150 lines, no new package): a zip of six parts,
+    one sheet, bold frozen header, sampled column widths. Numbers and bools are **typed cells** and dates are
+    a serial + a date `numFmt`, so they sum, filter and sort in Excel instead of arriving as text. Two
+    deliberate exceptions stay text: a `timestamptz` (Excel has no offset — converting would silently drop
+    `+02:00`) and any date before Excel's 1900 epoch. Control characters are stripped and cells capped at
+    32,767, because one stray `0x01` makes Excel call the whole workbook corrupt. **Verified by opening the
+    generated file in LibreOffice** (an independent OOXML reader), which read back numbers as numbers, bools
+    as TRUE/FALSE, and both date forms as dates.
+  - **Export moved off the edit toolbar** to `Controls/ResultExportButton` and onto the meta row of *every*
+    grid result: it lived in `ResultEditToolbar`, which a read-only result never renders, so exporting a join
+    or a view was unreachable.
+  - **The loaded-rows-vs-whole-result question was answered "whole", by fetching first.** A paged result is
+    fetched to the end before writing (the same capped, cancelable fetch as ⤓ all) and a fetch that doesn't
+    finish **abandons the export** — a file holding the 100 rows that happened to be on screen is
+    indistinguishable from a complete one once it leaves the app.
+  - CSV is written UTF-8 **with a BOM** (else Excel guesses the system code page and mangles every non-ASCII
+    value) via a temp file + atomic move, so an interrupted export can't overwrite a good one with a truncated
+    file. Writing runs on a thread pool (`Task.Run`) off a UI-thread row snapshot.
+  - 20 tests (`ResultExportTests` reading the produced files back, plus the export half of
+    `FetchAllAndExportTests`: fetch-first, abandon-on-cancel, picker-cancelled, failed write reported not
+    thrown, suggested name/type).
+- [x] **P2** **Fetch all rows** — **done 2026-08-11** *(live QA)*. `⤓ all` on the meta row (bound to
+  `HasMore`, so it retires itself) and `grid.fetchAll` in the palette / context menu →
+  `ExecutionViewModel.FetchAllAsync`, which loops `ExecutePageAsync` under the normal per-tab run lifecycle:
+  cancelable with Esc, live progress ("Fetching all rows… 4,300 so far"), and one lease held for the whole
+  loop. On completion it sets `TotalCount = Loaded`, so `[Count]` retires without a second query.
+  - **The foot-gun guard is a setting, not a dialog**: `results.fetchAllMaxRows` (default 200,000). Hitting
+    it stops and *says so* — never silently, since a truncated fetch reported as success would make the row
+    count and any export taken from it quietly wrong. Rows already fetched stay loaded, `HasMore` stays true.
+  - Returns "did it complete", which is what lets Export refuse to write half a result.
+  - 4 tests in `FetchAllAndExportTests` (pages to the end in order, no-op when already complete, stops at the
+    ceiling, cancel keeps the loaded rows); `PageableExecutor` gained a real row source + a `BeforePage` hook
+    so the cancel test is deterministic rather than timing-based.
+- [x] **P2** **Copy as…** — **done 2026-08-11** *(live QA)*. CSV / Markdown / JSON / HTML / SQL `INSERT`s
+  beside the existing TSV, from the grid's **new right-click menu** (Copy, Copy as ▸, Fetch all rows,
+  Export ▸) and as five palette commands (`grid.copyAs.*`, shipped unbound — Ctrl+C stays TSV).
+  - Pure formatters in `Results/TableFormats.cs` over a new `Results/TableBlock` — "the columns in output
+    order plus the rows projected onto them" — built either from a selection or a whole result, so **copy and
+    export render through the same code**. `Results/CopyFormat.cs` maps menu → format.
+  - **The one semantic decision:** a Ctrl-click gap is *filled* with its real value in a `TableBlock`, whereas
+    `Tsv` still blanks it. TSV's blanks exist to keep a spreadsheet paste aligned with what was selected;
+    CSV/JSON/SQL describe data, where a hole would either misalign every following field or invent a NULL
+    that isn't in the database. `Tsv` is untouched.
+  - Format details worth knowing: CSV is RFC 4180 with CRLF and quotes only where needed, and keeps
+    Postgres's own NULL-vs-empty-string distinction (empty unquoted vs `""`); JSON keeps types (numbers and
+    bools bare, arrays as arrays, bytea as a hex string — it has to be matched before the array arm) and
+    de-duplicates repeated column names (`id`, `id_2`); Markdown escapes pipes and turns newlines into
+    `<br>`; HTML is a bare escaped `<table>` fragment; SQL quotes identifiers and names `«table»`
+    conspicuously when the result has no single editable table, rather than guessing plausibly.
+  - **Bytea is no longer truncated on the way out** (`TableFormats.Text`): the grid caps it at 16 bytes to
+    keep a column narrow, which a file or clipboard has no excuse for.
+  - **Right-click now moves the selection** when it lands outside it (`GridSelectionController.SelectSingle`),
+    so a menu action can't act on cells the user isn't pointing at — and leaves a multi-cell selection alone
+    when it lands inside one.
+  - Ordering fix this forced: `MainWindow` registers the grid's commands *before* reading
+    `keybindings.json`, since the loader rejects bindings for ids it hasn't seen and the dispatcher can't
+    exist until the keymap does. `ResultView.CommandDispatcher`'s setter no longer registers as a side effect;
+    `RegisterGridCommands` is public and idempotent. Pinned by a `KeymapLoaderTests` case.
+  - 26 tests (`TableFormatsTests`) + 1 (`KeymapLoaderTests`). **Not done:** a `VALUES` list (the INSERT form
+    covers the same need).
+  - **Revised same day, on QA feedback — two changes:**
+    - **"HTML table" → "Table (Teams, Outlook, Word, Excel)", and it now goes on the clipboard as the real
+      HTML flavour.** The first cut put HTML *source* on as plain text, so pasting into Teams gave a wall of
+      `<table>` markup. New `Services/HtmlClipboard` builds a `DataTransfer` carrying the platform's own HTML
+      format — `text/html` on Linux/BSD, `public.html` (a UTI) on macOS, `HTML Format` on Windows — plus TSV
+      as the plain-text alternative for targets that don't take HTML. Falls back to plain text if the backend
+      refuses the flavour; a Copy is not worth an error dialog.
+      - Windows needs **CF_HTML**, not HTML: a header whose four numbers are *byte* offsets into the payload
+        that contains them. `CfHtml.Wrap` is pure and pinned by a test that re-derives every offset from the
+        bytes, because it's unverifiable here and a wrong number makes Windows paste **nothing, silently**.
+        Written as bytes (not a string) so the encoding matches the offsets.
+      - `TableFormats.Html` now emits **inline** styles + legacy `border`/`cellspacing` attributes: Teams,
+        Outlook and Word sanitise pasted markup, dropping `<style>` blocks and classes, so a rule that isn't
+        on the element is a rule that won't survive.
+      - Trap avoided (documented at the call site): the transfer **must not be disposed** by the caller —
+        the clipboard serves it lazily on paste (how X11/Wayland clipboards work) and disposes it itself. A
+        `using` there leaves a dead object on the clipboard and the paste comes back empty.
+      - **Bytes, never strings — this was the bug in the first attempt.** QA reported `wl-paste --list-types`
+        listing `text/html` while Teams still pasted plain text. Measured with a throwaway Avalonia probe
+        driving the app's own `HtmlClipboard` against the real clipboard: a platform format created with
+        `DataFormat.CreateStringPlatformFormat` is **advertised but serves an empty payload** on
+        X11/XWayland (Avalonia 12.1), so the target asks for HTML, gets zero bytes, and falls back to the
+        plain text. `CreateBytesPlatformFormat` + UTF-8 serves correctly (1,000 bytes of styled table, escaping
+        and NULL-as-empty-cell intact). Bytes also settle the encoding question the backend would otherwise
+        pick, which CF_HTML needs anyway. `HtmlClipboard.Payload(html, target)` is split out so all three
+        platforms' shapes are asserted from any one of them.
+      - **How to re-check by hand** (§4.3 — no synthetic input can trigger a copy): copy, then
+        `wl-paste --list-types` must list `text/html` **and** `wl-paste --type text/html` must print the
+        markup. The listing alone proves nothing — that is exactly what hid this bug.
+    - **New format: "SQL IN list — 1, 2, 'abc'"** (`grid.copyAs.inList`) — every selected value as
+      SQL literals, `7, 8, 'abc'`, with **no parentheses** (it's pasted between the ones already in
+      `where id in ()`) on one line. Duplicates collapse, first occurrence wins, since selecting a repeating
+      column is the normal way to build one. **NULLs are dropped**: `in (null)` matches nothing while looking
+      like it might, and in a `not in (…)` list it makes the predicate unknown for *every* row, silently
+      returning no rows at all. (Labelled for the SQL construct after QA: the first name said
+      "comma-separated values", one line above the item literally called CSV.)
+    - Menu order now lives in one place (`CopyRenderer.Alternatives`, most-reached-for first), read by both
+      the context menu and the command registration, with a test that a new enum member must appear in it.
 - [ ] **P2** **Paste into the results grid (`Ctrl+V`)** — copy is done, paste doesn't exist. Requested
   2026-08-11: copy the selected cells' values, then select one or more cells and paste, editing those rows.
-  Copy already works (`grid.copy`, `Ctrl+C`/`Ctrl+Insert` → `GridSelectionOps.Tsv`); there is **no**
-  `grid.paste` in `CommandIds` and nothing in `src/` reads the clipboard, so this is all new.
+  Copy already works (`grid.copy`, `Ctrl+C`/`Ctrl+Insert` → `GridSelectionOps.Tsv`, plus Copy as ▸ since
+  2026-08-11); there is **no** `grid.paste` in `CommandIds` and nothing in `src/` reads the clipboard, so this
+  is all new. It now has a home in the UI: the grid's `Controls/ResultContextMenu`, next to Copy.
   - **Fill semantics** (the requested case): a single clipboard value pasted over an N-cell selection writes
     that value into every selected cell. A multi-cell TSV block anchors at the active cell and fills
     right/down — **decide** whether it clips to the selection or extends past it (Excel extends from a
@@ -407,23 +510,27 @@ close, *not* on window close — prompting at quit would be friction for zero sa
   - Pure part → parsing clipboard TSV into a rectangle and mapping it onto the selection belongs beside
     `Results/GridSelectionOps` (§2.5), unit-testable without a grid — the paste *shape* rules are exactly the
     kind of thing Wayland stops us verifying by hand (§4.3).
-- [ ] **P2** **ISO dates in the grid and on the clipboard** — requested 2026-08-11. Copy and display share one
-  formatter (`GridSelectionOps.CellText` → `CellFormat.Display`), so **changing the three patterns in
-  `Formatting/CellFormat.cs` fixes both at once** — that's the "make it ISO when displaying as well"
-  simplification, not two changes. Today: `DateTimePattern` `dd.MM.yyyy HH:mm:ss`, `DatePattern`
-  `dd.MM.yyyy`, `TimePattern` `HH:mm:ss` (already `InvariantCulture`).
-  - **Decide the exact form**: `yyyy-MM-dd HH:mm:ss` (space, far more readable in a grid, still RFC 3339)
-    vs. strict `yyyy-MM-ddTHH:mm:ss`. Also decide fractional seconds — the current `TryParseExact` on
-    `dd.MM.yyyy HH:mm:ss` **fails** on any value carrying them and falls through to the lenient parse.
-  - **`DateTimeOffset` must keep its offset** (`…K`, or round-trip `o`). The current pattern drops it
-    entirely, so copying a `timestamptz` today loses the zone — an existing data-loss-on-copy bug that this
-    change is the natural moment to fix.
-  - **Round-trip gets strictly better**, which is the real argument: `CellFormat.TryParseDate` tries the
-    display pattern first, so an ISO display means an edited or pasted date re-parses unambiguously instead
-    of depending on which way the current culture reads `03.04.2026`.
-  - Rewrite `CellFormat`'s class doc comment — it currently *justifies* the day-first pattern ("`.NET`'s
-    culture data for day-first locales adds spaces/trailing dots"), so leaving it would contradict the code.
-    Update `CellFormatTests` (patterns are asserted there) and note the visible change for eyeball QA.
+- [x] **P2** **ISO dates in the grid and on the clipboard** — **done 2026-08-11** *(live QA — every date on
+  screen changes shape, so this is the one item here that needs a real eyeball pass)*. One change in
+  `Formatting/CellFormat.cs` fixed display, clipboard, inspector and export together, as predicted.
+  - **The form chosen is `yyyy-MM-dd HH:mm:ss`** — a space, not `T` (far easier to scan in a grid, and RFC
+    3339 permits it by mutual agreement). `DatePattern` `yyyy-MM-dd`, `TimePattern` unchanged.
+  - **Fractional seconds are shown when present, and only then**: the patterns end `.FFFFFF`, and because the
+    `.` is immediately followed by `F` specifiers .NET drops the separator too for a whole second. Postgres
+    stores microseconds, so truncating them would mean copying a value that isn't the one in the row.
+  - **`DateTimeOffset` now keeps its offset** via its own `DateTimeOffsetPattern` (`…zzz` →
+    `2026-08-11 14:03:22+02:00`). That closes the data-loss-on-copy bug the entry flagged.
+  - `TryParseDate` takes a **list** of accepted exact forms per type rather than one pattern, so a user typing
+    `2026-08-11 14:03` (no seconds), pasting an RFC 3339 `T` form, or omitting the offset on a `timestamptz`
+    all parse before the lenient culture fallback. A test pins that the same text parses identically under
+    `en-US` and `hr-HR`, which is the whole point.
+  - **Also fixed, same family:** SQL literals were rendered with `value.ToString()`, i.e. in the *current
+    culture*, so a date literal built on a Croatian machine came out `'11.08.2026 14:03:22'` and its meaning
+    then depended on the server's `DateStyle`. Extracted to `Results/SqlValue.Literal` (used by the inline-edit
+    preview, the FK-navigation lookup and Copy as ▸ SQL), all date forms ISO, plus `bytea`/array/`Guid` arms.
+  - `CellFormat`'s class doc no longer justifies day-first; `CellFormatTests` is 19 tests (was 8).
+    `ViewModels/HistoryPanelViewModel` deliberately keeps `dd.MM.yyyy` — those are log timestamps in prose,
+    not data values being copied.
 - [ ] **P2** Checkbox (bool) cells don't take grid selection — clicking one toggles the value but leaves the
   cell/row selection where it was, so keyboard nav and copy act on the wrong cell. Make the bool cell set the
   selection on click like every other cell. `Controls/ResultCellFactory.cs` `BoolCell`.
@@ -584,8 +691,14 @@ close, *not* on window close — prompting at quit would be friction for zero sa
     measure-column filtering), `ResultMetaTextTests`, `ColumnKindsTests`, `ShellNavigationTests`
     (tab wrap/clamp, focus-ring order).
 - [x] **P3** Remove dead `Views/HistoryWindow.axaml(.cs)` — **done**, the files are gone; the inline History panel is the only history UI.
-- [~] **P3** The "coming soon" stubs. *(`About` done — `Views/AboutDialog.cs` shows name/tagline/version from `<Version>` in `Directory.Build.props`. `Settings` done 2026-08-09 — the rail gear and Edit ▸ Settings… open the real window.)* **One** remains and it belongs to another item: **Export** (`Controls/ResultEditToolbar.cs`, a rendered-but-unwired `⭳ Export` button) → the export item above.
-- [~] **P3** Clear build warnings — **3 remain**, verified this pass; the obsolete `TextBox.Watermark` → `PlaceholderText` set is **fixed**. Left: `CS0108` `StatementMargin.Width` hides `Layoutable.Width` (`Editing/StatementMargin.cs:16`), and `xUnit2013` ×2 (`HistoryPanelTests.cs:51,53` — use `Assert.Single`).
+- [x] **P3** The "coming soon" stubs — **none left.** `About` → `Views/AboutDialog.cs`; `Settings` → the real
+  window (2026-08-09); **`⭳ Export` wired 2026-08-11** and moved to `Controls/ResultExportButton` so read-only
+  results get it too.
+- [~] **P3** Clear build warnings — **2 remain**, both `xUnit2013` (`HistoryPanelTests.cs:51,53` — use
+  `Assert.Single`). `CS0108` on `StatementMargin` is **fixed 2026-08-11**: the private `const double Width`
+  shadowed `Layoutable.Width`, which layout actually reads, so it was renamed `GutterWidth` rather than
+  papered over with `new` (a constant hiding a layout property reads as a bug either way). The obsolete
+  `TextBox.Watermark` → `PlaceholderText` set was fixed earlier.
 
 ---
 
@@ -641,6 +754,11 @@ close, *not* on window close — prompting at quit would be friction for zero sa
     anything that wants to *show* SQL statements reuses `Controls/SqlStatementList`.
   - **`ConnectionInfo.Options` handling** — the P3 factory item is the prerequisite for any app-level
     (`entra.*`) option key, since unknown keys currently reach Npgsql and throw.
+  - **Tabular text/file formats** — **built** (2026-08-11). A new format (Parquet, a `VALUES` list, an
+    `insert … on conflict` variant) is a function over `Results/TableBlock` in `TableFormats` plus one enum
+    member; it then works for both Copy as ▸ and Export, and is unit-testable without a grid. The grid's
+    **context menu** (`Controls/ResultContextMenu`) is the discoverable home for new grid actions — Paste
+    belongs there next to Copy.
   - **Settings framework** — **built** (2026-08-09). Anything that wants to become configurable now costs
     a property plus a catalog entry; see the settings item above. The one option still wanted and not
     there is the TLS/`sslmode` preference, which needs the connection-level work first.

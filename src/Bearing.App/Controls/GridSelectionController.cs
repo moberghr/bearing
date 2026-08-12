@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.VisualTree;
 using Bearing.App.Results;
+using Bearing.App.Services;
 using Bearing.App.ViewModels;
 using Avalonia.Input.Platform;
 using Avalonia;
@@ -81,6 +82,19 @@ public sealed class GridSelectionController
         Model.Dragging = true;
         Model.DragAnchor = (row, col);
         pointer.Capture(grid);
+        Notify();
+    }
+
+    /// <summary>Collapse the selection to a single cell without arming a drag — what a right-click that
+    /// lands outside the current selection does, so the context menu can only ever act on cells the user is
+    /// actually pointing at.</summary>
+    public void SelectSingle(ResultSetViewModel result, object?[] row, int col)
+    {
+        Model.Result = result;
+        Model.Cells.Clear();
+        Model.Cells.Add((row, col));
+        Model.Active = (row, col);
+        Model.Anchor = (row, col);
         Notify();
     }
 
@@ -248,6 +262,35 @@ public sealed class GridSelectionController
         if (!ReferenceEquals(Model.Result, result) || Model.Cells.Count == 0) return;
         TopLevel.GetTopLevel(_owner)?.Clipboard?.SetTextAsync(GridSelectionOps.Tsv(result, Model.Cells));
     }
+
+    /// <summary>Copy as ▸ <paramref name="format"/>: the same selection rendered as CSV / Markdown / JSON /
+    /// a rich table / SQL / an IN list instead of TSV. The tabular ones carry a header row (unlike plain
+    /// Copy), since a bare grid of values is of little use in those formats.
+    /// <para>
+    /// The table format is the one that isn't just text: it goes on the clipboard as the platform's HTML
+    /// flavour (with TSV as the plain-text alternative) so Teams and Word paste a table instead of markup.
+    /// </para>
+    /// </summary>
+    public void CopyAs(ResultSetViewModel result, CopyFormat format)
+    {
+        if (!ReferenceEquals(Model.Result, result) || Model.Cells.Count == 0) return;
+        if (format == CopyFormat.Tsv) { Copy(result); return; }
+
+        var block = TableBlock.ForSelection(result, Model.Cells);
+        var text = CopyRenderer.Render(result, block, format);
+        if (format == CopyFormat.Html)
+        {
+            CrashReporter.Observe(
+                HtmlClipboard.SetAsync(TopLevel.GetTopLevel(_owner), text, GridSelectionOps.Tsv(result, Model.Cells)),
+                "grid.copyAs.html");
+            return;
+        }
+        TopLevel.GetTopLevel(_owner)?.Clipboard?.SetTextAsync(text);
+    }
+
+    /// <summary>Whether a copy action has anything to act on (guards the copy commands + menu items).</summary>
+    public bool HasSelection(ResultSetViewModel result)
+        => ReferenceEquals(Model.Result, result) && Model.Cells.Count > 0;
 
     /// <summary>grid.delete (Delete): mark every row that owns a selected cell for deletion. A pending-new
     /// row is dropped outright rather than marked, so prune any now-dangling selection entries afterwards.</summary>

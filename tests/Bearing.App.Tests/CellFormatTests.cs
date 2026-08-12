@@ -8,14 +8,40 @@ namespace Bearing.App.Tests;
 public class CellFormatTests
 {
     [Fact]
-    public void DateTime_uses_day_first_pattern()
-        => Assert.Equal("15.02.2022 10:05:03", CellFormat.Display(new DateTime(2022, 2, 15, 10, 5, 3)));
+    public void DateTime_uses_the_iso_pattern()
+        => Assert.Equal("2022-02-15 10:05:03", CellFormat.Display(new DateTime(2022, 2, 15, 10, 5, 3)));
 
     [Fact]
     public void DateOnly_and_TimeOnly_patterns()
     {
-        Assert.Equal("15.02.2022", CellFormat.Display(new DateOnly(2022, 2, 15)));
+        Assert.Equal("2022-02-15", CellFormat.Display(new DateOnly(2022, 2, 15)));
         Assert.Equal("10:05:03", CellFormat.Display(new TimeOnly(10, 5, 3)));
+    }
+
+    [Fact]
+    public void Whole_seconds_render_without_a_fractional_part()
+    {
+        // ".FFFFFF" must drop the separator too, or every timestamp would read "…:03." on the hour.
+        Assert.Equal("2022-02-15 10:05:03", CellFormat.Display(new DateTime(2022, 2, 15, 10, 5, 3)));
+        Assert.Equal("10:05:00", CellFormat.Display(new TimeOnly(10, 5)));
+    }
+
+    [Fact]
+    public void Sub_second_precision_is_shown_rather_than_silently_truncated()
+    {
+        // Postgres stores microseconds; a copied value that isn't the stored one is worse than a long one.
+        var dt = new DateTime(2022, 2, 15, 10, 5, 3).AddTicks(1234560); // .123456
+        Assert.Equal("2022-02-15 10:05:03.123456", CellFormat.Display(dt));
+    }
+
+    [Fact]
+    public void DateTimeOffset_keeps_its_offset()
+    {
+        // A timestamptz used to render through the plain date/time pattern, which dropped the zone — so
+        // copying one lost information that couldn't be recovered from the clipboard text.
+        var dto = new DateTimeOffset(2022, 2, 15, 10, 5, 3, TimeSpan.FromHours(2));
+        Assert.Equal("2022-02-15 10:05:03+02:00", CellFormat.Display(dto));
+        Assert.Equal("2022-02-15 08:05:03+00:00", CellFormat.Display(dto.ToUniversalTime()));
     }
 
     [Fact]
@@ -46,10 +72,47 @@ public class CellFormatTests
     }
 
     [Fact]
-    public void Parse_accepts_the_display_pattern_and_rejects_junk()
+    public void Round_trips_a_fractional_timestamp_and_an_offset()
     {
-        Assert.True(CellFormat.TryParseDate("01.12.2023 00:00:00", typeof(DateTime), out var v));
+        var dt = new DateTime(2022, 2, 15, 10, 5, 3).AddTicks(1234560);
+        Assert.True(CellFormat.TryParseDate(CellFormat.Display(dt), typeof(DateTime), out var back));
+        Assert.Equal(dt, back);
+
+        var dto = new DateTimeOffset(2022, 2, 15, 10, 5, 3, TimeSpan.FromHours(2));
+        Assert.True(CellFormat.TryParseDate(CellFormat.Display(dto), typeof(DateTimeOffset), out var backOffset));
+        Assert.Equal(dto, backOffset);              // same instant *and* same offset
+        Assert.Equal(dto.Offset, ((DateTimeOffset)backOffset!).Offset);
+    }
+
+    [Fact]
+    public void Parse_is_unambiguous_whatever_the_machine_culture_reads_first()
+    {
+        // The whole point of the ISO switch: "2026-04-03" is the 3rd of April everywhere. The old day-first
+        // display pattern meant an edited date depended on which way the current culture read 03.04.2026.
+        var previous = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo("en-US"); // month-first
+            Assert.True(CellFormat.TryParseDate("2026-04-03 12:00:00", typeof(DateTime), out var us));
+            CultureInfo.CurrentCulture = new CultureInfo("hr-HR"); // day-first
+            Assert.True(CellFormat.TryParseDate("2026-04-03 12:00:00", typeof(DateTime), out var hr));
+            Assert.Equal(new DateTime(2026, 4, 3, 12, 0, 0), us);
+            Assert.Equal(us, hr);
+        }
+        finally { CultureInfo.CurrentCulture = previous; }
+    }
+
+    [Fact]
+    public void Parse_accepts_shorter_and_T_separated_forms_and_rejects_junk()
+    {
+        Assert.True(CellFormat.TryParseDate("2023-12-01 00:00:00", typeof(DateTime), out var v));
         Assert.Equal(new DateTime(2023, 12, 1), v);
+        Assert.True(CellFormat.TryParseDate("2023-12-01", typeof(DateTime), out var dateOnlyText));
+        Assert.Equal(new DateTime(2023, 12, 1), dateOnlyText);
+        Assert.True(CellFormat.TryParseDate("2023-12-01T08:30", typeof(DateTime), out var tForm));
+        Assert.Equal(new DateTime(2023, 12, 1, 8, 30, 0), tForm);
+        Assert.True(CellFormat.TryParseDate("08:30", typeof(TimeOnly), out var t));
+        Assert.Equal(new TimeOnly(8, 30), t);
         Assert.False(CellFormat.TryParseDate("not a date", typeof(DateTime), out _));
     }
 

@@ -131,21 +131,62 @@ internal sealed class PageableExecutor : IQueryExecutor
     /// <summary>When set, <see cref="CountAsync"/> throws it — a real count failure, not an uncountable query.</summary>
     public System.Exception? CountError { get; set; }
 
-    private static QueryResult OneColumn => new(
-        new[] { new ColumnDescriptor("n", "int4", typeof(int)) },
-        new object?[][] { new object?[] { 1 } },
-        1, System.TimeSpan.Zero, null, null, false);
+    /// <summary>Rows the source query has in total. The default of one keeps the single-page result the
+    /// count tests expect; raise it (with <see cref="PageSize"/>) to exercise paging / fetch-all.</summary>
+    public int TotalRows { get; set; } = 1;
+
+    /// <summary>Rows a page returns. Set this to the same value as <c>AppSettings.ResultPageSize</c>: the
+    /// view-model infers "more rows exist" from a page coming back exactly that full, so a mismatch makes the
+    /// fake page in a way the real app never would.</summary>
+    public int PageSize { get; set; } = 1;
+
+    /// <summary>How many <see cref="ExecutePageAsync"/> calls have been served (fetch-all's page count).</summary>
+    public int PageCalls { get; private set; }
+
+    private int _served;
+
+    /// <summary>Delay each page by this many milliseconds — long enough for a test to cancel mid-fetch.</summary>
+    public int PageDelayMs { get; set; }
+
+    /// <summary>Invoked with the 1-based page number before each page is served, so a test can cancel a
+    /// fetch-all at a known point instead of racing a timer. Cancelling here surfaces exactly as it would
+    /// from a real driver: the token check right after this throws.</summary>
+    public System.Action<int>? BeforePage { get; set; }
+
+    private static readonly ColumnDescriptor[] Columns = [new("n", "int4", typeof(int))];
+
+    /// <summary>The next page: rows numbered from where the last one stopped, so a test can assert both the
+    /// count and the order of what fetch-all appended.</summary>
+    private QueryResult NextPage()
+    {
+        var take = System.Math.Max(0, System.Math.Min(PageSize, TotalRows - _served));
+        var rows = new object?[take][];
+        for (var i = 0; i < take; i++) rows[i] = new object?[] { _served + i + 1 };
+        _served += take;
+        return new QueryResult(Columns, rows, take, System.TimeSpan.Zero, null, null, Truncated: _served < TotalRows);
+    }
 
     public Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
-        => Task.FromResult<IReadOnlyList<QueryResult>>(new[] { OneColumn });
+    {
+        _served = 0; // a re-run starts the source query over
+        return Task.FromResult<IReadOnlyList<QueryResult>>(new[] { NextPage() });
+    }
 
-    public Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct) => Task.FromResult(OneColumn);
+    public async Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
+    {
+        PageCalls++;
+        BeforePage?.Invoke(PageCalls);
+        if (PageDelayMs > 0) await Task.Delay(PageDelayMs, ct);
+        ct.ThrowIfCancellationRequested();
+        return NextPage();
+    }
 
     public Task<long?> CountAsync(string sql, CancellationToken ct)
         => CountError is not null ? Task.FromException<long?>(CountError) : Task.FromResult(CountValue);
 
     public Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct)
-        => Task.FromResult<IReadOnlyList<QueryResult>>(new[] { OneColumn });
+        => Task.FromResult<IReadOnlyList<QueryResult>>(
+            new[] { new QueryResult(Columns, System.Array.Empty<object?[]>(), 0, System.TimeSpan.Zero, null, null, false) });
 }
 
 /// <summary>An executor whose <see cref="ExecuteAsync"/> blocks (per distinct SQL) until the test releases
@@ -307,6 +348,18 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
     {
         SavePickerCalls++;
         return Task.FromResult(_saveAsPath);
+    }
+
+    /// <summary>Where the next export picker "lands". Null = the user cancelled the picker.</summary>
+    public string? ExportPath { get; set; }
+
+    /// <summary>The (suggested name, format) pairs the export picker was opened with, in order.</summary>
+    public List<(string SuggestedName, Bearing.App.Results.ExportFormat Format)> ExportPickers { get; } = new();
+
+    public Task<string?> PickExportFileAsync(string suggestedName, Bearing.App.Results.ExportFormat format)
+    {
+        ExportPickers.Add((suggestedName, format));
+        return Task.FromResult(ExportPath);
     }
 
     /// <summary>What the write/save confirmation answers. False cancels the write.</summary>

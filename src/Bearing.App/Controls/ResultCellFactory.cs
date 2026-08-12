@@ -254,7 +254,18 @@ public sealed class ResultCellFactory
         border.AddHandler(InputElement.PointerPressedEvent, (_, e) =>
         {
             if (e.ClickCount >= 2) return; // let the grid start editing on double-click
-            if (!e.GetCurrentPoint(border).Properties.IsLeftButtonPressed) return;
+            var point = e.GetCurrentPoint(border).Properties;
+            if (point.IsRightButtonPressed)
+            {
+                // Right-click arms the context menu. Outside the current selection it collapses onto this
+                // cell, so Copy/Copy as can't act on cells the user isn't pointing at; *inside* it leaves the
+                // selection alone (right-clicking a block to copy it must not shrink it to one cell). Never
+                // marked handled — the flyout still has to open.
+                grid.Focus();
+                if (!_selection.IsSelected(result, row, index)) _selection.SelectSingle(result, row, index);
+                return;
+            }
+            if (!point.IsLeftButtonPressed) return;
             grid.Focus(); // route subsequent key presses to this grid's keyboard handler
 
             var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);

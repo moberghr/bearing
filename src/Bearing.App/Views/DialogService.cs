@@ -9,6 +9,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using Bearing.App.Results;
 using Bearing.App.Services;
 using Bearing.Core.Data;
 
@@ -89,6 +90,20 @@ public sealed class DialogService : IDialogService
             SuggestedFileName = suggestedName,
             FileTypeChoices = new[] { SqlFileType },
             SuggestedStartLocation = await StartFolder(window, startDir),
+        });
+        return file?.TryGetLocalPath();
+    }
+
+    public async Task<string?> PickExportFileAsync(string suggestedName, ExportFormat format)
+    {
+        if (Owner is not { } window) return null;
+        var extension = ResultExport.Extension(format);
+        var file = await window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = $"Export result to {ResultExport.Label(format)}",
+            DefaultExtension = extension,
+            SuggestedFileName = suggestedName,
+            FileTypeChoices = new[] { new FilePickerFileType(ResultExport.Label(format)) { Patterns = new[] { "*." + extension } } },
         });
         return file?.TryGetLocalPath();
     }

@@ -1,3 +1,4 @@
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -63,6 +64,17 @@ public sealed partial class ResultView
 
         // Double-tap a column header (incl. its resize gripper) → auto-fit that column to its content.
         grid.DoubleTapped += (_, e) => ResultGridChrome.AutoFitColumn(grid, e);
+
+        // Right-click menu: copy (in any format), fetch the rest, export. The cells collapse the selection
+        // onto themselves on a right-click outside it (see ResultCellFactory), so what the menu acts on is
+        // always what the user is pointing at.
+        grid.ContextFlyout = ResultContextMenu.Build(
+            result,
+            hasSelection: () => _selection.HasSelection(result),
+            copy: () => _selection.Copy(result),
+            copyAs: format => _selection.CopyAs(result, format),
+            fetchAll: result.IsPageable ? () => FetchAll?.Invoke(result) ?? Task.CompletedTask : null,
+            export: format => Export?.Invoke(result, format) ?? Task.CompletedTask);
 
         WireSelection(grid, result);
         if (result.IsEditable) WireEditing(grid, result);

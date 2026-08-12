@@ -1,3 +1,5 @@
+using Bearing.App.Results;
+
 namespace Bearing.App.Input;
 
 /// <summary>Stable command id constants, shared by the defaults table and the registration sites so a
@@ -54,6 +56,20 @@ public static class CommandIds
 
     // Grid
     public const string GridCopy = "grid.copy";
+    public const string GridFetchAll = "grid.fetchAll";
+
+    /// <summary>Copy the selection in one of the alternative formats: <c>grid.copyAs.csv</c>,
+    /// <c>.markdown</c>, <c>.json</c>, <c>.html</c>, <c>.sqlInsert</c>. All ship unbound (Ctrl+C is TSV) and
+    /// are reachable from the palette, the grid's context menu, or a user binding.</summary>
+    public static string GridCopyAs(CopyFormat format) => "grid.copyAs." + Lower(format.ToString());
+
+    /// <summary>Export the whole result set: <c>grid.export.csv</c> / <c>grid.export.xlsx</c>.</summary>
+    public static string GridExport(ExportFormat format) => "grid.export." + Lower(format.ToString());
+
+    /// <summary>Enum name → id segment (<c>SqlInsert</c> → <c>sqlInsert</c>), so ids stay camelCase like
+    /// every other one here.</summary>
+    private static string Lower(string name) => char.ToLowerInvariant(name[0]) + name[1..];
+
     public const string GridSelectAll = "grid.selectAll";
     public const string GridDelete = "grid.delete";
     public const string GridBeginEdit = "grid.beginEdit";

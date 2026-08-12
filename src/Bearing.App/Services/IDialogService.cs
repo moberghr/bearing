@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Bearing.App.Results;
 using Bearing.App.Views;
 using Bearing.Core.Data;
 
@@ -84,6 +85,10 @@ public interface IDialogService
 
     /// <summary>Pick a destination for saving a .sql file. Returns the local path, or null if cancelled.</summary>
     Task<string?> PickSaveScriptAsync(string suggestedName, string? startDir);
+
+    /// <summary>Pick a destination for an exported result set, filtered to <paramref name="format"/>'s file
+    /// type. Returns the local path, or null if cancelled.</summary>
+    Task<string?> PickExportFileAsync(string suggestedName, ExportFormat format);
 
     /// <summary>Show SQL in a read-only, monospace preview window (non-modal; selectable to copy).</summary>
     void ShowSqlPreview(string sql, string title = "SQL preview — changes to save");

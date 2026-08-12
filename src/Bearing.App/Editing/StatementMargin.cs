@@ -13,7 +13,9 @@ namespace Bearing.App.Editing;
 /// </summary>
 public sealed class StatementMargin : AbstractMargin
 {
-    private const double Width = 7;
+    // Not "Width": that would shadow Layoutable.Width, which this class also has (and which layout reads),
+    // so the two names would look interchangeable while meaning different things.
+    private const double GutterWidth = 7;
     private const double BarWidth = 3;
     private const double BarInset = 2;
 
@@ -35,7 +37,7 @@ public sealed class StatementMargin : AbstractMargin
         InvalidateVisual();
     }
 
-    protected override Size MeasureOverride(Size availableSize) => new(Width, 0);
+    protected override Size MeasureOverride(Size availableSize) => new(GutterWidth, 0);
 
     protected override void OnTextViewChanged(TextView oldTextView, TextView newTextView)
     {

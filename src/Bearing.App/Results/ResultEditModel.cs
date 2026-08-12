@@ -82,7 +82,7 @@ internal static class ResultEditModel
     {
         var byName = c.Parameters.ToDictionary(p => p.Name, p => p.Value);
         return Regex.Replace(c.Sql, @"@p\d+", m =>
-            byName.TryGetValue(m.Value, out var v) ? (v is null ? "null" : SqlLiteral(v)) : m.Value);
+            byName.TryGetValue(m.Value, out var v) ? SqlValue.Literal(v) : m.Value);
     }
 
     /// <summary>`select * from ref where refcol = &lt;value&gt; [and …]` with all key parts from the row.</summary>
@@ -94,7 +94,7 @@ internal static class ResultEditModel
             var value = row[t.SourceColumnIndices[i]];
             preds.Add(value is null
                 ? $"{QuoteIdent(t.RefColumns[i])} is null"
-                : $"{QuoteIdent(t.RefColumns[i])} = {SqlLiteral(value)}");
+                : $"{QuoteIdent(t.RefColumns[i])} = {SqlValue.Literal(value)}");
         }
         return $"select * from {QuoteIdent(t.RefSchema)}.{QuoteIdent(t.RefTable)}\nwhere {string.Join("\n  and ", preds)};";
     }
@@ -176,7 +176,7 @@ internal static class ResultEditModel
             if (t == typeof(Guid)) return Guid.Parse(s);
             if (t == typeof(bool)) return bool.Parse(s);
             if (t.IsEnum) return Enum.Parse(t, s, ignoreCase: true);
-            // Dates: accept the display pattern (dd.MM.yyyy HH:mm:ss) the user sees, else a lenient parse.
+            // Dates: accept the ISO display forms (yyyy-MM-dd HH:mm:ss) the user sees, else a lenient parse.
             if (CellFormat.TryParseDate(s, t, out var date)) return date;
             return Convert.ChangeType(s, t, CultureInfo.InvariantCulture);
         }
@@ -184,17 +184,4 @@ internal static class ResultEditModel
     }
 
     private static string QuoteIdent(string ident) => "\"" + ident.Replace("\"", "\"\"") + "\"";
-
-    /// <summary>Format a key value as a SQL literal. Values come from the DB (not user text); strings
-    /// and other types are single-quoted (with '' escaping) and left to Postgres to cast.</summary>
-    private static string SqlLiteral(object value) => value switch
-    {
-        bool b => b ? "true" : "false",
-        byte or sbyte or short or ushort or int or uint or long or ulong
-            => Convert.ToString(value, CultureInfo.InvariantCulture)!,
-        float f => f.ToString("R", CultureInfo.InvariantCulture),
-        double d => d.ToString("R", CultureInfo.InvariantCulture),
-        decimal m => m.ToString(CultureInfo.InvariantCulture),
-        _ => "'" + value.ToString()!.Replace("'", "''") + "'",
-    };
 }

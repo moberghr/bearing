@@ -117,14 +117,13 @@ public sealed partial class ResultView
                 VerticalAlignment = VerticalAlignment.Center,
             });
 
-        // Right of the meta row: subtle edit controls for an editable result, or a read-only lock chip
-        // + reason for a locked one (design RESULTS_GRID §8). Undetermined results show neither.
+        // Right of the meta row: Export (any grid result), then subtle edit controls for an editable result or
+        // a read-only lock chip + reason for a locked one (design RESULTS_GRID §8). A non-grid result
+        // (statement message / error) shows none of it.
         var metaRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         Grid.SetColumn(left, 0);
         metaRow.Children.Add(left);
-        Control? right = result.IsEditable && grid is not null ? BuildEditToolbar(result, grid)
-            : result.LockReason is { } lockReason ? ResultChrome.LockChip(lockReason)
-            : null;
+        Control? right = BuildMetaActions(result, grid);
         if (right is not null)
         {
             Grid.SetColumn(right, 1);
@@ -187,6 +186,28 @@ public sealed partial class ResultView
         countBtn.Bind(Visual.IsVisibleProperty, new Binding(nameof(ResultSetViewModel.CanCount)));
         countBtn.Click += async (_, _) => { if (CountTotal is { } f) await f(result); };
         left.Children.Add(countBtn);
+
+        // ⤓ all pages the result to the end in one action instead of scrolling for it. Bound to HasMore, so it
+        // retires by itself the moment the last page lands (whether it got there by scrolling or by this).
+        var fetchAllBtn = ResultChrome.SubtleButton("⤓ all", "Fetch every remaining row (Esc to stop)");
+        fetchAllBtn.Margin = new Thickness(4, 0, 0, 0);
+        fetchAllBtn.DataContext = result;
+        fetchAllBtn.Bind(Visual.IsVisibleProperty, new Binding(nameof(ResultSetViewModel.HasMore)));
+        fetchAllBtn.Click += async (_, _) => { if (FetchAll is { } f) await f(result); };
+        left.Children.Add(fetchAllBtn);
+    }
+
+    /// <summary>The meta row's right-hand actions: Export for every grid result, plus either the edit toolbar
+    /// or the read-only lock chip. Null for a non-grid result.</summary>
+    private Control? BuildMetaActions(ResultSetViewModel result, DataGrid? grid)
+    {
+        if (!result.HasGrid) return null;
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        actions.Children.Add(ResultExportButton.Build(format => Export?.Invoke(result, format) ?? Task.CompletedTask));
+        // Edit controls last, so the commit group (Discard · Save) stays the rightmost thing on the row.
+        if (result.IsEditable && grid is not null) actions.Children.Add(BuildEditToolbar(result, grid));
+        else if (result.LockReason is { } lockReason) actions.Children.Add(ResultChrome.LockChip(lockReason));
+        return actions;
     }
 
     private Control BuildEditToolbar(ResultSetViewModel result, DataGrid grid)

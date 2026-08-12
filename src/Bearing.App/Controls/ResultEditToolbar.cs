@@ -12,12 +12,13 @@ using static Bearing.App.Controls.Tokens;
 namespace Bearing.App.Controls;
 
 /// <summary>
-/// The right-hand side of an editable result's meta row: the always-visible ＋ Add / Delete / ⭳ Export
-/// actions, plus a commit group (● N pending · Discard · Save) that reveals itself only while there
-/// are unsaved changes — bound to <see cref="ResultSetViewModel.HasPendingChanges"/>, so it tracks edits made
-/// anywhere (a cell commit, a checkbox toggle, a keyboard delete) without this toolbar being told.
+/// The right-hand side of an editable result's meta row: the always-visible ＋ Add / Delete actions, plus a
+/// commit group (● N pending · Discard · Save) that reveals itself only while there are unsaved changes —
+/// bound to <see cref="ResultSetViewModel.HasPendingChanges"/>, so it tracks edits made anywhere (a cell
+/// commit, a checkbox toggle, a keyboard delete) without this toolbar being told.
 /// <para>There is no Script/preview button: Save now shows the generated DML in its confirmation, so the
-/// preview is on the path to committing rather than a step the user had to remember to take.</para>
+/// preview is on the path to committing rather than a step the user had to remember to take. Export moved
+/// out to <see cref="ResultExportButton"/> — it applies to read-only results too, which never render this.</para>
 /// </summary>
 public static class ResultEditToolbar
 {
@@ -46,12 +47,9 @@ public static class ResultEditToolbar
             }
         };
 
-        var export = ResultChrome.SubtleButton("⭳ Export", "Export — coming soon"); // rendered; wired later (per decision)
-
         var bar = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         bar.Children.Add(add);
         bar.Children.Add(delete);
-        bar.Children.Add(export);
         bar.Children.Add(PendingGroup(result, onSave, onDiscard));
         return bar;
     }
