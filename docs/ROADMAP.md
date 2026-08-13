@@ -431,7 +431,7 @@ Legend: `[ ]` open · `[~]` partly done.
 
 ## 🔵 Open — hardening, security & distribution
 
-- [~] **P1** **Windows + macOS secure credential storage — written 2026-08-13, verified on neither.** Both
+- [~] **P1** **Windows + macOS secure credential storage — Windows verified 2026-08-13, macOS still not.** Both
   stores now exist behind the unchanged `ISecretStore`, and `SecretStoreFactory` dispatches per platform
   (`PlatformStore()`) instead of wiring libsecret only, so nothing above the store changed:
   `WindowsCredentialSecretStore` (Credential Manager via `CredWriteW`/`CredReadW`/`CredDeleteW`, keyed
@@ -440,16 +440,19 @@ Legend: `[ ]` open · `[~]` partly done.
   Availability is now decided by a **shared store→read→delete probe** in the factory rather than a
   per-store `IsAvailableAsync`, with a `finally` that never leaves a probe credential behind (it would be
   visible in both OS credential UIs).
-  - **What's left is the part this box can't do: run it.** `tests/Bearing.Persistence.Tests/PlatformKeychainTests.cs`
-    is the whole contract (round-trip, rotate-in-place, idempotent delete, per-connection isolation,
-    awkward/Unicode password) written platform-agnostically over
-    `SecretStoreFactory.CreatePlatformStoreAsync`, so **`dotnet test` on a Windows or macOS box is the
-    verification** — 5 skip-safe tests that pass here against real libsecret and will exercise the new
-    stores there. The first test also asserts the factory picked *this* platform's store, which is the quiet
-    failure to watch for (falling through to the file fallback on a platform that has a keychain).
-  - Also worth eyeballing on those platforms: the status bar reads "Secrets: OS keychain." and the
-    connection dialog defaults to *Stored password* with no warning — that's `CanStore`/`IsSecure` true,
-    i.e. the same posture Linux has today.
+  - **Windows: done.** `tests/Bearing.Persistence.Tests/PlatformKeychainTests.cs` — the whole contract
+    (round-trip, rotate-in-place, idempotent delete, per-connection isolation, awkward/Unicode password),
+    written platform-agnostically over `SecretStoreFactory.CreatePlatformStoreAsync` — **was run on a Windows
+    box 2026-08-13 and passed**, so `WindowsCredentialSecretStore` and the factory's platform dispatch are
+    verified against real Credential Manager. That includes the first test's assertion that the factory picked
+    *this* platform's store, which was the quiet failure to watch for (falling through to the file fallback on
+    a platform that has a keychain) — it didn't happen.
+  - **macOS: still unrun.** Same 5 skip-safe tests are the verification; nothing to write, it needs a Mac.
+    Until then `MacKeychainSecretStore` is code that has never executed — treat its `security`-CLI argument
+    parsing and the service/account keying as unproven, not merely un-QA'd.
+  - Also worth eyeballing on those platforms (**not yet done on Windows either**): the status bar reads
+    "Secrets: OS keychain." and the connection dialog defaults to *Stored password* with no warning — that's
+    `CanStore`/`IsSecure` true, i.e. the same posture Linux has today.
   - **Known trade-off on macOS:** `security add-generic-password` takes the password as an argument, so it
     is briefly visible in the process list (documented in the class). Its stdin-prompt mode reads from
     `/dev/tty` when one exists and would hang a terminal-launched app, and macOS restricts reading another
