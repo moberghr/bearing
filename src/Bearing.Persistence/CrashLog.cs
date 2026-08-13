@@ -23,4 +23,22 @@ public static class CrashLog
         }
         catch { /* diagnostics must never cascade */ }
     }
+
+    /// <summary>
+    /// Record a diagnostic that isn't an exception — a decision the app made silently and that the user would
+    /// otherwise have no way to explain. Same file, same never-throws contract as <see cref="Write"/>.
+    /// </summary>
+    public static void Note(string context, string message)
+    {
+        try
+        {
+            var entry = new StringBuilder()
+                .Append("=== ").Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")).Append(" · ").Append(context).AppendLine(" ===")
+                .AppendLine(message)
+                .AppendLine()
+                .ToString();
+            File.AppendAllText(Path, entry);
+        }
+        catch { /* diagnostics must never cascade */ }
+    }
 }

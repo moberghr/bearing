@@ -23,6 +23,16 @@ Legend: `[ ]` open · `[~]` partly done.
 > toolbar History button had it too; covered by `tests/Bearing.App.Tests/SidePanelRevealTests.cs`) and the
 > clipped connection-dialog Test error (wrapping + selectable + `SafeErrorText`). Both still want *(live QA)*.
 >
+> **2026-08-13 (secret-store probe):** the app claimed *"No system keyring found"* on a Linux box whose
+> libsecret worked perfectly. Two causes, both now fixed: the probe ran **once** at startup
+> (`App.axaml.cs`), so a keyring that wasn't serving at that instant pinned the session into the file
+> fallback until restart — there is now an upgrade-only `ShellViewModel.RefreshSecretStorageAsync`, re-asked
+> before the connection dialog opens; and `ProbeAsync` caught every failure into a bare `false`, discarding a
+> message that already held `secret-tool`'s own stderr — it now returns a redacted reason which
+> `CreateAsync` writes to `crash.log` via the new `CrashLog.Note`. 14 new tests
+> (`SecretStoreProbeTests`, `SecretStorageRefreshTests`). **Unverified against the original symptom**: it
+> needs the transient to recur, so the log line is the evidence to look for next time.
+>
 > **2026-08-13 (later still):** three requests added — completion going dead on disconnect and better
 > autocomplete matching (both under *Editor*, in that order — fuzzy matching is moot while the popup won't
 > open at all), and a multi-sheet Excel workbook per run (end of *Results grid*). Two things to know before
@@ -466,6 +476,17 @@ Legend: `[ ]` open · `[~]` partly done.
   - **Prerequisite-ish:** the P3 CI item below. Multi-platform packaging by hand on a Linux box isn't
     verifiable; a build matrix is what makes a Velopack release reproducible, and signing/notarization is the
     part that will actually bite on macOS.
+- [ ] **P3** **The no-keyring warnings still assert a cause they never checked.** Both amber blocks
+  (`ConnectionDialog.axaml:46,54`) and the status bar (`ShellViewModel.Projects.SecretPosture`) say "No system
+  keyring **found**", which is now known to be wrong in at least one real case — the keyring was there and
+  answering, the probe just ran too early. The reason is no longer thrown away (`SecretStoreFactory`
+  → `CrashLog.Note`), so the remaining work is to carry it to the UI: reword to "couldn't be reached", and
+  plumb the reason through `SecretStoragePosture` (a third field) so the dialog can show *why* — a locked
+  collection and a missing helper want different advice, and only one of them is worth an unlock hint.
+  - While there: the re-probe fires on every connection-dialog open on a machine that genuinely has no
+    keychain (it's a no-op only once a keychain is adopted). That's the right trade — it's exactly the machine
+    where healing matters — but if it ever shows up as a delay, cache the failure for a short interval rather
+    than reverting to deciding once.
 - [ ] **P2** Query-log privacy: file perms (0600), optional encryption, and/or PII/literal stripping.
   Retention exists (default 180d); no stripping. `SqliteQueryLog.cs`.
 - [ ] **P2** Enforce/prompt TLS (`sslmode`) — currently only set if the user adds the option manually.

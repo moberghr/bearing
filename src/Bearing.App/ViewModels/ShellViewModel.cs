@@ -161,7 +161,45 @@ public sealed partial class ShellViewModel : ObservableObject
     public string? ScriptsDirectory => _project?.ScriptsDirectory;
     public string? CurrentProjectName => _project?.Manifest.Name;
 
-    public void AttachSecretStore(ISecretStore secretStore) => _secretStore = secretStore;
+    /// <summary>Attach the secret store chosen at startup, and optionally the means to ask again later.</summary>
+    /// <param name="reprobe">Re-runs the platform probe. Supplied by the composition root (§2.4) rather than
+    /// reached for, so tests can drive the upgrade without a real keychain.</param>
+    public void AttachSecretStore(ISecretStore secretStore, Func<CancellationToken, Task<ISecretStore>>? reprobe = null)
+    {
+        _secretStore = secretStore;
+        _reprobeSecretStore = reprobe;
+    }
+
+    private Func<CancellationToken, Task<ISecretStore>>? _reprobeSecretStore;
+
+    /// <summary>
+    /// Ask again whether this machine has a usable keychain, and adopt it if so. The startup probe happens
+    /// once, very early — if the keyring wasn't serving yet at that moment (a launch soon after login, a
+    /// keyring daemon still settling), the app used to spend the entire session insisting there was none,
+    /// refusing to save passwords, with no way to re-check short of a restart.
+    /// <para>
+    /// <b>Upgrades only.</b> A session already on a keychain never re-probes: a transient failure must not
+    /// demote a working store and start refusing passwords mid-session (§1.1). So this is also a cheap no-op
+    /// in the normal case, which is what makes it safe to call from the UI path.
+    /// </para>
+    /// </summary>
+    /// <returns>True when the posture improved, so the caller can tell the user something changed.</returns>
+    public async Task<bool> RefreshSecretStorageAsync(CancellationToken ct = default)
+    {
+        if (_reprobeSecretStore is null || _secretStore?.IsSecure == true) return false;
+
+        ISecretStore candidate;
+        try { candidate = await _reprobeSecretStore(ct).ConfigureAwait(true); }
+        catch { return false; }   // best-effort, like every other probe on this path
+
+        if (!candidate.IsSecure) return false;
+
+        _secretStore = candidate;
+        OnPropertyChanged(nameof(SecretStorageSecure));
+        OnPropertyChanged(nameof(SecretStorage));
+        StatusText = SecretPosture();
+        return true;
+    }
 
     /// <summary>
     /// Bring a tab back on screen — the click target of a completion toast. A tab whose project isn't the

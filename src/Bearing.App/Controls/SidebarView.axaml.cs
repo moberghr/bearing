@@ -183,6 +183,9 @@ public partial class SidebarView : UserControl
         if (Vm is null || NodeOf(sender) is not ServerNodeViewModel server) return;
         var existing = server.Connection;
         var password = await Vm.Connections.GetConnectionPasswordAsync(existing.Id);
+        // Re-check for a keychain first: the dialog's warnings and its default credential kind are decided by
+        // the posture passed in, and a startup probe that ran too early must not pin them for the session.
+        await Vm.RefreshSecretStorageAsync();
         var result = await _dialogs.ShowConnectionDialogAsync(existing, password, (i, p, ct) => Vm.Connections.TestConnectionAsync(i, p, ct), Vm.SecretStorage);
         if (result is null) return;
         if (result.Delete) await Vm.Connections.DeleteConnectionAsync(existing.Id);

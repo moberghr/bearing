@@ -40,6 +40,9 @@ public partial class MainWindow
     private async Task AddConnectionAsync()
     {
         if (Vm is null) return;
+        // As in SidebarView's edit path: a new connection's default credential kind depends on whether a
+        // password can be stored, so ask again before deciding it from a probe that ran at startup.
+        await Vm.RefreshSecretStorageAsync();
         var result = await _dialogs.ShowConnectionDialogAsync(null, null, (i, p, ct) => Vm.Connections.TestConnectionAsync(i, p, ct), Vm.SecretStorage);
         if (result is { Delete: false }) await Vm.Connections.AddOrUpdateConnectionAsync(result.Connection, result.Password);
     }

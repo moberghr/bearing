@@ -121,7 +121,10 @@ public partial class App : Application
         // The opt-in is read live (not captured), so flipping it in the settings window takes effect at once.
         var secretStore = await SecretStoreFactory.CreateAsync(
             allowUnencryptedFile: () => settings.Current.AllowUnencryptedSecretFile);
-        vm.AttachSecretStore(secretStore);
+        // The same call is handed over as the re-probe: this one runs very early, and a keyring that wasn't
+        // serving yet at this instant would otherwise pin the whole session into the file fallback.
+        vm.AttachSecretStore(secretStore, reprobe: ct => SecretStoreFactory.CreateAsync(
+            allowUnencryptedFile: () => settings.Current.AllowUnencryptedSecretFile, ct));
         // Reopen the last-used project; fall back to the default project on first run (or if it's gone).
         await vm.ResumeLastProjectAsync(DefaultProjectDirectory());
         // Opt-in convenience: seed the local pagila demo connection only when BEARING_SEED_DEMO is set.
