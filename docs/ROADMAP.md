@@ -23,6 +23,13 @@ Legend: `[ ]` open · `[~]` partly done.
 > toolbar History button had it too; covered by `tests/Bearing.App.Tests/SidePanelRevealTests.cs`) and the
 > clipped connection-dialog Test error (wrapping + selectable + `SafeErrorText`). Both still want *(live QA)*.
 >
+> **2026-08-13 (later still):** three requests added — completion going dead on disconnect and better
+> autocomplete matching (both under *Editor*, in that order — fuzzy matching is moot while the popup won't
+> open at all), and a multi-sheet Excel workbook per run (end of *Results grid*). Two things to know before
+> reading them: **Excel export already exists** and is a typed hand-rolled workbook, so that item is only
+> "many sheets + naming"; and the fuzzy-match item is **not** an engine change — the engine emits every table
+> unfiltered and AvaloniaEdit does all the narrowing today, which is what has to be taken over.
+>
 > Baseline at the last verified pass (2026-08-13): build clean with **4 warnings** — the 2 known `xUnit2013`
 > plus 2 `ANT01` from the vendored PostgreSQL lexer grammar, which the previous "2 warnings" count omitted;
 > tests **Sql 163 · App 451 · Data 27 · Persistence 38** (679, 0 skipped) run live against Postgres on 5434
@@ -231,9 +238,104 @@ Legend: `[ ]` open · `[~]` partly done.
   begin-edit already have grid commands (`grid.delete`, `grid.beginEdit`); add `grid.save` / `grid.discard` /
   `grid.addRow` to `CommandIds` + `KeymapDefaults`, register them in `ResultView`'s grid scope
   (`RegisterGridCommands`), gated on `IsEditable`/`HasPendingChanges`.
+- [ ] **P2** **Export a whole run to one Excel workbook — one sheet per result set, with nameable sheets.**
+  Requested 2026-08-13, explicitly as *"something to think about first"*, so this entry is a design brief
+  rather than a work order.
+  - **Excel export already exists**, and as a real typed workbook rather than CSV in disguise:
+    `ExportFormat.Xlsx` (`ResultExport.cs:11-15`) writing through the hand-rolled `XlsxWriter` — bold frozen
+    header, typed numbers and bools, dates as serials with a `numFmt`, `timestamptz` deliberately kept as ISO
+    text. **Read that class's comment before reaching for ClosedXML/NPOI/OpenXml**: the no-library choice is
+    argued there, and it also names the independent check for changes
+    (`soffice --headless --convert-to csv`, since the unit tests only assert what the writer itself believes).
+    Sheet naming exists too — `ResultExport.SheetName` uses the source table when known, else "Result"
+    (`:82`), via `XlsxWriter.SafeSheetName` (`:195` — ≤31 chars, strips `[]:*?/\`, never blank). **So the two
+    missing halves are: more than one sheet, and letting the user name them.**
+  - **One sheet is baked into four places**, each trivially parameterizable but all of which must agree: the
+    `sheet1.xml` `<Override>` in `[Content_Types].xml` (`:213`), the lone `<sheet … sheetId="1" r:id="rId1"/>`
+    in `Workbook` (`:236`), the lone `rId1` relationship in `WorkbookRels` (`:228`), and the hardcoded entry
+    path in `WriteSheet` (`:66`). Add a multi-sheet overload and keep today's single-sheet call as a wrapper
+    over it.
+  - **Trap: sheet names must be unique, and `SafeSheetName` can *create* collisions** by truncating two long
+    names to the same 31 characters — and two result sets from the same table (an entirely normal run) collide
+    even before truncation. Excel refuses a workbook with duplicate sheet names, so dedupe **after**
+    sanitizing (`orders`, `orders (2)`, …), as a pure tested function.
+  - **The real question is scope, and it's genuinely new.** All three export entry points are anchored to a
+    *single* result set — the grid command (`ResultView.cs:148-153`), the right-click menu
+    (`ResultContextMenu.cs:58-62`) and the meta-row ⭳ button (`ResultExportButton.cs:18-29`) — all funnelling
+    through `Func<ResultSetViewModel, ExportFormat, Task>` (`MainWindow.axaml.cs:137` →
+    `ExecutionViewModel.ExportAsync:418`). A workbook of *all* of a run's sets is per-**tab**
+    (`EditorTabViewModel.Results`, `:74,83-107`) and so needs a new home — Query menu, palette command, or the
+    results dock chrome — plus a gate to include only sets that have a grid (`rs.HasGrid`: a `DELETE`'s
+    row-count result is not a sheet).
+  - **It also multiplies the fetch-all problem.** A single export fetches to the end first and **abandons**
+    rather than write a truncated result (`ExportAsync:425-429`). For N sets that is N fetches, each taking a
+    lease and serialized by the per-tab `RunExclusiveAsync` — so decide up front whether the workbook is
+    all-or-nothing, or writes the sheets that completed and says which it dropped. **Do the unpaged fetch-all
+    item above first:** N page-walks over a live server is exactly where its consistency argument bites.
+  - Naming UI: a pre-export dialog listing the sets with editable names (defaulting to `SheetName(rs)`) is the
+    obvious shape, and the natural place to show which sets will be skipped and to let the user drop one. That
+    would make it the first export path with a dialog of its own — *(live QA)*.
 
 ### Editor
 
+- [ ] **P2** **Completion dies the moment the connection does — even though the schema it needs is already in
+  memory.** Reported 2026-08-13. `SnapshotForSelectedTab` reads the snapshot *off the live session* —
+  `_ctx.Sessions.TryGet(id)?.Snapshot` (`ExecutionViewModel.cs:558-560`) — and `TryGet` only consults the
+  manager's `_live` map (`ConnectionSessionManager.cs:42,165-168`). So every path that removes a session takes
+  completion with it: explicit disconnect and rebuild-on-edit (`EvictAsync:184-193`), the **idle sweep**
+  (`SweepIdleAsync:204-227`), and credential expiry. `CompletionController.TriggerAsync` then sees
+  `snapshot is null` and returns before it ever reaches the engine (`:67`), so the popup just stops appearing
+  — no message, nothing to click, and nothing on screen connecting it to the disconnect.
+  - **The snapshot has no connection dependency at all.** `Core/Schema/SchemaSnapshot` is an immutable,
+    indexed set of tables / columns / FKs / schemas — no reader, no factory, no handle. It merely *lives* on
+    `ConnectionSession.Snapshot` (`ConnectionSession.cs:40`), and that is the only thing tying its lifetime to
+    a pool it doesn't use.
+  - Fix: hold it **outside** session lifetime, keyed `(connection id, database)` — the same key
+    `_schemaInflight` already uses (`:49`) and the scope the snapshot genuinely has (a DB switch rebuilds the
+    session, which is what keeps `session.Snapshot` from going stale today — §9.4). `EnsureSchemaAsync:170-181`
+    / `LoadSchemaAsync:344-354` fill it; `SnapshotForSelectedTab` reads it, falling back to the session. Two
+    payoffs beyond the bug: completion keeps working while disconnected, and a reconnect stops re-reading a
+    catalog it already has.
+  - **Decide the staleness story — it's the only reason not to do this blindly.** A cached snapshot can be
+    arbitrarily old, and the known schema-refresh gap (objects created after connect stay invisible until
+    reconnect) then lasts longer. Options: keep it for the app session; evict on *explicit* disconnect but not
+    on the idle sweep; or stamp it and re-read in the background on reconnect. The idle sweep is the case that
+    matters — it fires on its own, so today the user loses completion without having done anything.
+  - `SchemaBrowser` caches **readers**, not snapshots (`SchemaBrowser.cs:26`), and re-reads the snapshot on
+    every `GetObjectsAsync:40-46` — so there is no existing snapshot cache to reuse, and the tree wants the
+    same one. Build one, not two.
+  - Unusually for a UI-adjacent bug this is **properly testable**: the manager and `ExecutionViewModel` are
+    both constructible in `Bearing.App.Tests` (see `ConnectionSessionManagerTests`), so "snapshot survives
+    eviction / idle sweep" is a real unit test rather than eyeball QA.
+- [ ] **P2** **Autocomplete matching is too literal — `accounting_lines` should be reachable from `al`, and
+  from `accli` too.** Requested 2026-08-13: match at word starts, and support initials plus subsequences
+  across `snake_case`, `kebab-case`, PascalCase and camelCase boundaries.
+  - **Nothing in this repo filters completion at all today.** `CompletionEngine.Complete` returns *every*
+    table in the schema — `TableSuggestions:95-113` yields one per `schema.Tables`, unfiltered — ranked only by
+    `Priority` then name (`:70-73`). All as-you-type narrowing is AvaloniaEdit's:
+    `CompletionController.OnTextEntered:54-55` deliberately bails while the window is open ("let AvaloniaEdit
+    filter it"). Its scorer (`GetMatchQuality`, `CamelCaseMatch` — present in the 12.0.0 assembly but
+    **private**, so not overridable) scores full match / match-start / substring / camel-case. The decisive
+    point needs none of that detail: `al` is neither a prefix **nor a substring** of `accounting_lines`, so no
+    branch of that scorer can match it and the item is filtered *out* of the list. This cannot be fixed by
+    tuning what the engine emits.
+  - **The scorer we want already exists in-repo.** `Input/PaletteFilter.Score(title, query)` (`:30-51`) is
+    precisely this algorithm: subsequence match, +5 per contiguous character, +3 for a word start
+    (`!char.IsLetterOrDigit(prev)` — so `_`, `-`, `.` and space all count), minus the index of the first hit.
+    Traced by hand it already answers the request: `al` → 6, `accli` → 21, both matching. **The gap is case
+    transitions** — it lowercases up front, so `AccountingLines` from `al` still matches but earns no
+    word-start bonus and sinks below noise. Add a lower→upper boundary test against the *original* string.
+  - The wiring is the actual work: set `CompletionList.IsFiltering = false` (the property does exist in
+    AvaloniaEdit 12.0.0) and own the narrowing — `CompletionController` stops returning at `:55` and instead
+    re-scores and re-populates the list per keystroke, which means also owning "nothing matches → close the
+    window" and keeping the selection sane as the list shrinks. Insertion is unaffected:
+    `BearingCompletionData.Text` is already filter-only, since `Complete()` inserts `ReplacementText`
+    (`:20-32`).
+  - Decide how the fuzzy score composes with the engine's `Priority` (tables 10, keywords 1) — specifically
+    whether a strong hit on a keyword may outrank a weak one on a table. Keep the scorer **pure** so it's
+    testable without a popup (§2.5, §4.3): generalize `PaletteFilter` rather than growing a second scorer, and
+    pin the two reported cases as tests. *(live QA)* for the feel. Pairs naturally with the popup
+    icons/styling item below — same list, same item template.
 - [ ] **P2** **Autocomplete popup: icons, styling, and schema completion.** The engine is schema-aware but
   the popup is stock AvaloniaEdit chrome showing plain strings, and schemas are absent from completion
   entirely. Three parts, independent enough to land separately:
