@@ -554,9 +554,24 @@ public sealed partial class ExecutionViewModel : ObservableObject
                 IsRisky: true))
             .ToList();
 
-    /// <summary>Schema for the selected tab's connection (drives completion); null when not yet loaded.</summary>
+    /// <summary>
+    /// Schema for the selected tab's connection + database (drives completion); null only when it has never
+    /// been read. Falls back to the snapshot cache when no session is live: completion needs the catalog, not
+    /// the connection, so a disconnect / credential expiry / idle sweep must not silently switch it off.
+    /// </summary>
     public ISchemaSnapshot? SnapshotForSelectedTab()
-        => Selected?.ConnectionId is { } id ? _ctx.Sessions.TryGet(id)?.Snapshot : null;
+    {
+        if (Selected is not { } tab || _ctx.EffectiveConnection(tab) is not { } info) return null;
+
+        // The live session's own snapshot counts only while that session is on *this* database: sessions are
+        // keyed by connection id alone (§9.4), so an id-only match is what would let database B serve up
+        // database A's snapshot — and this feeds editability and FK navigation, not just the popup.
+        if (_ctx.Sessions.TryGet(info.Id) is { Snapshot: { } live } session
+            && string.Equals(session.Info.Database, info.Database, StringComparison.Ordinal))
+            return live;
+
+        return _ctx.Sessions.TryGetSnapshot(info.Id, info.Database);
+    }
 
     // History logs one entry per submitted run; a multi-statement run aggregates its sets.
     private void LogExecution(ConnectionInfo info, string sql, IReadOnlyList<QueryResult> results) => _ctx.QueryLog.Append(new QueryLogEntry

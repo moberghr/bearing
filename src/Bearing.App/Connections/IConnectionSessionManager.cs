@@ -43,7 +43,16 @@ public interface IConnectionSessionManager : IAsyncDisposable
     /// <summary>Load the schema snapshot for a session if not already loaded (idempotent, single-flight).</summary>
     Task<ISchemaSnapshot?> EnsureSchemaAsync(ConnectionSession session, CancellationToken ct);
 
-    /// <summary>Drop and dispose the session for an id (e.g. after the connection is edited or deleted).</summary>
+    /// <summary>The last snapshot read for this connection+database, live session or not. Snapshots outlive
+    /// sessions deliberately, so completion still works while disconnected.</summary>
+    ISchemaSnapshot? TryGetSnapshot(Guid connectionId, string database);
+
+    /// <summary>Forget the cached schema for a connection — only for events that make the catalog untrue
+    /// (re-pointed at another server, deleted, explicitly refreshed). A disconnect is not one of them.</summary>
+    void InvalidateSchema(Guid connectionId);
+
+    /// <summary>Drop and dispose the session for an id (e.g. after the connection is edited or deleted).
+    /// Deliberately keeps the cached schema — see <see cref="InvalidateSchema"/>.</summary>
     Task EvictAsync(Guid connectionId);
 
     /// <summary>Close every live/in-flight session — e.g. on a project switch — while keeping the manager

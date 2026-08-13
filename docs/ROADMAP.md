@@ -33,18 +33,39 @@ Legend: `[ ]` open · `[~]` partly done.
 > (`SecretStoreProbeTests`, `SecretStorageRefreshTests`). **Unverified against the original symptom**: it
 > needs the transient to recur, so the log line is the evidence to look for next time.
 >
+> **2026-08-13 (schema cache):** *completion dying on disconnect* is **done and removed**. Snapshots now live
+> in a `(connection id, database)` cache on `ConnectionSessionManager` that **outlives sessions**
+> (`TryGetSnapshot`), because a snapshot never needed the connection — only the catalog it already read.
+> `SnapshotForSelectedTab` reads it, and only after checking that a live session is on *this* database (an
+> id-only match would have let database B serve database A's catalog, which drives editability and FK nav).
+> The staleness call: **kept** across disconnect, idle sweep, credential expiry and project switch; **dropped**
+> only by the three events that make the catalog untrue — connection re-pointed at another server, deleted, or
+> explicitly refreshed — via the new `InvalidateSchema`. Bonus payoff: a reconnect adopts the cached snapshot
+> instead of re-reading the catalog. 10 new tests (`SchemaCacheTests`).
+> **Found and fixed on the way:** `EnsureSchemaAsync` registered its single-flight entry *after* starting the
+> load, while `LoadSchemaAsync` clears that key in its own `finally` — so a load completing **synchronously**
+> left a completed task in `_schemaInflight` that nothing ever cleared, and every later call for that key was
+> served the stale snapshot instead of re-reading. Latent in production only because real Npgsql reads always
+> yield; it would have broken the schema-refresh path the moment anything cached.
+>
 > **2026-08-13 (later still):** three requests added — completion going dead on disconnect and better
-> autocomplete matching (both under *Editor*, in that order — fuzzy matching is moot while the popup won't
-> open at all), and a multi-sheet Excel workbook per run (end of *Results grid*). Two things to know before
-> reading them: **Excel export already exists** and is a typed hand-rolled workbook, so that item is only
+> autocomplete matching (the first is now done — see above), and a multi-sheet Excel workbook per run (end of
+> *Results grid*). Two things to know before reading them: **Excel export already exists** and is a typed hand-rolled workbook, so that item is only
 > "many sheets + naming"; and the fuzzy-match item is **not** an engine change — the engine emits every table
 > unfiltered and AvaloniaEdit does all the narrowing today, which is what has to be taken over.
 >
 > Baseline at the last verified pass (2026-08-13): build clean with **4 warnings** — the 2 known `xUnit2013`
 > plus 2 `ANT01` from the vendored PostgreSQL lexer grammar, which the previous "2 warnings" count omitted;
-> tests **Sql 163 · App 451 · Data 27 · Persistence 38** (679, 0 skipped) run live against Postgres on 5434
-> (`BEARING_TEST_PG_PORT=5434 dotnet test`; `--no-incremental` for the warning count — an incremental build
-> re-emits none, which is easy to misread as "fixed").
+> tests **Sql 163 · App 466 · Data 27 · Persistence 46** (702) — 671 passed with 31 skipped in the last run,
+> where **every skip was a sandboxed agent losing socket access** (26 Postgres + 5 libsecret), not a real
+> skip. Run live against Postgres on 5434 (`BEARING_TEST_PG_PORT=5434 dotnet test`; `--no-incremental` for the
+> warning count — an incremental build re-emits none, which is easy to misread as "fixed").
+>
+> **If a build fails with `MSB1025` / `SocketException (13)` or "Access to the path `.gitmodules` is denied",
+> that is an agent sandbox, not the repo:** add `-m:1 -nodeReuse:false` (MSBuild's worker socket) and
+> `-p:EnableSourceControlManagerQueries=false` (`.gitmodules` masked with `/dev/null`). Note the
+> `SkippableFact` suites go **quiet** under those conditions — a green run with skips is not evidence the
+> keychain or Postgres paths work.
 >
 > **Nothing visual is ever verified here** (§4.3 — Wayland blocks headless GUI testing). Tag new UI work
 > *(live QA)* until the user has eyeballed it.
@@ -288,35 +309,6 @@ Legend: `[ ]` open · `[~]` partly done.
 
 ### Editor
 
-- [ ] **P2** **Completion dies the moment the connection does — even though the schema it needs is already in
-  memory.** Reported 2026-08-13. `SnapshotForSelectedTab` reads the snapshot *off the live session* —
-  `_ctx.Sessions.TryGet(id)?.Snapshot` (`ExecutionViewModel.cs:558-560`) — and `TryGet` only consults the
-  manager's `_live` map (`ConnectionSessionManager.cs:42,165-168`). So every path that removes a session takes
-  completion with it: explicit disconnect and rebuild-on-edit (`EvictAsync:184-193`), the **idle sweep**
-  (`SweepIdleAsync:204-227`), and credential expiry. `CompletionController.TriggerAsync` then sees
-  `snapshot is null` and returns before it ever reaches the engine (`:67`), so the popup just stops appearing
-  — no message, nothing to click, and nothing on screen connecting it to the disconnect.
-  - **The snapshot has no connection dependency at all.** `Core/Schema/SchemaSnapshot` is an immutable,
-    indexed set of tables / columns / FKs / schemas — no reader, no factory, no handle. It merely *lives* on
-    `ConnectionSession.Snapshot` (`ConnectionSession.cs:40`), and that is the only thing tying its lifetime to
-    a pool it doesn't use.
-  - Fix: hold it **outside** session lifetime, keyed `(connection id, database)` — the same key
-    `_schemaInflight` already uses (`:49`) and the scope the snapshot genuinely has (a DB switch rebuilds the
-    session, which is what keeps `session.Snapshot` from going stale today — §9.4). `EnsureSchemaAsync:170-181`
-    / `LoadSchemaAsync:344-354` fill it; `SnapshotForSelectedTab` reads it, falling back to the session. Two
-    payoffs beyond the bug: completion keeps working while disconnected, and a reconnect stops re-reading a
-    catalog it already has.
-  - **Decide the staleness story — it's the only reason not to do this blindly.** A cached snapshot can be
-    arbitrarily old, and the known schema-refresh gap (objects created after connect stay invisible until
-    reconnect) then lasts longer. Options: keep it for the app session; evict on *explicit* disconnect but not
-    on the idle sweep; or stamp it and re-read in the background on reconnect. The idle sweep is the case that
-    matters — it fires on its own, so today the user loses completion without having done anything.
-  - `SchemaBrowser` caches **readers**, not snapshots (`SchemaBrowser.cs:26`), and re-reads the snapshot on
-    every `GetObjectsAsync:40-46` — so there is no existing snapshot cache to reuse, and the tree wants the
-    same one. Build one, not two.
-  - Unusually for a UI-adjacent bug this is **properly testable**: the manager and `ExecutionViewModel` are
-    both constructible in `Bearing.App.Tests` (see `ConnectionSessionManagerTests`), so "snapshot survives
-    eviction / idle sweep" is a real unit test rather than eyeball QA.
 - [ ] **P2** **Autocomplete matching is too literal — `accounting_lines` should be reachable from `al`, and
   from `accli` too.** Requested 2026-08-13: match at word starts, and support initials plus subsequences
   across `snake_case`, `kebab-case`, PascalCase and camelCase boundaries.

@@ -47,6 +47,12 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     // (§9.4) and a database switch replaces the session, so an id-only key let the new session (db B) join
     // the old session's in-flight load (db A) and adopt A's snapshot — which drives editability and FK nav.
     private readonly Dictionary<(Guid Id, string Database), Task<ISchemaSnapshot?>> _schemaInflight = new();
+    // Loaded snapshots, same key as the in-flight map, and deliberately OUTLIVING the sessions that read
+    // them. A snapshot has no connection dependency — it's an immutable set of tables/columns/FKs — so tying
+    // its lifetime to a pool meant completion died on every disconnect, credential expiry, and (worst,
+    // because it is automatic and invisible) idle sweep. Only an event that makes the catalog untrue drops an
+    // entry: see InvalidateSchema.
+    private readonly Dictionary<(Guid Id, string Database), ISchemaSnapshot> _schemaCache = new();
     private bool _disposed;
 
     /// <summary>Default idle timeout before an unused connection is closed.</summary>
@@ -167,6 +173,29 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         lock (_gate) return _live.TryGetValue(connectionId, out var s) ? s : null;
     }
 
+    /// <summary>The last snapshot read for this connection+database, whether or not a session is live now.
+    /// This is what lets completion keep working while disconnected — it never needed the connection, only
+    /// the catalog it already read.</summary>
+    public ISchemaSnapshot? TryGetSnapshot(Guid connectionId, string database)
+    {
+        lock (_gate) return _schemaCache.TryGetValue((connectionId, database), out var s) ? s : null;
+    }
+
+    /// <summary>
+    /// Forget the cached schema for a connection (every database). Call this — and not plain
+    /// <see cref="EvictAsync"/> — when the catalog the snapshot describes is no longer the truth: the
+    /// connection was re-pointed at a different server, deleted, or explicitly refreshed. A disconnect is
+    /// <b>not</b> one of those: the schema of a server you've stopped talking to is still its schema.
+    /// </summary>
+    public void InvalidateSchema(Guid connectionId)
+    {
+        lock (_gate)
+        {
+            foreach (var key in _schemaCache.Keys.Where(k => k.Id == connectionId).ToArray())
+                _schemaCache.Remove(key);
+        }
+    }
+
     public Task<ISchemaSnapshot?> EnsureSchemaAsync(ConnectionSession session, CancellationToken ct)
     {
         if (session.Snapshot is not null) return Task.FromResult<ISchemaSnapshot?>(session.Snapshot);
@@ -174,9 +203,22 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         {
             if (session.Snapshot is not null) return Task.FromResult<ISchemaSnapshot?>(session.Snapshot);
             var key = (session.ConnectionId, session.Info.Database);
+            // A reconnect to a connection+database we've already read adopts the cached snapshot instead of
+            // re-reading the whole catalog. Same key as the load, so a database switch can't pick up the
+            // other database's snapshot (§9.4 — sessions are per-connection, snapshots are per-database).
+            if (_schemaCache.TryGetValue(key, out var cached))
+            {
+                session.Snapshot = cached;
+                return Task.FromResult<ISchemaSnapshot?>(cached);
+            }
             if (_schemaInflight.TryGetValue(key, out var pending)) return pending;
             var task = LoadSchemaAsync(session, ct);
-            _schemaInflight[key] = task;
+            // Only register a load that is genuinely still in flight. LoadSchemaAsync clears its own key when
+            // it finishes, so a load that completed *synchronously* has already done that removal — adding it
+            // here would leave a completed task in the map that nothing ever clears, and every later call for
+            // this key would then be served that stale snapshot instead of re-reading the catalog. Real
+            // Npgsql reads always yield, which is the only reason this never bit in production.
+            if (!task.IsCompleted) _schemaInflight[key] = task;
             return task;
         }
     }
@@ -261,6 +303,10 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             _live.Clear();
             _inflight.Clear();
             _schemaInflight.Clear();
+            // Kept across a project switch on purpose: switching back is meant to be cheap (tabs are parked,
+            // not torn down), and re-reading a catalog we already have is exactly what this cache avoids.
+            // On retire the app is going away, so drop it.
+            if (retire) _schemaCache.Clear();
             foreach (var s in all)
             {
                 // Shutdown tears everything down regardless of leases — a genuinely stuck query must not
@@ -347,6 +393,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         {
             var snapshot = await session.Metadata.LoadSnapshotAsync(session.Info.Database, ct);
             session.Snapshot = snapshot;
+            lock (_gate) _schemaCache[(session.ConnectionId, session.Info.Database)] = snapshot;
             return snapshot;
         }
         finally

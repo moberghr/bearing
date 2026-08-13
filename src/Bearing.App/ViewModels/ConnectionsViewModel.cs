@@ -286,7 +286,9 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         }
         catch (Exception ex) { _ctx.SetStatus($"Saved connection but secret/store failed: {ex.Message}"); }
 
-        if (networkChanged) await _ctx.Sessions.EvictAsync(conn.Id);
+        // A changed network target means the cached schema describes a different server, so drop it too —
+        // eviction alone deliberately keeps it (that is what makes completion survive a mere disconnect).
+        if (networkChanged) { _ctx.Sessions.InvalidateSchema(conn.Id); await _ctx.Sessions.EvictAsync(conn.Id); }
         _ctx.DefaultConnectionId ??= conn.Id;
         RefreshConnections();
         foreach (var t in Tabs) if (t.ConnectionId == conn.Id) ApplyConnectionDisplay(t);
@@ -309,6 +311,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         }
         catch (Exception ex) { _ctx.SetStatus($"Deleted connection but store failed: {ex.Message}"); }
 
+        _ctx.Sessions.InvalidateSchema(id);   // the connection is gone; don't keep its catalog around
         await _ctx.Sessions.EvictAsync(id);
         foreach (var t in Tabs) if (t.ConnectionId == id) { t.ConnectionId = null; ApplyConnectionDisplay(t); }
         if (_ctx.DefaultConnectionId == id) _ctx.DefaultConnectionId = null;
@@ -325,6 +328,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     public async Task RefreshServerMetadataAsync(Guid connectionId)
     {
         await _ctx.Schema.InvalidateAsync(connectionId);
+        _ctx.Sessions.InvalidateSchema(connectionId);   // this command's entire point is to re-read the catalog
         await _ctx.Sessions.EvictAsync(connectionId);
 
         var node = ServerNodes.FirstOrDefault(n => n.Connection.Id == connectionId);
