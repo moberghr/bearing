@@ -67,25 +67,6 @@ public class StoreResilienceTests : IDisposable
         Assert.Single(await recent.ListAsync(CancellationToken.None));
     }
 
-    /// <summary>Deleting a keyring secret has to verify, because `secret-tool clear` exits non-zero both for a
-    /// real failure and for "nothing matched" (with an empty stderr) — so neither trusting nor ignoring the
-    /// exit code is right. Skipped when no keyring is reachable.</summary>
-    [SkippableFact]
-    public async Task Deleting_a_keyring_secret_succeeds_and_deleting_a_missing_one_does_not_throw()
-    {
-        Skip.IfNot(await SecretToolSecretStore.IsAvailableAsync(CancellationToken.None),
-            "No Secret Service reachable for keyring test.");
-
-        var store = new SecretToolSecretStore();
-        var id = Guid.NewGuid();
-        await store.SetPasswordAsync(id, "to-be-deleted", CancellationToken.None);
-        Assert.Equal("to-be-deleted", await store.GetPasswordAsync(id, CancellationToken.None));
-
-        await store.DeleteAsync(id, CancellationToken.None);
-        Assert.Null(await store.GetPasswordAsync(id, CancellationToken.None));
-
-        // Second delete: nothing matches, exit code is 1, and that must not be reported as a failure.
-        await store.DeleteAsync(id, CancellationToken.None);
-        await store.DeleteAsync(Guid.NewGuid(), CancellationToken.None);
-    }
+    // Keyring delete semantics moved to PlatformKeychainTests, which runs the same contract against
+    // whichever OS credential store the host has rather than libsecret only.
 }

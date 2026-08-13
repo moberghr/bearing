@@ -156,12 +156,18 @@ projects and settings. The published/installed binary has no profile and uses th
 Connection passwords are **never** written to `project.json`. They are stored keyed by the connection's GUID
 (which does travel with the project) so a shared project prompts each user for their own password.
 
-- **Preferred:** the OS keychain. On Linux this is the freedesktop Secret Service via `secret-tool` (libsecret).
-  There is **no** keychain backend on Windows or macOS yet — those platforms always take the fallback below.
-- **Fallback:** when no keychain is reachable, passwords are written to per-connection files under
-  `secrets/` in the data dir (mode `0600` where the OS supports it). **This is not encrypted storage** — the
-  app surfaces a warning when it falls back, and you should prefer a machine with a working keyring for
-  sensitive credentials.
+- **Preferred:** the OS credential store, one per platform — the freedesktop Secret Service via `secret-tool`
+  (libsecret) on **Linux**, the Credential Manager on **Windows** (visible under Control Panel ▸ Credential
+  Manager ▸ Windows Credentials), and a login-keychain generic password on **macOS** (visible in Keychain
+  Access). Which one you get is decided at startup by actually storing and reading back a throwaway secret, so
+  an absent helper or a locked keyring falls back rather than failing later when you connect.
+  *The Windows and macOS backends are new and have only been verified on Linux so far — `dotnet test` on
+  those platforms runs the full store contract (`PlatformKeychainTests`).*
+- **Fallback:** with no credential store reachable, a password is **not saved at all** — the connection keeps
+  it in memory for the session and asks again next time, and the app says so in the status bar. Opting into
+  Settings ▸ Security ▸ *Store passwords on disk when no keyring is available* writes per-connection files
+  under `secrets/` in the data dir (mode `0600` where the OS supports it) instead; **that is base64, not
+  encrypted storage**, and it stays warned about for as long as it's on.
 
 ### Query log
 

@@ -24,8 +24,13 @@ public class WorkspacePersistenceTests : IDisposable
         var created = await store.CreateAsync(dir, "Analytics", CancellationToken.None);
         created.Manifest.Connections.Add(new ConnectionInfo
         {
-            Id = Guid.NewGuid(), Name = "prod", ProviderId = "postgres",
-            Host = "db.internal", Port = 5432, Database = "analytics", User = "reader",
+            Id = Guid.NewGuid(),
+            Name = "prod",
+            ProviderId = "postgres",
+            Host = "db.internal",
+            Port = 5432,
+            Database = "analytics",
+            User = "reader",
             Options = new Dictionary<string, string> { ["sslmode"] = "require", ["search_path"] = "public,reporting" },
         });
         await store.SaveAsync(created, CancellationToken.None);
@@ -53,14 +58,23 @@ public class WorkspacePersistenceTests : IDisposable
         var created = await store.CreateAsync(dir, "Envs", CancellationToken.None);
         created.Manifest.Connections.Add(new ConnectionInfo
         {
-            Id = Guid.NewGuid(), Name = "prod", ProviderId = "postgres",
-            Host = "db", Database = "app", User = "svc",
-            Environment = "production", EnvironmentColor = "#E5484D",
+            Id = Guid.NewGuid(),
+            Name = "prod",
+            ProviderId = "postgres",
+            Host = "db",
+            Database = "app",
+            User = "svc",
+            Environment = "production",
+            EnvironmentColor = "#E5484D",
         });
         created.Manifest.Connections.Add(new ConnectionInfo
         {
-            Id = Guid.NewGuid(), Name = "untagged", ProviderId = "postgres",
-            Host = "db", Database = "app", User = "svc",
+            Id = Guid.NewGuid(),
+            Name = "untagged",
+            ProviderId = "postgres",
+            Host = "db",
+            Database = "app",
+            User = "svc",
         });
         await store.SaveAsync(created, CancellationToken.None);
 
@@ -82,8 +96,13 @@ public class WorkspacePersistenceTests : IDisposable
         var created = await store.CreateAsync(dir, "Creds", CancellationToken.None);
         created.Manifest.Connections.Add(new ConnectionInfo
         {
-            Id = Guid.NewGuid(), Name = "azure", ProviderId = "postgres",
-            Host = "db", Database = "app", User = "svc", CredentialKind = CredentialKind.EntraToken,
+            Id = Guid.NewGuid(),
+            Name = "azure",
+            ProviderId = "postgres",
+            Host = "db",
+            Database = "app",
+            User = "svc",
+            CredentialKind = CredentialKind.EntraToken,
         });
         await store.SaveAsync(created, CancellationToken.None);
 
@@ -220,24 +239,6 @@ public class WorkspacePersistenceTests : IDisposable
         Assert.Null(await store.GetPasswordAsync(id, CancellationToken.None));
     }
 
-    [SkippableFact]
-    public async Task Os_keychain_round_trips_when_available()
-    {
-        Skip.IfNot(await SecretToolSecretStore.IsAvailableAsync(CancellationToken.None),
-            "No Secret Service (keyring) reachable.");
-
-        var store = new SecretToolSecretStore();
-        var id = Guid.NewGuid();
-        try
-        {
-            Assert.True(store.IsSecure);
-            await store.SetPasswordAsync(id, "keychain-pw", CancellationToken.None);
-            Assert.Equal("keychain-pw", await store.GetPasswordAsync(id, CancellationToken.None));
-        }
-        finally
-        {
-            await store.DeleteAsync(id, CancellationToken.None);
-        }
-        Assert.Null(await store.GetPasswordAsync(id, CancellationToken.None));
-    }
+    // The OS keychain round-trip lives in PlatformKeychainTests, which runs it against whichever real
+    // credential store the host has (libsecret / Credential Manager / login keychain).
 }

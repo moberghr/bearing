@@ -18,8 +18,9 @@ Legend: `[ ]` open · `[~]` partly done.
 > context-menu item), and the off-centre rail icons. The first three all lean on the same missing link between
 > a tab and its file on disk; read them together.
 >
-> Baseline at the last verified pass (2026-08-11): build clean with **2 warnings**; tests **Sql 163 · App 442 ·
-> Data 27 · Persistence 25** (657, 0 skipped) run live against Postgres on 5434
+> Baseline at the last verified pass (2026-08-13): build clean with **4 warnings** — the 2 known `xUnit2013`
+> plus 2 `ANT01` from the vendored PostgreSQL lexer grammar, which the previous "2 warnings" count omitted;
+> tests **Sql 163 · App 442 · Data 27 · Persistence 38** (670, 0 skipped) run live against Postgres on 5434
 > (`BEARING_TEST_PG_PORT=5434 dotnet test`; `--no-incremental` for the warning count — an incremental build
 > re-emits none, which is easy to misread as "fixed").
 >
@@ -308,8 +309,11 @@ Legend: `[ ]` open · `[~]` partly done.
 
 ## 🟡 Open — quality & maintainability
 
-- [~] **P3** Clear build warnings — **2 remain**, both `xUnit2013` (`HistoryPanelTests.cs:51,53` — use
-  `Assert.Single`).
+- [~] **P3** Clear build warnings — **4 remain** on a `--no-incremental` build: 2 × `xUnit2013`
+  (`HistoryPanelTests.cs:51,53` — use `Assert.Single`) and 2 × `ANT01` from the vendored PostgreSQL lexer
+  grammar (`PostgreSQLLexer.g4:1441,1456`, "non-fragment lexer rule can match the empty string"). The ANTLR
+  pair was missing from the earlier count; it comes from vendored grammar, so decide whether to fix it
+  upstream-style or suppress `ANT01` for that one file rather than leaving the number permanently non-zero.
 - [~] **P3** Raw `ex.Message` surfaced to the UI on generic catch paths. **Partly done 2026-08-10, and
   deliberately narrower than written.** Pure `Core/Data/SafeErrorText` redacts `password=…` / `pwd=…` values
   out of driver messages — the real hazard, since a connect- or parse-time failure can quote the whole
@@ -326,22 +330,34 @@ Legend: `[ ]` open · `[~]` partly done.
 
 ## 🔵 Open — hardening, security & distribution
 
-- [ ] **P1** **Windows secure credential storage.** `SecretStoreFactory.CreateAsync:14` wires **libsecret
-  only** (`SecretToolSecretStore`, Linux); everything else falls through to `FileFallbackSecretStore`, which
-  by default **refuses to store** (`ISecretStore.CanStore` false → the connection prompts each time). So on
-  Windows there is no keyring at all today: a user either re-enters passwords every session or opts into
-  Settings ▸ Security ▸ "Store passwords on disk when no keyring is available", which writes **base64, not
-  encrypted**. Implement a real Windows store — DPAPI (`ProtectedData`, `CurrentUser` scope) over a file, or
-  the Windows Credential Manager (`CredWrite`/`CredRead`, which is the closer analogue to libsecret and what
-  the OS considers a credential). The factory shape already accommodates it: one `OperatingSystem.IsWindows()`
-  branch at the `// TODO: MacKeychainStore / WindowsDpapiStore` line (`SecretStoreFactory.cs:17`), behind the
-  existing `ISecretStore`, so nothing above the store changes.
-  - Match the contract the libsecret store established, including the postcondition-verified delete
-    (`secret-tool clear` exits 1 for "nothing matched", so the exit code is unusable — Windows APIs report
-    honestly, but keep "delete then verify it's gone" as the tested behaviour).
-  - **Not testable on this box**, and neither is macOS Keychain — plan on the user running the Windows tests,
-    and keep the Linux path untouched so a regression there is impossible.
-  - macOS Keychain stays open behind this; the same branch and the same `ISecretStore`.
+- [~] **P1** **Windows + macOS secure credential storage — written 2026-08-13, verified on neither.** Both
+  stores now exist behind the unchanged `ISecretStore`, and `SecretStoreFactory` dispatches per platform
+  (`PlatformStore()`) instead of wiring libsecret only, so nothing above the store changed:
+  `WindowsCredentialSecretStore` (Credential Manager via `CredWriteW`/`CredReadW`/`CredDeleteW`, keyed
+  `bearing:connection:<guid>`, `CRED_PERSIST_LOCAL_MACHINE`, UTF-16 blob) and `MacKeychainSecretStore`
+  (a login-keychain generic password via the `security` CLI, service = app dir name, account = guid).
+  Availability is now decided by a **shared store→read→delete probe** in the factory rather than a
+  per-store `IsAvailableAsync`, with a `finally` that never leaves a probe credential behind (it would be
+  visible in both OS credential UIs).
+  - **What's left is the part this box can't do: run it.** `tests/Bearing.Persistence.Tests/PlatformKeychainTests.cs`
+    is the whole contract (round-trip, rotate-in-place, idempotent delete, per-connection isolation,
+    awkward/Unicode password) written platform-agnostically over
+    `SecretStoreFactory.CreatePlatformStoreAsync`, so **`dotnet test` on a Windows or macOS box is the
+    verification** — 5 skip-safe tests that pass here against real libsecret and will exercise the new
+    stores there. The first test also asserts the factory picked *this* platform's store, which is the quiet
+    failure to watch for (falling through to the file fallback on a platform that has a keychain).
+  - Also worth eyeballing on those platforms: the status bar reads "Secrets: OS keychain." and the
+    connection dialog defaults to *Stored password* with no warning — that's `CanStore`/`IsSecure` true,
+    i.e. the same posture Linux has today.
+  - **Known trade-off on macOS:** `security add-generic-password` takes the password as an argument, so it
+    is briefly visible in the process list (documented in the class). Its stdin-prompt mode reads from
+    `/dev/tty` when one exists and would hang a terminal-launched app, and macOS restricts reading another
+    process's arguments to the same user — who can already read the keychain item. The CLI is used rather
+    than Security.framework on purpose: a keychain item's ACL is bound to the creating app's code signature,
+    so an unsigned/self-updating Bearing would prompt after every rebuild and every Velopack update, while
+    items owned by Apple-signed `/usr/bin/security` stay silent. Revisit if signing/notarization lands.
+  - Windows `CredDelete` reports "nothing matched" honestly (`ERROR_NOT_FOUND`), so it doesn't need
+    libsecret's postcondition re-read — but "delete, then it really is gone" stays asserted in the tests.
 - [ ] **P2** **Velopack for distribution + in-app updates.** `build/release.sh` produces a self-contained,
   single-file `linux-x64` tarball with a local installer, a `.desktop` launcher and hicolor icons — one
   platform, and **no update path at all**: a new version means the user finds, downloads and re-installs it.
@@ -377,9 +393,10 @@ Legend: `[ ]` open · `[~]` partly done.
   prompts. Reads and deletes still work, so secrets written before the change keep resolving and can be
   cleared. The old behaviour is one opt-in away: Settings ▸ Security ▸ `AllowUnencryptedSecretFile`, read
   live, which keeps the amber base64 warning.
-  **Still open:** actual encryption of that opt-in file, and platform stores — Windows is now its own **P1**
-  above (promoted from "declined as untestable"), macOS Keychain rides along with it. The file path being off
-  by default is what keeps neither load-bearing.
+  **Still open:** actual encryption of that opt-in file. The platform stores it was waiting on are **written**
+  (see the Windows/macOS item above), which shrinks the fallback to what it should be — the path for a machine
+  with no credential store at all — but the file itself is still base64 when the opt-in is on. Off by default
+  is what keeps that from being load-bearing.
 
 ---
 
