@@ -54,12 +54,22 @@ Legend: `[ ]` open · `[~]` partly done.
 > "many sheets + naming"; and the fuzzy-match item is **not** an engine change — the engine emits every table
 > unfiltered and AvaloniaEdit does all the narrowing today, which is what has to be taken over.
 >
+> **2026-08-13 (test server defaults):** a bare `dotnet test` used to skip all 26 Postgres tests. The default
+> port was **5433** in the six `Bearing.Data.Tests` files and **5434** in the two `App` ones — six copies of the
+> same `Env`/`Reachable` pair that had drifted — and on this box 5433 is a *different* project's Postgres, so
+> the probe got `28P01 password authentication failed` and `catch { return false; }` reported it as "No
+> PostgreSQL reachable". Now one linked `tests/Shared/PgTestServer.cs` holds the defaults (5434) and its
+> `RequireAsync` puts the endpoint **and the driver's reason** in the skip message. Same fix in
+> `PlatformKeychainTests.RequireStoreAsync`, which was calling the reason-discarding
+> `CreatePlatformStoreAsync` instead of `ProbePlatformStoreAsync` — on Windows/macOS "no credential store
+> here" is never true, so a silent skip there was hiding the very failure that suite exists to catch.
+>
 > Baseline at the last verified pass (2026-08-13): build clean with **4 warnings** — the 2 known `xUnit2013`
 > plus 2 `ANT01` from the vendored PostgreSQL lexer grammar, which the previous "2 warnings" count omitted;
-> tests **Sql 163 · App 466 · Data 27 · Persistence 46** (702) — 671 passed with 31 skipped in the last run,
-> where **every skip was a sandboxed agent losing socket access** (26 Postgres + 5 libsecret), not a real
-> skip. Run live against Postgres on 5434 (`BEARING_TEST_PG_PORT=5434 dotnet test`; `--no-incremental` for the
-> warning count — an incremental build re-emits none, which is easy to misread as "fixed").
+> tests **Sql 163 · App 466 · Data 27 · Persistence 46** (702) — **all 702 passed with 0 skipped** on a bare
+> `dotnet test` against the `squirrel-pg-test` container, no env vars. A Postgres or keychain skip now carries
+> its own diagnosis, so read the message before assuming the server is down. (`--no-incremental` for the
+> warning count — an incremental build re-emits none, which is easy to misread as "fixed".)
 >
 > **If a build fails with `MSB1025` / `SocketException (13)` or "Access to the path `.gitmodules` is denied",
 > that is an agent sandbox, not the repo:** add `-m:1 -nodeReuse:false` (MSBuild's worker socket) and

@@ -19,11 +19,18 @@ namespace Bearing.Persistence.Tests;
 /// </summary>
 public class PlatformKeychainTests
 {
+    /// <summary>
+    /// Probes rather than just asking for the store, so a skip says <i>why</i>. The distinction matters most
+    /// on the platforms this file exists to verify: on Windows or macOS "there is no credential store here"
+    /// is never true, so a silent skip there is the bug, not the environment. <see cref="PlatformStoreProbe"/>
+    /// already carries the reason — <see cref="SecretStoreFactory.CreatePlatformStoreAsync"/> is the overload
+    /// that throws it away.
+    /// </summary>
     private static async Task<ISecretStore> RequireStoreAsync()
     {
-        var store = await SecretStoreFactory.CreatePlatformStoreAsync(CancellationToken.None);
-        Skip.If(store is null, "No OS credential store is reachable on this machine.");
-        return store!;
+        var probe = await SecretStoreFactory.ProbePlatformStoreAsync(CancellationToken.None);
+        Skip.If(probe.Store is null, $"No OS credential store is reachable on this machine — {probe.Failure}");
+        return probe.Store!;
     }
 
     private static CancellationToken Ct => CancellationToken.None;

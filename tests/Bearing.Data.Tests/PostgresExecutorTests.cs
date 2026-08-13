@@ -1,6 +1,7 @@
 using Bearing.Core.Data;
 using Bearing.Data;
 using Bearing.Data.Postgres;
+using Bearing.Testing;
 using Npgsql;
 using Xunit;
 using Xunit.Sdk;
@@ -8,40 +9,21 @@ using Xunit.Sdk;
 namespace Bearing.Data.Tests;
 
 /// <summary>
-/// Integration tests against a live PostgreSQL loaded with pagila. Point at it via env vars
-/// (BEARING_TEST_PG_*), defaulting to the local docker container on port 5433. Skipped cleanly
-/// when no database is reachable so the suite stays green off a dev box.
+/// Integration tests against a live PostgreSQL loaded with pagila. Endpoint and defaults come from
+/// <see cref="PgTestServer"/> (override with BEARING_TEST_PG_*). Skipped cleanly when no database is
+/// reachable so the suite stays green off a dev box.
 /// </summary>
 public class PostgresExecutorTests
 {
-    private static ConnectionInfo Info() => new()
-    {
-        Id = Guid.NewGuid(),
-        Name = "pagila-test",
-        ProviderId = PostgresProvider.ProviderId,
-        Host = Env("HOST", "localhost"),
-        Port = int.Parse(Env("PORT", "5433")),
-        Database = Env("DB", "pagila"),
-        User = Env("USER", "postgres"),
-    };
-
-    private static string Password => Env("PASSWORD", "squirrel");
-
-    private static string Env(string key, string dflt)
-        => Environment.GetEnvironmentVariable($"BEARING_TEST_PG_{key}") ?? dflt;
-
-    private static async Task<bool> Reachable(IDbConnectionFactory f)
-    {
-        try { return await f.TestConnectionAsync(CancellationToken.None); }
-        catch { return false; }
-    }
+    private static ConnectionInfo Info() => PgTestServer.Info();
+    private static string Password => PgTestServer.Password;
 
     [SkippableFact]
     public async Task Executes_a_select_and_returns_typed_rows()
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        Skip.IfNot(await Reachable(factory), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(factory);
 
         var executor = provider.CreateQueryExecutor(factory);
         var results = await executor.ExecuteAsync(
@@ -61,7 +43,7 @@ public class PostgresExecutorTests
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        Skip.IfNot(await Reachable(factory), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(factory);
 
         var executor = provider.CreateQueryExecutor(factory);
         var results = await executor.ExecuteAsync(
@@ -80,7 +62,7 @@ public class PostgresExecutorTests
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        Skip.IfNot(await Reachable(factory), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(factory);
 
         var executor = provider.CreateQueryExecutor(factory);
         var result = Assert.Single(await executor.ExecuteAsync(
@@ -99,7 +81,7 @@ public class PostgresExecutorTests
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        Skip.IfNot(await Reachable(factory), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(factory);
 
         var executor = provider.CreateQueryExecutor(factory);
         var result = Assert.Single(await executor.ExecuteAsync(
@@ -123,7 +105,7 @@ public class PostgresExecutorTests
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        Skip.IfNot(await Reachable(factory), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(factory);
 
         var executor = provider.CreateQueryExecutor(factory);
 
@@ -149,7 +131,7 @@ public class PostgresExecutorTests
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        Skip.IfNot(await Reachable(factory), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(factory);
 
         var executor = provider.CreateQueryExecutor(factory);
         const string sql = "select film_id from film order by film_id";
@@ -179,7 +161,7 @@ public class PostgresExecutorTests
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        Skip.IfNot(await Reachable(factory), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(factory);
 
         var executor = provider.CreateQueryExecutor(factory);
         const string sql = "select film_id from film order by film_id";
@@ -205,7 +187,7 @@ public class PostgresExecutorTests
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        Skip.IfNot(await Reachable(factory), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(factory);
 
         var reader = provider.CreateMetadataReader(factory);
         var dbs = await reader.GetDatabasesAsync(CancellationToken.None);

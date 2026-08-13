@@ -9,6 +9,7 @@ using Bearing.Core.Data;
 using Bearing.Data;
 using Bearing.Data.Postgres;
 using Bearing.Persistence;
+using Bearing.Testing;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -24,12 +25,11 @@ public class WorkspaceFlowTests : IDisposable
 
     public void Dispose() { try { if (Directory.Exists(_root)) Directory.Delete(_root, true); } catch { } }
 
-    private static string Env(string key, string dflt) => Environment.GetEnvironmentVariable($"BEARING_TEST_PG_{key}") ?? dflt;
-    private static string Host => Env("HOST", "localhost");
-    private static int Port => int.Parse(Env("PORT", "5434"));
-    private static string Db => Env("DB", "pagila");
-    private static string User => Env("USER", "postgres");
-    private static string Password => Env("PASSWORD", "squirrel");
+    private static string Host => PgTestServer.Host;
+    private static int Port => PgTestServer.Port;
+    private static string Db => PgTestServer.Database;
+    private static string User => PgTestServer.User;
+    private static string Password => PgTestServer.Password;
 
     private ShellViewModel NewVm() => new(
         new ProviderRegistry(),
@@ -41,18 +41,11 @@ public class WorkspaceFlowTests : IDisposable
         // Autosave off so dirty-state assertions stay meaningful; the modes have their own suite.
         settings: SettingsService.InMemory(new Bearing.Core.Workspace.AppSettings { AutosaveMode = Bearing.Core.Workspace.AutosaveMode.Off }));
 
-    private static async Task<bool> Reachable()
-    {
-        var info = new ConnectionInfo { Id = Guid.NewGuid(), Name = "probe", ProviderId = PostgresProvider.ProviderId,
-            Host = Host, Port = Port, Database = Db, User = User };
-        await using var f = new ProviderRegistry().Get(PostgresProvider.ProviderId).CreateConnectionFactory(info, Password);
-        try { return await f.TestConnectionAsync(CancellationToken.None); } catch { return false; }
-    }
 
     [SkippableFact]
     public async Task Per_tab_connection_executes_inherits_and_round_trips()
     {
-        Skip.IfNot(await Reachable(), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync();
 
         var dir = Path.Combine(_root, "proj");
         var vm = NewVm();
@@ -96,7 +89,7 @@ public class WorkspaceFlowTests : IDisposable
     [SkippableFact]
     public async Task Single_select_pages_and_counts()
     {
-        Skip.IfNot(await Reachable(), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync();
 
         var dir = Path.Combine(_root, "pageproj");
         var vm = NewVm();
@@ -132,7 +125,7 @@ public class WorkspaceFlowTests : IDisposable
     [SkippableFact]
     public async Task Foreign_key_cell_navigates_to_referenced_row()
     {
-        Skip.IfNot(await Reachable(), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync();
 
         var dir = Path.Combine(_root, "fkproj");
         var vm = NewVm();
@@ -169,13 +162,21 @@ public class WorkspaceFlowTests : IDisposable
     [SkippableFact]
     public async Task Editable_grid_saves_insert_update_delete_in_one_batch()
     {
-        Skip.IfNot(await Reachable(), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync();
 
         // Create + seed a test table via a separate connection BEFORE the VM connects, so it's in the
         // schema snapshot (editability is resolved from the snapshot).
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
-        var info = new ConnectionInfo { Id = Guid.NewGuid(), Name = "setup", ProviderId = PostgresProvider.ProviderId,
-            Host = Host, Port = Port, Database = Db, User = User };
+        var info = new ConnectionInfo
+        {
+            Id = Guid.NewGuid(),
+            Name = "setup",
+            ProviderId = PostgresProvider.ProviderId,
+            Host = Host,
+            Port = Port,
+            Database = Db,
+            User = User
+        };
         await using var setup = provider.CreateConnectionFactory(info, Password);
         var raw = provider.CreateQueryExecutor(setup);
         const string tbl = "bearing_edit_test";
@@ -229,11 +230,19 @@ public class WorkspaceFlowTests : IDisposable
     [SkippableFact]
     public async Task Empty_saves_as_empty_for_text_and_null_token_saves_null()
     {
-        Skip.IfNot(await Reachable(), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync();
 
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
-        var info = new ConnectionInfo { Id = Guid.NewGuid(), Name = "setup", ProviderId = PostgresProvider.ProviderId,
-            Host = Host, Port = Port, Database = Db, User = User };
+        var info = new ConnectionInfo
+        {
+            Id = Guid.NewGuid(),
+            Name = "setup",
+            ProviderId = PostgresProvider.ProviderId,
+            Host = Host,
+            Port = Port,
+            Database = Db,
+            User = User
+        };
         await using var setup = provider.CreateConnectionFactory(info, Password);
         var raw = provider.CreateQueryExecutor(setup);
         const string tbl = "bearing_null_test";
@@ -377,7 +386,7 @@ public class WorkspaceFlowTests : IDisposable
     [SkippableFact]
     public async Task Switching_database_runs_against_the_chosen_db_on_the_same_server()
     {
-        Skip.IfNot(await Reachable(), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync();
 
         var vm = NewVm();
         await vm.InitializeAsync(Path.Combine(_root, "dbswitch"));

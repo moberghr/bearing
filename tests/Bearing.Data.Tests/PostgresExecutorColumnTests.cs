@@ -1,33 +1,22 @@
 using Bearing.Core.Data;
 using Bearing.Data;
 using Bearing.Data.Postgres;
+using Bearing.Testing;
 using Xunit;
 
 namespace Bearing.Data.Tests;
 
 public class PostgresExecutorColumnTests
 {
-    private static ConnectionInfo Info() => new()
-    {
-        Id = Guid.NewGuid(),
-        Name = "pagila-test",
-        ProviderId = PostgresProvider.ProviderId,
-        Host = Env("HOST", "localhost"),
-        Port = int.Parse(Env("PORT", "5433")),
-        Database = Env("DB", "pagila"),
-        User = Env("USER", "postgres"),
-    };
-
-    private static string Password => Env("PASSWORD", "squirrel");
-    private static string Env(string key, string dflt)
-        => Environment.GetEnvironmentVariable($"BEARING_TEST_PG_{key}") ?? dflt;
+    private static ConnectionInfo Info() => PgTestServer.Info();
+    private static string Password => PgTestServer.Password;
 
     [SkippableFact]
     public async Task Raw_query_columns_carry_base_table_origin()
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        Skip.IfNot(await Safe(factory), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(factory);
 
         var executor = provider.CreateQueryExecutor(factory);
         var results = await executor.ExecuteAsync(
@@ -46,10 +35,5 @@ public class PostgresExecutorColumnTests
         // film_id and language_id share the same base table but differ in attribute number.
         Assert.Equal(filmId.BaseTableId, lang.BaseTableId);
         Assert.NotEqual(filmId.BaseColumnOrdinal, lang.BaseColumnOrdinal);
-    }
-
-    private static async Task<bool> Safe(IDbConnectionFactory f)
-    {
-        try { return await f.TestConnectionAsync(CancellationToken.None); } catch { return false; }
     }
 }

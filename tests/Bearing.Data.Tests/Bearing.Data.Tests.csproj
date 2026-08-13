@@ -12,6 +12,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Shared with Bearing.App.Tests: one definition of the test server's defaults (see PgTestServer). -->
+    <Compile Include="..\Shared\PgTestServer.cs" Link="Shared\PgTestServer.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />

@@ -2,33 +2,22 @@ using Bearing.Core.Data;
 using Bearing.Data;
 using Bearing.Data.Postgres;
 using Bearing.Sql;
+using Bearing.Testing;
 using Xunit;
 
 namespace Bearing.Data.Tests;
 
 public class PostgresWriteTests
 {
-    private static ConnectionInfo Info() => new()
-    {
-        Id = Guid.NewGuid(),
-        Name = "pagila-test",
-        ProviderId = PostgresProvider.ProviderId,
-        Host = Env("HOST", "localhost"),
-        Port = int.Parse(Env("PORT", "5433")),
-        Database = Env("DB", "pagila"),
-        User = Env("USER", "postgres"),
-    };
-
-    private static string Password => Env("PASSWORD", "squirrel");
-    private static string Env(string key, string dflt)
-        => Environment.GetEnvironmentVariable($"BEARING_TEST_PG_{key}") ?? dflt;
+    private static ConnectionInfo Info() => PgTestServer.Info();
+    private static string Password => PgTestServer.Password;
 
     [SkippableFact]
     public async Task Insert_update_delete_run_transactionally()
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        Skip.IfNot(await Safe(factory), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(factory);
 
         var exec = provider.CreateQueryExecutor(factory);
         const string tbl = "bearing_write_test";
@@ -78,7 +67,7 @@ public class PostgresWriteTests
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        Skip.IfNot(await Safe(factory), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(factory);
 
         var exec = provider.CreateQueryExecutor(factory);
         const string tbl = "bearing_write_rollback";
@@ -108,10 +97,5 @@ public class PostgresWriteTests
         for (var i = 0; i < r.Columns.Count; i++)
             if (r.Columns[i].Name == name) return i;
         return -1;
-    }
-
-    private static async Task<bool> Safe(IDbConnectionFactory f)
-    {
-        try { return await f.TestConnectionAsync(CancellationToken.None); } catch { return false; }
     }
 }

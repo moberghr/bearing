@@ -3,6 +3,7 @@ using Bearing.Core.Data;
 using Bearing.Data;
 using Bearing.Data.Postgres;
 using Bearing.Sql;
+using Bearing.Testing;
 using Xunit;
 
 namespace Bearing.Data.Tests;
@@ -13,27 +14,15 @@ namespace Bearing.Data.Tests;
 /// </summary>
 public class LiveCompletionTests
 {
-    private static ConnectionInfo Info() => new()
-    {
-        Id = Guid.NewGuid(),
-        Name = "pagila-test",
-        ProviderId = PostgresProvider.ProviderId,
-        Host = Env("HOST", "localhost"),
-        Port = int.Parse(Env("PORT", "5433")),
-        Database = Env("DB", "pagila"),
-        User = Env("USER", "postgres"),
-    };
-
-    private static string Password => Env("PASSWORD", "squirrel");
-    private static string Env(string key, string dflt)
-        => Environment.GetEnvironmentVariable($"BEARING_TEST_PG_{key}") ?? dflt;
+    private static ConnectionInfo Info() => PgTestServer.Info();
+    private static string Password => PgTestServer.Password;
 
     [SkippableFact]
     public async Task Completes_pagila_tables_and_columns_from_live_schema()
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        Skip.IfNot(await Safe(factory), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(factory);
 
         var snapshot = await provider.CreateMetadataReader(factory)
             .LoadSnapshotAsync("pagila", CancellationToken.None);
@@ -62,10 +51,5 @@ public class LiveCompletionTests
         Assert.Contains("f.film_id", filmActor!.ReplacementText);
         // film.language_id -> language.language_id (film is the referencing side)
         Assert.Contains(joins, j => j.DisplayText == "language" && j.ReplacementText.Contains("f.language_id"));
-    }
-
-    private static async Task<bool> Safe(IDbConnectionFactory f)
-    {
-        try { return await f.TestConnectionAsync(CancellationToken.None); } catch { return false; }
     }
 }

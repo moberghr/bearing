@@ -8,6 +8,7 @@ using Bearing.App.ViewModels;
 using Bearing.Core.Workspace;
 using Bearing.Data;
 using Bearing.Persistence;
+using Bearing.Testing;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -130,15 +131,10 @@ public class AutosaveModeTests : IDisposable
     {
         // The signal is raised inside ExecuteAsync past its guards, so covering the wiring (rather than
         // just OnExecutedAsync) needs a run that actually starts — hence a live server (§4.2).
-        var host = Environment.GetEnvironmentVariable("BEARING_TEST_PG_HOST") ?? "localhost";
-        var port = int.Parse(Environment.GetEnvironmentVariable("BEARING_TEST_PG_PORT") ?? "5434");
-        var db = Environment.GetEnvironmentVariable("BEARING_TEST_PG_DB") ?? "pagila";
-        var user = Environment.GetEnvironmentVariable("BEARING_TEST_PG_USER") ?? "postgres";
-        var password = Environment.GetEnvironmentVariable("BEARING_TEST_PG_PASSWORD") ?? "squirrel";
-
         var vm = await Project(AutosaveMode.OnExecute);
-        Skip.IfNot(await Reachable(host, port, db, user, password), "No PostgreSQL reachable for integration test.");
-        await vm.Connections.SeedDemoConnectionAsync(host, port, db, user, password);
+        await PgTestServer.RequireAsync();
+        await vm.Connections.SeedDemoConnectionAsync(
+            PgTestServer.Host, PgTestServer.Port, PgTestServer.Database, PgTestServer.User, PgTestServer.Password);
 
         var tab = vm.Workspace.SelectedTab!;
         var path = Path.Combine(vm.ScriptsDirectory!, "ran.sql");
@@ -150,23 +146,6 @@ public class AutosaveModeTests : IDisposable
         Assert.True(tab.LastResult?.Success, vm.StatusText);
         Assert.Equal("select 2;", await File.ReadAllTextAsync(path));
         await vm.DisposeSessionsAsync();
-    }
-
-    private static async Task<bool> Reachable(string host, int port, string db, string user, string password)
-    {
-        var info = new Bearing.Core.Data.ConnectionInfo
-        {
-            Id = Guid.NewGuid(),
-            Name = "probe",
-            ProviderId = Bearing.Data.Postgres.PostgresProvider.ProviderId,
-            Host = host,
-            Port = port,
-            Database = db,
-            User = user,
-        };
-        await using var f = new ProviderRegistry().Get(Bearing.Data.Postgres.PostgresProvider.ProviderId)
-            .CreateConnectionFactory(info, password);
-        try { return await f.TestConnectionAsync(System.Threading.CancellationToken.None); } catch { return false; }
     }
 
     // ---- Off ----

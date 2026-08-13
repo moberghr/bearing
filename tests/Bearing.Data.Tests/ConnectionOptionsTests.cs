@@ -1,6 +1,7 @@
 using Bearing.Core.Data;
 using Bearing.Data;
 using Bearing.Data.Postgres;
+using Bearing.Testing;
 using Npgsql;
 using Xunit;
 using Xunit.Sdk;
@@ -14,28 +15,10 @@ namespace Bearing.Data.Tests;
 /// </summary>
 public class ConnectionOptionsTests
 {
-    private static ConnectionInfo Info(Dictionary<string, string> options) => new()
-    {
-        Id = Guid.NewGuid(),
-        Name = "pagila-test",
-        ProviderId = PostgresProvider.ProviderId,
-        Host = Env("HOST", "localhost"),
-        Port = int.Parse(Env("PORT", "5433")),
-        Database = Env("DB", "pagila"),
-        User = Env("USER", "postgres"),
-        Options = options,
-    };
+    private static ConnectionInfo Info(Dictionary<string, string> options)
+        => PgTestServer.Info() with { Options = options };
 
-    private static string Password => Env("PASSWORD", "squirrel");
-
-    private static string Env(string key, string dflt)
-        => Environment.GetEnvironmentVariable($"BEARING_TEST_PG_{key}") ?? dflt;
-
-    private static async Task<bool> Reachable(IDbConnectionFactory f)
-    {
-        try { return await f.TestConnectionAsync(CancellationToken.None); }
-        catch { return false; }
-    }
+    private static string Password => PgTestServer.Password;
 
     /// <summary>An app-level key used to be handed to Npgsql, which threw an unwrapped exception at connect —
     /// making the documented `entra.resource` override unusable. It must simply be ignored by the driver.</summary>
@@ -44,7 +27,7 @@ public class ConnectionOptionsTests
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var plain = provider.CreateConnectionFactory(Info(new()), Password);
-        Skip.IfNot(await Reachable(plain), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(plain);
 
         await using var factory = provider.CreateConnectionFactory(
             Info(new() { ["entra.resource"] = "https://ossrdbms-aad.database.windows.net", ["not.a.driver.key"] = "x" }),
@@ -60,7 +43,7 @@ public class ConnectionOptionsTests
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var plain = provider.CreateConnectionFactory(Info(new()), Password);
-        Skip.IfNot(await Reachable(plain), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(plain);
 
         await using var factory = provider.CreateConnectionFactory(
             Info(new() { ["Password"] = "definitely-not-the-password" }), Password);
@@ -75,7 +58,7 @@ public class ConnectionOptionsTests
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var plain = provider.CreateConnectionFactory(Info(new()), Password);
-        Skip.IfNot(await Reachable(plain), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(plain);
 
         await using var factory = provider.CreateConnectionFactory(
             Info(new() { ["ApplicationName"] = "bearing-option-test" }), Password);

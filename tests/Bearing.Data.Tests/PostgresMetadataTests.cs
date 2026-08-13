@@ -1,33 +1,22 @@
 using Bearing.Core.Data;
 using Bearing.Data;
 using Bearing.Data.Postgres;
+using Bearing.Testing;
 using Xunit;
 
 namespace Bearing.Data.Tests;
 
 public class PostgresMetadataTests
 {
-    private static ConnectionInfo Info() => new()
-    {
-        Id = Guid.NewGuid(),
-        Name = "pagila-test",
-        ProviderId = PostgresProvider.ProviderId,
-        Host = Env("HOST", "localhost"),
-        Port = int.Parse(Env("PORT", "5433")),
-        Database = Env("DB", "pagila"),
-        User = Env("USER", "postgres"),
-    };
-
-    private static string Password => Env("PASSWORD", "squirrel");
-    private static string Env(string key, string dflt)
-        => Environment.GetEnvironmentVariable($"BEARING_TEST_PG_{key}") ?? dflt;
+    private static ConnectionInfo Info() => PgTestServer.Info();
+    private static string Password => PgTestServer.Password;
 
     [SkippableFact]
     public async Task Loads_tables_columns_and_foreign_keys()
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        Skip.IfNot(await Safe(factory), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(factory);
 
         var reader = provider.CreateMetadataReader(factory);
         var snapshot = await reader.LoadSnapshotAsync("pagila", CancellationToken.None);
@@ -59,7 +48,7 @@ public class PostgresMetadataTests
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        Skip.IfNot(await Safe(factory), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(factory);
 
         var reader = provider.CreateMetadataReader(factory);
         var routines = await reader.GetRoutinesAsync(CancellationToken.None);
@@ -78,7 +67,7 @@ public class PostgresMetadataTests
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        Skip.IfNot(await Safe(factory), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(factory);
 
         var reader = provider.CreateMetadataReader(factory);
         var snapshot = await reader.LoadSnapshotAsync("pagila", CancellationToken.None);
@@ -94,7 +83,7 @@ public class PostgresMetadataTests
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        Skip.IfNot(await Safe(factory), "No PostgreSQL reachable for integration test.");
+        await PgTestServer.RequireAsync(factory);
 
         var reader = provider.CreateMetadataReader(factory);
         var routine = (await reader.GetRoutinesAsync(CancellationToken.None))
@@ -103,10 +92,5 @@ public class PostgresMetadataTests
         var def = await reader.GetRoutineDefinitionAsync(routine.Id, CancellationToken.None);
         Assert.Contains("FUNCTION", def, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("get_customer_balance", def);
-    }
-
-    private static async Task<bool> Safe(IDbConnectionFactory f)
-    {
-        try { return await f.TestConnectionAsync(CancellationToken.None); } catch { return false; }
     }
 }
