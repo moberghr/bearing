@@ -78,10 +78,7 @@ public partial class MainWindow
     }
 
     // The toolbar History button now reveals the inline History side-panel (design §4) instead of a window.
-    private void OnHistoryClick(object? sender, RoutedEventArgs e)
-    {
-        if (Vm is not null) Vm.ActivePanel = SidePanel.History;
-    }
+    private void OnHistoryClick(object? sender, RoutedEventArgs e) => Vm?.ShowPanel(SidePanel.History);
 
     private async void OnSettingsClick(object? sender, RoutedEventArgs e) => await OpenSettingsAsync();
 
@@ -115,8 +112,8 @@ public partial class MainWindow
     {
         if (Vm?.Workspace.SelectedTab is { } tab) await RenameTabAsync(tab);
     }
-    private void OnMenuSchemaClick(object? sender, RoutedEventArgs e) { if (Vm is not null) Vm.ActivePanel = SidePanel.Schema; }
-    private void OnMenuScriptsClick(object? sender, RoutedEventArgs e) { if (Vm is not null) Vm.ActivePanel = SidePanel.Scripts; }
+    private void OnMenuSchemaClick(object? sender, RoutedEventArgs e) => Vm?.ShowPanel(SidePanel.Schema);
+    private void OnMenuScriptsClick(object? sender, RoutedEventArgs e) => Vm?.ShowPanel(SidePanel.Scripts);
     private void OnAboutClick(object? sender, RoutedEventArgs e) => AboutDialog.Open(this);
 
     // Rail tile clicked: activate that panel, or collapse the pane if its tile is re-clicked while open.

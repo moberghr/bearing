@@ -18,9 +18,14 @@ Legend: `[ ]` open · `[~]` partly done.
 > context-menu item), and the off-centre rail icons. The first three all lean on the same missing link between
 > a tab and its file on disk; read them together.
 >
+> **2026-08-13 (later):** two items **done and removed** — the "Show \<X\> panel does nothing when collapsed"
+> bug (now an explicit `ShellViewModel.ShowPanel`, six call sites, not the five the entry predicted — the
+> toolbar History button had it too; covered by `tests/Bearing.App.Tests/SidePanelRevealTests.cs`) and the
+> clipped connection-dialog Test error (wrapping + selectable + `SafeErrorText`). Both still want *(live QA)*.
+>
 > Baseline at the last verified pass (2026-08-13): build clean with **4 warnings** — the 2 known `xUnit2013`
 > plus 2 `ANT01` from the vendored PostgreSQL lexer grammar, which the previous "2 warnings" count omitted;
-> tests **Sql 163 · App 442 · Data 27 · Persistence 38** (670, 0 skipped) run live against Postgres on 5434
+> tests **Sql 163 · App 451 · Data 27 · Persistence 38** (679, 0 skipped) run live against Postgres on 5434
 > (`BEARING_TEST_PG_PORT=5434 dotnet test`; `--no-incremental` for the warning count — an incremental build
 > re-emits none, which is easy to misread as "fixed").
 >
@@ -275,36 +280,10 @@ Legend: `[ ]` open · `[~]` partly done.
 
 ### Panels, projects & dialogs
 
-- [ ] **P2** **"Show \<X\> panel" does nothing when the sidebar is collapsed and that panel is already the
-  active one.** Reported 2026-08-07 against Scripts; the same fault covers Connections and History. The
-  commands set `ActivePanel` and rely on a *side effect* to reveal the pane — `OnActivePanelChanged` does
-  `SidePaneOpen = true` (`ShellViewModel.cs:117-121`). But `[ObservableProperty]`'s setter short-circuits on
-  an unchanged value, so when `ActivePanel` is already `Scripts` the changed-handler never runs and the pane
-  stays collapsed. Panel *switching* works, which is why it looks like "only switches focus".
-  Fix: make revealing explicit rather than a notification side effect — set `ActivePanel` **and**
-  `SidePaneOpen = true` at each site. Note this is *not* `ActivateOrTogglePanel`
-  (`ShellViewModel.cs:110-115`): that deliberately collapses on re-activation, which is right for a rail
-  tile but wrong for a command named "Show …". Five call sites, all in `MainWindow.Commands.cs` — the three
-  palette commands (`:142-147`) and the two View-menu handlers `OnMenuSchemaClick` / `OnMenuScriptsClick`
-  (`:61-62`). Consider a single `ShowPanel(SidePanel)` on the shell so there's one reveal path, and drop the
-  implicit open from `OnActivePanelChanged` once every caller is explicit.
 - [ ] **P2** Remove / delete projects. Delete a project from the recent list, and optionally from disk (with
   confirm). Recent-list pruning of *missing* directories already self-heals
   (`RefreshRecentAsync` + `IRecentProjects.RemoveAsync`), so this is the deliberate-removal half:
   a still-present project the user wants gone, and the on-disk delete behind a confirm.
-- [ ] **P2** **A failed "Test" in the connection dialog clips its error.** `TestResult`
-  (`ConnectionDialog.axaml:75`) is a plain `TextBlock` with **no `TextWrapping`**, in a dialog fixed at
-  `Width="440"` with `SizeToContent="Height"` (`:4`), so a one-line Npgsql failure — which is where the
-  useful part usually is (SQLSTATE, host, TLS or auth detail) — runs off the right edge and is unreadable and
-  uncopyable. Set `TextWrapping="Wrap"` so the dialog grows instead, and make it selectable
-  (`SelectableTextBlock`) so the error can be copied; cap the height with a scroll if a driver hands back a
-  paragraph.
-  - **Route it through `Core/Data/SafeErrorText` while there.** `OnTestClick` assigns raw `ex.Message`
-    (`ConnectionDialog.axaml.cs:139`) — the one place a *user-typed, not-yet-saved* password is in play, and
-    a connect-time failure can quote the whole connection string. The executor and connect paths already
-    redact through `SafeErrorText`; this path was missed, and wrapping the text is what makes it long enough
-    to actually read. See the `[~]` `ex.Message` item below.
-
 ---
 
 ## 🟡 Open — quality & maintainability
@@ -323,8 +302,16 @@ Legend: `[ ]` open · `[~]` partly done.
   themselves, the connect path already names the endpoint by design (`Could not connect to 'x' (host:port/db)`),
   and stripping it would remove the useful half of every DNS/TLS/network error while protecting nobody. If the
   endpoint should genuinely be hidden, that's a separate decision — say so and it's a one-line change.
-  **Still open:** `ConnectionDialog.OnTestClick:139` was missed (see the dialog item above); sweep for any
-  other UI-facing catch that predates the helper.
+  **The connection dialog's `OnTestClick` — the miss called out here — is now wired (2026-08-13), and the
+  sweep for other UI-facing catches is done.** Result: everything else is either already safe or can't carry
+  a credential. The file-I/O catches (`TabAutosave:176`, `WorkspaceViewModel:165`, `ScriptsViewModel:112-158`,
+  `SettingsService:86`, `KeymapLoader:60,76`, `ShellViewModel.Projects:56`, `ExecutionViewModel:448` export)
+  report `IOException` text; `ExecutionViewModel:232` catches `ConnectionFailedException`, whose message
+  `ConnectionSessionManager` already redacted; `HistoryPanelViewModel:56` is the local SQLite log.
+  **Two genuine candidates left**, both because `SchemaBrowser` opens its *own* connections, so a connect-time
+  failure during a schema read can still quote a connection string: `SchemaNodes.cs:86` (the ⚠ child node on a
+  failed tree expansion) and `SidebarView.axaml.cs:224` ("Could not load definition"). Both are one-line
+  `SafeErrorText.Of(ex)` changes.
 
 ---
 

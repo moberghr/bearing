@@ -136,7 +136,10 @@ public partial class ConnectionDialog : Window
         }
         catch (Exception ex)
         {
-            TestResult.Text = "✗ " + ex.Message;
+            // Redacted, not raw: this dialog holds a user-typed, not-yet-saved password, and a connect-time
+            // driver failure can quote the whole connection string back at us. Same helper as the executor
+            // and connect paths — this one was missed.
+            TestResult.Text = "✗ " + SafeErrorText.Of(ex);
         }
     }
 

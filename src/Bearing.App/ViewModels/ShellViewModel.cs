@@ -117,17 +117,28 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The Alt-toggled menu bar (File/Edit/View/Query/Help); hidden by default (design §).</summary>
     [ObservableProperty] private bool _isMenuVisible;
 
-    /// <summary>Activate a side panel, or toggle the pane shut when its tile is re-clicked while open.</summary>
-    public void ActivateOrTogglePanel(SidePanel panel)
+    /// <summary>Show a side panel: switch to it <em>and</em> reveal the pane. Both halves are explicit on
+    /// purpose. Revealing used to be a side effect of <see cref="OnActivePanelChanged"/>, but
+    /// <c>[ObservableProperty]</c>'s setter short-circuits on an unchanged value — so "Show Scripts" while the
+    /// pane was collapsed and Scripts was already active never ran the handler and did nothing at all.</summary>
+    public void ShowPanel(SidePanel panel)
     {
-        if (ActivePanel == panel && SidePaneOpen) { SidePaneOpen = false; return; }
         ActivePanel = panel;
         SidePaneOpen = true;
     }
 
+    /// <summary>Activate a side panel, or toggle the pane shut when its tile is re-clicked while open.
+    /// Deliberately different from <see cref="ShowPanel"/>: collapsing on re-activation is right for a rail
+    /// tile and wrong for a command called "Show …".</summary>
+    public void ActivateOrTogglePanel(SidePanel panel)
+    {
+        if (ActivePanel == panel && SidePaneOpen) { SidePaneOpen = false; return; }
+        ShowPanel(panel);
+    }
+
     partial void OnActivePanelChanged(SidePanel value)
     {
-        SidePaneOpen = true; // selecting a rail tile always reveals the panel
+        // Reveal is *not* done here — see ShowPanel. This handler only reacts to the panel actually changing.
         if (value == SidePanel.History) _ = History.ReloadAsync(CancellationToken.None);
     }
 

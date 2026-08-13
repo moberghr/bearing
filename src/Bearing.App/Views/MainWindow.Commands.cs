@@ -60,12 +60,14 @@ public partial class MainWindow
         r.Register(KeyCommand.Sync(CommandIds.SelectProject, "Select project…", KeyScope.Global, "Connection", OpenProjectPicker));
         r.Register(KeyCommand.Sync(CommandIds.SelectConnection, "Select connection…", KeyScope.Global, "Connection", OpenConnectionPicker));
         r.Register(KeyCommand.Sync(CommandIds.SelectDatabase, "Select database…", KeyScope.Global, "Connection", OpenDatabasePicker));
+        // ShowPanel, not a bare ActivePanel assignment: these must reveal a collapsed pane even when the
+        // requested panel is already the active one (see ShellViewModel.ShowPanel).
         r.Register(KeyCommand.Sync(CommandIds.PanelConnections, "Show Connections panel", KeyScope.Global, "View",
-            () => { if (Vm is not null) Vm.ActivePanel = SidePanel.Schema; }));
+            () => Vm?.ShowPanel(SidePanel.Schema)));
         r.Register(KeyCommand.Sync(CommandIds.PanelScripts, "Show Scripts panel", KeyScope.Global, "View",
-            () => { if (Vm is not null) Vm.ActivePanel = SidePanel.Scripts; }));
+            () => Vm?.ShowPanel(SidePanel.Scripts)));
         r.Register(KeyCommand.Sync(CommandIds.PanelHistory, "Show History panel", KeyScope.Global, "View",
-            () => { if (Vm is not null) Vm.ActivePanel = SidePanel.History; }));
+            () => Vm?.ShowPanel(SidePanel.History)));
         r.Register(new KeyCommand(CommandIds.ConnectionNew, "New connection…", KeyScope.Global, "Connection", async () => await AddConnectionAsync()));
         r.Register(new KeyCommand(CommandIds.QueryRunAll, "Run entire script", KeyScope.Global, "Query", async () => await RunAllAsync()));
         r.Register(new KeyCommand(CommandIds.SettingsKeybindings, "Keyboard shortcuts…", KeyScope.Global, "View", async () => await EditKeybindingsAsync()));

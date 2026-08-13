@@ -72,7 +72,15 @@
     <CheckBox x:Name="ConfirmWritesBox" Margin="0,4,0,0"
               Content="Confirm before running writes / destructive DDL on this connection"/>
 
-    <TextBlock x:Name="TestResult" Opacity="0.75" Margin="0,4,0,0" Text=" "/>
+    <!-- Wraps: a failed Test reports a driver message whose useful half (SQLSTATE, host, TLS/auth detail) is
+         past column 440 and used to be clipped off the edge of this fixed-width dialog. SizeToContent="Height"
+         means wrapping grows the window instead; the ScrollViewer caps that growth so a paragraph-length
+         message can't push the buttons off screen, and HorizontalScrollBarVisibility must stay Disabled or
+         the content is measured unbounded and never wraps. SelectableTextBlock so the error can be copied. -->
+    <ScrollViewer Margin="0,4,0,0" MaxHeight="110"
+                  HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+      <SelectableTextBlock x:Name="TestResult" Opacity="0.75" TextWrapping="Wrap" Text=" "/>
+    </ScrollViewer>
 
     <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" Margin="0,8,0,0">
       <Button Grid.Column="0" x:Name="DeleteButton" Content="Delete" Click="OnDeleteClick"
