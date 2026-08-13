@@ -1,7 +1,8 @@
 namespace Bearing.Core.Workspace;
 
 /// <summary>
-/// App-global, user-editable preferences (persisted at <c>$XDG_CONFIG_HOME/bearing/settings.json</c>).
+/// App-global, user-editable preferences (persisted as <c>settings.json</c> in the per-platform config
+/// directory — see <c>Bearing.Persistence.BearingPaths.ConfigDir</c>).
 /// Distinct from per-project session state and from the shareable project manifest.
 /// <para>
 /// <b>Adding a setting is two edits, both in this folder:</b> add an init-only property here (with a

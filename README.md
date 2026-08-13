@@ -44,7 +44,8 @@ dotnet run --project src/Bearing.Desktop
 ```
 
 On startup Bearing reopens the project you last used. On first run (or if that project is gone) it opens a
-default project at `$XDG_DATA_HOME/bearing/projects/default` and seeds a demo connection pointing at a local
+default project at `projects/default` inside the app data directory (see
+[Where your data lives](#where-your-data-lives)) and seeds a demo connection pointing at a local
 `pagila` database.
 
 ## Tests
@@ -81,8 +82,19 @@ Bearing separates data by *shareability*:
 |---|---|---|---|
 | **Project** | `<project>/project.json` + `scripts/*.sql` | Connection settings (**no passwords**), SQL scripts | Yes — meant to be committed |
 | **Session** | `<project>/.bearing/session.json` | Open tabs, caret, active connection, pane layout | No — gitignored |
-| **App-global** | `$XDG_DATA_HOME/bearing/` | `query-log.sqlite`, `secrets/`, default project | No |
-| | `$XDG_CONFIG_HOME/bearing/` | recent projects, `keybindings.json`, `settings.json` | No |
+| **App-global — data** | platform data dir (below) | `query-log.sqlite`, `secrets/`, default project | No |
+| **App-global — config** | platform config dir (below) | recent projects, `keybindings.json`, `settings.json` | No |
+
+The two app-global directories follow each platform's own convention:
+
+| Platform | Config dir | Data dir |
+|---|---|---|
+| Linux | `$XDG_CONFIG_HOME/bearing` (`~/.config/bearing`) | `$XDG_DATA_HOME/bearing` (`~/.local/share/bearing`) |
+| Windows | `%APPDATA%\bearing` (roaming) | `%LOCALAPPDATA%\bearing` (local — the query log and secrets must not sync) |
+| macOS | `~/Library/Application Support/bearing` | `~/Library/Application Support/bearing` |
+
+`XDG_CONFIG_HOME` / `XDG_DATA_HOME` take precedence on every platform when set, so redirecting state for
+tests or a portable install works the same way everywhere.
 
 ### Upgrading from Squirrel
 
@@ -91,7 +103,8 @@ The app was called **Squirrel** before, and read its data from `squirrel`-named 
 until you move it. Your **projects and scripts are unaffected**: they live wherever you put them, and
 `project.json` is unchanged.
 
-Move the app-global directories (fish):
+Move the app-global directories — on Linux (fish); on Windows/macOS rename the same two directories in the
+platform locations from the table above:
 
 ```fish
 mv ~/.config/squirrel ~/.config/bearing
@@ -144,9 +157,11 @@ Connection passwords are **never** written to `project.json`. They are stored ke
 (which does travel with the project) so a shared project prompts each user for their own password.
 
 - **Preferred:** the OS keychain. On Linux this is the freedesktop Secret Service via `secret-tool` (libsecret).
+  There is **no** keychain backend on Windows or macOS yet — those platforms always take the fallback below.
 - **Fallback:** when no keychain is reachable, passwords are written to per-connection files under
-  `$XDG_DATA_HOME/bearing/secrets/` (mode `0600`). **This is not encrypted storage** — the app surfaces a
-  warning when it falls back, and you should prefer a machine with a working keyring for sensitive credentials.
+  `secrets/` in the data dir (mode `0600` where the OS supports it). **This is not encrypted storage** — the
+  app surfaces a warning when it falls back, and you should prefer a machine with a working keyring for
+  sensitive credentials.
 
 ### Query log
 

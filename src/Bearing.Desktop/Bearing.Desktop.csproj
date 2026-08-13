@@ -6,6 +6,11 @@
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>bearing</AssemblyName>
+    <!-- Win32 icon baked into the .exe (Explorer, taskbar, Alt+Tab). Only has an effect when the
+         target produces a Windows apphost; ignored for linux-*/osx-* RIDs. The in-app window icon
+         is separate — see Bearing.App/Views/MainWindow.axaml. Forward slashes so the path resolves
+         when cross-publishing from Linux. -->
+    <ApplicationIcon>../../assets/brand/icons/bearing.ico</ApplicationIcon>
   </PropertyGroup>
 
   <!-- Startup: precompile IL→native on publish (ReadyToRun) to cut JIT time in the ~490ms
