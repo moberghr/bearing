@@ -200,8 +200,23 @@ public partial class MainWindow : Window
         }
     }
 
+    // NEVER assign the picker's selection from inside this notification. The ComboBox's own
+    // ItemsSourceView subscribes to TabDatabases after this handler does, so mid-notification it still
+    // reports the pre-change items while the backing list is already mutated: assigning SelectedItem then
+    // resolves a stale index and blows up enumerating the selection (ArgumentOutOfRangeException out of
+    // SelectionModel). Post instead — one sync once the whole rebuild (Clear + N adds) has settled.
+    private bool _dbSyncQueued;
+
     private void OnTabDatabasesChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
-        => SyncDbPicker();
+    {
+        if (_dbSyncQueued) return;
+        _dbSyncQueued = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _dbSyncQueued = false;
+            SyncDbPicker();
+        });
+    }
 
     /// <summary>Build the notification sink as soon as the window is on screen (its manager attaches to the
     /// top level, so it can't exist earlier). Deliberately not deferred to the first completion: a host

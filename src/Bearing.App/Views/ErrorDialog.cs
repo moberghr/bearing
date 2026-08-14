@@ -36,7 +36,7 @@ public sealed class ErrorDialog : Window
         };
         var sub = new TextBlock
         {
-            Text = $"The app kept running. Details were saved to:\n{CrashLog.Path}",
+            Text = $"Details were saved to:\n{CrashLog.Path}",
             TextWrapping = TextWrapping.Wrap,
             Opacity = 0.8,
             Margin = new Thickness(0, 6, 0, 0),
