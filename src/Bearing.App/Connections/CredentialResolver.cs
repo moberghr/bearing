@@ -45,7 +45,20 @@ public sealed class CredentialResolver
             case CredentialKind.StoredPassword:
                 {
                     var store = _secrets();
-                    var pw = store is null ? null : await store.GetPasswordAsync(info.Id, ct);
+                    string? pw;
+                    try
+                    {
+                        pw = store is null ? null : await store.GetPasswordAsync(info.Id, ct);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        // The store *has* a password for this connection but could not hand it over (a keyring
+                        // that errored rather than answered "no such item"). Failing loudly is the point: the
+                        // alternative — treating it as "none stored" — sends a passwordless connect and then
+                        // prompts the user for a password already sitting in their keyring.
+                        throw new ConnectionFailedException(
+                            $"Could not read the stored password for '{info.Name}': {SafeErrorText.Of(ex)}", ex);
+                    }
                     if (pw is not null) return new Credential(pw, null);
 
                     // No stored secret: either none was ever set, or this machine has no keyring and the password

@@ -34,6 +34,44 @@ public class CredentialResolverTests
     }
 
     [Fact]
+    public async Task StoredPassword_read_failure_is_reported_not_treated_as_no_password()
+    {
+        // The bug this pins: a keyring that errors on read used to be indistinguishable from "nothing stored",
+        // because the store mapped every non-zero exit to null. The connect then went out passwordless and the
+        // user got prompted for a password that was in their keyring all along. A real failure must surface.
+        var secrets = new FakeSecretStore
+        {
+            ReadThrows = new InvalidOperationException(
+                "secret-tool lookup failed: The secret was transferred or encrypted in an invalid way."),
+        };
+        var info = Conn(CredentialKind.StoredPassword);
+        var prompt = new FakeCredentialPrompt("should-not-be-asked");
+        var resolver = new CredentialResolver(() => secrets, prompt, new ThrowingEntraTokens());
+
+        var ex = await Assert.ThrowsAsync<ConnectionFailedException>(
+            () => resolver.ResolveAsync(info, forceRefresh: false, CancellationToken.None));
+
+        Assert.Contains("Could not read the stored password", ex.Message);
+        Assert.Contains("transferred or encrypted", ex.Message);   // the keyring's own words reach the user
+        Assert.Equal(0, prompt.Calls);
+    }
+
+    [Fact]
+    public async Task StoredPassword_with_nothing_stored_still_connects_passwordless()
+    {
+        // The other half of the distinction above, and the reason "error" can't simply be folded into "none":
+        // no stored secret is the trust-auth / .pgpass path, which must go out with no password and no prompt.
+        var info = Conn(CredentialKind.StoredPassword);
+        var prompt = new FakeCredentialPrompt("should-not-be-asked");
+        var resolver = new CredentialResolver(() => new FakeSecretStore(), prompt, new ThrowingEntraTokens());
+
+        var cred = await resolver.ResolveAsync(info, forceRefresh: false, CancellationToken.None);
+
+        Assert.Null(cred.Secret);
+        Assert.Equal(0, prompt.Calls);
+    }
+
+    [Fact]
     public async Task Prompt_caches_the_password_and_re_prompts_only_after_invalidate()
     {
         var prompt = new FakeCredentialPrompt("first", "second");

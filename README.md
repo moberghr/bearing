@@ -71,8 +71,8 @@ docker run -d --name bearing-pg-test -p 5434:5432 \
 # then load the pagila schema + data into it
 ```
 
-The default password is still `squirrel` (the pre-rename value) so existing local test containers keep
-working — it is a throwaway dev credential, not app identity. Override it with `BEARING_TEST_PG_PASSWORD`.
+The default password is `squirrel` — a throwaway dev credential for the local test container, nothing to do
+with the app. Override it, and every other default, with `BEARING_TEST_PG_*` (`tests/Shared/PgTestServer.cs`).
 
 ## Where your data lives
 
@@ -95,51 +95,6 @@ The two app-global directories follow each platform's own convention:
 
 `XDG_CONFIG_HOME` / `XDG_DATA_HOME` take precedence on every platform when set, so redirecting state for
 tests or a portable install works the same way everywhere.
-
-### Upgrading from Squirrel
-
-The app was called **Squirrel** before, and read its data from `squirrel`-named directories. There is
-**no automatic migration** — nothing is deleted, but a fresh Bearing install will not see your old data
-until you move it. Your **projects and scripts are unaffected**: they live wherever you put them, and
-`project.json` is unchanged.
-
-Move the app-global directories — on Linux (fish); on Windows/macOS rename the same two directories in the
-platform locations from the table above:
-
-```fish
-mv ~/.config/squirrel ~/.config/bearing
-mv ~/.local/share/squirrel ~/.local/share/bearing
-```
-
-That carries over recent projects, `keybindings.json`, `settings.json`, the query log, and any
-file-fallback secrets. Then, **in each project directory**, move the per-project session folder so your
-open tabs and pane layout come back:
-
-```fish
-mv path/to/project/.squirrel path/to/project/.bearing
-```
-
-**Keychain passwords do not carry over.** Secrets are keyed by an `app` attribute that matches the app
-directory name, so entries stored under `app=squirrel` are invisible to a build looking up `app=bearing`.
-The simplest fix is to re-enter each connection's password in the connection dialog. To move them instead,
-for each connection GUID in your `project.json`:
-
-```fish
-secret-tool lookup app squirrel connection <guid> \
-  | secret-tool store --label "Bearing connection <guid>" app bearing connection <guid>
-```
-
-Or scripted across a whole project, with `jq`:
-
-```fish
-for id in (jq -r '.connections[].id' path/to/project/project.json)
-    secret-tool lookup app squirrel connection $id \
-      | secret-tool store --label "Bearing connection $id" app bearing connection $id
-end
-```
-
-Old `app=squirrel` entries are left in place; clear them with
-`secret-tool clear app squirrel connection <guid>` once you have confirmed Bearing connects.
 
 ### Profiles — isolating dev from real data
 

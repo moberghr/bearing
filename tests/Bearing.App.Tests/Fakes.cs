@@ -266,9 +266,15 @@ internal sealed class FakeSecretStore : ISecretStore
     /// <summary>Seed a secret regardless of <see cref="CanStore"/> — models one written before the opt-in
     /// was withdrawn, or by a keyring that later went away.</summary>
     public void Seed(Guid id, string password) => _store[id] = password;
+
+    /// <summary>Thrown from <see cref="GetPasswordAsync"/> — a keyring that *errored* rather than answering
+    /// "no such item". Distinct from returning null on purpose: the real store used to collapse the two.</summary>
+    public Exception? ReadThrows { get; init; }
+
     public Task<string?> GetPasswordAsync(Guid id, CancellationToken ct)
     {
         Fetched.Add(id);
+        if (ReadThrows is not null) throw ReadThrows;
         return Task.FromResult(_store.TryGetValue(id, out var p) ? p : null);
     }
     public Task DeleteAsync(Guid id, CancellationToken ct) { _store.Remove(id); return Task.CompletedTask; }

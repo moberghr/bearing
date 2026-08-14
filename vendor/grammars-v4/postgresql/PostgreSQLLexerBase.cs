@@ -94,6 +94,6 @@ public abstract class PostgreSQLLexerBase : Lexer
 
     public bool IsSemiColon()
     {
-        return ';' == (char)InputStream.LA(1);
+        return  ';' == (char)InputStream.LA(1);
     }
 }

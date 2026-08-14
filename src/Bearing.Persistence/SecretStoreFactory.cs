@@ -75,6 +75,25 @@ public static class SecretStoreFactory
     /// driven by a fake store — the real ones can only be exercised on their own platform (§4.2).</remarks>
     internal static async Task<string?> ProbeFailureAsync(ISecretStore store, CancellationToken ct)
     {
+        // Retried because one refusal is not evidence of a missing keychain: a healthy keyring rejects roughly
+        // 1 transfer in 80 (see SecretRetry). Deciding "no credential store here" on a single sample of that is
+        // what put a working-libsecret machine on the password-refusing file fallback for a whole session.
+        // Attempts are independent — fresh probe id, fresh helper process — so the last failure is the honest
+        // one to report.
+        string? failure = null;
+        for (var attempt = 1; attempt <= SecretRetry.Attempts; attempt++)
+        {
+            failure = await ProbeOnceAsync(store, ct).ConfigureAwait(false);
+            if (failure is null) return null;
+            if (SecretRetry.LooksFinal(failure)) break;   // the user dismissed an unlock prompt; don't nag
+        }
+        return failure;
+    }
+
+    /// <summary>One store → read back → delete cycle. See <see cref="ProbeFailureAsync"/> for why it runs more
+    /// than once.</summary>
+    private static async Task<string?> ProbeOnceAsync(ISecretStore store, CancellationToken ct)
+    {
         var probe = Guid.NewGuid();
         try
         {
@@ -83,6 +102,10 @@ public static class SecretStoreFactory
             return readBack == ProbeValue ? null
                  : readBack is null ? "it accepted the probe secret and then read it back as missing."
                  : "it read the probe secret back as a different value.";
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;   // shutting down — not a verdict on the keychain, and must not burn the remaining attempts
         }
         catch (Exception ex)
         {

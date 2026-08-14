@@ -253,8 +253,24 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     }
 
     /// <summary>Fetch the stored password for the connection editor's edit mode (null if none).</summary>
+    /// <remarks>A keyring that <i>errors</i> now raises rather than reporting "no password" (see
+    /// <c>SecretToolSecretStore.GetPasswordAsync</c>). Here that must not stop the dialog from opening — the
+    /// user can still edit the host or retype the password — so it opens with an empty password box and says
+    /// why in the status bar. Silently showing an empty box is what this avoids: it looks like no password was
+    /// ever stored, and saving over it would replace a good secret with nothing.</remarks>
     public async Task<string?> GetConnectionPasswordAsync(Guid id)
-        => _ctx.Secrets is null ? null : await _ctx.Secrets.GetPasswordAsync(id, CancellationToken.None);
+    {
+        if (_ctx.Secrets is null) return null;
+        try
+        {
+            return await _ctx.Secrets.GetPasswordAsync(id, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _ctx.SetStatus($"Could not read the stored password: {SafeErrorText.Of(ex)}");
+            return null;
+        }
+    }
 
     /// <summary>Add or replace a connection in the manifest and its password in the secret store.</summary>
     public async Task AddOrUpdateConnectionAsync(ConnectionInfo conn, string? password)
@@ -282,9 +298,9 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         {
             refusedSecret = true;
             try { await _ctx.ProjectStore.SaveAsync(_ctx.Project, CancellationToken.None); }
-            catch (Exception ex) { _ctx.SetStatus($"Saved connection but store failed: {ex.Message}"); }
+            catch (Exception ex) { _ctx.SetStatus($"Saved connection but store failed: {SafeErrorText.Of(ex)}"); }
         }
-        catch (Exception ex) { _ctx.SetStatus($"Saved connection but secret/store failed: {ex.Message}"); }
+        catch (Exception ex) { _ctx.SetStatus($"Saved connection but secret/store failed: {SafeErrorText.Of(ex)}"); }
 
         // A changed network target means the cached schema describes a different server, so drop it too —
         // eviction alone deliberately keeps it (that is what makes completion survive a mere disconnect).

@@ -1,0 +1,12 @@
+# Bearing — formatting scope.
+#
+# The only thing here is a fence around vendored third-party sources. `dotnet format` (the documented format
+# command in CLAUDE.md) formats every file in a project's compile set, and Bearing.Sql pulls the antlr4-c3 port
+# and the grammars-v4 base classes in by <Compile Include="..\..\vendor\...">. A format run therefore rewrote
+# ~120 lines of brace style across them on 2026-08-14 — whitespace only, but it makes every future diff against
+# upstream antlr4-c3 / grammars-v4 noise, which is exactly what you don't want in code we re-sync rather than
+# author (§9.5).
+#
+# `generated_code = true` tells the formatter and the analyzers to leave these alone.
+[vendor/**.cs]
+generated_code = true

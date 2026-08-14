@@ -30,8 +30,10 @@ Legend: `[ ]` open · `[~]` partly done.
 > before the connection dialog opens; and `ProbeAsync` caught every failure into a bare `false`, discarding a
 > message that already held `secret-tool`'s own stderr — it now returns a redacted reason which
 > `CreateAsync` writes to `crash.log` via the new `CrashLog.Note`. 14 new tests
-> (`SecretStoreProbeTests`, `SecretStorageRefreshTests`). **Unverified against the original symptom**: it
-> needs the transient to recur, so the log line is the evidence to look for next time.
+> (`SecretStoreProbeTests`, `SecretStorageRefreshTests`). **Both diagnoses here are superseded — see the
+> 2026-08-14 note below.** The log line did exactly its job (it named the symptom the next time it happened),
+> but "the probe ran too early" was wrong: the probe was fine, the keyring simply fails ~1% of calls. The
+> re-probe and the logged reason are both still worth having.
 >
 > **2026-08-13 (schema cache):** *completion dying on disconnect* is **done and removed**. Snapshots now live
 > in a `(connection id, database)` cache on `ConnectionSessionManager` that **outlives sessions**
@@ -75,10 +77,39 @@ Legend: `[ ]` open · `[~]` partly done.
 > `E'…'` lexes in a grammar we vendor rather than author. The 🟡 *quality & maintainability* section is gone
 > because it emptied out.
 >
-> Baseline at the last verified pass (2026-08-13): build clean with **0 warnings**;
-> tests **Sql 163 · App 471 · Data 27 · Persistence 46** (707) with 0 skipped on a bare `dotnet test` against
-> the `squirrel-pg-test` container, no env vars — **except** `PlatformKeychainTests`, which flakes about 1 run
-> in 3 for an environmental reason now diagnosed (see the libsecret item under *hardening*). A Postgres or
+> **2026-08-14 (libsecret is unreliable ~1% of the time — two faults, both now handled).** This started as a
+> `PlatformKeychainTests` failure on a box whose libsecret was healthy, and it is the **root cause of the
+> "No system keyring found" reports**; "the probe ran too early" (2026-08-13 note above) was a wrong guess.
+> Measured, not inferred:
+> - **Fault A — the write fails and says so (~1.2%).** 250 scripted store→read→delete cycles produced 3
+>   failures, all `secret-tool: Couldn't create item: The secret was transferred or encrypted in an invalid
+>   way.` Characteristic of the Secret Service session-encryption handshake, so it is a per-call dice roll,
+>   independent between attempts. (A plausible cause is the known gnome-keyring DH leading-zero-byte bug, which
+>   would predict ~1/256 per transfer — **unconfirmed**, don't repeat it as fact.)
+> - **Fault B — the write reports success and vanishes (~0.5%).** 200 *rotation* cycles (store over an
+>   existing item, which fault A's measurement never did) produced 1 case where both stores exited `0` with an
+>   **empty stderr** and the read then found nothing. Nothing reports an error, so a retry alone cannot see it.
+>   This is what the probe's "accepted the probe secret and then read it back as missing" message was.
+>
+> Three fixes, in `SecretRetry` (new, carries the measurements), `SecretStoreFactory` and
+> `SecretToolSecretStore`: the **probe retries** (3 attempts, fresh probe id each, last failure reported) so one
+> dice roll can no longer demote the session to the password-refusing file fallback; **writes verify their own
+> postcondition** by reading back, like `DeleteAsync` already did, which is the only defence against fault B;
+> and **`GetPasswordAsync` stops mapping every non-zero exit to `null`** — an empty stderr is libsecret's "no
+> such item" and still returns null (the trust-auth/`.pgpass` path), anything else now raises. That last one was
+> a silent-corruption bug in its own right: a keyring that *errored* on read was indistinguishable from "no
+> password stored", so the connect path went out passwordless and prompted for a password sitting in the
+> keyring. A dismissed unlock prompt is treated as final everywhere — retrying it just re-asks the user.
+> Callers handle the new raise: `CredentialResolver` turns it into `ConnectionFailedException`, and the
+> connection editor opens with an empty box plus a status line rather than crashing. 13 new tests
+> (`SecretRetryTests`, 2 in `CredentialResolverTests`, `FakeSecretStore.ReadThrows`).
+> **Verified: 30 consecutive full-suite runs clean**, where the pre-fix rate was ~1 run in 3. Two `ex.Message`
+> sites in `ConnectionsViewModel`'s save path were redacted on the way — the 2026-08-13 claim that the
+> `SafeErrorText` sweep was complete had missed them.
+>
+> Baseline at the last verified pass (2026-08-14): build clean with **0 warnings**;
+> tests **Sql 163 · App 473 · Data 27 · Persistence 57** (720) with 0 skipped on a bare `dotnet test` against
+> the `squirrel-pg-test` container, no env vars, and **30/30 runs green**. A Postgres or
 > keychain skip carries its own diagnosis, so read the message before assuming the server is down.
 > (`--no-incremental` for the warning count — an incremental build re-emits none, which is easy to misread as
 > "fixed".) Note the ANTLR build task writes to `~/.jre/`, which an agent sandbox blocks with
@@ -404,36 +435,6 @@ Legend: `[ ]` open · `[~]` partly done.
 
 ## 🔵 Open — hardening, security & distribution
 
-- [ ] **P1** **The keychain probe is a single sample of an operation that fails ~1% of the time — retry it.
-  This is the root cause of the "No system keyring found" report, now measured rather than guessed.**
-  Found 2026-08-13 while running the suite: `PlatformKeychainTests` failed on a box whose libsecret was
-  healthy, and `CrashLog` had the reason the earlier pass added — *"it accepted the probe secret and then read
-  it back as missing."* By hand, `secret-tool store` + `lookup` worked fine. **Measured: 250 scripted probes
-  mirroring `ProbeFailureAsync` produced 3 failures (~1.2%)**, all with the same libsecret error:
-  `secret-tool: Couldn't create item: The secret was transferred or encrypted in an invalid way.`
-  - So a **healthy** keyring rejects roughly 1 in 80 secret transfers, and the probe treats one rejection as
-    "this machine has no credential store" — demoting the whole session to the file fallback, which by default
-    **refuses to store passwords at all**. That is the reported symptom exactly, and it is not transient
-    keyring *state*: it is a per-call dice roll, which is why re-probing later (already built,
-    `RefreshSecretStorageAsync`) heals it and why the original report looked unreproducible.
-  - The error text is characteristic of the Secret Service session-encryption handshake rather than of
-    anything this app does (a plausible cause is the known gnome-keyring DH shared-secret leading-zero-byte
-    bug, which would predict a ~1/256-per-transfer rate — close to what was measured, but **unconfirmed**,
-    so don't write it down as fact).
-  - **Fix: retry inside `ProbeFailureAsync`** — attempts are independent, so 2 tries takes ~1.2% to ~0.015%
-    and 3 makes it irrelevant. Retry the *whole* store→read→delete with a fresh GUID, and only report the
-    **last** failure. Keep the `finally` cleanup per attempt so no probe credential lingers.
-  - **Second defect, same root, worse consequence:** `SecretToolSecretStore.GetPasswordAsync` maps *any*
-    non-zero exit to `null` with the comment `// not found` (`:33`), so this 1%-of-the-time encryption error on
-    a **real** read is indistinguishable from "no password stored". On the connect path that silently becomes
-    a passwordless connect and then a credential prompt for a connection whose password is sitting in the
-    keyring. Distinguish "no such item" (empty stderr) from a transfer error, and retry the latter.
-  - This also makes the suite flake: `dotnet test` failed ~1 run in 3 across 4 runs, in a *different*
-    `PlatformKeychainTests` case each time. Any test that stores or reads a real secret inherits the ~1%, so
-    the retry belongs in the store/probe rather than in the tests — and the earlier "all 702 passed" baseline
-    was luck, not a clean signal.
-  - **Bearing on the Windows result above:** that verification is one green run of the same shape. Whether
-    Credential Manager has its own equivalent flake is unknown; the retry makes the question moot.
 - [~] **P1** **Windows + macOS secure credential storage — Windows verified 2026-08-13, macOS still not.** Both
   stores now exist behind the unchanged `ISecretStore`, and `SecretStoreFactory` dispatches per platform
   (`PlatformStore()`) instead of wiring libsecret only, so nothing above the store changed:
@@ -450,6 +451,9 @@ Legend: `[ ]` open · `[~]` partly done.
     verified against real Credential Manager. That includes the first test's assertion that the factory picked
     *this* platform's store, which was the quiet failure to watch for (falling through to the file fallback on
     a platform that has a keychain) — it didn't happen.
+  - **Both platforms now inherit the probe retry** (2026-08-14 note above), so a Windows or macOS credential
+    store with its own ~1% equivalent can no longer be mistaken for "no keychain here" on a single sample.
+    The verified Windows run predates that, and was one green run of a shape that flaked ~1 in 3 on Linux.
   - **macOS: still unrun.** Same 5 skip-safe tests are the verification; nothing to write, it needs a Mac.
     Until then `MacKeychainSecretStore` is code that has never executed — treat its `security`-CLI argument
     parsing and the service/account keying as unproven, not merely un-QA'd.
@@ -487,8 +491,10 @@ Legend: `[ ]` open · `[~]` partly done.
 - [ ] **P3** **The no-keyring warnings still assert a cause they never checked.** Both amber blocks
   (`ConnectionDialog.axaml:46,54`) and the status bar (`ShellViewModel.Projects.SecretPosture`) say "No system
   keyring **found**", which is now known to be wrong in at least one real case — the keyring was there and
-  answering, and it is now measured *why* (the ~1% transfer failure in the P1 item above; "ran too early" was
-  the earlier guess and is not the mechanism). The reason is no longer thrown away (`SecretStoreFactory`
+  answering, and it is now measured *why* (the ~1% transfer faults recorded in the 2026-08-14 note above and in
+  `SecretRetry`; "ran too early" was the earlier guess and is not the mechanism). With the probe retrying, this
+  wording should now be reached only by a machine that genuinely has no keychain — which is exactly why the
+  remaining work is to stop asserting a cause. The reason is no longer thrown away (`SecretStoreFactory`
   → `CrashLog.Note`), so the remaining work is to carry it to the UI: reword to "couldn't be reached", and
   plumb the reason through `SecretStoragePosture` (a third field) so the dialog can show *why* — a locked
   collection and a missing helper want different advice, and only one of them is worth an unlock hint.

@@ -1,5 +1,5 @@
 #nullable disable
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 
 namespace Antlr4CodeCompletion.Core.CodeCompletion
 {
