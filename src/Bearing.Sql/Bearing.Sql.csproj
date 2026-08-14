@@ -10,6 +10,17 @@
   <PropertyGroup>
     <!-- Generated parser + the vendored grammar base classes live in the GLOBAL namespace
          (the grammars-v4 base classes declare no namespace), so we do not set an ANTLR package. -->
+
+    <!--
+      ANT01 = ANTLR warning(146) "non-fragment lexer rule can match the empty string", raised twice by the
+      vendored lexer (PostgreSQLLexer.g4:1441,1456). Both rules are deliberately empty: they are the
+      "escape string constant was NOT continued" fallthroughs whose only job is `-> skip, popMode`, so the
+      empty match IS the mechanism. Silencing beats editing them — a fix would change how `E'…'`
+      continuation lexes, in a grammar we vendor rather than author.
+      Scope note: MSBuild suppression is per-project, not per-file, so this hides any future ANT01 in this
+      project too. Drop the property temporarily after updating vendor/grammars-v4 to re-read the warnings.
+    -->
+    <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);ANT01</MSBuildWarningsAsMessages>
   </PropertyGroup>
 
   <ItemGroup>

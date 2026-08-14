@@ -61,7 +61,10 @@ public sealed partial class CompletionEngine : ICompletionEngine
                 if (kw is not null)
                     suggestions.Add(new Suggestion
                     {
-                        DisplayText = kw, ReplacementText = kw, Kind = SuggestionKind.Keyword, Priority = 1,
+                        DisplayText = kw,
+                        ReplacementText = kw,
+                        Kind = SuggestionKind.Keyword,
+                        Priority = 1,
                     });
             }
         }

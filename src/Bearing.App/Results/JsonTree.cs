@@ -119,12 +119,14 @@ public static class JsonTree
     {
         JsonValueKind.Object => new JsonTreeNode
         {
-            Key = key, Kind = JsonNodeKind.Object,
+            Key = key,
+            Kind = JsonNodeKind.Object,
             Children = el.EnumerateObject().Select(p => Build(p.Name, p.Value)).ToList(),
         },
         JsonValueKind.Array => new JsonTreeNode
         {
-            Key = key, Kind = JsonNodeKind.Array,
+            Key = key,
+            Kind = JsonNodeKind.Array,
             Children = el.EnumerateArray().Select(v => Build(null, v)).ToList(),
         },
         JsonValueKind.String => new JsonTreeNode { Key = key, Kind = JsonNodeKind.String, Value = el.GetString() },

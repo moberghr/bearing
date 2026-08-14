@@ -83,7 +83,9 @@ public abstract partial class SchemaNodeViewModel : ObservableObject
         catch (Exception ex)
         {
             Children.Clear();
-            Children.Add(new MessageNodeViewModel("⚠", ex.Message));
+            // SchemaBrowser opens its own connections, so a connect-time failure here can quote a whole
+            // connection string — redact before it reaches the tree (§1.1).
+            Children.Add(new MessageNodeViewModel("⚠", SafeErrorText.Of(ex)));
         }
         finally
         {

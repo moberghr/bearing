@@ -10,6 +10,7 @@ using Avalonia.Interactivity;
 using Bearing.App.Services;
 using Bearing.App.ViewModels;
 using Bearing.App.Views;
+using Bearing.Core.Data;
 
 namespace Bearing.App.Controls;
 
@@ -224,7 +225,9 @@ public partial class SidebarView : UserControl
         }
         catch (System.Exception ex)
         {
-            if (Vm is not null) Vm.StatusText = $"Could not load definition: {ex.Message}";
+            // Definition reads go through SchemaBrowser's own connections, so a connect-time failure can
+            // quote a connection string into the status bar — redact it (§1.1).
+            if (Vm is not null) Vm.StatusText = $"Could not load definition: {SafeErrorText.Of(ex)}";
         }
     }
 

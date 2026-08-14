@@ -502,96 +502,96 @@ namespace Antlr4CodeCompletion.Core.CodeCompletion
                     switch (transition.TransitionType)
                     {
                         case TransitionType.RULE:
-                        {
-                            var endStatus = this.ProcessRule(transition.target, currentEntry.TokenIndex, callStack, indentation);
-                            foreach (var position in endStatus)
                             {
-                                statePipeline.AddLast(new PipelineEntry(((RuleTransition)transition).followState, position));
+                                var endStatus = this.ProcessRule(transition.target, currentEntry.TokenIndex, callStack, indentation);
+                                foreach (var position in endStatus)
+                                {
+                                    statePipeline.AddLast(new PipelineEntry(((RuleTransition)transition).followState, position));
+                                }
+                                break;
                             }
-                            break;
-                        }
 
                         case TransitionType.PREDICATE:
-                        {
-                            if (this.CheckPredicate((PredicateTransition)transition))
                             {
-                                statePipeline.AddLast(new PipelineEntry(transition.target, currentEntry.TokenIndex));
+                                if (this.CheckPredicate((PredicateTransition)transition))
+                                {
+                                    statePipeline.AddLast(new PipelineEntry(transition.target, currentEntry.TokenIndex));
+                                }
+                                break;
                             }
-                            break;
-                        }
 
                         case TransitionType.WILDCARD:
-                        {
-                            if (atCaret)
                             {
-                                if (!this.TranslateToRuleIndex(callStack.ToList()))
-                                {
-                                    foreach (var token in IntervalSet.Of(TokenConstants.MinUserTokenType, this.atn.maxTokenType).ToList())
-                                    {
-                                        if (!this.ignoredTokens.Contains(token))
-                                        {
-                                            this.candidates.Tokens[token] = new List<int>();
-                                        }
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                statePipeline.AddLast(new PipelineEntry(transition.target, currentEntry.TokenIndex + 1));
-                            }
-                            break;
-                        }
-
-                        default:
-                        {
-                            if (transition.IsEpsilon)
-                            {
-                                // Jump over simple states with a single outgoing epsilon transition.
-                                statePipeline.AddLast(new PipelineEntry(transition.target, currentEntry.TokenIndex));
-                                continue;
-                            }
-
-                            var set = transition.Label;
-                            if (set != null && set.Count > 0)
-                            {
-                                if (transition.TransitionType == TransitionType.NOT_SET)
-                                {
-                                    set = set.Complement(IntervalSet.Of(TokenConstants.MinUserTokenType, this.atn.maxTokenType));
-                                }
-
                                 if (atCaret)
                                 {
                                     if (!this.TranslateToRuleIndex(callStack.ToList()))
                                     {
-                                        var list = set.ToList();
-                                        var isAddFollowing = list.Count == 1;
-
-                                        foreach (var symbol in list)
+                                        foreach (var token in IntervalSet.Of(TokenConstants.MinUserTokenType, this.atn.maxTokenType).ToList())
                                         {
-                                            if (!this.ignoredTokens.Contains(symbol))
+                                            if (!this.ignoredTokens.Contains(token))
                                             {
-                                                if (isAddFollowing)
-                                                {
-                                                    this.candidates.Tokens[symbol] = this.GetFollowingTokens(transition);
-                                                }
-                                                else
-                                                {
-                                                    this.candidates.Tokens[symbol] = new List<int>();
-                                                }
+                                                this.candidates.Tokens[token] = new List<int>();
                                             }
                                         }
                                     }
                                 }
                                 else
                                 {
-                                    if (set.Contains(currentSymbol))
+                                    statePipeline.AddLast(new PipelineEntry(transition.target, currentEntry.TokenIndex + 1));
+                                }
+                                break;
+                            }
+
+                        default:
+                            {
+                                if (transition.IsEpsilon)
+                                {
+                                    // Jump over simple states with a single outgoing epsilon transition.
+                                    statePipeline.AddLast(new PipelineEntry(transition.target, currentEntry.TokenIndex));
+                                    continue;
+                                }
+
+                                var set = transition.Label;
+                                if (set != null && set.Count > 0)
+                                {
+                                    if (transition.TransitionType == TransitionType.NOT_SET)
                                     {
-                                        statePipeline.AddLast(new PipelineEntry(transition.target, currentEntry.TokenIndex + 1));
+                                        set = set.Complement(IntervalSet.Of(TokenConstants.MinUserTokenType, this.atn.maxTokenType));
+                                    }
+
+                                    if (atCaret)
+                                    {
+                                        if (!this.TranslateToRuleIndex(callStack.ToList()))
+                                        {
+                                            var list = set.ToList();
+                                            var isAddFollowing = list.Count == 1;
+
+                                            foreach (var symbol in list)
+                                            {
+                                                if (!this.ignoredTokens.Contains(symbol))
+                                                {
+                                                    if (isAddFollowing)
+                                                    {
+                                                        this.candidates.Tokens[symbol] = this.GetFollowingTokens(transition);
+                                                    }
+                                                    else
+                                                    {
+                                                        this.candidates.Tokens[symbol] = new List<int>();
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        if (set.Contains(currentSymbol))
+                                        {
+                                            statePipeline.AddLast(new PipelineEntry(transition.target, currentEntry.TokenIndex + 1));
+                                        }
                                     }
                                 }
                             }
-                        }
-                        break;
+                            break;
                     }
                 }
             }

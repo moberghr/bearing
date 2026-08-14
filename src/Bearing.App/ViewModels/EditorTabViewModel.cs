@@ -40,6 +40,7 @@ public sealed partial class EditorTabViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsDirty))]
+    [NotifyPropertyChangedFor(nameof(HeaderTooltip))]
     private string? _scriptPath;   // absolute path; null until a scratch tab's file is created
 
     /// <summary>True when the buffer differs from the last-saved content (drives the modified marker).</summary>
@@ -195,4 +196,28 @@ public sealed partial class EditorTabViewModel : ObservableObject
     /// filename — the file is an implementation detail until the tab is named and promoted.</summary>
     private void UpdateHeader()
         => Header = IsScratch || ScriptPath is null ? DisplayName : Path.GetFileName(ScriptPath);
+
+    /// <summary>
+    /// Hover text for the tab title: which file on disk this tab actually is. A scratch tab's
+    /// <see cref="Header"/> deliberately hides its filename, so this is the only place the link is visible
+    /// (and the only way to tell two same-named scripts in different folders apart).
+    /// <para>
+    /// Project-relative when the file sits under the tab's own project — the absolute path is mostly
+    /// <c>~/…/project/scripts/</c> noise — and absolute otherwise. Not recomputed on
+    /// <see cref="ProjectDirectory"/>, which is fixed for the tab's life.
+    /// </para>
+    /// </summary>
+    public string HeaderTooltip
+        => ScriptPath is { } path ? DisplayPath(ProjectDirectory, path) : "Not saved to a file yet";
+
+    /// <summary>Pure — path shown in <see cref="HeaderTooltip"/>. A file outside the project keeps its
+    /// absolute path: <c>GetRelativePath</c> would answer with a <c>../..</c> walk, which reads worse.</summary>
+    private static string DisplayPath(string? projectDirectory, string scriptPath)
+    {
+        if (string.IsNullOrEmpty(projectDirectory)) return scriptPath;
+        var relative = Path.GetRelativePath(projectDirectory, scriptPath);
+        return relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative)
+            ? scriptPath
+            : relative;
+    }
 }

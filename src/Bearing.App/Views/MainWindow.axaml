@@ -365,7 +365,9 @@
               <TabStrip.ItemTemplate>
                 <DataTemplate x:DataType="vm:EditorTabViewModel">
                   <StackPanel Orientation="Horizontal" DoubleTapped="OnTabHeaderDoubleTapped">
-                    <TextBlock Text="{Binding Header}" VerticalAlignment="Center"/>
+                    <!-- Tooltip names the backing file: a scratch tab's header hides it by design. -->
+                    <TextBlock Text="{Binding Header}" VerticalAlignment="Center"
+                               ToolTip.Tip="{Binding HeaderTooltip}"/>
                     <!-- Running indicator: a rotating arc while this tab has a query in flight. Execution
                          is per-tab, so a background tab shows progress here without being the focused tab. -->
                     <Path Width="11" Height="11" Margin="6,0,0,0" VerticalAlignment="Center"

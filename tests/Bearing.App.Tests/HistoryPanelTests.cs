@@ -48,9 +48,9 @@ public class HistoryPanelTests
         await vm.ReloadAsync(CancellationToken.None);
 
         Assert.Equal(3, vm.Groups.Count);                // 3 distinct days
-        Assert.Equal(1, vm.Groups[0].Rows.Count);        // today
+        Assert.Single(vm.Groups[0].Rows);                // today
         Assert.Equal(2, vm.Groups[1].Rows.Count);        // yesterday
-        Assert.Equal(1, vm.Groups[2].Rows.Count);        // 5 days ago
+        Assert.Single(vm.Groups[2].Rows);                // 5 days ago
     }
 
     [Fact]

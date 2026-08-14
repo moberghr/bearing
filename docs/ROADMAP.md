@@ -64,12 +64,25 @@ Legend: `[ ]` open · `[~]` partly done.
 > `CreatePlatformStoreAsync` instead of `ProbePlatformStoreAsync` — on Windows/macOS "no credential store
 > here" is never true, so a silent skip there was hiding the very failure that suite exists to catch.
 >
-> Baseline at the last verified pass (2026-08-13): build clean with **4 warnings** — the 2 known `xUnit2013`
-> plus 2 `ANT01` from the vendored PostgreSQL lexer grammar, which the previous "2 warnings" count omitted;
-> tests **Sql 163 · App 466 · Data 27 · Persistence 46** (702) — **all 702 passed with 0 skipped** on a bare
-> `dotnet test` against the `squirrel-pg-test` container, no env vars. A Postgres or keychain skip now carries
-> its own diagnosis, so read the message before assuming the server is down. (`--no-incremental` for the
-> warning count — an incremental build re-emits none, which is easy to misread as "fixed".)
+> **2026-08-13 (small-items pass):** three items **done and removed** — the tab-title tooltip (new derived
+> `EditorTabViewModel.HeaderTooltip`, project-relative, "Not saved to a file yet" while a scratch tab has no
+> file; 5 tests in `TabHeaderTooltipTests.cs`) *(live QA)*; the **last two** raw-`ex.Message` sites
+> (`SchemaNodes.cs` error node, `SidebarView.axaml.cs` definition failure) — the `SafeErrorText` sweep is now
+> complete, so that whole entry is closed; and the build warnings, now **0** — `xUnit2013` fixed with
+> `Assert.Single`, `ANT01` suppressed per-project via `MSBuildWarningsAsMessages` in `Bearing.Sql.csproj`.
+> The ANT01 call: both flagged rules are **deliberately** empty (`-> skip, popMode` fallthroughs for
+> "escape string constant not continued"), so the empty match is the mechanism — fixing them would change how
+> `E'…'` lexes in a grammar we vendor rather than author. The 🟡 *quality & maintainability* section is gone
+> because it emptied out.
+>
+> Baseline at the last verified pass (2026-08-13): build clean with **0 warnings**;
+> tests **Sql 163 · App 471 · Data 27 · Persistence 46** (707) with 0 skipped on a bare `dotnet test` against
+> the `squirrel-pg-test` container, no env vars — **except** `PlatformKeychainTests`, which flakes about 1 run
+> in 3 for an environmental reason now diagnosed (see the libsecret item under *hardening*). A Postgres or
+> keychain skip carries its own diagnosis, so read the message before assuming the server is down.
+> (`--no-incremental` for the warning count — an incremental build re-emits none, which is easy to misread as
+> "fixed".) Note the ANTLR build task writes to `~/.jre/`, which an agent sandbox blocks with
+> `MSB3231 Access to the path '/home/skajfes/.jre/' is denied` — unrelated to the `MSB1025` family above.
 >
 > **If a build fails with `MSB1025` / `SocketException (13)` or "Access to the path `.gitmodules` is denied",
 > that is an agent sandbox, not the repo:** add `-m:1 -nodeReuse:false` (MSBuild's worker socket) and
@@ -98,8 +111,8 @@ Legend: `[ ]` open · `[~]` partly done.
   resets per day, the file ordinal restarts daily and fills gaps.
   - **Recommended direction: make the file name the single source of truth and drop the special case**, so
     the tab reads `2026-08-13-02.sql` once the file exists and keeps `Scratch N` only as the pre-file
-    placeholder. That is what the scripts tree, the hover tooltip and "reveal in Scripts" (both items below)
-    all show, so it's the name the user can actually act on. The alternative — name the file after the label
+    placeholder. That is what the scripts tree, the hover tooltip (**built** — `HeaderTooltip`) and "reveal in
+    Scripts" (the item below) all show, so it's the name the user can actually act on. The alternative — name the file after the label
     (`scratch-3.sql`) — reads nicer but throws away the daily bucketing and gives cross-day collisions to
     resolve; if you go that way, do it in `ScratchNaming` and keep the date somewhere.
   - **`_scratchCounter` increments on every `NewTab`, including opening a named script** (`:89` is on the
@@ -114,18 +127,6 @@ Legend: `[ ]` open · `[~]` partly done.
     (`ScratchNaming.IsUnderScratch`) — a renamed scratch must still end up showing its new file name, and an
     *empty* scratch (no file yet) must still keep the typed label (`:291`). `ScratchNaming` is pure and
     already has a home for tests (§2.5).
-- [ ] **P2** **Hovering a tab title should show the full backing file name.** There is no `ToolTip.Tip`
-  anywhere on the tab header — the item template's root `StackPanel` (`MainWindow.axaml:367`) and the title
-  `TextBlock` (`:368`, `Text="{Binding Header}"`) both lack one; the only tooltips in the template are on the
-  spinner (`:373`), the dirty dot (`:388`) and the close button (`:396`). Bind it to
-  `EditorTabViewModel.ScriptPath` (`EditorTabViewModel.cs:41-43` — the absolute path, and the only path
-  property; there is no `FilePath`). Two cases to handle deliberately: `ScriptPath` is **null** until a
-  scratch tab's file is created, and a null tooltip shows nothing at all — either suppress the tooltip or say
-  "not saved yet"; and the useful string is arguably the **project-relative** path rather than the absolute
-  one (`ProjectDirectory` is on the VM at `:33`), since the absolute path is mostly `~/…/project/scripts/`
-  noise. A tiny derived property on the VM keeps the formatting out of XAML and under test. This is the
-  cheapest half of the scratch-naming item above — it makes the label↔file link visible even before the
-  names are unified.
 - [ ] **P2** **Right-click a tab title → Rename, Save, Close.** All three operations already exist per-tab and
   are reachable other ways; this is a discoverability gap, not new behaviour. Rename is `CommandIds.TabRename`
   (`MainWindow.Commands.cs:34`) plus the double-tap handler `OnTabHeaderDoubleTapped`
@@ -398,39 +399,41 @@ Legend: `[ ]` open · `[~]` partly done.
   confirm). Recent-list pruning of *missing* directories already self-heals
   (`RefreshRecentAsync` + `IRecentProjects.RemoveAsync`), so this is the deliberate-removal half:
   a still-present project the user wants gone, and the on-disk delete behind a confirm.
----
-
-## 🟡 Open — quality & maintainability
-
-- [~] **P3** Clear build warnings — **4 remain** on a `--no-incremental` build: 2 × `xUnit2013`
-  (`HistoryPanelTests.cs:51,53` — use `Assert.Single`) and 2 × `ANT01` from the vendored PostgreSQL lexer
-  grammar (`PostgreSQLLexer.g4:1441,1456`, "non-fragment lexer rule can match the empty string"). The ANTLR
-  pair was missing from the earlier count; it comes from vendored grammar, so decide whether to fix it
-  upstream-style or suppress `ANT01` for that one file rather than leaving the number permanently non-zero.
-- [~] **P3** Raw `ex.Message` surfaced to the UI on generic catch paths. **Partly done 2026-08-10, and
-  deliberately narrower than written.** Pure `Core/Data/SafeErrorText` redacts `password=…` / `pwd=…` values
-  out of driver messages — the real hazard, since a connect- or parse-time failure can quote the whole
-  connection string, which then lands in the results pane, the status bar *and* the query log. Wired into the
-  executor's three generic catches and the connect-failure path (`ConnectionSessionManager`).
-  **Host/port/database are kept on purpose:** this is a local tool showing the user a server they configured
-  themselves, the connect path already names the endpoint by design (`Could not connect to 'x' (host:port/db)`),
-  and stripping it would remove the useful half of every DNS/TLS/network error while protecting nobody. If the
-  endpoint should genuinely be hidden, that's a separate decision — say so and it's a one-line change.
-  **The connection dialog's `OnTestClick` — the miss called out here — is now wired (2026-08-13), and the
-  sweep for other UI-facing catches is done.** Result: everything else is either already safe or can't carry
-  a credential. The file-I/O catches (`TabAutosave:176`, `WorkspaceViewModel:165`, `ScriptsViewModel:112-158`,
-  `SettingsService:86`, `KeymapLoader:60,76`, `ShellViewModel.Projects:56`, `ExecutionViewModel:448` export)
-  report `IOException` text; `ExecutionViewModel:232` catches `ConnectionFailedException`, whose message
-  `ConnectionSessionManager` already redacted; `HistoryPanelViewModel:56` is the local SQLite log.
-  **Two genuine candidates left**, both because `SchemaBrowser` opens its *own* connections, so a connect-time
-  failure during a schema read can still quote a connection string: `SchemaNodes.cs:86` (the ⚠ child node on a
-  failed tree expansion) and `SidebarView.axaml.cs:224` ("Could not load definition"). Both are one-line
-  `SafeErrorText.Of(ex)` changes.
 
 ---
 
 ## 🔵 Open — hardening, security & distribution
 
+- [ ] **P1** **The keychain probe is a single sample of an operation that fails ~1% of the time — retry it.
+  This is the root cause of the "No system keyring found" report, now measured rather than guessed.**
+  Found 2026-08-13 while running the suite: `PlatformKeychainTests` failed on a box whose libsecret was
+  healthy, and `CrashLog` had the reason the earlier pass added — *"it accepted the probe secret and then read
+  it back as missing."* By hand, `secret-tool store` + `lookup` worked fine. **Measured: 250 scripted probes
+  mirroring `ProbeFailureAsync` produced 3 failures (~1.2%)**, all with the same libsecret error:
+  `secret-tool: Couldn't create item: The secret was transferred or encrypted in an invalid way.`
+  - So a **healthy** keyring rejects roughly 1 in 80 secret transfers, and the probe treats one rejection as
+    "this machine has no credential store" — demoting the whole session to the file fallback, which by default
+    **refuses to store passwords at all**. That is the reported symptom exactly, and it is not transient
+    keyring *state*: it is a per-call dice roll, which is why re-probing later (already built,
+    `RefreshSecretStorageAsync`) heals it and why the original report looked unreproducible.
+  - The error text is characteristic of the Secret Service session-encryption handshake rather than of
+    anything this app does (a plausible cause is the known gnome-keyring DH shared-secret leading-zero-byte
+    bug, which would predict a ~1/256-per-transfer rate — close to what was measured, but **unconfirmed**,
+    so don't write it down as fact).
+  - **Fix: retry inside `ProbeFailureAsync`** — attempts are independent, so 2 tries takes ~1.2% to ~0.015%
+    and 3 makes it irrelevant. Retry the *whole* store→read→delete with a fresh GUID, and only report the
+    **last** failure. Keep the `finally` cleanup per attempt so no probe credential lingers.
+  - **Second defect, same root, worse consequence:** `SecretToolSecretStore.GetPasswordAsync` maps *any*
+    non-zero exit to `null` with the comment `// not found` (`:33`), so this 1%-of-the-time encryption error on
+    a **real** read is indistinguishable from "no password stored". On the connect path that silently becomes
+    a passwordless connect and then a credential prompt for a connection whose password is sitting in the
+    keyring. Distinguish "no such item" (empty stderr) from a transfer error, and retry the latter.
+  - This also makes the suite flake: `dotnet test` failed ~1 run in 3 across 4 runs, in a *different*
+    `PlatformKeychainTests` case each time. Any test that stores or reads a real secret inherits the ~1%, so
+    the retry belongs in the store/probe rather than in the tests — and the earlier "all 702 passed" baseline
+    was luck, not a clean signal.
+  - **Bearing on the Windows result above:** that verification is one green run of the same shape. Whether
+    Credential Manager has its own equivalent flake is unknown; the retry makes the question moot.
 - [~] **P1** **Windows + macOS secure credential storage — Windows verified 2026-08-13, macOS still not.** Both
   stores now exist behind the unchanged `ISecretStore`, and `SecretStoreFactory` dispatches per platform
   (`PlatformStore()`) instead of wiring libsecret only, so nothing above the store changed:
@@ -484,7 +487,8 @@ Legend: `[ ]` open · `[~]` partly done.
 - [ ] **P3** **The no-keyring warnings still assert a cause they never checked.** Both amber blocks
   (`ConnectionDialog.axaml:46,54`) and the status bar (`ShellViewModel.Projects.SecretPosture`) say "No system
   keyring **found**", which is now known to be wrong in at least one real case — the keyring was there and
-  answering, the probe just ran too early. The reason is no longer thrown away (`SecretStoreFactory`
+  answering, and it is now measured *why* (the ~1% transfer failure in the P1 item above; "ran too early" was
+  the earlier guess and is not the mechanism). The reason is no longer thrown away (`SecretStoreFactory`
   → `CrashLog.Note`), so the remaining work is to carry it to the UI: reword to "couldn't be reached", and
   plumb the reason through `SecretStoragePosture` (a third field) so the dialog can show *why* — a locked
   collection and a missing helper want different advice, and only one of them is worth an unlock hint.

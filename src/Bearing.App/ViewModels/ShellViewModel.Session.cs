@@ -18,6 +18,7 @@ using Bearing.Core.Workspace;
 using Bearing.Sql;
 
 namespace Bearing.App.ViewModels;
+
 public sealed partial class ShellViewModel
 {
     // ---- Session persistence (synchronous; safe on the close path) ---------------------------
