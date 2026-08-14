@@ -10,7 +10,14 @@ namespace Bearing.App.Formatting;
 /// unambiguous in both directions (a day-first display made <c>03.04.2026</c> re-parse differently
 /// depending on the machine's culture). A space separates date and time instead of <c>T</c> — far easier
 /// to scan in a grid, and still RFC 3339 ("T" may be replaced by a space by mutual agreement).
-/// Non-date values keep their default (current-culture) rendering.
+/// <para>
+/// <b>Numbers are invariant for the same reason</b>, and it is not merely cosmetic: this text is what the
+/// clipboard and every export format carry (<c>TableFormats.Text</c>), and it is also what the inline
+/// editor hands back to <c>ResultEditModel.Coerce</c>, which parses invariantly. Rendered in a
+/// comma-decimal culture, <c>9.5m</c> displayed as "9,5" re-parsed invariantly is <b>95</b> — a silent
+/// tenfold write. The numeric arms below mirror <c>SqlValue.Literal</c> exactly, so Copy as ▸ CSV and
+/// Copy as ▸ SQL can never disagree about a number.
+/// </para>
 /// </summary>
 public static class CellFormat
 {
@@ -39,6 +46,14 @@ public static class CellFormat
         TimeOnly t => t.ToString(TimePattern, CultureInfo.InvariantCulture),
         byte[] bytes => FormatBytea(bytes),               // bytea → \x hex (truncated)
         Array arr => FormatArray(arr),                     // text[]/int[]/… → {a, b, c}
+        decimal m => m.ToString(CultureInfo.InvariantCulture),
+        double d => d.ToString("R", CultureInfo.InvariantCulture),
+        float fl => fl.ToString("R", CultureInfo.InvariantCulture),
+        byte or sbyte or short or ushort or int or uint or long or ulong
+            => Convert.ToString(value, CultureInfo.InvariantCulture)!,
+        // Anything else that formats per-culture (BigInteger for an oversized numeric, …). Everything the
+        // grid actually shows is matched above; this is the arm that stops a new type reintroducing the bug.
+        IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
         _ => value.ToString() ?? "",
     };
 
@@ -111,6 +126,47 @@ public static class CellFormat
             if (TimeOnly.TryParseExact(s, TimeFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var v)
                 || TimeOnly.TryParse(s, CultureInfo.CurrentCulture, DateTimeStyles.None, out v)) { value = v; return true; }
         }
+        return false;
+    }
+
+    /// <summary>Whether <paramref name="target"/> is one of the numeric types <see cref="Display"/> renders
+    /// invariantly — and therefore one <see cref="TryParseNumber"/> owns rather than <c>Convert.ChangeType</c>.
+    /// </summary>
+    public static bool IsNumeric(Type target)
+        => target == typeof(decimal) || target == typeof(double) || target == typeof(float)
+        || target == typeof(byte) || target == typeof(sbyte)
+        || target == typeof(short) || target == typeof(ushort)
+        || target == typeof(int) || target == typeof(uint)
+        || target == typeof(long) || target == typeof(ulong);
+
+    /// <summary>
+    /// Parse an edited cell string back to a numeric <paramref name="target"/>: invariant, and with group
+    /// separators <b>disallowed</b>. Both halves matter, and the second is the subtle one —
+    /// <c>Convert.ChangeType("9,5", typeof(decimal), InvariantCulture)</c> does <i>not</i> throw. It reads
+    /// the comma as a thousands separator and returns <b>95</b>, so a user typing their own locale's decimal
+    /// form silently wrote a tenfold value. Refusing it here sends the raw string to the server instead,
+    /// which rejects it with an error the user can see.
+    /// </summary>
+    public static bool TryParseNumber(string s, Type target, out object? value)
+    {
+        // NumberStyles.Float = sign + decimal point + exponent; NumberStyles.Integer = sign only. Neither
+        // includes AllowThousands, which is the whole point.
+        const NumberStyles Real = NumberStyles.Float;
+        const NumberStyles Int = NumberStyles.Integer;
+        var inv = CultureInfo.InvariantCulture;
+
+        value = null;
+        if (target == typeof(decimal)) { if (decimal.TryParse(s, Real, inv, out var v)) { value = v; return true; } }
+        else if (target == typeof(double)) { if (double.TryParse(s, Real, inv, out var v)) { value = v; return true; } }
+        else if (target == typeof(float)) { if (float.TryParse(s, Real, inv, out var v)) { value = v; return true; } }
+        else if (target == typeof(byte)) { if (byte.TryParse(s, Int, inv, out var v)) { value = v; return true; } }
+        else if (target == typeof(sbyte)) { if (sbyte.TryParse(s, Int, inv, out var v)) { value = v; return true; } }
+        else if (target == typeof(short)) { if (short.TryParse(s, Int, inv, out var v)) { value = v; return true; } }
+        else if (target == typeof(ushort)) { if (ushort.TryParse(s, Int, inv, out var v)) { value = v; return true; } }
+        else if (target == typeof(int)) { if (int.TryParse(s, Int, inv, out var v)) { value = v; return true; } }
+        else if (target == typeof(uint)) { if (uint.TryParse(s, Int, inv, out var v)) { value = v; return true; } }
+        else if (target == typeof(long)) { if (long.TryParse(s, Int, inv, out var v)) { value = v; return true; } }
+        else if (target == typeof(ulong)) { if (ulong.TryParse(s, Int, inv, out var v)) { value = v; return true; } }
         return false;
     }
 }

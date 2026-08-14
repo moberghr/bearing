@@ -178,6 +178,11 @@ internal static class ResultEditModel
             if (t.IsEnum) return Enum.Parse(t, s, ignoreCase: true);
             // Dates: accept the ISO display forms (yyyy-MM-dd HH:mm:ss) the user sees, else a lenient parse.
             if (CellFormat.TryParseDate(s, t, out var date)) return date;
+            // Numbers are CellFormat's, not Convert's. Convert.ChangeType allows group separators even under
+            // InvariantCulture, so it reads "9,5" as 95 without complaint — a silent tenfold write for anyone
+            // typing a comma-decimal. A refused number falls through to the raw string, which the server
+            // rejects visibly. See CellFormat.TryParseNumber.
+            if (CellFormat.IsNumeric(t)) return CellFormat.TryParseNumber(s, t, out var number) ? number : s;
             return Convert.ChangeType(s, t, CultureInfo.InvariantCulture);
         }
         catch { return s; }
