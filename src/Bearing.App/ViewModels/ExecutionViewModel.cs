@@ -333,8 +333,23 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // ORDER BY is honored consistently across pages) when the query allows a safe suffix, else a
             // subquery wrap. The executor just runs the string.
             var page = await session.Executor.ExecutePageAsync(PageSql.Page(rs.SourceSql, rs.Loaded, PageSize), ct);
+
+            // A failed page arrives as an error result, not a throw, so it has to be checked for. Appending
+            // it would append nothing and clear HasMore: the result would silently look complete — auto-load
+            // and [⤓ all] would retire, and an export taken afterwards would write the rows that happened to
+            // be on screen and report success. Leaving rows and HasMore untouched also means the next scroll
+            // simply retries.
+            if (!page.Success)
+            {
+                // Npgsql raises a cancelled statement as PostgresException 57014, which the executor turns
+                // into an error result too — so the user's own Esc must not be reported as a server failure.
+                ct.ThrowIfCancellationRequested();
+                RunFinished(tab, $"Load more failed: {page.Error?.Message}");
+                return;
+            }
+
             rs.AppendPage(page.Rows, page.RowCount == PageSize);
-            // No status update: auto-load fires on scroll and the count lives on the meta row.
+            // No status update on success: auto-load fires on scroll and the count lives on the meta row.
         }, "Load cancelled.", "Load more failed");
     }
 

@@ -191,10 +191,22 @@ internal sealed class PageableExecutor : IQueryExecutor
         return Task.FromResult<IReadOnlyList<QueryResult>>(new[] { NextPage() });
     }
 
+    /// <summary>When set, every page comes back as a failed result carrying this error — how a real page
+    /// failure arrives (the executor catches the driver exception), which is the case Load more has to
+    /// recognise instead of reading it as "no more rows".</summary>
+    public QueryError? PageError { get; set; }
+
     public async Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
     {
         PageCalls++;
         BeforePage?.Invoke(PageCalls);
+        // Returned ahead of the token check on purpose: a *cancelled* statement also comes back this way
+        // (Npgsql raises 57014, the executor turns it into an error result), so a caller can't rely on a
+        // cancel throwing out of here. That swallow is exactly what the caller has to cope with.
+        if (PageError is not null)
+            return new QueryResult(
+                System.Array.Empty<ColumnDescriptor>(), System.Array.Empty<object?[]>(),
+                0, System.TimeSpan.Zero, null, PageError, Truncated: false);
         if (PageDelayMs > 0) await Task.Delay(PageDelayMs, ct);
         ct.ThrowIfCancellationRequested();
         return NextPage();

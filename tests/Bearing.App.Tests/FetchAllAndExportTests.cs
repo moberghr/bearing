@@ -14,8 +14,8 @@ using Xunit;
 namespace Bearing.App.Tests;
 
 /// <summary>
-/// Fetch all rows, and the export that depends on it. Driven through <see cref="ExecutionViewModel"/> with
-/// <see cref="PageableExecutor"/> — no live database, no grid.
+/// Fetch all rows, Load more, and the export that depends on both. Driven through
+/// <see cref="ExecutionViewModel"/> with <see cref="PageableExecutor"/> — no live database, no grid.
 /// <para>
 /// The load-bearing behaviour here is that <b>export never writes half a result</b>: it fetches to the end
 /// first and abandons the export if that doesn't finish, because a file containing the 10 rows that happened
@@ -179,6 +179,65 @@ public class FetchAllAndExportTests : IDisposable
         Assert.Equal(Page * 3, h.Result.Loaded);    // the first page plus the two batches that completed
         Assert.True(h.Result.HasMore);
         Assert.False(h.Tab.IsRunning);              // the run is torn down, so the tab is usable again
+    }
+
+    // ---- load more --------------------------------------------------------------------------
+
+    /// <summary>A page that fails is reported and changes nothing. It arrives as an error result with no
+    /// rows, which <c>AppendPage</c> used to read as "no more rows": the result silently looked complete, so
+    /// auto-load and ⤓ all retired and the export below wrote a single page as if it were the answer.</summary>
+    [Fact]
+    public async Task A_failed_page_is_reported_and_does_not_make_the_result_look_complete()
+    {
+        var h = await RunOnce(totalRows: 25);
+        h.Executor.PageError = new QueryError("connection reset", "08006", null);
+
+        await h.Exec.LoadMoreAsync(h.Result);
+
+        Assert.Contains("Load more failed", h.Status());
+        Assert.Contains("connection reset", h.Status());
+        Assert.Equal(Page, h.Result.Loaded);        // nothing appended …
+        Assert.True(h.Result.HasMore);              // … and the result is still honestly incomplete
+        Assert.Null(h.Result.TotalCount);
+        Assert.False(h.Tab.IsRunning);              // the run is torn down, so a scroll can retry
+    }
+
+    /// <summary>The consequence of the above that reaches a file: because HasMore survives the failure, an
+    /// export afterwards still fetches to the end rather than writing the one page on screen.</summary>
+    [Fact]
+    public async Task An_export_after_a_failed_page_still_writes_the_whole_result()
+    {
+        var h = await RunOnce(totalRows: 25);
+        h.Executor.PageError = new QueryError("connection reset", "08006", null);
+        await h.Exec.LoadMoreAsync(h.Result);
+
+        h.Executor.PageError = null;                // the connection came back
+        var path = Path.Combine(_root, "after.csv");
+        h.Dialogs.ExportPath = path;
+
+        await h.Exec.ExportAsync(h.Result, ExportFormat.Csv);
+
+        Assert.Equal(25, h.Result.Loaded);
+        var lines = File.ReadAllText(path).TrimEnd('\r', '\n').Split("\r\n");
+        Assert.Equal(26, lines.Length);             // header + all 25 rows, not the 10 that were on screen
+        Assert.Equal("25", lines[^1]);
+    }
+
+    /// <summary>A cancelled statement comes back as an error result too (Npgsql raises 57014 and the executor
+    /// turns it into one), so the failure branch has to recognise the user's own Esc — otherwise cancelling a
+    /// load reports itself as a server failure.</summary>
+    [Fact]
+    public async Task A_page_cancelled_by_the_user_reports_a_cancel_not_a_failure()
+    {
+        var h = await RunOnce(totalRows: 25);
+        h.Executor.BeforePage = _ => h.Tab.CancelRun();
+        h.Executor.PageError = new QueryError("canceling statement due to user request", "57014", null);
+
+        await h.Exec.LoadMoreAsync(h.Result);
+
+        Assert.Equal("Load cancelled.", h.Status());
+        Assert.Equal(Page, h.Result.Loaded);
+        Assert.True(h.Result.HasMore);
     }
 
     // ---- export -----------------------------------------------------------------------------
