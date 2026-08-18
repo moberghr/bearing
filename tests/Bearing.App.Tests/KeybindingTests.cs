@@ -104,6 +104,35 @@ public class KeybindingTests
     }
 
     [Fact]
+    public void Ctrl_S_saves_the_grids_rows_but_only_inside_the_grid()
+    {
+        // grid.save is guarded on there being pending row edits, so a clean grid leaves Ctrl+S unhandled and
+        // it bubbles to file.save. The keymap half of that is: the two ids must not collide in one scope.
+        Assert.Equal(CommandIds.GridSave, Defaults.Resolve(KeyScope.Grid, KeyModifiers.Control, Key.S, NoPhys));
+        Assert.Equal(CommandIds.FileSave, Defaults.Resolve(KeyScope.Global, KeyModifiers.Control, Key.S, NoPhys));
+        Assert.Equal("Ctrl+S", Defaults.DisplayGesture(CommandIds.FileSave)); // what the File menu still shows
+    }
+
+    [Fact]
+    public void Discarding_row_edits_is_not_bound_to_a_plain_undo()
+    {
+        // It drops *every* pending change; Ctrl+Z would promise a one-step undo it doesn't do.
+        Assert.Equal(CommandIds.GridDiscard,
+            Defaults.Resolve(KeyScope.Grid, KeyModifiers.Control | KeyModifiers.Alt, Key.Z, NoPhys));
+        Assert.Null(Defaults.Resolve(KeyScope.Grid, KeyModifiers.Control, Key.Z, NoPhys));
+    }
+
+    [Fact]
+    public void The_grids_insert_family_stays_distinct()
+    {
+        Assert.Equal(CommandIds.GridCopy, Defaults.Resolve(KeyScope.Grid, KeyModifiers.Control, Key.Insert, NoPhys));
+        Assert.Equal(CommandIds.GridPaste, Defaults.Resolve(KeyScope.Grid, KeyModifiers.Shift, Key.Insert, NoPhys));
+        Assert.Equal(CommandIds.GridAddRow, Defaults.Resolve(KeyScope.Grid, KeyModifiers.Alt, Key.Insert, NoPhys));
+        Assert.Equal(CommandIds.GridPaste, Defaults.Resolve(KeyScope.Grid, KeyModifiers.Control, Key.V, NoPhys));
+        Assert.Null(Defaults.Resolve(KeyScope.Grid, KeyModifiers.None, Key.Insert, NoPhys)); // no bare-Insert row
+    }
+
+    [Fact]
     public void Comment_vs_fold_all_differ_only_by_shift()
     {
         // Ctrl+- (OemMinus) toggles comment; Ctrl+Shift+- folds all.

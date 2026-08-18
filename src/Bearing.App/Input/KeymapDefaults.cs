@@ -68,6 +68,13 @@ public static class KeymapDefaults
         yield return R(CommandIds.GridDelete, "Delete");
         yield return R(CommandIds.GridBeginEdit, "Enter");
         yield return R(CommandIds.GridBeginEdit, "F2");
+        yield return R(CommandIds.GridAddRow, "Alt+Insert");   // joins Delete / Ctrl+Insert / Shift+Insert
+        // Commit + revert the pending row edits. Both are guarded on there being pending changes, so with a
+        // clean grid Ctrl+S falls straight through to file.save — the grid only claims it when it has
+        // something of its own to save. Revert is deliberately not Ctrl+Z: it drops *every* pending change,
+        // which is not what a one-step undo means.
+        yield return R(CommandIds.GridSave, "Ctrl+S");
+        yield return R(CommandIds.GridDiscard, "Ctrl+Alt+Z");
         yield return R(CommandIds.GridClearSelection, "Escape");
         yield return R(CommandIds.GridFollowFk, "Alt+Right"); // drill into the FK the active cell points to
         yield return R(CommandIds.GridBack, "Alt+Left");      // return to the pre-navigation result

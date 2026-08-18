@@ -169,6 +169,17 @@ public sealed partial class ResultView : UserControl
         r.Register(KeyCommand.Sync(CommandIds.GridBeginEdit, "Edit cell", KeyScope.Grid, "Grid",
             () => { if (GridTarget() is { } t) _selection.BeginEditActive(t.Grid, t.Result); },
             canRun: () => GridTarget()?.Result.IsEditable == true));
+        r.Register(KeyCommand.Sync(CommandIds.GridAddRow, "Add row", KeyScope.Grid, "Grid",
+            () => { if (GridTarget() is { } t) AddRowTo(t.Grid, t.Result); },
+            canRun: () => GridTarget()?.Result.IsEditable == true));
+        // Save/Discard are guarded on pending changes as well as editability, which is what lets Ctrl+S fall
+        // through to file.save on a grid with nothing of its own to commit.
+        r.Register(new KeyCommand(CommandIds.GridSave, "Save changes", KeyScope.Grid, "Grid",
+            async () => { if (GridTarget() is { } t && SaveChanges is { } f) await f(t.Result); },
+            canRun: () => HasPendingEdits()));
+        r.Register(new KeyCommand(CommandIds.GridDiscard, "Discard changes", KeyScope.Grid, "Grid",
+            async () => { if (GridTarget() is { } t && DiscardChanges is { } f) await f(t.Result); },
+            canRun: () => HasPendingEdits()));
         r.Register(KeyCommand.Sync(CommandIds.GridClearSelection, "Clear selection", KeyScope.Grid, "Grid",
             () => _selection.ClearAndNotify(),
             canRun: () => _selection.Model.Cells.Count > 0));
@@ -176,6 +187,21 @@ public sealed partial class ResultView : UserControl
             FollowActiveFk, canRun: _selection.ActiveCellIsFk));
         r.Register(KeyCommand.Sync(CommandIds.GridBack, "Back (foreign-key navigation)", KeyScope.Grid, "Grid",
             () => GoBack?.Invoke(), canRun: () => CanGoBack));
+    }
+
+    /// <summary>Whether the grid a command would act on has unsaved row edits (guards grid.save/grid.discard,
+    /// and the toolbar's own buttons bind to the same <see cref="ResultSetViewModel.HasPendingChanges"/>).</summary>
+    private bool HasPendingEdits()
+        => GridTarget()?.Result is { IsEditable: true, HasPendingChanges: true };
+
+    /// <summary>grid.addRow (Alt+Insert) and the toolbar's ＋ Add: append a pending-INSERT row, scroll to it
+    /// and put the cursor on its first cell, so it can be filled in without reaching for the mouse.</summary>
+    private void AddRowTo(DataGrid grid, ResultSetViewModel result)
+    {
+        if (!result.IsEditable) return;
+        var row = result.AddRow();
+        ResultRowPainter.RefreshRowColors(grid, result);
+        _selection.MoveActive(grid, result, row, GridSelectionOps.FirstColumn(result), extend: false);
     }
 
     /// <summary>Paste the clipboard into a grid and report the outcome — including how many cells were
