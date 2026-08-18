@@ -173,30 +173,37 @@ public sealed class ResultCellFactory
         return cell;
     }
 
-    /// <summary>A boolean cell: a checkbox that <i>displays</i> the value and nothing more. It selects, drags
-    /// and copies exactly like every other cell (#9); editing it is an explicit act — double-tap, or
-    /// Space/Enter/F2 — never a plain click.
+    /// <summary>A boolean cell: a checkbox showing the value. It selects, drags and copies exactly like every
+    /// other cell (#9). A plain click <i>on the box</i> also cycles the value; a click anywhere else in the
+    /// cell — like a click in any other column — only selects.
     /// <para>
-    /// That rule is why the CheckBox is inert rather than a live control. Clicking a grid cell must not write
-    /// to the database, and a clickable box also made the mouse unpredictable: it is a small centred target in
-    /// a wide cell, so a click that missed it selected the cell (visibly) without toggling, which reads as a
-    /// swallowed click. An indicator has no target to miss.
+    /// The CheckBox stays an inert indicator even so: the click is handled by the cell, which tests the press
+    /// against the indicator's bounds (see <c>GridSelectionController.TryToggleBoolAtPointer</c>). That keeps
+    /// one write path for the mouse, the double-tap and the keyboard, and it is why a value change can safely
+    /// re-render the cell — a live CheckBox holds the pointer capture between press and release, and replacing
+    /// it in between silently ate the click.
     /// </para></summary>
     private IDataTemplate BoolCell(ResultSetViewModel result, int index, DataGrid grid)
         => new FuncDataTemplate<object?[]>((row, _) =>
             MakeSelectable(() => BoolContent(row, index), result, row, index, grid));
 
-    /// <summary>The checkbox indicator. Not hit-testable and not focusable — every write goes through the
-    /// toggle path in <c>GridSelectionController</c>, so there is one mouse behaviour and one keyboard
-    /// behaviour and they are the same code. NULL still shows indeterminate: Avalonia's <c>:indeterminate</c>
-    /// pseudo-class keys off <c>IsChecked == null</c>, independent of <c>IsThreeState</c> (which only ever
-    /// governed the click cycle this cell no longer has).</summary>
+    /// <summary>The checkbox indicator, and — because the cell hit-tests against it — the exact area where a
+    /// click cycles the value. Zero padding is what makes those two the same thing: Fluent's CheckBox lays out
+    /// a 20px box column plus an 8px pad for content this has none of, so the pad would otherwise extend the
+    /// clickable area past the visible box.
+    /// <para>
+    /// Not hit-testable and not focusable: every write goes through <c>GridSelectionController.ToggleBool</c>,
+    /// so the mouse, the double-tap and the keyboard are one code path. NULL still shows indeterminate —
+    /// Avalonia's <c>:indeterminate</c> pseudo-class keys off <c>IsChecked == null</c>, independent of
+    /// <c>IsThreeState</c> (which only ever governed the click cycle this control no longer runs).
+    /// </para></summary>
     private static Control BoolContent(object?[]? row, int index)
         => new CheckBox
         {
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             IsChecked = BoolCellValue.Read(row, index),
+            Padding = new Thickness(0),
             IsHitTestVisible = false, // display only (not greyed out like IsEnabled=false would be)
             Focusable = false,
         };

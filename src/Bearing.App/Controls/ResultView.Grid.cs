@@ -117,6 +117,11 @@ public sealed partial class ResultView
     /// header its whole column (#6); anything else — the scrollbar, the corner, empty space below the last
     /// row — clears the selection, which is the click-away this handler replaced.
     /// <para>
+    /// A cell press has already selected itself by now (this runs after the cell's own handler, being further
+    /// up the tree), so the one thing left to do for it is the checkbox gesture: a click that landed on a bool
+    /// cell's box also cycles the value.
+    /// </para>
+    /// <para>
     /// A column selection covers the <i>loaded</i> rows, so on a part-fetched result it says so rather than
     /// letting a short Copy as ▸ IN list look complete.
     /// </para></summary>
@@ -125,6 +130,8 @@ public sealed partial class ResultView
         switch (_selection.TrySelectFromHeader(grid, result, e))
         {
             case GridPressTarget.Cell:
+                _selection.TryToggleBoolAtPointer(grid, result, e);
+                return;
             case GridPressTarget.RowHeader:
                 return;
             case GridPressTarget.ColumnHeader:

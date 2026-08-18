@@ -472,26 +472,55 @@ public sealed class GridSelectionController
         grid.BeginEdit();
     }
 
-    /// <summary>Double-tap a checkbox cell → cycle its value. The gesture that edits a bool cell with the
-    /// mouse, since a plain click deliberately only selects (a click in the grid never writes to the
-    /// database). Reads the target off the cell under the pointer rather than the selection, so it acts on
-    /// what was double-tapped even if the two ever disagree. A non-bool cell falls through — the DataGrid's
-    /// own double-tap opens the text editor there.</summary>
-    public void ToggleBoolAt(DataGrid grid, ResultSetViewModel result, TappedEventArgs e)
+    /// <summary>A plain left-click that landed <i>on the checkbox</i> of a bool cell → cycle its value. The
+    /// cell has already taken the selection by the time this runs (its own press handler did, and this is a
+    /// grid-level handler); a click anywhere else in the cell, or in any other column, therefore just selects.
+    /// <para>
+    /// The hot zone is the indicator's own bounds, so the thing you aim at and the thing that responds are the
+    /// same rectangle. Modifier-clicks are excluded: Ctrl and Shift are range/multi-select gestures, and
+    /// writing values while building a selection would be indefensible.
+    /// </para></summary>
+    public bool TryToggleBoolAtPointer(DataGrid grid, ResultSetViewModel result, PointerPressedEventArgs e)
     {
-        if (!result.IsEditable || e.Source is not Visual source) return;
-        if (CellUnder(source) is not { } cell) return;
-        if (cell.Col >= result.Columns.Count || !ColumnKinds.IsBool(result.Columns[cell.Col])) return;
+        if (!result.IsEditable || e.ClickCount != 1) return false;
+        if (!e.GetCurrentPoint(grid).Properties.IsLeftButtonPressed) return false;
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Shift) || e.KeyModifiers.HasFlag(KeyModifiers.Control)
+            || e.KeyModifiers.HasFlag(KeyModifiers.Meta)) return false;
+        if (BoolCellUnder(result, e.Source as Visual) is not { } cell) return false;
+
+        // The indicator is not hit-testable, so the press landed on the cell border either way; what decides
+        // is whether it landed inside the box the user can see.
+        if (cell.Border.Child is not { } indicator) return false;
+        if (!new Rect(indicator.Bounds.Size).Contains(e.GetCurrentPoint(indicator).Position)) return false;
+
         ToggleBool(grid, result, cell.Row, cell.Col);
+        return true;
     }
 
-    /// <summary>The (row, column) of the results cell containing <paramref name="source"/>, read off the
-    /// selection border's tag; null when the pointer wasn't over a cell.</summary>
-    private static (object?[] Row, int Col)? CellUnder(Visual source)
+    /// <summary>Double-tap a bool cell → cycle its value, anywhere in the cell. The forgiving counterpart to
+    /// the click-the-box gesture, and the same double-tap that opens the text editor on any other column.
+    /// Reads its target from the cell under the pointer rather than from the selection, so it acts on what was
+    /// actually tapped.</summary>
+    public void ToggleBoolAt(DataGrid grid, ResultSetViewModel result, TappedEventArgs e)
     {
+        if (!result.IsEditable) return;
+        if (BoolCellUnder(result, e.Source as Visual) is { } cell) ToggleBool(grid, result, cell.Row, cell.Col);
+    }
+
+    /// <summary>The bool cell containing <paramref name="source"/> — its selection border plus the (row,
+    /// column) off that border's tag. Null when the pointer wasn't over a cell, or the cell isn't a checkbox
+    /// column.</summary>
+    private static (Border Border, object?[] Row, int Col)? BoolCellUnder(ResultSetViewModel result, Visual? source)
+    {
+        if (source is null) return null;
         foreach (var visual in source.GetSelfAndVisualAncestors())
-            if (visual is Border { Tag: ValueTuple<object?[], int> tag })
-                return (tag.Item1, tag.Item2);
+        {
+            if (visual is not Border { Tag: ValueTuple<object?[], int> tag } border) continue;
+            var col = tag.Item2;
+            return col < result.Columns.Count && ColumnKinds.IsBool(result.Columns[col])
+                ? (border, tag.Item1, col)
+                : null;
+        }
         return null;
     }
 
