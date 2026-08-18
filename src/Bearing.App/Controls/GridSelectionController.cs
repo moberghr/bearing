@@ -472,15 +472,16 @@ public sealed class GridSelectionController
         grid.BeginEdit();
     }
 
-    /// <summary>Cycle a checkbox cell's value in place (the keyboard's equivalent of clicking it). A bool
-    /// column is a <c>DataGridTemplateColumn</c> with no editing template, so BeginEdit has nothing to open;
-    /// leaving Enter dead on a cell the cursor can now land on (#9) would be the worse answer.
+    /// <summary>Cycle a checkbox cell's value in place (the keyboard's equivalent of clicking it), skipping
+    /// the NULL leg on a NOT NULL column. A bool column is a <c>DataGridTemplateColumn</c> with no editing
+    /// template, so BeginEdit has nothing to open; leaving Enter dead on a cell the cursor can now land on
+    /// (#9) would be the worse answer.
     /// <para>The realized CheckBox re-reads the row on <see cref="Notify"/>, which is also how a paste into a
     /// checkbox column shows up.</para></summary>
     private void ToggleBool(DataGrid grid, ResultSetViewModel result, object?[] row, int col)
     {
         if (!result.IsEditable) return;
-        result.SetCell(row, col, BoolCellValue.Next(BoolCellValue.Read(row, col)));
+        result.SetCell(row, col, BoolCellValue.Next(BoolCellValue.Read(row, col), result.AllowsNull(col)));
         ResultRowPainter.RefreshRowColors(grid, result);
         Notify();
     }

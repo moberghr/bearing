@@ -2,8 +2,9 @@ using Bearing.Core.Data;
 
 namespace Bearing.Core.Schema;
 
-/// <summary>One result column that maps to a base-table column, with its real name + PK flag.</summary>
-public sealed record EditableColumn(int ResultIndex, string BaseColumn, bool IsPrimaryKey);
+/// <summary>One result column that maps to a base-table column, with its real name, PK flag and whether the
+/// catalog declares it NOT NULL (which is what stops the grid offering NULL as an editable value).</summary>
+public sealed record EditableColumn(int ResultIndex, string BaseColumn, bool IsPrimaryKey, bool NotNull = false);
 
 /// <summary>
 /// The table a single-table result set edits, plus the base name + PK flag of each result column.
@@ -12,6 +13,11 @@ public sealed record EditableColumn(int ResultIndex, string BaseColumn, bool IsP
 public sealed record EditTarget(string Schema, string Table, IReadOnlyList<EditableColumn> Columns)
 {
     public IEnumerable<EditableColumn> KeyColumns => Columns.Where(c => c.IsPrimaryKey);
+
+    /// <summary>Whether a result column may hold NULL. Permissive when the column isn't mapped: the answer
+    /// only ever narrows what the UI offers, so "don't know" must not forbid a legal value.</summary>
+    public bool AllowsNull(int resultIndex)
+        => Columns.FirstOrDefault(c => c.ResultIndex == resultIndex) is not { NotNull: true };
 }
 
 /// <summary>
@@ -59,10 +65,10 @@ public static class EditabilityResolver
         for (var i = 0; i < columns.Count; i++)
         {
             var ordinal = columns[i].BaseColumnOrdinal;
-            var name = NameOf(catalog, ordinal);
-            if (name is null)                                  // column not in the snapshot ⇒ bail
+            var info = ColumnAt(catalog, ordinal);
+            if (info is null)                                  // column not in the snapshot ⇒ bail
                 return (null, "a column isn't in the loaded schema.");
-            mapped.Add(new EditableColumn(i, name, pkOrdinals.Contains(ordinal)));
+            mapped.Add(new EditableColumn(i, info.Name, pkOrdinals.Contains(ordinal), info.NotNull));
             present.Add(ordinal);
         }
 
@@ -72,10 +78,10 @@ public static class EditabilityResolver
         return (new EditTarget(table.Schema, table.Name, mapped), null);
     }
 
-    private static string? NameOf(IReadOnlyList<ColumnInfo> cols, int ordinal)
+    private static ColumnInfo? ColumnAt(IReadOnlyList<ColumnInfo> cols, int ordinal)
     {
         foreach (var c in cols)
-            if (c.Ordinal == ordinal) return c.Name;
+            if (c.Ordinal == ordinal) return c;
         return null;
     }
 

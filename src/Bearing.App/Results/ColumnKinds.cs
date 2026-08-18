@@ -12,7 +12,7 @@ public static class ColumnKinds
 {
     /// <summary>A bool (or nullable bool) column — rendered as a checkbox instead of text. It selects like
     /// any other cell; what it lacks is a text editor, so Enter/F2 cycles the value in place
-    /// (<c>GridSelectionController.BeginEditActive</c>).</summary>
+    /// (<c>GridSelectionController.BeginEditActive</c>), skipping NULL when the column is NOT NULL.</summary>
     public static bool IsBool(ColumnDescriptor c)
         => (Nullable.GetUnderlyingType(c.ClrType) ?? c.ClrType) == typeof(bool);
 

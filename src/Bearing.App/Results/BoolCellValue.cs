@@ -21,13 +21,18 @@ public static class BoolCellValue
         };
     }
 
-    /// <summary>The next value in the checkbox's three-state cycle — false → true → NULL → false — matching
-    /// what Avalonia's own <c>ToggleButton</c> does with <c>IsThreeState</c>, so the keyboard and the mouse
-    /// walk the same ring.</summary>
-    public static bool? Next(bool? current) => current switch
+    /// <summary>The next value in the checkbox's cycle — false → true → NULL → false, matching what
+    /// Avalonia's own <c>ToggleButton</c> does with <c>IsThreeState</c>, so the keyboard and the mouse walk
+    /// the same ring.
+    /// <para>
+    /// <paramref name="allowNull"/> is the column's nullability: a NOT NULL column skips the NULL leg
+    /// entirely (false ⇄ true), because offering it means staging an UPDATE the server is certain to reject.
+    /// An existing NULL still cycles *out* to false either way — a pending new row starts as one.
+    /// </para></summary>
+    public static bool? Next(bool? current, bool allowNull) => current switch
     {
         false => true,
-        true => null,
+        true => allowNull ? null : false,
         _ => false,
     };
 }

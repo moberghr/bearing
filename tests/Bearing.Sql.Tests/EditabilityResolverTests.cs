@@ -29,6 +29,27 @@ public class EditabilityResolverTests
     }
 
     [Fact]
+    public void Carries_the_catalogs_not_null_flag_so_the_grid_can_refuse_to_offer_null()
+    {
+        // The grid's checkbox column reads this: a NOT NULL bool must not offer its indeterminate state.
+        var cols = new[]
+        {
+            new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersId, 1),
+            new ColumnDescriptor("user_id", "int4", typeof(int), TestSchema.OrdersId, 2),
+            new ColumnDescriptor("total", "numeric", typeof(decimal), TestSchema.OrdersId, 3),
+        };
+
+        var t = EditabilityResolver.Resolve(Schema, cols);
+        Assert.NotNull(t);
+        Assert.True(t!.Columns[1].NotNull);      // orders.user_id is NOT NULL
+        Assert.False(t.Columns[2].NotNull);      // orders.total is nullable
+
+        Assert.False(t.AllowsNull(1));
+        Assert.True(t.AllowsNull(2));
+        Assert.True(t.AllowsNull(99));           // unmapped column: don't-know must not forbid a legal value
+    }
+
+    [Fact]
     public void Uses_catalog_column_name_not_result_alias()
     {
         // `select id as oid, name, email from users` — PK still maps to catalog name "id".

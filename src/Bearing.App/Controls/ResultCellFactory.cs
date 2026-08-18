@@ -194,7 +194,10 @@ public sealed class ResultCellFactory
     {
         var cb = new CheckBox
         {
-            IsThreeState = true, // null → indeterminate
+            // Three-state only where NULL is a legal value; a NOT NULL column clicks false ⇄ true. It can
+            // still *show* an indeterminate box: IsThreeState governs the click cycle, not the display, and a
+            // pending new row's cells start out null.
+            IsThreeState = result.AllowsNull(index),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             IsChecked = BoolCellValue.Read(row, index),
