@@ -86,6 +86,9 @@ public partial class MainWindow
             () => _text.ApplyDelete(TextDeleter.ToLineStart)));
         r.Register(KeyCommand.Sync(CommandIds.EditorDeleteWordBack, "Delete word before caret", KeyScope.Editor, "Editor",
             () => _text.ApplyDelete(TextDeleter.WordBefore)));
+        r.Register(KeyCommand.Sync(CommandIds.EditorZoomIn, "Zoom in (this tab)", KeyScope.Editor, "Editor", () => Zoom(z => z.ZoomIn())));
+        r.Register(KeyCommand.Sync(CommandIds.EditorZoomOut, "Zoom out (this tab)", KeyScope.Editor, "Editor", () => Zoom(z => z.ZoomOut())));
+        r.Register(KeyCommand.Sync(CommandIds.EditorZoomReset, "Reset zoom (this tab)", KeyScope.Editor, "Editor", () => Zoom(z => z.Reset())));
 
         // Navigation/focus commands are claimed in a window tunnel handler so the framework's own tab
         // traversal and the editor/grid don't swallow them first.
@@ -96,6 +99,18 @@ public partial class MainWindow
             CommandIds.SelectProject, CommandIds.SelectConnection, CommandIds.SelectDatabase,
         };
         for (var n = 1; n <= 9; n++) _navCommands.Add(CommandIds.TabGoto(n));
+
+        // Same set minus focus.editor, used while the caret is already in the editor — see OnWindowNavKey.
+        _navCommandsFromEditor = new HashSet<string>(_navCommands);
+        _navCommandsFromEditor.Remove(CommandIds.FocusEditor);
+    }
+
+    /// <summary>Run a zoom command on the selected tab and say what happened — a one-point change is easy
+    /// to miss, and the status line is the only affordance the zoom has.</summary>
+    private void Zoom(Action<EditorZoomController> change)
+    {
+        change(_zoom);
+        if (Vm is { } vm) vm.StatusText = $"Editor font {_zoom.CurrentSize:0.#} pt (this tab)";
     }
 
     /// <summary>Run a workspace-scoped action, skipped before a view-model exists.</summary>
@@ -143,7 +158,13 @@ public partial class MainWindow
     {
         // an overlay owns the keyboard while open (nav commands carry no Escape, so block all of them)
         if (_palette.AnyOpen) return;
-        _dispatcher.TryHandle(e, KeyScope.Global, _navCommands);
+
+        // Nav commands are claimed in the window's tunnel phase, i.e. *before* the editor's own tunnel
+        // handler — which is why editor.zoomReset never saw Ctrl+0: focus.editor shares that gesture and
+        // was swallowing it here. Focusing the editor is a no-op when the caret is already in it, so drop
+        // that one claim in that case and let the editor's binding have the key.
+        var claimed = Editor.TextArea.IsKeyboardFocusWithin ? _navCommandsFromEditor : _navCommands;
+        _dispatcher.TryHandle(e, KeyScope.Global, claimed);
     }
 
     /// <summary>Tunnel-phase Escape → cancel the selected tab's in-flight query, pre-empting the grid's

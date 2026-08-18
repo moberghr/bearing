@@ -70,7 +70,8 @@ public static class DmlGenerator
         return name;
     }
 
-    private static string Ident(string id) => "\"" + id.Replace("\"", "\"\"") + "\"";
+    /// <summary>Generated DML always quotes — nobody types over this output, so the safe form wins.</summary>
+    private static string Ident(string id) => PgIdentifier.Quote(id);
 
     private static string Qualify(string? schema, string table) =>
         string.IsNullOrEmpty(schema) ? Ident(table) : $"{Ident(schema)}.{Ident(table)}";

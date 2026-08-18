@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     private readonly SqlFoldingController _folding;
     private readonly EditorTextCommands _text;              // statement-aware editor ops + Run's SQL
     private readonly EditorTextBehavior _editorText;        // editor <-> SelectedTab buffer/caret sync
+    private readonly EditorZoomController _zoom;            // per-tab transient font zoom (Ctrl+= / - / 0)
     private readonly CommandRegistry _commands = new();
     private readonly KeyDispatcher _dispatcher;
     private readonly CommandPaletteHost _palette;           // command palette + quick-pick overlays
@@ -31,6 +32,7 @@ public partial class MainWindow : Window
     private readonly IReadOnlyList<string> _keymapWarnings;
     private bool _keymapWarningsShown;
     private HashSet<string> _navCommands = new();
+    private HashSet<string> _navCommandsFromEditor = new();   // _navCommands without focus.editor
     private readonly Bearing.App.Services.IDialogService _dialogs = new DialogService(); // owns dialog/picker construction
     private bool _suppressProjectChange;   // guards the project combo during programmatic updates
     private CompletionToastHost? _toasts;  // built once the window is open (its manager needs a top level)
@@ -57,6 +59,9 @@ public partial class MainWindow : Window
         _tabs = new TabNavigator(() => _dispatcher!.Keymap);
         _palette = new CommandPaletteHost(this, _commands, () => _dispatcher!.Keymap);
         _resultsPane = new ResultsPaneController(WorkspaceGrid, ResultsSplitter, ResultsView);
+        // The editor's FontSize is applied here rather than bound in XAML: one editor serves every tab,
+        // and each tab carries its own zoom over the configured base size.
+        _zoom = new EditorZoomController(Editor, () => Vm?.EditorFontSize ?? 14);
 
         // One keybinding pipeline for the whole app: the registry holds command delegates, the keymap
         // maps gestures to command ids, the dispatcher resolves keystrokes per scope. Global + Editor
@@ -307,12 +312,15 @@ public partial class MainWindow : Window
             ResultsView.ViewMode = Vm?.ResultsViewMode ?? Bearing.Core.Workspace.ResultsViewMode.Stacked;
         else if (e.PropertyName is nameof(ShellViewModel.Title) or nameof(ShellViewModel.ProjectDirectory))
             SyncProjectCombo();
+        else if (e.PropertyName == nameof(ShellViewModel.EditorFontSize))
+            _zoom.Refresh();   // settings changed the base size; keep the selected tab's zoom on top of it
     }
 
     private void LoadEditorFromSelectedTab()
     {
         var tab = Vm?.Workspace.SelectedTab;
         _editorText.Bind(tab);   // pushes text/caret into the editor under the load guard
+        _zoom.Bind(tab);         // …and that tab's own font zoom
         RebuildResults(tab);
         _text.UpdateStatementHighlight();
     }

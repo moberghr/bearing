@@ -19,6 +19,7 @@ public sealed partial class CompletionEngine : ICompletionEngine
         var parsed = PgParsing.Create(sql);
         parsed.Tokens.Fill();
         var caret = ResolveCaret(parsed.Tokens, caretOffset);
+        var aliasSlot = CaretIsInAliasSlot(schema, parsed.Tokens.GetTokens(), caret.TokenIndex);
 
         // Prime the parser over the statement so c3 has a walkable token stream, then rewind.
         try { parsed.Parser.root(); } catch { /* partial SQL */ }
@@ -32,22 +33,41 @@ public sealed partial class CompletionEngine : ICompletionEngine
         var candidates = core.CollectCandidates(caret.TokenIndex, context: null);
         var intents = candidates.Rules.Keys.Select(PgCompletionRules.Classify).ToHashSet();
 
+        // A half-typed alias is a name the user is inventing — nothing in the catalog or the grammar
+        // belongs there, and whatever sat under Enter would overwrite it. An *empty* alias slot still
+        // gets keywords (as / join / where), which is what actually follows a named source.
+        if (aliasSlot && caret.ReplacementLength > 0)
+            return new CompletionResult(Array.Empty<Suggestion>(), caret.ReplacementStart, caret.ReplacementLength);
+
         var suggestions = new List<Suggestion>();
         var qualifier = AliasQualifierBefore(sql, caretOffset);
 
-        if (qualifier is not null)
+        if (qualifier is not null && IsResolvedSource(sources, qualifier))
         {
-            // After "alias." only that alias's columns (and FK-equality predicates joining it to an
-            // in-scope table) make sense — never tables/joins/keywords, regardless of how c3 classifies
-            // the caret in the surrounding (often broken) SQL.
-            suggestions.AddRange(FkPredicateSuggestions(schema, sources, qualifier));
+            // After "alias." only that alias's columns (and, where a predicate can actually begin, the
+            // FK equality joining it to an in-scope table) make sense — never tables/joins/keywords,
+            // regardless of how c3 classifies the caret in the surrounding (often broken) SQL.
+            if (FkPredicateFits(parsed.Tokens.GetTokens(), caret.TokenIndex))
+                suggestions.AddRange(FkPredicateSuggestions(schema, sources, qualifier));
             suggestions.AddRange(ColumnSuggestions(schema, sources, qualifier));
         }
-        else
+        else if (qualifier is not null && SchemaNamed(schema, qualifier) is { } qualifierSchema)
         {
-            if (intents.Contains(CompletionIntent.TablePosition))
+            // "public." is a schema qualifier, not an alias — an in-scope alias of the same name wins
+            // (checked above), otherwise the only sensible answer is that schema's relations. This
+            // branch used to fall through to the column path and produce an empty popup.
+            suggestions.AddRange(TableSuggestions(schema, sources, onlySchema: qualifierSchema));
+        }
+        else if (qualifier is null)
+        {
+            // An alias slot is still a "table position" to c3 (an alias is just an identifier), but the
+            // one thing that cannot belong there is another relation — offering them made accepting one
+            // overwrite the alias: `select * from film f` → `select * from film film f2`. Keywords still
+            // come through, which is what actually follows a named source (as / join / where).
+            if (intents.Contains(CompletionIntent.TablePosition) && !aliasSlot)
             {
                 suggestions.AddRange(TableSuggestions(schema, sources));
+                suggestions.AddRange(SchemaSuggestions(schema));
                 if (sources.Count > 0)
                     suggestions.AddRange(JoinSuggestions(schema, sources));
             }
@@ -95,24 +115,154 @@ public sealed partial class CompletionEngine : ICompletionEngine
 
     // ---- Table suggestions (auto-aliased, like the prototype) --------------------------------
 
-    private static IEnumerable<Suggestion> TableSuggestions(ISchemaSnapshot schema, IReadOnlyList<TableRef> sources)
+    /// <param name="onlySchema">When set, only that schema's relations, and inserted bare — the caret
+    /// already sits after <c>schema.</c>.</param>
+    private static IEnumerable<Suggestion> TableSuggestions(
+        ISchemaSnapshot schema, IReadOnlyList<TableRef> sources, string? onlySchema = null)
     {
         var existing = ExistingAliases(sources);
         foreach (var t in schema.Tables)
         {
+            if (onlySchema is not null
+                && !string.Equals(t.Schema, onlySchema, StringComparison.OrdinalIgnoreCase)) continue;
+
             var alias = AliasResolver.Determine(t, existing);
+            // A relation outside search_path (or shadowed by a same-named one earlier in it) does not
+            // resolve bare, so the insertion carries its schema even though the label doesn't.
+            var name = onlySchema is null && !ResolvesUnqualified(schema, t)
+                ? $"{Q(t.Schema)}.{Q(t.Name)}"
+                : Q(t.Name);
             yield return new Suggestion
             {
                 DisplayText = t.Name,
                 FilterText = t.Name,
                 DetailText = t.Schema,
-                ReplacementText = $"{t.Name} {alias}",
+                ReplacementText = $"{name} {alias}",
                 Kind = t.Kind == RelationKind.View ? SuggestionKind.View : SuggestionKind.Table,
                 Priority = 10,
                 Description = $"{t.Kind}: {t.Schema}.{t.Name}",
             };
         }
     }
+
+    /// <summary>
+    /// Schema names at a table position, so <c>audit.</c> is reachable without knowing what's in it.
+    /// Ranked below relations: the common case is picking a table, not narrowing to a schema first.
+    /// </summary>
+    private static IEnumerable<Suggestion> SchemaSuggestions(ISchemaSnapshot schema)
+    {
+        var reachable = new HashSet<string>(schema.SearchPath, StringComparer.OrdinalIgnoreCase);
+        foreach (var name in schema.Schemas)
+            yield return new Suggestion
+            {
+                DisplayText = name,
+                FilterText = name,
+                DetailText = "schema",
+                // The trailing dot leaves the caret where the relation list continues.
+                ReplacementText = $"{Q(name)}.",
+                Kind = SuggestionKind.Schema,
+                Priority = 5,
+                Description = reachable.Contains(name)
+                    ? $"schema {name} (in search_path)"
+                    : $"schema {name}",
+            };
+    }
+
+    /// <summary>True when writing <paramref name="table"/>'s bare name resolves to that same relation:
+    /// its schema is on the search_path and nothing earlier there shadows the name.</summary>
+    private static bool ResolvesUnqualified(ISchemaSnapshot schema, TableInfo table)
+        => schema.SearchPath.Contains(table.Schema, StringComparer.OrdinalIgnoreCase)
+           && schema.ResolveTable(null, table.Name)?.Id == table.Id;
+
+    /// <summary>
+    /// True when <paramref name="qualifier"/> names a FROM/JOIN source that resolved to a real relation.
+    /// Resolution matters: <c>from audit.</c> leaves a half-typed source named <c>audit</c> behind, and
+    /// treating that as an alias is what made the schema qualifier answer with an empty popup.
+    /// </summary>
+    /// <summary>
+    /// True when a whole predicate (<c>film_id = fa.film_id</c>) can start at the caret, as opposed to
+    /// just a column reference. The offer is only sensible directly after a boolean context opens —
+    /// <c>on</c>, <c>where</c>, <c>and</c>/<c>or</c>/<c>not</c>, <c>having</c>, an opening paren. On the
+    /// right-hand side of an existing comparison (<c>on fa.film_id = f.|</c>) it produced
+    /// <c>on fa.film_id = f.film_id = fa.film_id</c>, and in a select list it is noise.
+    /// </summary>
+    private static bool FkPredicateFits(IList<Antlr4.Runtime.IToken> toks, int caretTokenIndex)
+    {
+        // Walk back to the qualifier: the caret may sit on the column being typed, on the dot, or between.
+        var i = PrevMeaningful(toks, caretTokenIndex);
+        if (i >= 0 && IsNameToken(toks[i])) i = PrevMeaningful(toks, i - 1);
+        if (i < 0 || toks[i].Type != PostgreSQLParser.DOT) return false;
+
+        i = PrevMeaningful(toks, i - 1);
+        if (i < 0 || !IsNameToken(toks[i])) return false;
+
+        var before = PrevMeaningful(toks, i - 1);
+        return before >= 0 && toks[before].Type is PostgreSQLParser.ON or PostgreSQLParser.WHERE
+            or PostgreSQLParser.AND or PostgreSQLParser.OR or PostgreSQLParser.NOT
+            or PostgreSQLParser.HAVING or PostgreSQLParser.OPEN_PAREN;
+    }
+
+    /// <summary>
+    /// True when the caret sits where a source's alias goes, the relation before it already being named:
+    /// <c>from film f|</c>, <c>from film |</c>, <c>from film as f|</c>, <c>from public.film f|</c>. Keyed
+    /// off the token before the caret rather than the parse tree, so it survives half-typed SQL like the
+    /// rest of this file.
+    /// </summary>
+    private static bool CaretIsInAliasSlot(ISchemaSnapshot schema, IList<Antlr4.Runtime.IToken> toks, int caretTokenIndex)
+    {
+        var i = PrevMeaningful(toks, caretTokenIndex - 1);
+        if (i < 0) return false;
+
+        if (toks[i].Type == PostgreSQLParser.AS)
+        {
+            i = PrevMeaningful(toks, i - 1);
+            if (i < 0) return false;
+        }
+        if (!IsNameToken(toks[i])) return false;
+
+        // Walk back over a qualified name (schema.relation), collecting its parts.
+        var parts = new List<string> { toks[i].Text };
+        var before = PrevMeaningful(toks, i - 1);
+        while (before >= 0 && toks[before].Type == PostgreSQLParser.DOT)
+        {
+            var name = PrevMeaningful(toks, before - 1);
+            if (name < 0 || !IsNameToken(toks[name])) break;
+            parts.Insert(0, toks[name].Text);
+            before = PrevMeaningful(toks, name - 1);
+        }
+
+        // Only a FROM/JOIN list puts a relation name there; anything else (a select-list expression, a
+        // WHERE) is not an alias slot even though it may end in an identifier.
+        if (before < 0 || toks[before].Type is not (PostgreSQLParser.FROM or PostgreSQLParser.JOIN
+            or PostgreSQLParser.COMMA or PostgreSQLParser.LATERAL_P))
+            return false;
+
+        var relation = PgIdentifier.Unquote(parts[^1]);
+        var schemaName = parts.Count >= 2 ? PgIdentifier.Unquote(parts[^2]) : null;
+        return schema.ResolveTable(schemaName, relation) is not null;
+    }
+
+    /// <summary>Index of the nearest token at or before <paramref name="from"/> that carries meaning
+    /// (skipping whitespace/comments on the hidden channel, and EOF), or -1.</summary>
+    private static int PrevMeaningful(IList<Antlr4.Runtime.IToken> toks, int from)
+    {
+        for (var i = Math.Min(from, toks.Count - 1); i >= 0; i--)
+            if (toks[i].Channel == Antlr4.Runtime.TokenConstants.DefaultChannel
+                && toks[i].Type != Antlr4.Runtime.TokenConstants.EOF)
+                return i;
+        return -1;
+    }
+
+    private static bool IsNameToken(Antlr4.Runtime.IToken t)
+        => t.Type is PostgreSQLParser.Identifier or PostgreSQLParser.QuotedIdentifier;
+
+    private static bool IsResolvedSource(IReadOnlyList<TableRef> sources, string qualifier)
+        => sources.Any(s => s.Resolved is not null
+                            && string.Equals(s.EffectiveName, qualifier, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The schema named <paramref name="qualifier"/> as the catalog spells it, or null.</summary>
+    private static string? SchemaNamed(ISchemaSnapshot schema, string qualifier)
+        => schema.Schemas.FirstOrDefault(s => string.Equals(s, qualifier, StringComparison.OrdinalIgnoreCase));
 
     // ---- FK-driven smart joins (bidirectional) -----------------------------------------------
 
@@ -124,7 +274,7 @@ public sealed partial class CompletionEngine : ICompletionEngine
         {
             if (src.Resolved is null) continue;
             var srcOid = src.Resolved.Id;
-            var srcAlias = src.EffectiveName;
+            var srcAlias = src.EffectiveRef;
 
             foreach (var fk in schema.ForeignKeysTouching(srcOid))
             {
@@ -147,19 +297,19 @@ public sealed partial class CompletionEngine : ICompletionEngine
                 var alias = AliasResolver.Determine(other, existing);
                 var preds = new List<string>();
                 for (var i = 0; i < Math.Min(srcCols.Count, otherCols.Count); i++)
-                    preds.Add($"{alias}.{ColumnName(schema, otherOid, otherCols[i])} = {srcAlias}.{ColumnName(schema, srcOid, srcCols[i])}");
+                    preds.Add($"{alias}.{Q(ColumnName(schema, otherOid, otherCols[i]))} = {srcAlias}.{Q(ColumnName(schema, srcOid, srcCols[i]))}");
                 var predicate = string.Join(" and ", preds);
 
                 yield return new Suggestion
                 {
                     DisplayText = other.Name,
                     FilterText = other.Name,
-                    DetailText = $"join → {srcAlias}",
+                    DetailText = $"join → {SourceLabel(src)}",
                     TrailingText = predicate,
-                    ReplacementText = $"{other.Name} {alias} on {predicate}",
+                    ReplacementText = $"{Q(other.Name)} {alias} on {predicate}",
                     Kind = SuggestionKind.Join,
                     Priority = 20,
-                    Description = $"FK {fk.Name}: {other.Schema}.{other.Name} ⋈ {srcAlias}",
+                    Description = $"FK {fk.Name}: {other.Schema}.{other.Name} ⋈ {SourceLabel(src)}",
                 };
             }
         }
@@ -197,7 +347,7 @@ public sealed partial class CompletionEngine : ICompletionEngine
 
                 var preds = new List<string>();
                 for (var i = 0; i < Math.Min(ownerCols.Count, otherCols.Count); i++)
-                    preds.Add($"{ColumnName(schema, ownerOid, ownerCols[i])} = {other.EffectiveName}.{ColumnName(schema, otherOid, otherCols[i])}");
+                    preds.Add($"{Q(ColumnName(schema, ownerOid, ownerCols[i]))} = {other.EffectiveRef}.{Q(ColumnName(schema, otherOid, otherCols[i]))}");
                 if (preds.Count == 0) continue;
                 var predicate = string.Join(" and ", preds);
 
@@ -205,11 +355,11 @@ public sealed partial class CompletionEngine : ICompletionEngine
                 {
                     DisplayText = predicate,
                     FilterText = ColumnName(schema, ownerOid, ownerCols[0]),
-                    DetailText = $"fk → {other.EffectiveName}",
+                    DetailText = $"fk → {SourceLabel(other)}",
                     ReplacementText = predicate,
                     Kind = SuggestionKind.Join,
                     Priority = 30,
-                    Description = $"FK {fk.Name}: {owner.EffectiveName} ⋈ {other.EffectiveName}",
+                    Description = $"FK {fk.Name}: {SourceLabel(owner)} ⋈ {SourceLabel(other)}",
                 };
             }
         }
@@ -235,7 +385,11 @@ public sealed partial class CompletionEngine : ICompletionEngine
         {
             foreach (var src in resolved)
                 foreach (var c in schema.ColumnsOf(src.Resolved!.Id))
-                    yield return ColumnSuggestion(c, src.EffectiveName);
+                    // An aliased source qualifies its columns on insertion: in a select list, ORDER BY or
+                    // WHERE, a bare `id` is ambiguous the moment a second source joins in, and the alias
+                    // is what the rest of the statement refers to it by.
+                    yield return ColumnSuggestion(c, src.EffectiveName,
+                        qualifier: src.Alias is not null ? src.EffectiveRef : null);
             yield break;
         }
 
@@ -245,16 +399,34 @@ public sealed partial class CompletionEngine : ICompletionEngine
                 yield return ColumnSuggestion(c, t.Name);
     }
 
-    private static Suggestion ColumnSuggestion(ColumnInfo c, string owner) => new()
+    /// <param name="qualifier">Prefix for the inserted text (<c>f.id</c>); null inserts the bare column,
+    /// which is what the <c>alias.</c> path needs — the qualifier is already typed there.</param>
+    private static Suggestion ColumnSuggestion(ColumnInfo c, string owner, string? qualifier = null) => new()
     {
         DisplayText = c.Name,
         FilterText = c.Name,
         DetailText = owner,
-        ReplacementText = c.Name,
+        ReplacementText = qualifier is null ? Q(c.Name) : $"{qualifier}.{Q(c.Name)}",
         Kind = SuggestionKind.Column,
         Priority = c.IsPrimaryKey ? 9 : 8,
         Description = $"{owner}.{c.Name} : {c.DataType}",
     };
+
+    /// <summary>Quote a catalog name for insertion when the bare form wouldn't round-trip
+    /// (<c>__MigrationHistory</c>, <c>order</c>); ordinary lower-case names stay bare so the
+    /// completed SQL reads the way it would if it were typed by hand.</summary>
+    private static string Q(string identifier) => PgIdentifier.QuoteIfNeeded(identifier);
+
+    /// <summary>
+    /// How a hint names a source: the relation plus the alias the query gave it (<c>film f</c>). The alias
+    /// on its own — which is all <c>join → f</c> showed — doesn't say what you are joining to, and a query
+    /// with several single-letter aliases makes it a guessing game.
+    /// </summary>
+    private static string SourceLabel(TableRef src)
+    {
+        var name = src.Resolved?.Name ?? src.RawName;
+        return src.Alias is { Length: > 0 } alias ? $"{name} {alias}" : name;
+    }
 
     private static string ColumnName(ISchemaSnapshot schema, long tableId, int ordinal)
         => schema.ColumnsOf(tableId).FirstOrDefault(c => c.Ordinal == ordinal)?.Name ?? $"col{ordinal}";
@@ -264,15 +436,19 @@ public sealed partial class CompletionEngine : ICompletionEngine
 
     // ---- Caret + token helpers ---------------------------------------------------------------
 
-    /// <summary>If the caret sits just after "&lt;identifier&gt;.", returns that identifier (the alias).</summary>
+    /// <summary>
+    /// If the caret sits just after "&lt;identifier&gt;.", returns that identifier (the alias),
+    /// unquoted — a quoted qualifier (<c>"__MigrationHistory".</c>) is the same source as the bare
+    /// one, and every match downstream is against unquoted names.
+    /// </summary>
     private static string? AliasQualifierBefore(string sql, int caret)
     {
         var prefix = sql[..caret];
         var m = AliasDotRegex().Match(prefix);
-        return m.Success ? m.Groups[1].Value : null;
+        return m.Success ? PgIdentifier.Unquote(m.Groups[1].Value) : null;
     }
 
-    [GeneratedRegex(@"([A-Za-z_][A-Za-z0-9_$]*)\s*\.\s*[A-Za-z0-9_$]*$")]
+    [GeneratedRegex(@"(""(?:[^""]|"""")*""|[A-Za-z_][A-Za-z0-9_$]*)\s*\.\s*(?:""(?:[^""]|"""")*|[A-Za-z0-9_$]*)$")]
     private static partial Regex AliasDotRegex();
 
     private static string? KeywordText(Antlr4.Runtime.IVocabulary vocab, int tokenType)
@@ -311,10 +487,17 @@ public sealed partial class CompletionEngine : ICompletionEngine
         return new CaretResolution(eof?.TokenIndex ?? 0, caret, 0);
     }
 
+    /// <summary>
+    /// True when the token under the caret is a partially-typed name the completion should overwrite.
+    /// A quoted identifier counts — including the unterminated <c>"__Mig</c> the user is mid-way
+    /// through typing, which the lexer still hands back as one token starting with a quote. Without
+    /// that, accepting an item appended instead of replacing: <c>"__Mig"__MigrationHistory"</c>.
+    /// </summary>
     private static bool IsWord(Antlr4.Runtime.IToken t)
     {
         var s = t.Text;
         if (string.IsNullOrEmpty(s)) return false;
+        if (s[0] == '"') return true;
         return (char.IsLetter(s[0]) || s[0] == '_')
                && s.All(ch => char.IsLetterOrDigit(ch) || ch == '_' || ch == '$');
     }

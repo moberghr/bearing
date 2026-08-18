@@ -14,6 +14,7 @@ public sealed class SchemaSnapshot : ISchemaSnapshot
 
     public string Database { get; }
     public IReadOnlyList<string> Schemas { get; }
+    public IReadOnlyList<string> SearchPath { get; }
     public IReadOnlyList<TableInfo> Tables { get; }
 
     public SchemaSnapshot(
@@ -21,10 +22,14 @@ public sealed class SchemaSnapshot : ISchemaSnapshot
         IReadOnlyList<string> schemas,
         IReadOnlyList<TableInfo> tables,
         IReadOnlyList<ColumnInfo> columns,
-        IReadOnlyList<ForeignKeyInfo> foreignKeys)
+        IReadOnlyList<ForeignKeyInfo> foreignKeys,
+        IReadOnlyList<string>? searchPath = null)
     {
         Database = database;
         Schemas = schemas;
+        // No search_path given (hand-built snapshots): treat every listed schema as reachable, which is
+        // the pre-existing assumption and keeps bare names unqualified.
+        SearchPath = searchPath ?? schemas;
         Tables = tables;
 
         _columnsByTable = columns

@@ -51,4 +51,32 @@
   <!-- Chain, broken: same links, gap in the middle bar (disconnected) -->
   <StreamGeometry x:Key="Icon.ChainBroken">M9,17 h-2 a5,5 0 0 1 0,-10 h2 M15,7 h2 a5,5 0 0 1 0,10 h-2 M8,12 h2 M14,12 h2</StreamGeometry>
 
+  <!-- ============================================================================================
+       Completion-popup kind marks (SuggestionKind → glyph). Same 24×24 stroked convention; drawn at
+       14px next to the row label so a table, a column, a keyword and an FK join snippet are
+       distinguishable at a glance. Joins get their own mark because accepting one inserts a whole
+       JOIN … ON … clause, not just a name.
+       ============================================================================================ -->
+
+  <!-- Relation: header row over two columns -->
+  <StreamGeometry x:Key="Icon.Table">M4,6 h16 v12 h-16 z M4,10 h16 M9.5,10 v8 M15,10 v8</StreamGeometry>
+
+  <!-- View: a relation frame with an eye — a derived, read-only relation -->
+  <StreamGeometry x:Key="Icon.View">M4,6 h16 v12 h-16 z M6.5,12 a5.5,3.2 0 1 0 11,0 a5.5,3.2 0 1 0 -11,0 M11,12 a1,1 0 1 0 2,0 a1,1 0 1 0 -2,0</StreamGeometry>
+
+  <!-- Column: one vertical strip of cells -->
+  <StreamGeometry x:Key="Icon.Column">M9,4 h6 v16 h-6 z M9,8 h6 M9,12 h6 M9,16 h6</StreamGeometry>
+
+  <!-- Keyword: angle brackets (syntax, not data) -->
+  <StreamGeometry x:Key="Icon.Keyword">M9,7 L4,12 L9,17 M15,7 L20,12 L15,17</StreamGeometry>
+
+  <!-- Join: the two-set intersection every FK join draws -->
+  <StreamGeometry x:Key="Icon.Join">M5,12 a4.5,4.5 0 1 0 9,0 a4.5,4.5 0 1 0 -9,0 M10,12 a4.5,4.5 0 1 0 9,0 a4.5,4.5 0 1 0 -9,0</StreamGeometry>
+
+  <!-- Function: an f between parentheses -->
+  <StreamGeometry x:Key="Icon.Function">M9,18 v-9 a2.5,2.5 0 0 1 2.5,-2.5 M7,12 h5 M16,7 a4.5,5.5 0 0 1 0,10 M4.5,7 a4.5,5.5 0 0 0 0,10</StreamGeometry>
+
+  <!-- Snippet: a braced fragment -->
+  <StreamGeometry x:Key="Icon.Snippet">M10,5 h-2 a2,2 0 0 0 -2,2 v3 a2,2 0 0 1 -2,2 a2,2 0 0 1 2,2 v3 a2,2 0 0 0 2,2 h2 M14,5 h2 a2,2 0 0 1 2,2 v3 a2,2 0 0 0 2,2 a2,2 0 0 0 -2,2 v3 a2,2 0 0 1 -2,2 h-2</StreamGeometry>
+
 </ResourceDictionary>

@@ -60,6 +60,67 @@ public class JoinCompletionTests
     }
 
     [Fact]
+    public void The_join_hint_names_the_source_relation_not_just_its_alias()
+    {
+        // "join → u" made you guess which source a single-letter alias was; "join → users u" doesn't.
+        var joins = JoinsFor("select * from users u join ");
+        var orders = joins.Single(j => j.DisplayText == "orders");
+        Assert.Equal("join → users u", orders.DetailText);
+
+        // An unaliased source has only its name to show.
+        Assert.Equal("join → users", JoinsFor("select * from users join ").First().DetailText);
+    }
+
+    [Fact]
+    public void The_fk_predicate_hint_names_the_other_source_too()
+    {
+        var sql = "select * from users u join orders o on o.";
+        var fk = Engine.Complete(sql, sql.Length, Schema).Suggestions
+            .First(s => s.Kind == SuggestionKind.Join);
+        Assert.Equal("fk → users u", fk.DetailText);
+    }
+
+    [Fact]
+    public void Fk_predicate_is_offered_where_a_predicate_starts()
+    {
+        // Directly after ON: the whole equality is the useful completion.
+        var sql = "select * from users u join orders o on o.";
+        var result = Engine.Complete(sql, sql.Length, Schema);
+        Assert.Contains(result.Suggestions,
+            s => s.Kind == SuggestionKind.Join && s.ReplacementText == "user_id = u.id");
+    }
+
+    [Theory]
+    // Right-hand side of an existing comparison — the reported case. Offering the equality again yielded
+    // `on o.user_id = u.id = o.user_id`.
+    [InlineData("select * from users u join orders o on o.user_id = u.")]
+    [InlineData("select * from users u join orders o on o.user_id = u.id")]
+    [InlineData("select * from users u join orders o on o.user_id > u.")]
+    public void No_fk_predicate_where_only_a_column_can_go(string sql)
+    {
+        var result = Engine.Complete(sql, sql.Length, Schema);
+        Assert.DoesNotContain(result.Suggestions, s => s.Kind == SuggestionKind.Join);
+        Assert.Contains(result.Suggestions, s => s.Kind == SuggestionKind.Column);
+    }
+
+    [Fact]
+    public void No_fk_predicate_in_a_select_list()
+    {
+        // A select list is a column position, not a predicate one (caret sits at "select u.|").
+        var result = Engine.Complete("select u. from users u", caretOffset: 9, Schema);
+        Assert.DoesNotContain(result.Suggestions, s => s.Kind == SuggestionKind.Join);
+        Assert.Contains(result.Suggestions, s => s.Kind == SuggestionKind.Column);
+    }
+
+    [Fact]
+    public void Fk_predicate_survives_a_conjunction()
+    {
+        var sql = "select * from users u join orders o on o.user_id = u.id and o.";
+        var result = Engine.Complete(sql, sql.Length, Schema);
+        Assert.Contains(result.Suggestions, s => s.Kind == SuggestionKind.Join);
+    }
+
+    [Fact]
     public void Alias_dot_restricts_columns_to_that_source()
     {
         var result = Engine.Complete("select u. from users u", caretOffset: 9, Schema);

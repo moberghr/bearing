@@ -133,6 +133,8 @@
     <FluentTheme />
     <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
     <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml" />
+    <!-- Completion popup in Bearing's palette — must follow the AvaloniaEdit theme to win. -->
+    <StyleInclude Source="avares://Bearing.App/Themes/Completion.axaml" />
 
     <!-- Result/history grids: monospace so column values line up.
          Global (not window-scoped) since the result grid is built in code-behind
