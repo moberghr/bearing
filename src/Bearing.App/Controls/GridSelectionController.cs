@@ -472,12 +472,34 @@ public sealed class GridSelectionController
         grid.BeginEdit();
     }
 
-    /// <summary>Cycle a checkbox cell's value in place (the keyboard's equivalent of clicking it), skipping
-    /// the NULL leg on a NOT NULL column. A bool column is a <c>DataGridTemplateColumn</c> with no editing
-    /// template, so BeginEdit has nothing to open; leaving Enter dead on a cell the cursor can now land on
-    /// (#9) would be the worse answer.
-    /// <para>The realized CheckBox re-reads the row on <see cref="Notify"/>, which is also how a paste into a
-    /// checkbox column shows up.</para></summary>
+    /// <summary>Double-tap a checkbox cell → cycle its value. The gesture that edits a bool cell with the
+    /// mouse, since a plain click deliberately only selects (a click in the grid never writes to the
+    /// database). Reads the target off the cell under the pointer rather than the selection, so it acts on
+    /// what was double-tapped even if the two ever disagree. A non-bool cell falls through — the DataGrid's
+    /// own double-tap opens the text editor there.</summary>
+    public void ToggleBoolAt(DataGrid grid, ResultSetViewModel result, TappedEventArgs e)
+    {
+        if (!result.IsEditable || e.Source is not Visual source) return;
+        if (CellUnder(source) is not { } cell) return;
+        if (cell.Col >= result.Columns.Count || !ColumnKinds.IsBool(result.Columns[cell.Col])) return;
+        ToggleBool(grid, result, cell.Row, cell.Col);
+    }
+
+    /// <summary>The (row, column) of the results cell containing <paramref name="source"/>, read off the
+    /// selection border's tag; null when the pointer wasn't over a cell.</summary>
+    private static (object?[] Row, int Col)? CellUnder(Visual source)
+    {
+        foreach (var visual in source.GetSelfAndVisualAncestors())
+            if (visual is Border { Tag: ValueTuple<object?[], int> tag })
+                return (tag.Item1, tag.Item2);
+        return null;
+    }
+
+    /// <summary>Cycle a checkbox cell's value in place, skipping the NULL leg on a NOT NULL column. A bool
+    /// column is a <c>DataGridTemplateColumn</c> with no editing template — which Avalonia treats as
+    /// read-only, so BeginEdit has nothing to open there and every bool write lands here instead.
+    /// <para>The cell re-renders on <see cref="Notify"/>, which is also how a paste into a checkbox column
+    /// shows up.</para></summary>
     private void ToggleBool(DataGrid grid, ResultSetViewModel result, object?[] row, int col)
     {
         if (!result.IsEditable) return;

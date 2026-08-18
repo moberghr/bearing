@@ -62,8 +62,13 @@ public sealed partial class ResultView
             grid.Columns.Add(_cells.BuildColumn(result, i, grid));
         grid.ItemsSource = result.Rows; // ObservableCollection → paged rows append without a rebuild
 
-        // Double-tap a column header (incl. its resize gripper) → auto-fit that column to its content.
-        grid.DoubleTapped += (_, e) => ResultGridChrome.AutoFitColumn(grid, e);
+        // Double-tap: a column header (incl. its resize gripper) auto-fits that column; a checkbox cell
+        // cycles its value, which is how a bool is edited with the mouse now that a plain click only selects.
+        grid.DoubleTapped += (_, e) =>
+        {
+            ResultGridChrome.AutoFitColumn(grid, e);
+            _selection.ToggleBoolAt(grid, result, e);
+        };
 
         // Right-click menu: copy (in any format), fetch the rest, export. The cells collapse the selection
         // onto themselves on a right-click outside it (see ResultCellFactory), so what the menu acts on is

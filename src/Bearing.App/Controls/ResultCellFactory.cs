@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
@@ -8,7 +7,6 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
 using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using static Bearing.App.Controls.Tokens;
@@ -175,53 +173,33 @@ public sealed class ResultCellFactory
         return cell;
     }
 
-    /// <summary>A boolean cell rendered as a checkbox: read-only display when the grid is locked,
-    /// interactive (toggles the row value + marks it edited) when the result is editable. Selectable like
-    /// every other cell (#9) — clicking the box both toggles it and moves the selection here, so a following
-    /// Ctrl+C / Delete acts on the row the user just pointed at instead of wherever the cursor used to be.
+    /// <summary>A boolean cell: a checkbox that <i>displays</i> the value and nothing more. It selects, drags
+    /// and copies exactly like every other cell (#9); editing it is an explicit act — double-tap, or
+    /// Space/Enter/F2 — never a plain click.
     /// <para>
-    /// The one difference from a value cell: a press here does not arm a drag-rectangle, because taking the
-    /// pointer capture for the grid would rob the CheckBox of the release that toggles it. Drag from a
-    /// neighbouring cell to sweep across checkbox columns.
+    /// That rule is why the CheckBox is inert rather than a live control. Clicking a grid cell must not write
+    /// to the database, and a clickable box also made the mouse unpredictable: it is a small centred target in
+    /// a wide cell, so a click that missed it selected the cell (visibly) without toggling, which reads as a
+    /// swallowed click. An indicator has no target to miss.
     /// </para></summary>
     private IDataTemplate BoolCell(ResultSetViewModel result, int index, DataGrid grid)
         => new FuncDataTemplate<object?[]>((row, _) =>
-        {
-            // The one cell kind that refreshes by patching itself rather than being rebuilt: see syncValue.
-            var cb = BoolContent(result, index, row);
-            return MakeSelectable(() => cb, result, row, index, grid, armDrag: false,
-                syncValue: () => cb.IsChecked = BoolCellValue.Read(row, index));
-        });
+            MakeSelectable(() => BoolContent(row, index), result, row, index, grid));
 
-    /// <summary>The checkbox itself. <c>IsChecked</c> is seeded here and nothing rebinds it, so a write from
-    /// elsewhere (a paste, the keyboard toggle) is picked up by the syncValue hook above.</summary>
-    private static CheckBox BoolContent(ResultSetViewModel result, int index, object?[]? row)
-    {
-        var cb = new CheckBox
+    /// <summary>The checkbox indicator. Not hit-testable and not focusable — every write goes through the
+    /// toggle path in <c>GridSelectionController</c>, so there is one mouse behaviour and one keyboard
+    /// behaviour and they are the same code. NULL still shows indeterminate: Avalonia's <c>:indeterminate</c>
+    /// pseudo-class keys off <c>IsChecked == null</c>, independent of <c>IsThreeState</c> (which only ever
+    /// governed the click cycle this cell no longer has).</summary>
+    private static Control BoolContent(object?[]? row, int index)
+        => new CheckBox
         {
-            // Three-state only where NULL is a legal value; a NOT NULL column clicks false ⇄ true. It can
-            // still *show* an indeterminate box: IsThreeState governs the click cycle, not the display, and a
-            // pending new row's cells start out null.
-            IsThreeState = result.AllowsNull(index),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             IsChecked = BoolCellValue.Read(row, index),
+            IsHitTestVisible = false, // display only (not greyed out like IsEnabled=false would be)
+            Focusable = false,
         };
-        if (!result.IsEditable)
-        {
-            cb.IsHitTestVisible = false; // display only (not greyed like IsEnabled=false)
-            cb.Focusable = false;
-            return cb;
-        }
-        cb.IsCheckedChanged += (_, _) =>
-        {
-            if (row is null) return;
-            if (!result.SetCell(row, index, cb.IsChecked)) return; // unchanged / out of range (e.g. initial bind)
-            if (cb.GetVisualAncestors().OfType<DataGridRow>().FirstOrDefault() is { } dgr)
-                ResultRowPainter.ApplyRowStatus(dgr, result);
-        };
-        return cb;
-    }
 
     /// <summary>The in-cell editor (a TextBox seeded with the current value) shared by editable and FK
     /// columns. A template — re-materialized per row as the grid recycles containers on scroll —
@@ -249,15 +227,14 @@ public sealed class ResultCellFactory
     /// whenever that value changed under us — the display templates are materialized once per realized row,
     /// so a write that doesn't go through the in-cell editor (a paste, the keyboard bool toggle) would
     /// otherwise leave the old text on screen while the pending UPDATE carried the new one.</param>
-    /// <param name="armDrag">False for a cell whose content needs the pointer capture itself (a checkbox):
-    /// the click still selects, it just doesn't start a drag-rectangle.</param>
-    /// <param name="syncValue">When given, the cell patches its existing visual on a value change instead of
-    /// being rebuilt from <paramref name="content"/>. Required for content that is mid-interaction while the
-    /// change lands: a CheckBox takes the pointer capture on press and toggles on release, so replacing it in
-    /// between (which the press's own selection notify would do, one click behind) silently eats the click.</param>
+    /// <remarks>
+    /// Rebuilding the content is safe for every cell kind because no cell's content holds the pointer
+    /// capture: a press hit-tests to this Border (never replaced — only its child is), and a drag captures the
+    /// grid. That was not true while the checkbox was a live control, and replacing it mid-click ate the
+    /// release that toggled it.
+    /// </remarks>
     private Control MakeSelectable(
-        Func<Control> content, ResultSetViewModel result, object?[]? row, int index, DataGrid grid,
-        bool armDrag = true, Action? syncValue = null)
+        Func<Control> content, ResultSetViewModel result, object?[]? row, int index, DataGrid grid)
     {
         var border = new Border
         {
@@ -282,8 +259,7 @@ public sealed class ResultCellFactory
             if (!Equals(ValueAt(row, index), rendered))
             {
                 rendered = ValueAt(row, index);
-                if (syncValue is not null) syncValue();
-                else border.Child = content();
+                border.Child = content();
             }
             ApplySelectionRing(border, result, row, index);
         }
@@ -312,8 +288,7 @@ public sealed class ResultCellFactory
             var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
             if (shift && _selection.CanExtendFrom(result)) _selection.ExtendTo(result, row, index);
             else if (ctrl) _selection.ToggleCell(result, row, index);
-            else if (armDrag) _selection.SelectSingleAndBeginDrag(result, row, index, e.Pointer, grid);
-            else _selection.SelectSingle(result, row, index);
+            else _selection.SelectSingleAndBeginDrag(result, row, index, e.Pointer, grid);
             e.Handled = true;
         }, RoutingStrategies.Bubble, handledEventsToo: true);
         return border;

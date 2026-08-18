@@ -68,6 +68,7 @@ public static class KeymapDefaults
         yield return R(CommandIds.GridDelete, "Delete");
         yield return R(CommandIds.GridBeginEdit, "Enter");
         yield return R(CommandIds.GridBeginEdit, "F2");
+        yield return R(CommandIds.GridBeginEdit, "Space");     // on a checkbox cell this is the cycle
         yield return R(CommandIds.GridAddRow, "Alt+Insert");   // joins Delete / Ctrl+Insert / Shift+Insert
         // Commit + revert the pending row edits. Both are guarded on there being pending changes, so with a
         // clean grid Ctrl+S falls straight through to file.save — the grid only claims it when it has

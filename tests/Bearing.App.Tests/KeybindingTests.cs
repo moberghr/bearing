@@ -104,6 +104,16 @@ public class KeybindingTests
     }
 
     [Fact]
+    public void Space_edits_the_active_cell_like_enter_and_f2()
+    {
+        // On a checkbox cell "edit" is the value cycle, and the keyboard is now the primary way to change a
+        // bool: clicking a grid cell only ever selects it.
+        Assert.Equal(CommandIds.GridBeginEdit, Defaults.Resolve(KeyScope.Grid, KeyModifiers.None, Key.Space, NoPhys));
+        Assert.Equal(CommandIds.GridBeginEdit, Defaults.Resolve(KeyScope.Grid, KeyModifiers.None, Key.F2, NoPhys));
+        Assert.Null(Defaults.Resolve(KeyScope.Global, KeyModifiers.None, Key.Space, NoPhys));
+    }
+
+    [Fact]
     public void Ctrl_S_saves_the_grids_rows_but_only_inside_the_grid()
     {
         // grid.save is guarded on there being pending row edits, so a clean grid leaves Ctrl+S unhandled and
