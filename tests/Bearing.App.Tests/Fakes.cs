@@ -113,6 +113,13 @@ internal sealed class FakeExecutor : IQueryExecutor
     public Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
         => Task.FromResult(Empty);
 
+    public async IAsyncEnumerable<RowBatch> StreamRowsAsync(
+        string sql, QueryOptions options, [EnumeratorCancellation] CancellationToken ct)
+    {
+        await Task.CompletedTask;
+        yield break;
+    }
+
     public Task<long?> CountAsync(string sql, CancellationToken ct)
         => Task.FromResult<long?>(0);
 
@@ -140,8 +147,16 @@ internal sealed class PageableExecutor : IQueryExecutor
     /// fake page in a way the real app never would.</summary>
     public int PageSize { get; set; } = 1;
 
-    /// <summary>How many <see cref="ExecutePageAsync"/> calls have been served (fetch-all's page count).</summary>
+    /// <summary>How many <see cref="ExecutePageAsync"/> calls have been served (Load more's page count).
+    /// Fetch all no longer pages, so this staying at zero is part of what its tests assert.</summary>
     public int PageCalls { get; private set; }
+
+    /// <summary>How many <see cref="StreamRowsAsync"/> calls have been served — fetch all is one.</summary>
+    public int StreamCalls { get; private set; }
+
+    /// <summary>The SQL the last stream was asked for, so a test can assert the offset/limit window the
+    /// view-model built (it must skip the rows already on screen and stop at the ceiling).</summary>
+    public string? LastStreamSql { get; private set; }
 
     private int _served;
 
@@ -152,6 +167,10 @@ internal sealed class PageableExecutor : IQueryExecutor
     /// fetch-all at a known point instead of racing a timer. Cancelling here surfaces exactly as it would
     /// from a real driver: the token check right after this throws.</summary>
     public System.Action<int>? BeforePage { get; set; }
+
+    /// <summary>Invoked with the 1-based batch number before each streamed batch is yielded, so a test can
+    /// cancel (or throw) mid-stream at a known point. Same contract as <see cref="BeforePage"/>.</summary>
+    public System.Action<int>? BeforeBatch { get; set; }
 
     private static readonly ColumnDescriptor[] Columns = [new("n", "int4", typeof(int))];
 
@@ -179,6 +198,54 @@ internal sealed class PageableExecutor : IQueryExecutor
         if (PageDelayMs > 0) await Task.Delay(PageDelayMs, ct);
         ct.ThrowIfCancellationRequested();
         return NextPage();
+    }
+
+    /// <summary>When set, the stream throws this after <see cref="StreamErrorAfterBatches"/> batches — a read
+    /// that dies partway (connection dropped, table vanished), which must not read as a complete fetch.</summary>
+    public System.Exception? StreamError { get; set; }
+
+    public int StreamErrorAfterBatches { get; set; }
+
+    /// <summary>
+    /// Serves the rest of the source query as one execution, in <see cref="QueryOptions.BatchRows"/> batches,
+    /// continuing from wherever the last page stopped (the view-model asks for exactly that window with an
+    /// OFFSET). Mirrors the real reader loop on the two things fetch-all depends on: rows come out in order
+    /// from a single pass, and <see cref="RowBatch.Truncated"/> is set only when
+    /// <see cref="QueryOptions.MaxRows"/> cut the read while rows were still waiting.
+    /// </summary>
+    public async IAsyncEnumerable<RowBatch> StreamRowsAsync(
+        string sql, QueryOptions options, [EnumeratorCancellation] CancellationToken ct)
+    {
+        StreamCalls++;
+        LastStreamSql = sql;
+
+        var batchSize = System.Math.Max(1, options.BatchRows);
+        var batch = new List<object?[]>();
+        var streamed = 0;
+        var batches = 0;
+
+        while (_served < TotalRows)                 // "the server still has a row"
+        {
+            if (options.MaxRows is { } max && streamed >= max)
+            {
+                yield return new RowBatch(batch, Truncated: true);
+                yield break;
+            }
+
+            batch.Add(new object?[] { ++_served });
+            streamed++;
+            if (batch.Count < batchSize) continue;
+
+            batches++;
+            BeforeBatch?.Invoke(batches);
+            if (StreamError is not null && batches > StreamErrorAfterBatches) throw StreamError;
+            if (PageDelayMs > 0) await Task.Delay(PageDelayMs, ct);
+            ct.ThrowIfCancellationRequested();
+            yield return new RowBatch(batch, Truncated: false);
+            batch = new List<object?[]>();
+        }
+
+        if (batch.Count > 0) yield return new RowBatch(batch, Truncated: false);
     }
 
     public Task<long?> CountAsync(string sql, CancellationToken ct)
@@ -231,6 +298,14 @@ internal sealed class GatedExecutor : IQueryExecutor
     }
 
     public Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct) => Task.FromResult(Empty);
+
+    public async IAsyncEnumerable<RowBatch> StreamRowsAsync(
+        string sql, QueryOptions options, [EnumeratorCancellation] CancellationToken ct)
+    {
+        await Task.CompletedTask;
+        yield break;
+    }
+
     public Task<long?> CountAsync(string sql, CancellationToken ct) => Task.FromResult<long?>(0);
     public Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct)
         => Task.FromResult<IReadOnlyList<QueryResult>>(new[] { Empty });

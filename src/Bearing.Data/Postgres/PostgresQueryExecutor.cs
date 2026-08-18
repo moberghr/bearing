@@ -1,5 +1,6 @@
 using System.Data.Common;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using Npgsql;
 using Npgsql.Schema;
 using Bearing.Core.Data;
@@ -78,6 +79,50 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
             sw.Stop();
             return Failure(sw.Elapsed, new QueryError(SafeErrorText.Of(ex), null, null));
         }
+    }
+
+    /// <summary>
+    /// Streams one row-returning query in batches. No try/catch: this path <em>throws</em> (see the interface
+    /// contract) — a stream whose failure came back as an empty tail would let "fetch all" report a complete
+    /// result it never read.
+    /// </summary>
+    public async IAsyncEnumerable<RowBatch> StreamRowsAsync(
+        string sql, QueryOptions options, [EnumeratorCancellation] CancellationToken ct)
+    {
+        var batchSize = Math.Max(1, options.BatchRows);
+        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+        if (reader.FieldCount == 0) yield break; // not row-returning — nothing to stream
+
+        var batch = new List<object?[]>(batchSize);
+        var read = 0;
+        var truncated = false;
+
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            // Cap check *after* a successful read and before materializing: getting here means the server
+            // still had a row, which is precisely the "there was more" signal the caller can't get otherwise.
+            if (options.MaxRows is { } max && read >= max) { truncated = true; break; }
+
+            var row = new object?[reader.FieldCount];
+            // Sync IsDBNull for the same reason as ReadResultSetAsync: the row is already buffered.
+            for (var i = 0; i < reader.FieldCount; i++)
+                row[i] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+            batch.Add(row);
+            read++;
+
+            if (batch.Count >= batchSize)
+            {
+                yield return new RowBatch(batch, Truncated: false);
+                batch = new List<object?[]>(batchSize);
+            }
+        }
+
+        // The tail. Also emitted when it is empty but the cap stopped us, since Truncated has to reach the
+        // caller even when the ceiling happens to land on a batch boundary.
+        if (batch.Count > 0 || truncated) yield return new RowBatch(batch, truncated);
     }
 
     public async Task<long?> CountAsync(string sql, CancellationToken ct)

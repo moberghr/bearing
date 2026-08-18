@@ -182,6 +182,57 @@ public class PostgresExecutorTests
             Assert.Equal(Convert.ToInt32(appended.Rows[i][0]), Convert.ToInt32(wrapped.Rows[i][0]));
     }
 
+    /// <summary>
+    /// The read behind "Fetch all rows": one execution, streamed in batches, instead of a walk over pages.
+    /// Three things it has to get right — every row in order from a single pass, a cap that stops the read,
+    /// and the difference between "the cap cut this" and "the result ended", which is what the UI reports.
+    /// </summary>
+    [SkippableFact]
+    public async Task Streaming_reads_a_result_in_one_pass_and_says_when_a_cap_cut_it()
+    {
+        var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
+        await using var factory = provider.CreateConnectionFactory(Info(), Password);
+        await PgTestServer.RequireAsync(factory);
+
+        var executor = provider.CreateQueryExecutor(factory);
+        const string sql = "select film_id from film order by film_id";
+
+        static async Task<List<RowBatch>> Drain(IAsyncEnumerable<RowBatch> stream)
+        {
+            var batches = new List<RowBatch>();
+            await foreach (var b in stream) batches.Add(b);
+            return batches;
+        }
+
+        // Uncapped: all 1000 pagila films, in order, in BatchRows-sized batches plus a tail.
+        var all = await Drain(executor.StreamRowsAsync(
+            sql, new QueryOptions { MaxRows = null, BatchRows = 300 }, CancellationToken.None));
+        Assert.Equal(new[] { 300, 300, 300, 100 }, all.Select(b => b.Rows.Count));
+        Assert.Equal(Enumerable.Range(1, 1000), all.SelectMany(b => b.Rows).Select(r => Convert.ToInt32(r[0])));
+        Assert.DoesNotContain(true, all.Select(b => b.Truncated));
+
+        // Capped with rows still behind it: exactly MaxRows are yielded and the last batch says so. The
+        // caller asks for one row past the cap purely so this is knowable without a second query.
+        var capped = await Drain(executor.StreamRowsAsync(
+            $"{sql}\nlimit 501", new QueryOptions { MaxRows = 500, BatchRows = 200 }, CancellationToken.None));
+        Assert.Equal(500, capped.Sum(b => b.Rows.Count));
+        Assert.True(capped[^1].Truncated);
+        Assert.False(capped[0].Truncated);      // only the final batch carries it
+
+        // A cap the result merely reaches is *not* truncation — reporting it as one would turn a complete
+        // fetch into "stopped at the limit" and block the export that follows it.
+        var exact = await Drain(executor.StreamRowsAsync(
+            $"{sql}\nlimit 500", new QueryOptions { MaxRows = 500, BatchRows = 200 }, CancellationToken.None));
+        Assert.Equal(500, exact.Sum(b => b.Rows.Count));
+        Assert.False(exact[^1].Truncated);
+
+        // Failures throw rather than ending the stream quietly: a fetch that swallowed one would report a
+        // complete result it never read, and the export downstream would write part of the answer.
+        var ex = await Assert.ThrowsAsync<PostgresException>(() => Drain(executor.StreamRowsAsync(
+            "select * from no_such_table_here", new QueryOptions(), CancellationToken.None)));
+        Assert.Equal("42P01", ex.SqlState); // undefined_table
+    }
+
     [SkippableFact]
     public async Task Lists_databases()
     {

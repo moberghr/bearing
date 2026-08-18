@@ -76,7 +76,7 @@ public class FetchAllAndExportTests : IDisposable
     // ---- fetch all ---------------------------------------------------------------------------
 
     [Fact]
-    public async Task Fetch_all_pages_to_the_end_and_the_total_is_then_known_without_counting()
+    public async Task Fetch_all_streams_to_the_end_and_the_total_is_then_known_without_counting()
     {
         var h = await RunOnce(totalRows: 25);
         Assert.Equal(Page, h.Result.Loaded);       // one page on screen …
@@ -86,12 +86,30 @@ public class FetchAllAndExportTests : IDisposable
 
         Assert.Equal(25, h.Result.Loaded);          // … all of it after
         Assert.False(h.Result.HasMore);
-        Assert.Equal(2, h.Executor.PageCalls);      // 10 + 10 + 5, the first page came from the run itself
+        // The point of the change: one execution, not a page walk. Walking re-ran the query per page with a
+        // growing OFFSET, and each page being its own statement is what let a concurrent write duplicate or
+        // skip rows between them while the fetch still claimed to be complete.
+        Assert.Equal(1, h.Executor.StreamCalls);
+        Assert.Equal(0, h.Executor.PageCalls);
         // The count is now a fact rather than a query, so [Count] retires without asking the server.
         Assert.Equal(25, h.Result.TotalCount);
         Assert.False(h.Result.CanCount);
         Assert.Contains("Fetched all 25 rows", h.Status());
         Assert.Equal(Enumerable.Range(1, 25), h.Result.Rows.Select(r => (int)r[0]!)); // in order, no gaps
+    }
+
+    /// <summary>The single read starts past what is already on screen and is bounded by the ceiling, so the
+    /// rows the first page fetched aren't transferred twice — and the server isn't asked for more than the
+    /// fetch is allowed to keep. The <c>+ 1</c> is the probe that makes "there was more" detectable.</summary>
+    [Fact]
+    public async Task Fetch_all_asks_for_one_window_that_skips_the_loaded_rows_and_stops_at_the_ceiling()
+    {
+        var h = await RunOnce(totalRows: 25);
+
+        Assert.True(await h.Exec.FetchAllAsync(h.Result));
+
+        var cap = AppSettings.Defaults.ResultFetchAllMaxRows;
+        Assert.Equal($"select n from t\nlimit {cap - Page + 1} offset {Page}", h.Executor.LastStreamSql);
     }
 
     [Fact]
@@ -101,7 +119,27 @@ public class FetchAllAndExportTests : IDisposable
         Assert.False(h.Result.HasMore);
 
         Assert.True(await h.Exec.FetchAllAsync(h.Result));
-        Assert.Equal(0, h.Executor.PageCalls);  // nothing was asked of the server
+        Assert.Equal(0, h.Executor.StreamCalls);  // nothing was asked of the server
+        Assert.Equal(0, h.Executor.PageCalls);
+    }
+
+    /// <summary>A read that dies partway is a failure, not a complete result. The page-walking version read
+    /// the failure as an empty page — "no more rows" — and reported "Fetched all N rows", which then let an
+    /// export write a file containing part of the answer.</summary>
+    [Fact]
+    public async Task A_read_that_fails_partway_is_reported_as_a_failure_not_as_a_complete_fetch()
+    {
+        var h = await RunOnce(totalRows: 1000);
+        h.Executor.StreamError = new InvalidOperationException("connection reset");
+        h.Executor.StreamErrorAfterBatches = 2;
+
+        Assert.False(await h.Exec.FetchAllAsync(h.Result));
+
+        Assert.Contains("Fetch all failed", h.Status());
+        Assert.Contains("connection reset", h.Status());
+        Assert.Equal(Page * 3, h.Result.Loaded);    // the batches that did land are kept
+        Assert.True(h.Result.HasMore);              // and it doesn't pretend the result is exhausted
+        Assert.Null(h.Result.TotalCount);
     }
 
     [Fact]
@@ -120,8 +158,9 @@ public class FetchAllAndExportTests : IDisposable
 
         Assert.Contains("Stopped at", h.Status());
         Assert.Contains("Fetch all limit", h.Status());
-        // The page that crossed the line is kept, not discarded (the check is per page, not per row).
-        Assert.InRange(h.Result.Loaded, 1_000, 1_000 + Page - 1);
+        // Exactly the ceiling: the read asks for one row past it purely to notice there was more, and that
+        // probe row is never materialized (the page-walking version overshot by up to a page).
+        Assert.Equal(1_000, h.Result.Loaded);
         Assert.True(h.Result.HasMore);              // and it is honest about there being more
         Assert.Null(h.Result.TotalCount);
     }
@@ -130,14 +169,14 @@ public class FetchAllAndExportTests : IDisposable
     public async Task Cancelling_a_fetch_keeps_the_rows_already_loaded()
     {
         var h = await RunOnce(totalRows: 1000);
-        // Cancel deterministically at the third page rather than racing a timer; a real driver surfaces the
+        // Cancel deterministically at the third batch rather than racing a timer; a real driver surfaces the
         // cancel exactly here too.
-        h.Executor.BeforePage = page => { if (page == 3) h.Tab.CancelRun(); };
+        h.Executor.BeforeBatch = batch => { if (batch == 3) h.Tab.CancelRun(); };
 
         Assert.False(await h.Exec.FetchAllAsync(h.Result));
 
         Assert.Equal("Fetch all cancelled.", h.Status());
-        Assert.Equal(Page * 3, h.Result.Loaded);    // the first page plus the two that completed
+        Assert.Equal(Page * 3, h.Result.Loaded);    // the first page plus the two batches that completed
         Assert.True(h.Result.HasMore);
         Assert.False(h.Tab.IsRunning);              // the run is torn down, so the tab is usable again
     }
@@ -169,7 +208,7 @@ public class FetchAllAndExportTests : IDisposable
     {
         var h = await RunOnce(totalRows: 1000);
         h.Dialogs.ExportPath = Path.Combine(_root, "never.csv");
-        h.Executor.BeforePage = page => { if (page == 2) h.Tab.CancelRun(); };
+        h.Executor.BeforeBatch = batch => { if (batch == 2) h.Tab.CancelRun(); };
 
         await h.Exec.ExportAsync(h.Result, ExportFormat.Csv);
 

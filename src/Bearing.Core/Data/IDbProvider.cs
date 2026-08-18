@@ -61,6 +61,23 @@ public interface IQueryExecutor
     Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct);
 
     /// <summary>
+    /// Run one already-built row-returning query (the caller shaped any LIMIT/OFFSET — see <c>PageSql</c>)
+    /// and yield its rows in <see cref="QueryOptions.BatchRows"/>-sized batches as the reader drains them,
+    /// so a large result materializes incrementally instead of in one jump.
+    /// <para>
+    /// <b>One statement, one snapshot.</b> This is what "fetch all" runs instead of walking pages: every row
+    /// comes from the same execution, so a concurrent insert or delete can't shift rows between pages and
+    /// make the fetch duplicate or skip them — and the server produces each row once rather than re-running
+    /// the query per page with a growing OFFSET.
+    /// </para>
+    /// <see cref="QueryOptions.MaxRows"/> caps what is yielded and sets <see cref="RowBatch.Truncated"/> on
+    /// the final batch when the server still had rows. Base-table origin isn't read (the columns come from
+    /// the first page). Failures are <em>thrown</em>, not returned as an error result: a half-consumed stream
+    /// has no single result to carry one, and a caller that must not act on half an answer needs the throw.
+    /// </summary>
+    IAsyncEnumerable<RowBatch> StreamRowsAsync(string sql, QueryOptions options, CancellationToken ct);
+
+    /// <summary>
     /// Total row count of a single SELECT (<c>select count(*) from (&lt;sql&gt;)</c>). Null means the query's
     /// <em>shape</em> can't be counted (a multi-statement batch, a non-SELECT, a data-modifying CTE) and the
     /// caller should simply show no total. A real failure — connection lost, table dropped, permission

@@ -42,9 +42,10 @@ public sealed record AppSettings
     public int ResultPageSize { get; init; } = 100;
 
     /// <summary>
-    /// Where "Fetch all rows" stops. It pages until the result is exhausted, so without a ceiling a
-    /// mistyped query against a billion-row table would page until the app runs out of memory. Hitting the
-    /// ceiling is reported, never silent — the rows fetched so far stay loaded.
+    /// Where "Fetch all rows" stops. It streams the result to the end, so without a ceiling a mistyped query
+    /// against a billion-row table would read until the app runs out of memory — the ceiling also bounds what
+    /// the server is asked to produce. Hitting it is reported, never silent, and the rows already streamed
+    /// stay loaded.
     /// </summary>
     public int ResultFetchAllMaxRows { get; init; } = 200_000;
 

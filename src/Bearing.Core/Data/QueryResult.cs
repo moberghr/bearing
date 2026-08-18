@@ -33,8 +33,21 @@ public sealed record QueryResult(
     public bool Success => Error is null;
 }
 
+/// <summary>
+/// One chunk of a streamed result (<see cref="IQueryExecutor.StreamRowsAsync"/>). Batches arrive in row
+/// order and are meant to be appended as they land, so a long read shows progress instead of one jump at the
+/// end. <see cref="Truncated"/> is set only on the final batch, and only when the read stopped at
+/// <see cref="QueryOptions.MaxRows"/> with rows still waiting on the server — that is how a caller tells
+/// "this is the whole result" from "this is where the ceiling cut it", without a second query.
+/// </summary>
+public sealed record RowBatch(IReadOnlyList<object?[]> Rows, bool Truncated);
+
 public sealed record QueryOptions
 {
     /// <summary>Cap materialized rows (UI grid protection). Null = unlimited.</summary>
     public int? MaxRows { get; init; } = 10_000;
+
+    /// <summary>Rows per batch when streaming (<see cref="IQueryExecutor.StreamRowsAsync"/>); ignored by the
+    /// materializing paths. Sets how often a long read reports progress, nothing else.</summary>
+    public int BatchRows { get; init; } = 1_000;
 }

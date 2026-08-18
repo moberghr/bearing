@@ -339,9 +339,16 @@ public sealed partial class ExecutionViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Page a result set to the end in one action (the ⤓ all button) instead of scrolling through it.
-    /// Cancelable like any run (Esc / the Run button), reports progress as it goes, and stops at
-    /// <see cref="AppSettings.ResultFetchAllMaxRows"/> so a mistyped query can't page until the app dies.
+    /// Load a result set to the end in one action (the ⤓ all button) instead of scrolling through it.
+    /// <para>
+    /// <b>One execution, streamed</b> — not a walk over pages. Walking meant re-running the query per page
+    /// with a growing OFFSET (quadratic server work), and, because each page was its own statement, a
+    /// concurrent insert or delete could shift rows between pages so the fetch silently duplicated or skipped
+    /// some and still reported a complete result. One statement is one snapshot.
+    /// </para>
+    /// Cancelable like any run (Esc / the Run button), reports progress per batch as the reader drains, and
+    /// stops at <see cref="AppSettings.ResultFetchAllMaxRows"/> so a mistyped query can't read until the app
+    /// dies. Rows already materialized are kept on cancel.
     /// </summary>
     /// <returns>True when the result is fully loaded (or was already) — false if the fetch was cancelled,
     /// failed, or stopped at the row ceiling. Callers that follow a fetch with something else (Export) use
@@ -359,21 +366,34 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
         await RunExclusiveAsync(tab, async ct =>
         {
-            while (rs.HasMore)
+            // Room left under the ceiling. Already at it before we start (a page size configured above the
+            // cap) is the same non-silent stop as running into it mid-read.
+            var room = cap - rs.Loaded;
+            if (room <= 0) { ReportCeiling(tab, cap); return; }
+
+            // The rows the first page already showed are skipped with an OFFSET — they came from the earlier
+            // statement and stay on screen, so scroll position and any pending edits survive the fetch.
+            // Asking for room + 1 lets the reader see one row past the ceiling: that is what distinguishes
+            // "the result ends here" from "we stopped early", with no extra query.
+            var sql = PageSql.Page(rs.SourceSql, rs.Loaded, room + 1);
+            var options = new QueryOptions { MaxRows = room, BatchRows = PageSize };
+            var truncated = false;
+
+            // No ConfigureAwait(false) here, deliberately: each batch is appended to Rows, which the grid is
+            // bound to, so the loop body must resume on the UI thread. The reader itself drains off it — that
+            // is what the Bearing.Data ConfigureAwait pass is for.
+            await foreach (var batch in session.Executor.StreamRowsAsync(sql, options, ct))
             {
-                if (rs.Loaded >= cap)
-                {
-                    // Deliberately not silent: a truncated fetch that reported success would make the row
-                    // count — and any export taken from it — quietly wrong.
-                    RunFinished(tab, $"Stopped at {rs.Loaded:N0} rows (the Fetch all limit). "
-                                   + "Raise it in Settings ▸ Results if you need more.");
-                    return;
-                }
-                ct.ThrowIfCancellationRequested();
-                var page = await session.Executor.ExecutePageAsync(PageSql.Page(rs.SourceSql, rs.Loaded, PageSize), ct);
-                rs.AppendPage(page.Rows, page.RowCount == PageSize);
+                // hasMore stays true for the duration (the honest value while a read is in flight) and is
+                // settled once below. Nothing can act on it meanwhile — the tab is running.
+                rs.AppendPage(batch.Rows, hasMore: true);
+                truncated = batch.Truncated;
                 RunStatus(tab, $"Fetching all rows… {rs.Loaded:N0} so far (Esc to stop)");
             }
+
+            rs.HasMore = truncated;
+            if (truncated) { ReportCeiling(tab, cap); return; }
+
             complete = true;
             // The total is now known for certain — it's what we loaded — so [Count] retires without a query.
             rs.TotalCount = rs.Loaded;
@@ -382,6 +402,13 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
         return complete;
     }
+
+    /// <summary>Report a fetch that stopped at the row ceiling. Deliberately not silent, and reported as a
+    /// stop rather than a success: a truncated fetch that claimed to be complete would make the row count —
+    /// and any export taken from it — quietly wrong.</summary>
+    private void ReportCeiling(EditorTabViewModel tab, int cap)
+        => RunFinished(tab, $"Stopped at {cap:N0} rows (the Fetch all limit). "
+                          + "Raise it in Settings ▸ Results if you need more.");
 
     /// <summary>Fill in the total row count for a pageable result set (the [Count] action).</summary>
     public async Task CountTotalAsync(ResultSetViewModel rs)
