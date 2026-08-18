@@ -97,37 +97,39 @@ public sealed class ResultCellFactory
         var isJsonCol = ColumnKinds.IsJson(result.Columns[index].DataTypeName);
         var numeric = CellStats.IsNumeric(result.Columns[index].ClrType);
         return new FuncDataTemplate<object?[]>((row, _) =>
-        {
-            var isNull = row is null || index >= row.Length || row[index] is null;
-            var text = new TextBlock
-            {
-                Text = GridSelectionOps.CellText(row, index),
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(4, 0),
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                Foreground = isNull ? NullBrush : (numeric ? Res("Text.Code") : Res("Text.Primary")),
-                FontStyle = isNull ? FontStyle.Italic : FontStyle.Normal,
-            };
+            MakeSelectable(() => ValueContent(result, index, row, isJsonCol, numeric), result, row, index, grid));
+    }
 
-            Control inner = text;
-            if (!isNull)
-            {
-                var raw = GridSelectionOps.CellText(row, index);
-                if (isJsonCol || raw.Length > 60 || raw.Contains('\n'))
-                {
-                    var expand = ResultChrome.InspectAffordance();
-                    // handledEventsToo: the DataGrid marks the press handled in the tunnel phase.
-                    expand.AddHandler(InputElement.PointerPressedEvent, (_, e) => { _inspect(result, index, row!); e.Handled = true; },
-                        RoutingStrategies.Bubble, handledEventsToo: true);
-                    var dock = new DockPanel { Margin = new Thickness(0, 0, 18, 0) }; // keep ⤢ clear of the scrollbar
-                    DockPanel.SetDock(expand, Dock.Right);
-                    dock.Children.Add(expand);
-                    dock.Children.Add(text);
-                    inner = dock;
-                }
-            }
-            return MakeSelectable(inner, result, row, index, grid);
-        });
+    /// <summary>The inside of a value cell, built from the row's current value — a function rather than a
+    /// one-off because a write that doesn't come from the in-cell editor (a paste, the keyboard bool toggle)
+    /// has to be able to re-render the cell it changed. Everything here depends on the value: the text, the
+    /// dimmed-italic NULL styling, and whether the ⤢ inspect affordance is there at all.</summary>
+    private Control ValueContent(ResultSetViewModel result, int index, object?[]? row, bool isJsonCol, bool numeric)
+    {
+        var isNull = row is null || index >= row.Length || row[index] is null;
+        var text = new TextBlock
+        {
+            Text = GridSelectionOps.CellText(row, index),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(4, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Foreground = isNull ? NullBrush : (numeric ? Res("Text.Code") : Res("Text.Primary")),
+            FontStyle = isNull ? FontStyle.Italic : FontStyle.Normal,
+        };
+        if (isNull) return text;
+
+        var raw = GridSelectionOps.CellText(row, index);
+        if (!isJsonCol && raw.Length <= 60 && !raw.Contains('\n')) return text;
+
+        var expand = ResultChrome.InspectAffordance();
+        // handledEventsToo: the DataGrid marks the press handled in the tunnel phase.
+        expand.AddHandler(InputElement.PointerPressedEvent, (_, e) => { _inspect(result, index, row!); e.Handled = true; },
+            RoutingStrategies.Bubble, handledEventsToo: true);
+        var dock = new DockPanel { Margin = new Thickness(0, 0, 18, 0) }; // keep ⤢ clear of the scrollbar
+        DockPanel.SetDock(expand, Dock.Right);
+        dock.Children.Add(expand);
+        dock.Children.Add(text);
+        return dock;
     }
 
     /// <summary>A foreign-key column: the value shows as plain text with a clickable jump-icon on the
@@ -138,35 +140,40 @@ public sealed class ResultCellFactory
         {
             Tag = index, // enables CellEditEnding capture when the grid is editable
             CellEditingTemplate = result.IsEditable ? CellEditor(index) : null,
-            CellTemplate = new FuncDataTemplate<object?[]>((row, _) =>
-            {
-                if (row is null) return new TextBlock();
-                var hasValue = row.Length > index && row[index] is not null;
-
-                var value = new TextBlock
-                {
-                    Text = GridSelectionOps.CellText(row, index),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    TextTrimming = TextTrimming.CharacterEllipsis,
-                    Margin = new Thickness(4, 0, 4, 0),
-                };
-
-                var jump = ResultChrome.JumpAffordance();
-                jump.IsVisible = hasValue;
-                // handledEventsToo: the DataGrid marks the press handled in the tunnel phase.
-                jump.AddHandler(InputElement.PointerPressedEvent, (_, e) =>
-                {
-                    e.Handled = true;
-                    if (hasValue) _followForeignKey(result, index, row);
-                }, RoutingStrategies.Bubble, handledEventsToo: true);
-
-                var cell = new DockPanel { Margin = new Thickness(0, 0, 18, 0) }; // keep ↗ clear of the scrollbar
-                DockPanel.SetDock(jump, Dock.Right);
-                cell.Children.Add(jump);
-                cell.Children.Add(value);
-                return MakeSelectable(cell, result, row, index, grid);
-            }),
+            CellTemplate = new FuncDataTemplate<object?[]>((row, _) => row is null
+                ? new TextBlock()
+                : MakeSelectable(() => ForeignKeyContent(result, index, row), result, row, index, grid)),
         };
+
+    /// <summary>The inside of a foreign-key cell: the value plus the ↗ jump icon, which is hidden on a NULL —
+    /// so this is value-dependent and gets rebuilt when the row changes (see <see cref="ValueContent"/>).</summary>
+    private Control ForeignKeyContent(ResultSetViewModel result, int index, object?[] row)
+    {
+        var hasValue = row.Length > index && row[index] is not null;
+
+        var value = new TextBlock
+        {
+            Text = GridSelectionOps.CellText(row, index),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Margin = new Thickness(4, 0, 4, 0),
+        };
+
+        var jump = ResultChrome.JumpAffordance();
+        jump.IsVisible = hasValue;
+        // handledEventsToo: the DataGrid marks the press handled in the tunnel phase.
+        jump.AddHandler(InputElement.PointerPressedEvent, (_, e) =>
+        {
+            e.Handled = true;
+            if (hasValue) _followForeignKey(result, index, row);
+        }, RoutingStrategies.Bubble, handledEventsToo: true);
+
+        var cell = new DockPanel { Margin = new Thickness(0, 0, 18, 0) }; // keep ↗ clear of the scrollbar
+        DockPanel.SetDock(jump, Dock.Right);
+        cell.Children.Add(jump);
+        cell.Children.Add(value);
+        return cell;
+    }
 
     /// <summary>A boolean cell rendered as a checkbox: read-only display when the grid is locked,
     /// interactive (toggles the row value + marks it edited) when the result is editable. Selectable like
@@ -179,32 +186,34 @@ public sealed class ResultCellFactory
     /// </para></summary>
     private IDataTemplate BoolCell(ResultSetViewModel result, int index, DataGrid grid)
         => new FuncDataTemplate<object?[]>((row, _) =>
+            MakeSelectable(() => BoolContent(result, index, row), result, row, index, grid, armDrag: false));
+
+    /// <summary>The checkbox itself. Value-dependent like the other cell contents, which is how a paste or the
+    /// keyboard toggle shows up — <c>IsChecked</c> is seeded here and nothing rebinds it.</summary>
+    private static Control BoolContent(ResultSetViewModel result, int index, object?[]? row)
+    {
+        var cb = new CheckBox
         {
-            var cb = new CheckBox
-            {
-                IsThreeState = true, // null → indeterminate
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                IsChecked = BoolCellValue.Read(row, index),
-            };
-            if (!result.IsEditable)
-            {
-                cb.IsHitTestVisible = false; // display only (not greyed like IsEnabled=false)
-                cb.Focusable = false;
-                return MakeSelectable(cb, result, row, index, grid, armDrag: false);
-            }
-            cb.IsCheckedChanged += (_, _) =>
-            {
-                if (row is null) return;
-                if (!result.SetCell(row, index, cb.IsChecked)) return; // unchanged / out of range (e.g. initial bind)
-                if (cb.GetVisualAncestors().OfType<DataGridRow>().FirstOrDefault() is { } dgr)
-                    ResultRowPainter.ApplyRowStatus(dgr, result);
-            };
-            // A value written to the row from outside this cell — the keyboard toggle, a paste — re-reads
-            // here, since IsChecked was seeded once at build and nothing else would refresh it.
-            return MakeSelectable(cb, result, row, index, grid, armDrag: false,
-                syncValue: () => cb.IsChecked = BoolCellValue.Read(row, index));
-        });
+            IsThreeState = true, // null → indeterminate
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsChecked = BoolCellValue.Read(row, index),
+        };
+        if (!result.IsEditable)
+        {
+            cb.IsHitTestVisible = false; // display only (not greyed like IsEnabled=false)
+            cb.Focusable = false;
+            return cb;
+        }
+        cb.IsCheckedChanged += (_, _) =>
+        {
+            if (row is null) return;
+            if (!result.SetCell(row, index, cb.IsChecked)) return; // unchanged / out of range (e.g. initial bind)
+            if (cb.GetVisualAncestors().OfType<DataGridRow>().FirstOrDefault() is { } dgr)
+                ResultRowPainter.ApplyRowStatus(dgr, result);
+        };
+        return cb;
+    }
 
     /// <summary>The in-cell editor (a TextBox seeded with the current value) shared by editable and FK
     /// columns. A template — re-materialized per row as the grid recycles containers on scroll —
@@ -228,17 +237,19 @@ public sealed class ResultCellFactory
     /// <summary>Wrap a cell's content in a selectable border: single-click selects (blue ring) and
     /// starts a drag rectangle, Ctrl/Cmd-click toggles, Shift-click extends a rectangle; the whole-row
     /// highlight stays invisible. Numeric selections feed the quick-stats bar.</summary>
+    /// <param name="content">Builds the cell's inside from the row's current value. Called now, and again
+    /// whenever that value changed under us — the display templates are materialized once per realized row,
+    /// so a write that doesn't go through the in-cell editor (a paste, the keyboard bool toggle) would
+    /// otherwise leave the old text on screen while the pending UPDATE carried the new one.</param>
     /// <param name="armDrag">False for a cell whose content needs the pointer capture itself (a checkbox):
     /// the click still selects, it just doesn't start a drag-rectangle.</param>
-    /// <param name="syncValue">Re-read the row into the cell's own visual, run with the ring restyle — for a
-    /// cell that shows a value it can't rebind (the checkbox).</param>
     private Control MakeSelectable(
-        Control inner, ResultSetViewModel result, object?[]? row, int index, DataGrid grid,
-        bool armDrag = true, Action? syncValue = null)
+        Func<Control> content, ResultSetViewModel result, object?[]? row, int index, DataGrid grid,
+        bool armDrag = true)
     {
         var border = new Border
         {
-            Child = inner,
+            Child = content(),
             Background = Brushes.Transparent,       // hit-testable across the whole cell
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch,
@@ -251,9 +262,16 @@ public sealed class ResultCellFactory
 
         border.Tag = (row, index); // read back when a drag hit-tests the cell under the pointer
 
+        // The value this cell is currently showing. Compared on every restyle, so re-rendering costs a
+        // reference check per realized cell rather than a rebuilt visual per arrow keypress.
+        var rendered = ValueAt(row, index);
         void Restyle()
         {
-            syncValue?.Invoke();
+            if (!Equals(ValueAt(row, index), rendered))
+            {
+                rendered = ValueAt(row, index);
+                border.Child = content();
+            }
             ApplySelectionRing(border, result, row, index);
         }
         Restyle();
@@ -287,6 +305,9 @@ public sealed class ResultCellFactory
         }, RoutingStrategies.Bubble, handledEventsToo: true);
         return border;
     }
+
+    private static object? ValueAt(object?[]? row, int index)
+        => row is not null && index < row.Length ? row[index] : null;
 
     /// <summary>Draw (or clear) a cell's selection ring.
     /// <para>
