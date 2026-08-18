@@ -11,46 +11,36 @@ namespace Bearing.App.Results;
 public enum GridMotion { Left, Right, Up, Down, Home, End, PageUp, PageDown }
 
 /// <summary>
-/// The arithmetic behind results-grid cell selection: which columns can hold a selection, where a motion
-/// lands, which cells a rectangle covers, and what a selection copies as. Pure over
+/// The arithmetic behind results-grid cell selection: where a motion lands, which cells a rectangle covers,
+/// and what a selection copies as. Pure over
 /// <see cref="ResultSetViewModel"/> — no controls, no clipboard, no scrolling — so the spreadsheet
 /// behaviour that used to be welded into <c>ResultView</c>'s key handler can actually be asserted
 /// (Wayland blocks headless keystroke tests; see §4.3).
 /// <para>
-/// Bool columns render as checkboxes and are skipped everywhere: they draw no selection ring, so letting
-/// the cursor land on one would make it vanish.
+/// Every column takes a selection, checkbox (bool) columns included: their cells carry the same selection
+/// border as any other, so the cursor can land on one without disappearing (#9). Nothing here is
+/// column-kind aware any more.
 /// </para>
 /// </summary>
 public static class GridSelectionOps
 {
-    /// <summary>The leftmost column a selection can occupy (0 when the result has no selectable column).</summary>
-    public static int FirstSelectableColumn(ResultSetViewModel result)
-    {
-        for (var c = 0; c < result.Columns.Count; c++)
-            if (!ColumnKinds.IsBool(result.Columns[c])) return c;
-        return 0;
-    }
+    /// <summary>The leftmost column (0, also for a result with no columns at all).</summary>
+    public static int FirstColumn(ResultSetViewModel result) => 0;
 
-    /// <summary>The rightmost column a selection can occupy.</summary>
-    public static int LastSelectableColumn(ResultSetViewModel result)
-    {
-        for (var c = result.Columns.Count - 1; c >= 0; c--)
-            if (!ColumnKinds.IsBool(result.Columns[c])) return c;
-        return Math.Max(0, result.Columns.Count - 1);
-    }
+    /// <summary>The rightmost column; 0 for a result with no columns, so callers can index with it.</summary>
+    public static int LastColumn(ResultSetViewModel result) => Math.Max(0, result.Columns.Count - 1);
 
-    /// <summary>The next selectable column from <paramref name="from"/> in direction ±1, or
-    /// <paramref name="from"/> itself at an edge (the cursor stops rather than wrapping).</summary>
+    /// <summary>The next column from <paramref name="from"/> in direction ±1, or <paramref name="from"/>
+    /// itself at an edge (the cursor stops rather than wrapping).</summary>
     public static int StepColumn(ResultSetViewModel result, int from, int dir)
     {
-        for (var c = from + dir; c >= 0 && c < result.Columns.Count; c += dir)
-            if (!ColumnKinds.IsBool(result.Columns[c])) return c;
-        return from;
+        var to = from + dir;
+        return to >= 0 && to < result.Columns.Count ? to : from;
     }
 
     /// <summary>Where a motion lands from (<paramref name="row"/>, <paramref name="col"/>).
     /// <paramref name="toEdge"/> is the Ctrl modifier — it jumps to the row/column extreme instead of
-    /// stepping. Row indices clamp; columns skip bool columns. Both stay in range.</summary>
+    /// stepping. Rows and columns both clamp at the edges and stay in range.</summary>
     public static (int Row, int Col) Move(
         ResultSetViewModel result, int row, int col, GridMotion motion, bool toEdge, int pageSize)
     {
@@ -59,19 +49,19 @@ public static class GridSelectionOps
         int nr = Math.Clamp(row, 0, last), nc = col;
         switch (motion)
         {
-            case GridMotion.Left: nc = toEdge ? FirstSelectableColumn(result) : StepColumn(result, col, -1); break;
-            case GridMotion.Right: nc = toEdge ? LastSelectableColumn(result) : StepColumn(result, col, +1); break;
+            case GridMotion.Left: nc = toEdge ? FirstColumn(result) : StepColumn(result, col, -1); break;
+            case GridMotion.Right: nc = toEdge ? LastColumn(result) : StepColumn(result, col, +1); break;
             case GridMotion.Up: nr = toEdge ? 0 : Math.Max(0, nr - 1); break;
             case GridMotion.Down: nr = toEdge ? last : Math.Min(last, nr + 1); break;
-            case GridMotion.Home: nc = FirstSelectableColumn(result); if (toEdge) nr = 0; break;
-            case GridMotion.End: nc = LastSelectableColumn(result); if (toEdge) nr = last; break;
+            case GridMotion.Home: nc = FirstColumn(result); if (toEdge) nr = 0; break;
+            case GridMotion.End: nc = LastColumn(result); if (toEdge) nr = last; break;
             case GridMotion.PageUp: nr = Math.Max(0, nr - page); break;
             case GridMotion.PageDown: nr = Math.Min(last, nr + page); break;
         }
         return (nr, nc);
     }
 
-    /// <summary>Every selectable cell in the rectangle spanning <paramref name="a"/>..<paramref name="b"/>
+    /// <summary>Every cell in the rectangle spanning <paramref name="a"/>..<paramref name="b"/>
     /// inclusive, in any corner order. Empty when either anchor's row is no longer in the result (a page
     /// reload or a discarded new row can strand one).</summary>
     public static IReadOnlyList<(object?[] Row, int Col)> Rectangle(
@@ -88,20 +78,18 @@ public static class GridSelectionOps
         {
             var rr = rows[r];
             for (var c = c0; c <= c1; c++)
-                if (c < rr.Length && c < result.Columns.Count && !ColumnKinds.IsBool(result.Columns[c]))
-                    cells.Add((rr, c));
+                if (c < rr.Length && c < result.Columns.Count) cells.Add((rr, c));
         }
         return cells;
     }
 
-    /// <summary>Every selectable cell of the result (Ctrl+A).</summary>
+    /// <summary>Every cell of the result (Ctrl+A).</summary>
     public static IReadOnlyList<(object?[] Row, int Col)> AllCells(ResultSetViewModel result)
     {
         var cells = new List<(object?[] Row, int Col)>();
         foreach (var row in result.Rows)
             for (var c = 0; c < result.Columns.Count; c++)
-                if (c < row.Length && !ColumnKinds.IsBool(result.Columns[c]))
-                    cells.Add((row, c));
+                if (c < row.Length) cells.Add((row, c));
         return cells;
     }
 

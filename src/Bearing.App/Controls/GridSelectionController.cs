@@ -205,7 +205,7 @@ public sealed class GridSelectionController
     public void SeedActive(DataGrid grid, ResultSetViewModel result)
     {
         if (result.Rows.Count == 0) return;
-        MoveActive(grid, result, result.Rows[0], GridSelectionOps.FirstSelectableColumn(result), extend: false);
+        MoveActive(grid, result, result.Rows[0], GridSelectionOps.FirstColumn(result), extend: false);
     }
 
     /// <summary>Whether this grid still needs a seeded cursor (nothing active, or the cursor is elsewhere).</summary>
@@ -227,7 +227,7 @@ public sealed class GridSelectionController
         {
             Model.Anchor = Model.Active;
             Model.Cells.Clear();
-            if (col < result.Columns.Count && !ColumnKinds.IsBool(result.Columns[col])) Model.Cells.Add((row, col));
+            if (col < result.Columns.Count) Model.Cells.Add((row, col));
             Notify();
         }
         if (col < grid.Columns.Count) grid.ScrollIntoView(row, grid.Columns[col]);
@@ -250,7 +250,7 @@ public sealed class GridSelectionController
         foreach (var cell in GridSelectionOps.AllCells(result)) Model.Cells.Add(cell);
         if (result.Rows.Count > 0)
         {
-            Model.Active ??= (result.Rows[0], GridSelectionOps.FirstSelectableColumn(result));
+            Model.Active ??= (result.Rows[0], GridSelectionOps.FirstColumn(result));
             Model.Anchor ??= Model.Active;
         }
         Notify();
@@ -305,14 +305,33 @@ public sealed class GridSelectionController
         Notify();
     }
 
-    /// <summary>grid.beginEdit (Enter/F2): start editing the active cell via the DataGrid's own machinery.</summary>
+    /// <summary>grid.beginEdit (Enter/F2): start editing the active cell via the DataGrid's own machinery —
+    /// except on a checkbox column, which has no text editor and cycles its value instead.</summary>
     public void BeginEditActive(DataGrid grid, ResultSetViewModel result)
     {
         if (Model.Active is not { } a || !ReferenceEquals(Model.Result, result)) return;
         if (result.Rows.IndexOf(a.Row) < 0 || a.Col >= grid.Columns.Count) return;
         grid.ScrollIntoView(a.Row, grid.Columns[a.Col]);
+        if (a.Col < result.Columns.Count && ColumnKinds.IsBool(result.Columns[a.Col]))
+        {
+            ToggleBool(grid, result, a.Row, a.Col);
+            return;
+        }
         grid.SelectedItem = a.Row;
         grid.CurrentColumn = grid.Columns[a.Col];
         grid.BeginEdit();
+    }
+
+    /// <summary>Cycle a checkbox cell's value in place (the keyboard's equivalent of clicking it). A bool
+    /// column is a <c>DataGridTemplateColumn</c> with no editing template, so BeginEdit has nothing to open;
+    /// leaving Enter dead on a cell the cursor can now land on (#9) would be the worse answer.
+    /// <para>The realized CheckBox re-reads the row on <see cref="Notify"/>, which is also how a paste into a
+    /// checkbox column shows up.</para></summary>
+    private void ToggleBool(DataGrid grid, ResultSetViewModel result, object?[] row, int col)
+    {
+        if (!result.IsEditable) return;
+        result.SetCell(row, col, BoolCellValue.Next(BoolCellValue.Read(row, col)));
+        ResultRowPainter.RefreshRowColors(grid, result);
+        Notify();
     }
 }

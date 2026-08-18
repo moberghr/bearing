@@ -57,7 +57,7 @@ public sealed class ResultCellFactory
         if (result.ForeignKeyColumns.Contains(index))
             col = ForeignKeyColumn(result, index, grid);
         else if (ColumnKinds.IsBool(result.Columns[index]))
-            col = new DataGridTemplateColumn { CellTemplate = BoolCell(result, index) }; // toggles inline
+            col = new DataGridTemplateColumn { CellTemplate = BoolCell(result, index, grid) }; // toggles inline
         else if (result.IsEditable)
             col = new DataGridTemplateColumn
             {
@@ -169,8 +169,15 @@ public sealed class ResultCellFactory
         };
 
     /// <summary>A boolean cell rendered as a checkbox: read-only display when the grid is locked,
-    /// interactive (toggles the row value + marks it edited) when the result is editable.</summary>
-    private static IDataTemplate BoolCell(ResultSetViewModel result, int index)
+    /// interactive (toggles the row value + marks it edited) when the result is editable. Selectable like
+    /// every other cell (#9) — clicking the box both toggles it and moves the selection here, so a following
+    /// Ctrl+C / Delete acts on the row the user just pointed at instead of wherever the cursor used to be.
+    /// <para>
+    /// The one difference from a value cell: a press here does not arm a drag-rectangle, because taking the
+    /// pointer capture for the grid would rob the CheckBox of the release that toggles it. Drag from a
+    /// neighbouring cell to sweep across checkbox columns.
+    /// </para></summary>
+    private IDataTemplate BoolCell(ResultSetViewModel result, int index, DataGrid grid)
         => new FuncDataTemplate<object?[]>((row, _) =>
         {
             var cb = new CheckBox
@@ -178,13 +185,13 @@ public sealed class ResultCellFactory
                 IsThreeState = true, // null → indeterminate
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
-                IsChecked = ToBool(row, index),
+                IsChecked = BoolCellValue.Read(row, index),
             };
             if (!result.IsEditable)
             {
                 cb.IsHitTestVisible = false; // display only (not greyed like IsEnabled=false)
                 cb.Focusable = false;
-                return cb;
+                return MakeSelectable(cb, result, row, index, grid, armDrag: false);
             }
             cb.IsCheckedChanged += (_, _) =>
             {
@@ -193,19 +200,11 @@ public sealed class ResultCellFactory
                 if (cb.GetVisualAncestors().OfType<DataGridRow>().FirstOrDefault() is { } dgr)
                     ResultRowPainter.ApplyRowStatus(dgr, result);
             };
-            return cb;
+            // A value written to the row from outside this cell — the keyboard toggle, a paste — re-reads
+            // here, since IsChecked was seeded once at build and nothing else would refresh it.
+            return MakeSelectable(cb, result, row, index, grid, armDrag: false,
+                syncValue: () => cb.IsChecked = BoolCellValue.Read(row, index));
         });
-
-    private static bool? ToBool(object?[]? row, int index)
-    {
-        if (row is null || index >= row.Length) return null;
-        return row[index] switch
-        {
-            bool b => b,
-            string s when bool.TryParse(s, out var b) => b,
-            _ => null,
-        };
-    }
 
     /// <summary>The in-cell editor (a TextBox seeded with the current value) shared by editable and FK
     /// columns. A template — re-materialized per row as the grid recycles containers on scroll —
@@ -229,7 +228,13 @@ public sealed class ResultCellFactory
     /// <summary>Wrap a cell's content in a selectable border: single-click selects (blue ring) and
     /// starts a drag rectangle, Ctrl/Cmd-click toggles, Shift-click extends a rectangle; the whole-row
     /// highlight stays invisible. Numeric selections feed the quick-stats bar.</summary>
-    private Control MakeSelectable(Control inner, ResultSetViewModel result, object?[]? row, int index, DataGrid grid)
+    /// <param name="armDrag">False for a cell whose content needs the pointer capture itself (a checkbox):
+    /// the click still selects, it just doesn't start a drag-rectangle.</param>
+    /// <param name="syncValue">Re-read the row into the cell's own visual, run with the ring restyle — for a
+    /// cell that shows a value it can't rebind (the checkbox).</param>
+    private Control MakeSelectable(
+        Control inner, ResultSetViewModel result, object?[]? row, int index, DataGrid grid,
+        bool armDrag = true, Action? syncValue = null)
     {
         var border = new Border
         {
@@ -246,7 +251,11 @@ public sealed class ResultCellFactory
 
         border.Tag = (row, index); // read back when a drag hit-tests the cell under the pointer
 
-        void Restyle() => ApplySelectionRing(border, result, row, index);
+        void Restyle()
+        {
+            syncValue?.Invoke();
+            ApplySelectionRing(border, result, row, index);
+        }
         Restyle();
         _selection.AddRestyleListener(Restyle);
         border.DetachedFromVisualTree += (_, _) => _selection.RemoveRestyleListener(Restyle);
@@ -272,7 +281,8 @@ public sealed class ResultCellFactory
             var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
             if (shift && _selection.CanExtendFrom(result)) _selection.ExtendTo(result, row, index);
             else if (ctrl) _selection.ToggleCell(result, row, index);
-            else _selection.SelectSingleAndBeginDrag(result, row, index, e.Pointer, grid);
+            else if (armDrag) _selection.SelectSingleAndBeginDrag(result, row, index, e.Pointer, grid);
+            else _selection.SelectSingle(result, row, index);
             e.Handled = true;
         }, RoutingStrategies.Bubble, handledEventsToo: true);
         return border;
