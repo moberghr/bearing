@@ -70,10 +70,20 @@ public static class KeymapDefaults
         // ---- Grid (resolved in the results grid's tunnel handler) ----
         yield return R(CommandIds.GridCopy, "Ctrl+C");
         yield return R(CommandIds.GridCopy, "Ctrl+Insert");
+        yield return R(CommandIds.GridPaste, "Ctrl+V");      // mirrors the copy pair
+        yield return R(CommandIds.GridPaste, "Shift+Insert");
         yield return R(CommandIds.GridSelectAll, "Ctrl+A");
         yield return R(CommandIds.GridDelete, "Delete");
         yield return R(CommandIds.GridBeginEdit, "Enter");
         yield return R(CommandIds.GridBeginEdit, "F2");
+        yield return R(CommandIds.GridBeginEdit, "Space");     // on a checkbox cell this is the cycle
+        yield return R(CommandIds.GridAddRow, "Alt+Insert");   // joins Delete / Ctrl+Insert / Shift+Insert
+        // Commit + revert the pending row edits. Both are guarded on there being pending changes, so with a
+        // clean grid Ctrl+S falls straight through to file.save — the grid only claims it when it has
+        // something of its own to save. Revert is deliberately not Ctrl+Z: it drops *every* pending change,
+        // which is not what a one-step undo means.
+        yield return R(CommandIds.GridSave, "Ctrl+S");
+        yield return R(CommandIds.GridDiscard, "Ctrl+Alt+Z");
         yield return R(CommandIds.GridClearSelection, "Escape");
         yield return R(CommandIds.GridFollowFk, "Alt+Right"); // drill into the FK the active cell points to
         yield return R(CommandIds.GridBack, "Alt+Left");      // return to the pre-navigation result

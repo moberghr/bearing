@@ -13,13 +13,14 @@ namespace Bearing.App.Tests;
 /// shape. Previously welded into <c>ResultView</c>'s key handler and therefore unreachable by tests (Wayland
 /// blocks headless keystrokes, §4.3); now pure over <see cref="GridSelectionOps"/>.
 /// <para>
-/// The recurring theme is the bool column: it renders as a checkbox that draws no selection ring, so the
-/// cursor must never land on one and a rectangle must skip it.
+/// The bool column used to be the recurring theme here, skipped by every operation because its checkbox drew
+/// no selection ring. It now carries the same ring as any other cell (#9), so these assert the opposite: the
+/// cursor lands on it, rectangles cover it, and Ctrl+A takes it.
 /// </para>
 /// </summary>
 public class GridSelectionOpsTests
 {
-    /// <summary>(id int, name text, flag bool, qty int) — column 2 is the un-selectable checkbox.</summary>
+    /// <summary>(id int, name text, flag bool, qty int) — column 2 is the checkbox column.</summary>
     private static ResultSetViewModel Grid(params object?[][] rows)
     {
         var columns = new[]
@@ -38,22 +39,22 @@ public class GridSelectionOpsTests
         [2, "two", false, 20],
         [3, "three", null, 30]);
 
-    // ---- selectable columns ------------------------------------------------------------------
+    // ---- columns -----------------------------------------------------------------------------
 
     [Fact]
-    public void First_and_last_selectable_columns_skip_the_bool_column()
+    public void First_and_last_columns_span_the_whole_result()
     {
         var rs = ThreeRows();
-        Assert.Equal(0, GridSelectionOps.FirstSelectableColumn(rs));
-        Assert.Equal(3, GridSelectionOps.LastSelectableColumn(rs)); // qty, not the bool at 2
+        Assert.Equal(0, GridSelectionOps.FirstColumn(rs));
+        Assert.Equal(3, GridSelectionOps.LastColumn(rs));
     }
 
     [Fact]
-    public void Stepping_right_jumps_over_the_bool_column()
+    public void Stepping_lands_on_the_checkbox_column_instead_of_jumping_it()
     {
         var rs = ThreeRows();
-        Assert.Equal(3, GridSelectionOps.StepColumn(rs, 1, +1)); // name -> qty, skipping flag
-        Assert.Equal(1, GridSelectionOps.StepColumn(rs, 3, -1)); // qty -> name, skipping flag
+        Assert.Equal(2, GridSelectionOps.StepColumn(rs, 1, +1)); // name -> flag
+        Assert.Equal(2, GridSelectionOps.StepColumn(rs, 3, -1)); // qty  -> flag
     }
 
     [Fact]
@@ -65,17 +66,19 @@ public class GridSelectionOpsTests
     }
 
     [Fact]
-    public void An_all_bool_result_reports_column_zero_rather_than_minus_one()
+    public void A_checkbox_only_result_is_still_selectable()
     {
-        // Degenerate but reachable (`select flag from t`): callers index Columns with the answer, so it must
-        // stay in range even though nothing is really selectable.
+        // `select flag from t` used to have nothing selectable at all — the cursor had nowhere to go and
+        // Ctrl+C copied nothing.
         var single = new QueryResult(
             [new ColumnDescriptor("flag", "bool", typeof(bool))],
             new[] { new object?[] { true } }, 1, TimeSpan.Zero, null, null, false);
         var boolOnly = new ResultSetViewModel(single, "select flag from t", pageable: false);
 
-        Assert.Equal(0, GridSelectionOps.FirstSelectableColumn(boolOnly));
-        Assert.Equal(0, GridSelectionOps.LastSelectableColumn(boolOnly));
+        Assert.Equal(0, GridSelectionOps.FirstColumn(boolOnly));
+        Assert.Equal(0, GridSelectionOps.LastColumn(boolOnly));
+        Assert.Single(GridSelectionOps.AllCells(boolOnly));
+        Assert.Equal("True", GridSelectionOps.Tsv(boolOnly, GridSelectionOps.AllCells(boolOnly)));
     }
 
     // ---- motion ------------------------------------------------------------------------------
@@ -112,7 +115,7 @@ public class GridSelectionOpsTests
         Assert.Equal((0, 0), ctrlHome);                              // top-left
 
         var ctrlEnd = GridSelectionOps.Move(rs, 1, 0, GridMotion.End, toEdge: true, pageSize: 10);
-        Assert.Equal((2, 3), ctrlEnd);                               // bottom-right (skipping the bool)
+        Assert.Equal((2, 3), ctrlEnd);                               // bottom-right
     }
 
     [Fact]
@@ -127,14 +130,14 @@ public class GridSelectionOpsTests
     // ---- rectangles --------------------------------------------------------------------------
 
     [Fact]
-    public void A_rectangle_covers_every_selectable_cell_between_its_corners()
+    public void A_rectangle_covers_every_cell_between_its_corners()
     {
         var rs = ThreeRows();
         var cells = GridSelectionOps.Rectangle(rs, (rs.Rows[0], 1), (rs.Rows[1], 3));
 
-        // rows 0-1 × columns 1,3 (the bool at 2 is skipped) = 4 cells
-        Assert.Equal(4, cells.Count);
-        Assert.DoesNotContain(2, cells.Select(c => c.Col));
+        // rows 0-1 × columns 1,2,3 — the checkbox at 2 included
+        Assert.Equal(6, cells.Count);
+        Assert.Contains((rs.Rows[0], 2), cells);
         Assert.Contains((rs.Rows[0], 1), cells);
         Assert.Contains((rs.Rows[1], 3), cells);
     }
@@ -158,12 +161,77 @@ public class GridSelectionOpsTests
     }
 
     [Fact]
-    public void All_cells_excludes_bool_columns()
+    public void All_cells_includes_the_checkbox_column()
     {
         var rs = ThreeRows();
         var cells = GridSelectionOps.AllCells(rs);
-        Assert.Equal(9, cells.Count); // 3 rows × 3 selectable columns
-        Assert.DoesNotContain(2, cells.Select(c => c.Col));
+        Assert.Equal(12, cells.Count); // 3 rows × 4 columns
+        Assert.Contains(2, cells.Select(c => c.Col));
+    }
+
+    // ---- whole rows / columns (header clicks, #6) ----------------------------------------------
+
+    [Fact]
+    public void A_row_header_click_takes_the_whole_width_of_the_row()
+    {
+        var rs = ThreeRows();
+        var cells = GridSelectionOps.WholeRows(rs, rs.Rows[1], rs.Rows[1]);
+
+        Assert.Equal(4, cells.Count); // every column, checkbox included
+        Assert.All(cells, c => Assert.Same(rs.Rows[1], c.Row));
+        Assert.Equal([0, 1, 2, 3], cells.Select(c => c.Col).OrderBy(c => c).ToArray());
+    }
+
+    [Fact]
+    public void Shift_clicking_a_second_row_header_takes_the_contiguous_rows()
+    {
+        var rs = ThreeRows();
+        var cells = GridSelectionOps.WholeRows(rs, rs.Rows[0], rs.Rows[2]);
+
+        Assert.Equal(12, cells.Count); // 3 rows × 4 columns
+        Assert.Equal(3, cells.Select(c => c.Row).Distinct().Count());
+    }
+
+    [Fact]
+    public void A_column_header_click_takes_every_loaded_row_of_that_column()
+    {
+        var rs = ThreeRows();
+        var cells = GridSelectionOps.WholeColumns(rs, 1, 1);
+
+        Assert.Equal(3, cells.Count);
+        Assert.All(cells, c => Assert.Equal(1, c.Col));
+    }
+
+    [Fact]
+    public void Shift_clicking_a_second_column_header_takes_the_contiguous_columns()
+    {
+        var rs = ThreeRows();
+        var cells = GridSelectionOps.WholeColumns(rs, 1, 3);
+
+        Assert.Equal(9, cells.Count); // 3 rows × columns 1..3
+        Assert.Equal([1, 2, 3], cells.Select(c => c.Col).Distinct().OrderBy(c => c).ToArray());
+    }
+
+    [Fact]
+    public void A_column_selection_stops_at_the_loaded_rows_of_a_paged_result()
+    {
+        // The honest half of the answer to "what does a column mean on a paged result": it covers what is
+        // loaded, and the grid says so. Silently spanning 3 of 1,000 rows is how a Copy as ▸ IN list comes
+        // out short without anyone noticing.
+        var rs = ThreeRows();
+        rs.HasMore = true;
+        rs.TotalCount = 1000;
+
+        Assert.Equal(3, GridSelectionOps.WholeColumns(rs, 0, 0).Count);
+        Assert.Equal("3 of 1,000 rows", rs.RowCountText);
+    }
+
+    [Fact]
+    public void A_header_click_on_an_empty_result_selects_nothing()
+    {
+        var empty = Grid();
+        Assert.Empty(GridSelectionOps.WholeColumns(empty, 0, 0));
+        Assert.Empty(GridSelectionOps.WholeRows(empty, new object?[] { 1, "x", null, 2 }, new object?[] { 1, "x", null, 2 }));
     }
 
     // ---- clipboard ---------------------------------------------------------------------------

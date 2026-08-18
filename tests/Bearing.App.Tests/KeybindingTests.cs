@@ -104,6 +104,45 @@ public class KeybindingTests
     }
 
     [Fact]
+    public void Space_edits_the_active_cell_like_enter_and_f2()
+    {
+        // On a checkbox cell "edit" is the value cycle, and the keyboard is now the primary way to change a
+        // bool: clicking a grid cell only ever selects it.
+        Assert.Equal(CommandIds.GridBeginEdit, Defaults.Resolve(KeyScope.Grid, KeyModifiers.None, Key.Space, NoPhys));
+        Assert.Equal(CommandIds.GridBeginEdit, Defaults.Resolve(KeyScope.Grid, KeyModifiers.None, Key.F2, NoPhys));
+        Assert.Null(Defaults.Resolve(KeyScope.Global, KeyModifiers.None, Key.Space, NoPhys));
+    }
+
+    [Fact]
+    public void Ctrl_S_saves_the_grids_rows_but_only_inside_the_grid()
+    {
+        // grid.save is guarded on there being pending row edits, so a clean grid leaves Ctrl+S unhandled and
+        // it bubbles to file.save. The keymap half of that is: the two ids must not collide in one scope.
+        Assert.Equal(CommandIds.GridSave, Defaults.Resolve(KeyScope.Grid, KeyModifiers.Control, Key.S, NoPhys));
+        Assert.Equal(CommandIds.FileSave, Defaults.Resolve(KeyScope.Global, KeyModifiers.Control, Key.S, NoPhys));
+        Assert.Equal("Ctrl+S", Defaults.DisplayGesture(CommandIds.FileSave)); // what the File menu still shows
+    }
+
+    [Fact]
+    public void Discarding_row_edits_is_not_bound_to_a_plain_undo()
+    {
+        // It drops *every* pending change; Ctrl+Z would promise a one-step undo it doesn't do.
+        Assert.Equal(CommandIds.GridDiscard,
+            Defaults.Resolve(KeyScope.Grid, KeyModifiers.Control | KeyModifiers.Alt, Key.Z, NoPhys));
+        Assert.Null(Defaults.Resolve(KeyScope.Grid, KeyModifiers.Control, Key.Z, NoPhys));
+    }
+
+    [Fact]
+    public void The_grids_insert_family_stays_distinct()
+    {
+        Assert.Equal(CommandIds.GridCopy, Defaults.Resolve(KeyScope.Grid, KeyModifiers.Control, Key.Insert, NoPhys));
+        Assert.Equal(CommandIds.GridPaste, Defaults.Resolve(KeyScope.Grid, KeyModifiers.Shift, Key.Insert, NoPhys));
+        Assert.Equal(CommandIds.GridAddRow, Defaults.Resolve(KeyScope.Grid, KeyModifiers.Alt, Key.Insert, NoPhys));
+        Assert.Equal(CommandIds.GridPaste, Defaults.Resolve(KeyScope.Grid, KeyModifiers.Control, Key.V, NoPhys));
+        Assert.Null(Defaults.Resolve(KeyScope.Grid, KeyModifiers.None, Key.Insert, NoPhys)); // no bare-Insert row
+    }
+
+    [Fact]
     public void Ctrl_minus_zooms_out_and_shift_still_folds_all()
     {
         // Ctrl+- (OemMinus) used to be the comment alias; per-tab zoom owns it now (the convention every

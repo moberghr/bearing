@@ -14,6 +14,8 @@ namespace Bearing.App.Controls;
 /// <summary>
 /// The right-hand side of an editable result's meta row: the always-visible ＋ Add / Delete actions, plus a
 /// commit group (● N pending · Discard · Save) that reveals itself only while there are unsaved changes —
+/// each one also a keyboard command in the grid scope (grid.addRow / grid.save / grid.discard, #11), which is
+/// what the tooltips advertise —
 /// bound to <see cref="ResultSetViewModel.HasPendingChanges"/>, so it tracks edits made anywhere (a cell
 /// commit, a checkbox toggle, a keyboard delete) without this toolbar being told.
 /// <para>There is no Script/preview button: Save now shows the generated DML in its confirmation, so the
@@ -23,19 +25,17 @@ namespace Bearing.App.Controls;
 public static class ResultEditToolbar
 {
     /// <summary>Build the toolbar for <paramref name="result"/>. The callbacks are already scoped to it.</summary>
+    /// <param name="onAddRow">Adding a row also moves the cell cursor onto it, which is the host's business
+    /// (it owns the selection) — and it is the same action grid.addRow runs, so it lives in one place.</param>
     public static Control Build(
         ResultSetViewModel result,
         DataGrid grid,
+        Action onAddRow,
         Func<Task> onSave,
         Func<Task> onDiscard)
     {
-        var add = ResultChrome.SubtleButton("＋ Add", "Add row");
-        add.Click += (_, _) =>
-        {
-            var row = result.AddRow();
-            grid.ScrollIntoView(row, null);
-            ResultRowPainter.RefreshRowColors(grid, result);
-        };
+        var add = ResultChrome.SubtleButton("＋ Add", "Add row (Alt+Insert)");
+        add.Click += (_, _) => onAddRow();
 
         var delete = ResultChrome.SubtleButton("Delete", "Delete selected row");
         delete.Click += (_, _) =>
@@ -86,6 +86,7 @@ public static class ResultEditToolbar
             Foreground = Res("Error.Red"),
             Cursor = new Cursor(StandardCursorType.Hand),
         };
+        ToolTip.SetTip(discard, "Discard pending changes (Ctrl+Alt+Z)");
         discard.Click += async (_, _) => await onDiscard();
 
         var save = new Button
@@ -97,6 +98,7 @@ public static class ResultEditToolbar
             Foreground = Res("Bg.Editor"),
             Cursor = new Cursor(StandardCursorType.Hand),
         };
+        ToolTip.SetTip(save, "Save pending changes (Ctrl+S)");
         save.Click += async (_, _) => await onSave();
 
         var group = new StackPanel

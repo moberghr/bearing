@@ -119,6 +119,10 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// <summary>True when rows can be edited/added/deleted (a detectable single table + PK).</summary>
     public bool IsEditable => EditTarget is not null;
 
+    /// <summary>Whether a column may hold NULL, per the catalog. True when there is no edit target to ask —
+    /// a read-only result still has to *display* whatever NULLs it read.</summary>
+    public bool AllowsNull(int column) => EditTarget?.AllowsNull(column) ?? true;
+
     // Pending change tracking, keyed by row-array reference (rows are plain object?[] with no identity).
     private readonly Dictionary<object?[], object?[]> _originals = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<object?[]> _edited = new(ReferenceEqualityComparer.Instance);

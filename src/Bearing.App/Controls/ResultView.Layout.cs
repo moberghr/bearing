@@ -213,6 +213,7 @@ public sealed partial class ResultView
     private Control BuildEditToolbar(ResultSetViewModel result, DataGrid grid)
         => ResultEditToolbar.Build(
             result, grid,
+            onAddRow: () => AddRowTo(grid, result),
             onSave: async () => { if (SaveChanges is { } f) await f(result); },
             onDiscard: async () => { if (DiscardChanges is { } f) await f(result); });
 }
