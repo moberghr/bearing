@@ -48,7 +48,7 @@ public static class FromClauseExtractor
                 {
                     alias = toks[k + 1].Text; k += 2;
                 }
-                else if (k < toks.Count && toks[k].Type == PostgreSQLParser.Identifier)
+                else if (k < toks.Count && toks[k].Type is PostgreSQLParser.Identifier or PostgreSQLParser.QuotedIdentifier)
                 {
                     alias = toks[k].Text; k += 1; // a bare identifier after the name is the alias
                 }
@@ -59,6 +59,9 @@ public static class FromClauseExtractor
                     Schema = schemaName,
                     RawName = name,
                     Alias = Unquote(alias),
+                    // Quoting is kept here (and only here) so generated predicates can spell the
+                    // qualifier the way the query does — `"__MigrationHistory".id`, not `.id` folded.
+                    ReferenceText = alias ?? nameParts[^1],
                     Resolved = schema.ResolveTable(schemaName, name),
                 });
 
@@ -91,7 +94,5 @@ public static class FromClauseExtractor
         return result;
     }
 
-    private static string? Unquote(string? s)
-        => string.IsNullOrEmpty(s) ? s
-           : (s.Length >= 2 && s[0] == '"' && s[^1] == '"' ? s[1..^1] : s);
+    private static string? Unquote(string? s) => s is null ? null : PgIdentifier.Unquote(s);
 }

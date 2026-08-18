@@ -53,6 +53,9 @@ public static class CommandIds
     public const string EditorUnfoldAll = "editor.unfoldAll";
     public const string EditorDeleteToLineStart = "editor.deleteToLineStart";
     public const string EditorDeleteWordBack = "editor.deleteWordBack";
+    public const string EditorZoomIn = "editor.zoomIn";
+    public const string EditorZoomOut = "editor.zoomOut";
+    public const string EditorZoomReset = "editor.zoomReset";
 
     // Grid
     public const string GridCopy = "grid.copy";

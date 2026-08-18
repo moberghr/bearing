@@ -48,7 +48,10 @@ public static class KeymapDefaults
         yield return E(CommandIds.EditorOpenLineBelow, "Shift+Enter");
         yield return E(CommandIds.EditorOpenLineAbove, "Ctrl+Shift+Enter");
         yield return E(CommandIds.EditorToggleComment, "Ctrl+/");
-        yield return E(CommandIds.EditorToggleComment, "Ctrl+-");   // HR layout: that physical key reports OemMinus
+        // Ctrl+- used to be the comment alias (on an HR layout the '/' key reports OemMinus), but zoom
+        // owns that key now — the browser/editor convention everyone reaches for. Ctrl+K is the
+        // layout-independent replacement, since Ctrl+/ needs Shift+7 on a Croatian keyboard.
+        yield return E(CommandIds.EditorToggleComment, "Ctrl+K");
         yield return E(CommandIds.EditorSelectStatement, "Ctrl+Shift+A");
         yield return E(CommandIds.EditorFoldCurrent, "Ctrl+Shift+PhysBracketLeft");
         yield return E(CommandIds.EditorUnfoldCurrent, "Ctrl+Shift+PhysBracketRight");
@@ -58,6 +61,11 @@ public static class KeymapDefaults
         // handled, so AvaloniaEdit's own Ctrl+U (case conversion, inherited from WPF) never fires.
         yield return E(CommandIds.EditorDeleteToLineStart, "Ctrl+U");
         yield return E(CommandIds.EditorDeleteWordBack, "Ctrl+W");
+        // Per-tab font zoom. Editor scope, so Ctrl+0 resets the zoom while typing and still means
+        // "focus the editor" from the grid or the side panel (that binding is Global).
+        yield return E(CommandIds.EditorZoomIn, "Ctrl+=");
+        yield return E(CommandIds.EditorZoomOut, "Ctrl+-");
+        yield return E(CommandIds.EditorZoomReset, "Ctrl+0");
 
         // ---- Grid (resolved in the results grid's tunnel handler) ----
         yield return R(CommandIds.GridCopy, "Ctrl+C");

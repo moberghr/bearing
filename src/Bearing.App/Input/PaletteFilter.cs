@@ -6,7 +6,8 @@ namespace Bearing.App.Input;
 /// <summary>
 /// Ranks commands for the command palette. Pure and dependency-free so the ranking is unit-testable.
 /// Empty query → everything, grouped then alphabetical. Non-empty → fuzzy subsequence match on the
-/// title, best score first (contiguous runs and word-boundary hits score higher, earlier matches win).
+/// title (<see cref="FuzzyMatcher"/>), best match first: match quality decides the order, the score
+/// breaks ties inside a quality.
 /// </summary>
 public static class PaletteFilter
 {
@@ -15,10 +16,12 @@ public static class PaletteFilter
         if (string.IsNullOrWhiteSpace(query))
             return commands.OrderBy(c => c.Group).ThenBy(c => c.Title).ToList();
 
+        var trimmed = query.Trim();
         return commands
-            .Select(c => (Command: c, Score: Score(c.Title, query.Trim())))
-            .Where(x => x.Score.HasValue)
-            .OrderByDescending(x => x.Score!.Value)
+            .Select(c => (Command: c, Match: FuzzyMatcher.Match(c.Title, trimmed)))
+            .Where(x => x.Match.IsMatch)
+            .OrderByDescending(x => x.Match.Quality)
+            .ThenByDescending(x => x.Match.Score)
             .ThenBy(x => x.Command.Title)
             .Select(x => x.Command)
             .ToList();
@@ -27,23 +30,7 @@ public static class PaletteFilter
     /// <summary>Subsequence score, or null when <paramref name="query"/> isn't a subsequence of the title.</summary>
     public static int? Score(string title, string query)
     {
-        var t = title.ToLowerInvariant();
-        var q = query.ToLowerInvariant();
-
-        var from = 0;
-        var score = 0;
-        var firstIdx = -1;
-        var prevIdx = -2;
-        foreach (var c in q)
-        {
-            var idx = t.IndexOf(c, from);
-            if (idx < 0) return null;
-            if (firstIdx < 0) firstIdx = idx;
-            if (idx == prevIdx + 1) score += 5;                                   // contiguous run
-            if (idx == 0 || !char.IsLetterOrDigit(t[idx - 1])) score += 3;        // start of a word
-            prevIdx = idx;
-            from = idx + 1;
-        }
-        return score - firstIdx;                                                  // earlier first hit is better
+        var match = FuzzyMatcher.Match(title, query);
+        return match.IsMatch ? match.Score : null;
     }
 }

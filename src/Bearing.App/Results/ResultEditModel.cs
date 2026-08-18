@@ -188,5 +188,6 @@ internal static class ResultEditModel
         catch { return s; }
     }
 
-    private static string QuoteIdent(string ident) => "\"" + ident.Replace("\"", "\"\"") + "\"";
+    /// <summary>Generated write SQL always quotes — nobody types over this output, so the safe form wins.</summary>
+    private static string QuoteIdent(string ident) => Bearing.Sql.PgIdentifier.Quote(ident);
 }

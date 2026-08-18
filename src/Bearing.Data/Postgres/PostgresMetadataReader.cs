@@ -39,7 +39,7 @@ public sealed class PostgresMetadataReader : IMetadataReader
             if (!schemas.Contains(s, StringComparer.OrdinalIgnoreCase))
                 schemas.Add(s);
 
-        return new SchemaSnapshot(database, schemas, tables, columns, fks);
+        return new SchemaSnapshot(database, schemas, tables, columns, fks, searchPath);
     }
 
     private static async Task<List<string>> ReadSearchPathAsync(NpgsqlConnection conn, CancellationToken ct)

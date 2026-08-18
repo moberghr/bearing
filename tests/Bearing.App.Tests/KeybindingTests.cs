@@ -104,11 +104,29 @@ public class KeybindingTests
     }
 
     [Fact]
-    public void Comment_vs_fold_all_differ_only_by_shift()
+    public void Ctrl_minus_zooms_out_and_shift_still_folds_all()
     {
-        // Ctrl+- (OemMinus) toggles comment; Ctrl+Shift+- folds all.
-        Assert.Equal(CommandIds.EditorToggleComment, Defaults.Resolve(KeyScope.Editor, KeyModifiers.Control, Key.OemMinus, NoPhys));
+        // Ctrl+- (OemMinus) used to be the comment alias; per-tab zoom owns it now (the convention every
+        // browser and editor uses). Ctrl+Shift+- keeps folding all.
+        Assert.Equal(CommandIds.EditorZoomOut, Defaults.Resolve(KeyScope.Editor, KeyModifiers.Control, Key.OemMinus, NoPhys));
         Assert.Equal(CommandIds.EditorFoldAll, Defaults.Resolve(KeyScope.Editor, KeyModifiers.Control | KeyModifiers.Shift, Key.OemMinus, NoPhys));
+    }
+
+    [Fact]
+    public void Toggle_comment_kept_a_layout_independent_key()
+    {
+        // Ctrl+/ needs Shift+7 on a Croatian layout, which is why the alias existed at all — so the
+        // replacement has to be a plain letter, not another OEM key.
+        Assert.Equal(CommandIds.EditorToggleComment, Defaults.Resolve(KeyScope.Editor, KeyModifiers.Control, Key.OemQuestion, NoPhys));
+        Assert.Equal(CommandIds.EditorToggleComment, Defaults.Resolve(KeyScope.Editor, KeyModifiers.Control, Key.K, NoPhys));
+    }
+
+    [Fact]
+    public void Zoom_is_editor_scoped_so_ctrl_0_still_focuses_the_editor_elsewhere()
+    {
+        Assert.Equal(CommandIds.EditorZoomIn, Defaults.Resolve(KeyScope.Editor, KeyModifiers.Control, Key.OemPlus, NoPhys));
+        Assert.Equal(CommandIds.EditorZoomReset, Defaults.Resolve(KeyScope.Editor, KeyModifiers.Control, Key.D0, NoPhys));
+        Assert.Equal(CommandIds.FocusEditor, Defaults.Resolve(KeyScope.Global, KeyModifiers.Control, Key.D0, NoPhys));
     }
 
     [Fact]

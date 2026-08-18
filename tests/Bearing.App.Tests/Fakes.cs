@@ -328,6 +328,7 @@ internal sealed class FakeSnapshot : ISchemaSnapshot
     public FakeSnapshot(string database) => Database = database;
     public string Database { get; }
     public IReadOnlyList<string> Schemas => System.Array.Empty<string>();
+    public IReadOnlyList<string> SearchPath => System.Array.Empty<string>();
     public IReadOnlyList<TableInfo> Tables => System.Array.Empty<TableInfo>();
     public IReadOnlyList<ColumnInfo> ColumnsOf(long tableId) => System.Array.Empty<ColumnInfo>();
     public TableInfo? ResolveTable(string? schema, string name) => null;

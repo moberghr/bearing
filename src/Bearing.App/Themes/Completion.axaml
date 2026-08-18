@@ -1,0 +1,58 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ae="using:AvaloniaEdit.CodeCompletion">
+
+  <!-- ==============================================================================================
+       Completion popup, in Bearing's palette. Included after the AvaloniaEdit Fluent theme so these
+       win: without them the popup was the only surface in the app still wearing stock Fluent chrome
+       (light-ish list, blue selection) instead of the graphite/teal tokens.
+
+       The rows themselves are drawn by Completion/CompletionItemTemplate (icon + name + detail +
+       trailing predicate) — this file only dresses the container and the selection states. Styles are
+       application-scoped because the popup lives in its own PopupRoot, not under the window.
+       ============================================================================================== -->
+
+  <Style Selector="ae|CompletionList">
+    <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+    <Setter Property="MinWidth" Value="260"/>
+    <Setter Property="MaxHeight" Value="280"/>
+  </Style>
+
+  <!-- The list box is what actually paints: CompletionList's template is just
+       <CompletionListBox Name="PART_ListBox"/> with no border of its own, so a transparent list box left
+       the popup see-through onto the results grid behind it. The surface lives here. -->
+  <Style Selector="ae|CompletionListBox">
+    <Setter Property="Background" Value="{DynamicResource Bg.Chrome}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource Border.Control}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="CornerRadius" Value="7"/>
+    <Setter Property="Padding" Value="2"/>
+  </Style>
+
+  <Style Selector="ae|CompletionListBox > ListBoxItem">
+    <Setter Property="Padding" Value="7,1"/>
+    <Setter Property="MinHeight" Value="22"/>
+    <Setter Property="CornerRadius" Value="5"/>
+    <Setter Property="Background" Value="Transparent"/>
+  </Style>
+
+  <Style Selector="ae|CompletionListBox > ListBoxItem:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
+  </Style>
+
+  <Style Selector="ae|CompletionListBox > ListBoxItem:selected /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource Bg.Select}"/>
+  </Style>
+
+  <Style Selector="ae|CompletionListBox > ListBoxItem:selected:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource Bg.Select}"/>
+  </Style>
+
+  <!-- Description tooltip beside the list (ICompletionData.Description). -->
+  <Style Selector="ae|CompletionTipContentControl">
+    <Setter Property="Background" Value="{DynamicResource Bg.Window}"/>
+    <Setter Property="Foreground" Value="{DynamicResource Text.Code}"/>
+    <Setter Property="MaxWidth" Value="420"/>
+  </Style>
+
+</Styles>

@@ -38,6 +38,13 @@ public sealed partial class EditorTabViewModel : ObservableObject
     [ObservableProperty] private string _text = "";
     [ObservableProperty] private int _caretOffset;
 
+    /// <summary>
+    /// Transient font zoom for this tab, in points over the configured base size (Settings ▸ Editor ▸
+    /// font size) — Ctrl+= / Ctrl+- move it, Ctrl+0 clears it. Deliberately not in <c>session.json</c>:
+    /// reopening a tab, or opening a new one, starts from the base size again.
+    /// </summary>
+    [ObservableProperty] private int _fontZoomSteps;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsDirty))]
     [NotifyPropertyChangedFor(nameof(HeaderTooltip))]

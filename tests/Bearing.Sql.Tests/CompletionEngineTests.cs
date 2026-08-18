@@ -58,6 +58,46 @@ public class CompletionEngineTests
     }
 
     [Fact]
+    public void Columns_of_an_aliased_source_insert_qualified()
+    {
+        // In a select list / ORDER BY / WHERE, a bare `id` is ambiguous as soon as a second source joins,
+        // and the alias is how the rest of the statement names the source.
+        var result = Engine.Complete("select id from users u", caretOffset: 9, Schema);
+        var id = result.Suggestions.First(s => s.Kind == SuggestionKind.Column && s.DisplayText == "id");
+        Assert.Equal("u.id", id.ReplacementText);
+        Assert.Equal("id", id.DisplayText);       // the label and the filter stay bare
+        Assert.Equal("id", id.FilterText);
+    }
+
+    [Fact]
+    public void Order_by_offers_alias_qualified_columns()
+    {
+        // The reported case: ORDER BY offered the right names but inserted them bare.
+        var sql = "select * from users u order by ";
+        var result = Engine.Complete(sql, sql.Length, Schema);
+        var id = result.Suggestions.FirstOrDefault(s => s.Kind == SuggestionKind.Column && s.DisplayText == "id");
+        Assert.NotNull(id);
+        Assert.Equal("u.id", id!.ReplacementText);
+    }
+
+    [Fact]
+    public void Columns_of_an_unaliased_source_stay_bare()
+    {
+        var result = Engine.Complete("select id from users", caretOffset: 9, Schema);
+        var id = result.Suggestions.First(s => s.Kind == SuggestionKind.Column && s.DisplayText == "id");
+        Assert.Equal("id", id.ReplacementText);
+    }
+
+    [Fact]
+    public void Columns_after_an_alias_dot_stay_bare()
+    {
+        // The qualifier is already typed there — inserting "u.id" would yield "u.u.id".
+        var result = Engine.Complete("select u. from users u", caretOffset: 9, Schema);
+        Assert.All(result.Suggestions.Where(s => s.Kind == SuggestionKind.Column),
+            s => Assert.DoesNotContain(".", s.ReplacementText));
+    }
+
+    [Fact]
     public void Inserting_in_whitespace_yields_empty_replacement_span()
     {
         var result = Engine.Complete("select * from ", caretOffset: 14, Schema);
