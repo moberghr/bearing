@@ -84,17 +84,18 @@ public sealed partial class ResultView
     }
 
     /// <summary>Hook the grid up to the selection controller. Cells drive their own selection (per-cell
-    /// PointerPressed in <see cref="ResultCellFactory"/>); the grid extends a drag and clears the selection
-    /// when a click missed a cell. <c>handledEventsToo: true</c> is required because the DataGrid marks these
-    /// pointer events handled in the tunnel phase.</summary>
+    /// PointerPressed in <see cref="ResultCellFactory"/>); the grid extends a drag, selects whole rows and
+    /// columns from the headers, and clears the selection when a click missed all of that.
+    /// <c>handledEventsToo: true</c> is required because the DataGrid marks these pointer events handled in
+    /// the tunnel phase.</summary>
     private void WireSelection(DataGrid grid, ResultSetViewModel result)
     {
         grid.AddHandler(PointerMovedEvent, (_, e) => _selection.DragTo(grid, result, e),
             RoutingStrategies.Bubble, handledEventsToo: true);
         grid.AddHandler(PointerReleasedEvent, (_, e) => { if (_selection.Model.Dragging) _selection.EndDrag(e.Pointer); },
             RoutingStrategies.Bubble, handledEventsToo: true);
-        // Clear on click-away: plain handler (skipped when a cell already handled the press).
-        grid.PointerPressed += (_, _) => { if (_selection.Model.Cells.Count > 0) _selection.ClearAndNotify(); };
+        grid.AddHandler(PointerPressedEvent, (_, e) => OnGridPressed(grid, result, e),
+            RoutingStrategies.Bubble, handledEventsToo: true);
 
         // Keyboard-drive the grid. Handled in the tunnel phase so we pre-empt the DataGrid's own
         // arrow-nav / Ctrl+C before it acts (setting Handled skips its class-level OnKeyDown).
@@ -105,6 +106,30 @@ public sealed partial class ResultView
         // When the grid takes focus (e.g. via F6) with no active cell yet, seed the top-left cell so the
         // focus is visible instead of the caller having to press an arrow first.
         grid.GotFocus += (_, _) => { if (_selection.NeedsSeed(result)) _selection.SeedActive(grid, result); };
+    }
+
+    /// <summary>A press the cells didn't take: the row-number gutter selects the whole row and a column
+    /// header its whole column (#6); anything else — the scrollbar, the corner, empty space below the last
+    /// row — clears the selection, which is the click-away this handler replaced.
+    /// <para>
+    /// A column selection covers the <i>loaded</i> rows, so on a part-fetched result it says so rather than
+    /// letting a short Copy as ▸ IN list look complete.
+    /// </para></summary>
+    private void OnGridPressed(DataGrid grid, ResultSetViewModel result, PointerPressedEventArgs e)
+    {
+        switch (_selection.TrySelectFromHeader(grid, result, e))
+        {
+            case GridPressTarget.Cell:
+            case GridPressTarget.RowHeader:
+                return;
+            case GridPressTarget.ColumnHeader:
+                if (result is { IsPageable: true, HasMore: true })
+                    Status?.Invoke($"Column selected over the loaded rows only ({result.RowCountText}) — ⤓ all fetches the rest.");
+                return;
+            default:
+                if (_selection.Model.Cells.Count > 0) _selection.ClearAndNotify();
+                return;
+        }
     }
 
     /// <summary>Capture a committed cell edit back onto the result set and tint the row immediately.</summary>

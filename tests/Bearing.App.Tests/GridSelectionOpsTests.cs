@@ -169,6 +169,71 @@ public class GridSelectionOpsTests
         Assert.Contains(2, cells.Select(c => c.Col));
     }
 
+    // ---- whole rows / columns (header clicks, #6) ----------------------------------------------
+
+    [Fact]
+    public void A_row_header_click_takes_the_whole_width_of_the_row()
+    {
+        var rs = ThreeRows();
+        var cells = GridSelectionOps.WholeRows(rs, rs.Rows[1], rs.Rows[1]);
+
+        Assert.Equal(4, cells.Count); // every column, checkbox included
+        Assert.All(cells, c => Assert.Same(rs.Rows[1], c.Row));
+        Assert.Equal([0, 1, 2, 3], cells.Select(c => c.Col).OrderBy(c => c).ToArray());
+    }
+
+    [Fact]
+    public void Shift_clicking_a_second_row_header_takes_the_contiguous_rows()
+    {
+        var rs = ThreeRows();
+        var cells = GridSelectionOps.WholeRows(rs, rs.Rows[0], rs.Rows[2]);
+
+        Assert.Equal(12, cells.Count); // 3 rows × 4 columns
+        Assert.Equal(3, cells.Select(c => c.Row).Distinct().Count());
+    }
+
+    [Fact]
+    public void A_column_header_click_takes_every_loaded_row_of_that_column()
+    {
+        var rs = ThreeRows();
+        var cells = GridSelectionOps.WholeColumns(rs, 1, 1);
+
+        Assert.Equal(3, cells.Count);
+        Assert.All(cells, c => Assert.Equal(1, c.Col));
+    }
+
+    [Fact]
+    public void Shift_clicking_a_second_column_header_takes_the_contiguous_columns()
+    {
+        var rs = ThreeRows();
+        var cells = GridSelectionOps.WholeColumns(rs, 1, 3);
+
+        Assert.Equal(9, cells.Count); // 3 rows × columns 1..3
+        Assert.Equal([1, 2, 3], cells.Select(c => c.Col).Distinct().OrderBy(c => c).ToArray());
+    }
+
+    [Fact]
+    public void A_column_selection_stops_at_the_loaded_rows_of_a_paged_result()
+    {
+        // The honest half of the answer to "what does a column mean on a paged result": it covers what is
+        // loaded, and the grid says so. Silently spanning 3 of 1,000 rows is how a Copy as ▸ IN list comes
+        // out short without anyone noticing.
+        var rs = ThreeRows();
+        rs.HasMore = true;
+        rs.TotalCount = 1000;
+
+        Assert.Equal(3, GridSelectionOps.WholeColumns(rs, 0, 0).Count);
+        Assert.Equal("3 of 1,000 rows", rs.RowCountText);
+    }
+
+    [Fact]
+    public void A_header_click_on_an_empty_result_selects_nothing()
+    {
+        var empty = Grid();
+        Assert.Empty(GridSelectionOps.WholeColumns(empty, 0, 0));
+        Assert.Empty(GridSelectionOps.WholeRows(empty, new object?[] { 1, "x", null, 2 }, new object?[] { 1, "x", null, 2 }));
+    }
+
     // ---- clipboard ---------------------------------------------------------------------------
 
     [Fact]

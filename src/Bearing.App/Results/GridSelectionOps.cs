@@ -83,6 +83,27 @@ public static class GridSelectionOps
         return cells;
     }
 
+    /// <summary>Every cell of the rows spanning <paramref name="from"/>..<paramref name="to"/> inclusive — a
+    /// row-header click (both ends the same row) or a Shift-extended range of them, across the full width of
+    /// the result.</summary>
+    public static IReadOnlyList<(object?[] Row, int Col)> WholeRows(
+        ResultSetViewModel result, object?[] from, object?[] to)
+        => Rectangle(result, (from, FirstColumn(result)), (to, LastColumn(result)));
+
+    /// <summary>Every cell of the columns spanning <paramref name="from"/>..<paramref name="to"/> inclusive —
+    /// a column-header click or a Shift-extended range of them.
+    /// <para>
+    /// Over the <b>loaded</b> rows only. A paged result's unfetched rows aren't in <c>Rows</c> and can't be
+    /// selected, so a column selection is honest about being partial rather than pretending to cover the
+    /// result (the caller says so; ⤓ all fetches the rest). This is what makes a
+    /// Copy as ▸ SQL IN list from a column trustworthy or knowingly incomplete, never silently short.
+    /// </para></summary>
+    public static IReadOnlyList<(object?[] Row, int Col)> WholeColumns(
+        ResultSetViewModel result, int from, int to)
+        => result.Rows.Count == 0
+            ? Array.Empty<(object?[], int)>()
+            : Rectangle(result, (result.Rows[0], from), (result.Rows[^1], to));
+
     /// <summary>Every cell of the result (Ctrl+A).</summary>
     public static IReadOnlyList<(object?[] Row, int Col)> AllCells(ResultSetViewModel result)
     {

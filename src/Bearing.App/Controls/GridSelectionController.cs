@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.VisualTree;
 using Bearing.App.Results;
@@ -11,6 +12,25 @@ using Avalonia.Input.Platform;
 using Avalonia;
 
 namespace Bearing.App.Controls;
+
+/// <summary>What a press inside a results grid landed on, as far as selection is concerned. Returned by
+/// <see cref="GridSelectionController.TrySelectFromHeader"/> so the view can react to a column selection
+/// being partial without re-doing the hit test.</summary>
+public enum GridPressTarget
+{
+    /// <summary>Grid chrome with no meaning for the selection — the scrollbar, the corner, empty space
+    /// below the last row. The caller clears the selection on this one.</summary>
+    None,
+
+    /// <summary>A cell, which selects itself (see <c>ResultCellFactory.MakeSelectable</c>).</summary>
+    Cell,
+
+    /// <summary>The row-number gutter: the whole row is now selected.</summary>
+    RowHeader,
+
+    /// <summary>A column header: that column is now selected, over the loaded rows.</summary>
+    ColumnHeader,
+}
 
 /// <summary>
 /// Drives spreadsheet-style cell selection in the results grids: pointer clicks and drags, the keyboard cell
@@ -153,6 +173,93 @@ public sealed class GridSelectionController
         Model.Cells.Clear();
         foreach (var cell in cells) Model.Cells.Add(cell);
         Notify();
+    }
+
+    /// <summary>Row/column header click → select the whole row or column (#6). Shift extends the band from
+    /// the current anchor (contiguous rows / columns), Ctrl adds it to the selection; a right-press selects
+    /// the band too, unless it is already selected, so the context menu always acts on what is under the
+    /// pointer. Returns what the press landed on, so the caller can clear on a click-away and report that a
+    /// column selection covers the loaded rows only.
+    /// <para>
+    /// Registered <c>handledEventsToo</c> at grid level, so it also sees the presses the DataGrid and its
+    /// headers already marked handled — which is why it hit-tests for a cell instead of reading
+    /// <c>e.Handled</c> to decide whether a cell owns the press.
+    /// </para></summary>
+    public GridPressTarget TrySelectFromHeader(DataGrid grid, ResultSetViewModel result, PointerPressedEventArgs e)
+    {
+        if (e.Source is not Visual source) return GridPressTarget.None;
+
+        DataGridRowHeader? rowHeader = null;
+        DataGridColumnHeader? columnHeader = null;
+        foreach (var visual in source.GetSelfAndVisualAncestors())
+        {
+            if (visual is Border { Tag: ValueTuple<object?[], int> }) return GridPressTarget.Cell;
+            if (visual is DataGridRowHeader rh) { rowHeader = rh; break; }
+            if (visual is DataGridColumnHeader ch) { columnHeader = ch; break; }
+        }
+
+        var point = e.GetCurrentPoint(grid).Properties;
+        if (!point.IsLeftButtonPressed && !point.IsRightButtonPressed) return GridPressTarget.None;
+        var extend = e.KeyModifiers.HasFlag(KeyModifiers.Shift) && CanExtendFrom(result);
+        var add = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);
+
+        if (rowHeader is not null)
+        {
+            if (RowOf(rowHeader) is not { } row) return GridPressTarget.None;
+            var from = extend ? Model.Anchor!.Value.Row : row;
+            var origin = (row, extend ? Model.Anchor!.Value.Col : GridSelectionOps.FirstColumn(result));
+            return SelectBand(grid, result, GridSelectionOps.WholeRows(result, from, row), origin,
+                keepAnchor: extend, add, point.IsRightButtonPressed)
+                ? GridPressTarget.RowHeader
+                : GridPressTarget.None;
+        }
+
+        if (columnHeader is not null)
+        {
+            if (ColumnIndexOf(grid, columnHeader) is not { } col || result.Rows.Count == 0) return GridPressTarget.None;
+            var from = extend ? Model.Anchor!.Value.Col : col;
+            var origin = (extend ? Model.Anchor!.Value.Row : result.Rows[0], col);
+            return SelectBand(grid, result, GridSelectionOps.WholeColumns(result, from, col), origin,
+                keepAnchor: extend, add, point.IsRightButtonPressed)
+                ? GridPressTarget.ColumnHeader
+                : GridPressTarget.None;
+        }
+
+        return GridPressTarget.None;
+    }
+
+    /// <summary>Select a whole-row / whole-column band. Returns false when there was nothing to select, or
+    /// when a right-press landed inside a band that is already selected (which must not shrink it).</summary>
+    private bool SelectBand(
+        DataGrid grid, ResultSetViewModel result, IReadOnlyList<(object?[] Row, int Col)> cells,
+        (object?[] Row, int Col) origin, bool keepAnchor, bool add, bool rightButton)
+    {
+        if (cells.Count == 0) return false;
+        var alreadySelected = ReferenceEquals(Model.Result, result) && cells.All(Model.Cells.Contains);
+        if (rightButton && alreadySelected) return true; // leave the block alone, just let the menu open
+
+        grid.Focus(); // route the following keystrokes to this grid, as a cell click does
+        if (!add || !ReferenceEquals(Model.Result, result)) Model.Cells.Clear();
+        Model.Result = result;
+        foreach (var cell in cells) Model.Cells.Add(cell);
+        Model.Active = origin;
+        if (!keepAnchor) Model.Anchor = origin;
+        Notify();
+        return true;
+    }
+
+    /// <summary>The row array behind a row header (its owning <see cref="DataGridRow"/>'s item).</summary>
+    private static object?[]? RowOf(DataGridRowHeader header)
+        => header.GetSelfAndVisualAncestors().OfType<DataGridRow>().FirstOrDefault()?.DataContext as object?[];
+
+    /// <summary>A column header's result-column index. Headers are the Control instances the cell factory
+    /// built per column, so they match by reference — and the Columns collection keeps its build order even
+    /// after the user drags columns around (reordering moves DisplayIndex, not the collection).</summary>
+    private static int? ColumnIndexOf(DataGrid grid, DataGridColumnHeader header)
+    {
+        for (var i = 0; i < grid.Columns.Count; i++)
+            if (ReferenceEquals(grid.Columns[i].Header, header.Content)) return i;
+        return null; // the top-left corner header owns no column
     }
 
     // ---- keyboard ---------------------------------------------------------------------------
