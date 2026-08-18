@@ -186,11 +186,16 @@ public sealed class ResultCellFactory
     /// </para></summary>
     private IDataTemplate BoolCell(ResultSetViewModel result, int index, DataGrid grid)
         => new FuncDataTemplate<object?[]>((row, _) =>
-            MakeSelectable(() => BoolContent(result, index, row), result, row, index, grid, armDrag: false));
+        {
+            // The one cell kind that refreshes by patching itself rather than being rebuilt: see syncValue.
+            var cb = BoolContent(result, index, row);
+            return MakeSelectable(() => cb, result, row, index, grid, armDrag: false,
+                syncValue: () => cb.IsChecked = BoolCellValue.Read(row, index));
+        });
 
-    /// <summary>The checkbox itself. Value-dependent like the other cell contents, which is how a paste or the
-    /// keyboard toggle shows up — <c>IsChecked</c> is seeded here and nothing rebinds it.</summary>
-    private static Control BoolContent(ResultSetViewModel result, int index, object?[]? row)
+    /// <summary>The checkbox itself. <c>IsChecked</c> is seeded here and nothing rebinds it, so a write from
+    /// elsewhere (a paste, the keyboard toggle) is picked up by the syncValue hook above.</summary>
+    private static CheckBox BoolContent(ResultSetViewModel result, int index, object?[]? row)
     {
         var cb = new CheckBox
         {
@@ -246,9 +251,13 @@ public sealed class ResultCellFactory
     /// otherwise leave the old text on screen while the pending UPDATE carried the new one.</param>
     /// <param name="armDrag">False for a cell whose content needs the pointer capture itself (a checkbox):
     /// the click still selects, it just doesn't start a drag-rectangle.</param>
+    /// <param name="syncValue">When given, the cell patches its existing visual on a value change instead of
+    /// being rebuilt from <paramref name="content"/>. Required for content that is mid-interaction while the
+    /// change lands: a CheckBox takes the pointer capture on press and toggles on release, so replacing it in
+    /// between (which the press's own selection notify would do, one click behind) silently eats the click.</param>
     private Control MakeSelectable(
         Func<Control> content, ResultSetViewModel result, object?[]? row, int index, DataGrid grid,
-        bool armDrag = true)
+        bool armDrag = true, Action? syncValue = null)
     {
         var border = new Border
         {
@@ -273,7 +282,8 @@ public sealed class ResultCellFactory
             if (!Equals(ValueAt(row, index), rendered))
             {
                 rendered = ValueAt(row, index);
-                border.Child = content();
+                if (syncValue is not null) syncValue();
+                else border.Child = content();
             }
             ApplySelectionRing(border, result, row, index);
         }
