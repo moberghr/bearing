@@ -7,7 +7,7 @@ using Bearing.App.ViewModels;
 namespace Bearing.App.Controls;
 
 /// <summary>
-/// The results grid's right-click menu: Copy, Copy as ▸, Export ▸, and Fetch all rows. Its own class rather
+/// The results grid's right-click menu: Copy, Copy as ▸, Paste, Export ▸, and Fetch all rows. Its own class rather
 /// than another slab of <see cref="ResultView"/> (§9.1) — the menu owns which actions it offers and when
 /// they're applicable, and gets the actions themselves as callbacks.
 /// <para>
@@ -17,6 +17,9 @@ namespace Bearing.App.Controls;
 /// </summary>
 internal static class ResultContextMenu
 {
+    /// <param name="paste">Null for a read-only result (then the item is hidden — a locked grid should not
+    /// advertise a write it will refuse).</param>
+    /// <param name="canPaste">Whether a paste has a cursor to anchor on right now.</param>
     /// <param name="fetchAll">Null when the host hasn't wired paging (then the item is hidden).</param>
     /// <param name="export">Null when the host hasn't wired export (then the submenu is hidden).</param>
     public static MenuFlyout Build(
@@ -24,6 +27,8 @@ internal static class ResultContextMenu
         Func<bool> hasSelection,
         Action copy,
         Action<CopyFormat> copyAs,
+        Func<Task>? paste,
+        Func<bool> canPaste,
         Func<Task>? fetchAll,
         Func<ExportFormat, Task>? export)
     {
@@ -43,6 +48,14 @@ internal static class ResultContextMenu
         var menu = new MenuFlyout();
         menu.Items.Add(copyItem);
         menu.Items.Add(copyAsItem);
+
+        MenuItem? pasteItem = null;
+        if (paste is not null)
+        {
+            pasteItem = new MenuItem { Header = "Paste" };
+            pasteItem.Click += async (_, _) => await paste();
+            menu.Items.Add(pasteItem);
+        }
 
         MenuItem? fetchItem = null;
         if (fetchAll is not null)
@@ -73,6 +86,8 @@ internal static class ResultContextMenu
             var selected = hasSelection();
             copyItem.IsEnabled = selected;
             copyAsItem.IsEnabled = selected;
+            // Paste writes at the cursor, not over the selection, so it has its own applicability test.
+            if (pasteItem is not null) pasteItem.IsEnabled = canPaste();
             if (fetchItem is not null) fetchItem.IsEnabled = result.IsPageable && result.HasMore;
         };
         return menu;

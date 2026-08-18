@@ -92,6 +92,9 @@ public sealed partial class ResultView : UserControl
     /// <summary>Invoked to discard a result set's pending edits (the [Discard] button).</summary>
     public Func<ResultSetViewModel, Task>? DiscardChanges { get; set; }
 
+    /// <summary>Report a one-line outcome to the shell's status bar (what a paste wrote, what it dropped).</summary>
+    public Action<string>? Status { get; set; }
+
     /// <summary>The shared keybinding pipeline (set once by the window), used to resolve a keystroke that
     /// lands in a grid. Spatial cell navigation stays local (see <see cref="OnGridKey"/>).
     /// <para>
@@ -142,6 +145,11 @@ public sealed partial class ResultView : UserControl
                 () => { if (GridTarget() is { } t) _selection.CopyAs(t.Result, captured); },
                 canRun: () => GridTarget() is { } t && _selection.HasSelection(t.Result)));
         }
+        // Paste is the one grid command with an await in it (the clipboard read), so it captures its target
+        // before yielding — _keyStrokeTarget is cleared the moment TryHandle returns (see OnGridKey).
+        r.Register(new KeyCommand(CommandIds.GridPaste, "Paste", KeyScope.Grid, "Grid",
+            async () => { if (GridTarget() is { } t) await PasteInto(t.Grid, t.Result); },
+            canRun: () => GridTarget() is { } t && _selection.CanPasteInto(t.Result)));
         r.Register(new KeyCommand(CommandIds.GridFetchAll, "Fetch all rows", KeyScope.Grid, "Grid",
             async () => { if (GridTarget() is { } t && FetchAll is { } f) await f(t.Result); },
             canRun: () => GridTarget()?.Result is { IsPageable: true, HasMore: true }));
@@ -168,6 +176,13 @@ public sealed partial class ResultView : UserControl
             FollowActiveFk, canRun: _selection.ActiveCellIsFk));
         r.Register(KeyCommand.Sync(CommandIds.GridBack, "Back (foreign-key navigation)", KeyScope.Grid, "Grid",
             () => GoBack?.Invoke(), canRun: () => CanGoBack));
+    }
+
+    /// <summary>Paste the clipboard into a grid and report the outcome — including how many cells were
+    /// dropped, so a paste clipped by the loaded row count can't pass for a complete one.</summary>
+    private async Task PasteInto(DataGrid grid, ResultSetViewModel result)
+    {
+        if (await _selection.PasteAsync(grid, result) is { } report) Status?.Invoke(report);
     }
 
     /// <summary>grid.followFk: drill into the row the active FK cell points to (same as clicking its ↗).</summary>

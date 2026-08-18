@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.VisualTree;
@@ -286,6 +287,48 @@ public sealed class GridSelectionController
             return;
         }
         TopLevel.GetTopLevel(_owner)?.Clipboard?.SetTextAsync(text);
+    }
+
+    /// <summary>Whether a paste has an editable target and somewhere to land (guards grid.paste and its
+    /// menu item). A paste anchors on the active cell, so a grid with focus but no cursor is not a target.</summary>
+    public bool CanPasteInto(ResultSetViewModel result)
+        => result.IsEditable && ReferenceEquals(Model.Result, result) && Model.Active is not null;
+
+    /// <summary>grid.paste (Ctrl+V / Shift+Insert): write the clipboard's cells into the grid — a single value
+    /// fills the selection, a TSV block anchors at the cursor and fills right/down (see <see cref="GridPaste"/>
+    /// for the shape rules). Returns what to tell the user, or null when nothing was attempted.
+    /// <para>
+    /// Every write goes through <see cref="ResultSetViewModel.SetCell"/>, the same call the in-cell editor
+    /// makes, so paste inherits the (null) token, empty-means-NULL, and save-time coercion rather than growing
+    /// a second value-parsing path. It only stages pending edits — the save confirmation is still the gate on
+    /// anything reaching the server.
+    /// </para>
+    /// <para>
+    /// The clipboard read is the only await here, and it is why the guard runs twice: the user can click into
+    /// another cell, or a page load can replace the rows, while the platform is still answering.
+    /// </para></summary>
+    public async Task<string?> PasteAsync(DataGrid grid, ResultSetViewModel result)
+    {
+        if (!CanPasteInto(result)) return null;
+        if (TopLevel.GetTopLevel(_owner)?.Clipboard is not { } clipboard) return null;
+
+        var text = await clipboard.TryGetTextAsync();
+        if (!CanPasteInto(result) || Model.Active is not { } active) return null;
+
+        var block = GridPaste.Parse(text);
+        if (block.Count == 0) return null;
+        var writes = GridPaste.Plan(result, block, active, Model.Cells);
+        var clipped = GridPaste.Clipped(result, block, active, Model.Cells);
+        if (writes.Count == 0) return "Nothing pasted — the clipboard's block starts past the last row.";
+
+        foreach (var (row, col, value) in writes) result.SetCell(row, col, value);
+        ResultRowPainter.RefreshRowColors(grid, result);
+        Notify(); // also re-reads the checkbox cells a paste wrote through
+
+        var pasted = $"Pasted {writes.Count} cell{(writes.Count == 1 ? "" : "s")}.";
+        return clipped == 0
+            ? pasted
+            : $"{pasted} {clipped} dropped — the block runs past the loaded rows/columns.";
     }
 
     /// <summary>Whether a copy action has anything to act on (guards the copy commands + menu items).</summary>

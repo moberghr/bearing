@@ -56,6 +56,7 @@ public static class CommandIds
 
     // Grid
     public const string GridCopy = "grid.copy";
+    public const string GridPaste = "grid.paste";
     public const string GridFetchAll = "grid.fetchAll";
 
     /// <summary>Copy the selection in one of the alternative formats: <c>grid.copyAs.csv</c>,

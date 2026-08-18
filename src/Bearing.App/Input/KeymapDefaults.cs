@@ -62,6 +62,8 @@ public static class KeymapDefaults
         // ---- Grid (resolved in the results grid's tunnel handler) ----
         yield return R(CommandIds.GridCopy, "Ctrl+C");
         yield return R(CommandIds.GridCopy, "Ctrl+Insert");
+        yield return R(CommandIds.GridPaste, "Ctrl+V");      // mirrors the copy pair
+        yield return R(CommandIds.GridPaste, "Shift+Insert");
         yield return R(CommandIds.GridSelectAll, "Ctrl+A");
         yield return R(CommandIds.GridDelete, "Delete");
         yield return R(CommandIds.GridBeginEdit, "Enter");

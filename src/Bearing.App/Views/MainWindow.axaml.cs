@@ -146,6 +146,7 @@ public partial class MainWindow : Window
             Vm?.Workspace.SelectedTab?.GoBack();
             RebuildResults(Vm?.Workspace.SelectedTab);
         };
+        ResultsView.Status = text => { if (Vm is not null) Vm.StatusText = text; };
         ResultsView.SaveChanges = async rs =>
         {
             if (Vm is null) return;

@@ -73,6 +73,8 @@ public sealed partial class ResultView
             hasSelection: () => _selection.HasSelection(result),
             copy: () => _selection.Copy(result),
             copyAs: format => _selection.CopyAs(result, format),
+            paste: result.IsEditable ? () => PasteInto(grid, result) : null,
+            canPaste: () => _selection.CanPasteInto(result),
             fetchAll: result.IsPageable ? () => FetchAll?.Invoke(result) ?? Task.CompletedTask : null,
             export: format => Export?.Invoke(result, format) ?? Task.CompletedTask);
 
