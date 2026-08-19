@@ -13,8 +13,11 @@
   <!-- Schema: a table grid -->
   <StreamGeometry x:Key="Icon.Schema">M4,5 h16 v14 h-16 z M4,10 h16 M4,14.5 h16 M11,5 v14</StreamGeometry>
 
-  <!-- Scripts: a document with a folded corner -->
-  <StreamGeometry x:Key="Icon.Scripts">M7,3 h8 l4,4 v14 h-12 z M15,3 v4 h4 M9,12 h6 M9,15 h6 M9,18 h4</StreamGeometry>
+  <!-- Scripts: a document with a folded corner. Ink spans x 6..18 / y 3..21 — centred on the viewport's
+       (12,12), which matters now that the rail renders it on this grid instead of fitting it to its own ink
+       bounds (#5): the same drawing shifted one unit right, as it used to be, reads as off-centre in the tile
+       next to the clock and the cylinder, both of which are symmetric about (12,12). -->
+  <StreamGeometry x:Key="Icon.Scripts">M6,3 h8 l4,4 v14 h-12 z M14,3 v4 h4 M8,12 h6 M8,15 h6 M8,18 h4</StreamGeometry>
 
   <!-- Folder -->
   <StreamGeometry x:Key="Icon.Folder">M4,7 h6 l2,2 h8 v9 h-16 z</StreamGeometry>

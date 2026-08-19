@@ -27,15 +27,16 @@
       <Setter Property="FontSize" Value="12.5"/>
     </Style>
 
-    <!-- Rail icon paths inherit the tile's Foreground so they recolor on hover/active. -->
+    <!-- Rail icon paths inherit the tile's Foreground so they recolor on hover/active. Sizing is NOT set
+         here: Stretch="Uniform" + a fixed 20×20 box fit each glyph to its own ink bounds rather than to the
+         24×24 grid the icons were drawn on, which is what left them optically unaligned (#5). The nav glyphs
+         are LineIcons now, and they own their own geometry space (weight included); StrokeThickness below is
+         for the Run/Stop glyphs, which are filled shapes sized in device pixels at their call site. -->
     <Style Selector="RadioButton.rail Path, Button.rail Path">
       <Setter Property="Stroke" Value="{Binding $parent[TemplatedControl].Foreground}"/>
       <Setter Property="StrokeThickness" Value="1.6"/>
       <Setter Property="StrokeLineCap" Value="Round"/>
       <Setter Property="StrokeJoin" Value="Round"/>
-      <Setter Property="Stretch" Value="Uniform"/>
-      <Setter Property="Width" Value="20"/>
-      <Setter Property="Height" Value="20"/>
     </Style>
 
     <!-- Connection toggle: stroked chain glyph (scaled + centered by a Viewbox); stroke recolors with the
@@ -275,7 +276,7 @@
                   <Binding Path="SidePaneOpen"/>
                 </MultiBinding>
               </RadioButton.IsChecked>
-              <Path Data="{StaticResource Icon.Database}"/>
+              <controls:LineIcon Data="{StaticResource Icon.Database}"/>
             </RadioButton>
             <RadioButton Classes="rail" Theme="{StaticResource RailTile}" GroupName="rail" Tag="Scripts"
                          ToolTip.Tip="Scripts" Click="OnRailTileClick">
@@ -285,7 +286,7 @@
                   <Binding Path="SidePaneOpen"/>
                 </MultiBinding>
               </RadioButton.IsChecked>
-              <Path Data="{StaticResource Icon.Scripts}"/>
+              <controls:LineIcon Data="{StaticResource Icon.Scripts}"/>
             </RadioButton>
             <RadioButton Classes="rail" Theme="{StaticResource RailTile}" GroupName="rail" Tag="History"
                          ToolTip.Tip="History" Click="OnRailTileClick">
@@ -295,12 +296,12 @@
                   <Binding Path="SidePaneOpen"/>
                 </MultiBinding>
               </RadioButton.IsChecked>
-              <Path Data="{StaticResource Icon.History}"/>
+              <controls:LineIcon Data="{StaticResource Icon.History}"/>
             </RadioButton>
           </StackPanel>
           <Button Grid.Row="2" Classes="rail" Theme="{StaticResource RailButton}" ToolTip.Tip="Settings"
                   Click="OnSettingsClick" HorizontalAlignment="Center" Margin="0,0,0,8">
-            <Path Data="{StaticResource Icon.Settings}"/>
+            <controls:LineIcon Data="{StaticResource Icon.Settings}"/>
           </Button>
         </Grid>
       </Border>
