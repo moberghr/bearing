@@ -171,14 +171,14 @@ public partial class MainWindow
     private async void OnOpenProjectClick(object? sender, RoutedEventArgs e)
     {
         if (Vm is null) return;
-        if (await _dialogs.PickFolderAsync("Open Bearing project folder") is { } path)
+        if (await _dialogs.PickFolderAsync("Open Bearing project folder", Vm.ProjectBrowseDirectory) is { } path)
             await Vm.OpenProjectAsync(path);
     }
 
     private async void OnNewProjectClick(object? sender, RoutedEventArgs e)
     {
         if (Vm is null) return;
-        if (await _dialogs.PickFolderAsync("Choose an empty folder for the new project") is not { } path) return;
+        if (await _dialogs.PickFolderAsync("Choose an empty folder for the new project", Vm.ProjectBrowseDirectory) is not { } path) return;
         var name = await _dialogs.ShowTextPromptAsync("Project name", new System.IO.DirectoryInfo(path).Name);
         if (name is not null) await Vm.NewProjectAsync(path, name);
     }

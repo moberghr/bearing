@@ -66,13 +66,14 @@ public sealed class DialogService : IDialogService
             ? new TextPromptDialog(prompt, initial).ShowDialog<string?>(window)
             : Task.FromResult<string?>(null);
 
-    public async Task<string?> PickFolderAsync(string title)
+    public async Task<string?> PickFolderAsync(string title, string? startDir = null)
     {
         if (Owner is not { } window) return null;
         var folders = await window.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
         {
             Title = title,
             AllowMultiple = false,
+            SuggestedStartLocation = await StartFolder(window, startDir),
         });
         return folders.Count > 0 ? folders[0].TryGetLocalPath() : null;
     }

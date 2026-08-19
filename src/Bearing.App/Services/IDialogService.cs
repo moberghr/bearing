@@ -104,8 +104,10 @@ public interface IDialogService
     /// <summary>Prompt for a single line of text (rename, new folder/script, project name). Null if cancelled.</summary>
     Task<string?> ShowTextPromptAsync(string prompt, string initial = "");
 
-    /// <summary>Pick an existing folder (project open/new). Returns its local path, or null if cancelled.</summary>
-    Task<string?> PickFolderAsync(string title);
+    /// <summary>Pick an existing folder (project open/new). Returns its local path, or null if cancelled.
+    /// <paramref name="startDir"/> seeds the initial location — projects live next to each other, so the
+    /// browser should open where they already are rather than at the picker's idea of home.</summary>
+    Task<string?> PickFolderAsync(string title, string? startDir = null);
 
     /// <summary>Pick an existing .sql file to open. <paramref name="startDir"/> seeds the initial location.
     /// Returns the local path, or null if cancelled.</summary>

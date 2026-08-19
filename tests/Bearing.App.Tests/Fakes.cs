@@ -503,7 +503,14 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
         Bearing.App.Services.SecretStoragePosture storage)
         => Task.FromResult<Bearing.App.Views.ConnectionDialogResult?>(null);
     public Task<string?> ShowTextPromptAsync(string prompt, string initial = "") => Task.FromResult<string?>(null);
-    public Task<string?> PickFolderAsync(string title) => Task.FromResult<string?>(null);
+    /// <summary>Where the folder picker was told to start, per call — the projects folder, not home.</summary>
+    public List<string?> FolderPickerStarts { get; } = new();
+
+    public Task<string?> PickFolderAsync(string title, string? startDir = null)
+    {
+        FolderPickerStarts.Add(startDir);
+        return Task.FromResult<string?>(null);
+    }
     public Task<string?> PickOpenScriptAsync(string? startDir) => Task.FromResult<string?>(null);
     public void ShowSqlPreview(string sql, string title = "SQL preview — changes to save") { }
 }

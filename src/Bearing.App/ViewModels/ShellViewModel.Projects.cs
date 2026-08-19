@@ -163,6 +163,27 @@ public sealed partial class ShellViewModel
         StatusText = $"Created project '{name}'.";
     }
 
+    /// <summary>
+    /// Where a project browser should open: the folder that holds the current project, falling back to the
+    /// one that holds the startup default. Projects are directories that sit next to each other, so "the
+    /// projects folder" is simply the parent of the one you're in — no separate workspace concept needed to
+    /// answer the question.
+    /// </summary>
+    public string? ProjectBrowseDirectory
+    {
+        get
+        {
+            var known = _project?.Directory ?? _fallbackProjectDirectory;
+            if (known is null) return null;
+            try
+            {
+                var parent = Path.GetDirectoryName(Path.GetFullPath(known));
+                return parent is not null && Directory.Exists(parent) ? parent : null;
+            }
+            catch { return null; }   // unusable path: let the picker choose its own start
+        }
+    }
+
     /// <summary>The default project directory, from startup — where a removal lands when the recent list has
     /// nothing else in it. Null in tests that call <see cref="InitializeAsync"/> directly.</summary>
     private string? _fallbackProjectDirectory;
