@@ -1,13 +1,42 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Bearing.App.ViewModels;
 
-/// <summary>One saved SQL script shown in the side pane's Scripts tree.</summary>
-public sealed record ScriptItem(string Name, string FullPath)
+/// <summary>
+/// One saved SQL script shown in the side pane's Scripts tree. An observable object rather than a record
+/// because the row is editable in place — renaming turns the label into a text box (#39), which is state the
+/// row itself has to carry.
+/// </summary>
+public sealed partial class ScriptItem : ObservableObject
 {
+    public ScriptItem(string name, string fullPath)
+    {
+        Name = name;
+        FullPath = fullPath;
+        _renameDraft = Path.GetFileNameWithoutExtension(name);
+    }
+
+    public string Name { get; }
+    public string FullPath { get; }
+
     /// <summary>True when an open tab backs this file and has unsaved edits (snapshot at refresh time).</summary>
     public bool IsUnsaved { get; init; }
+
+    /// <summary>True while this row is an editable box rather than a label.</summary>
+    [ObservableProperty] private bool _isRenaming;
+
+    /// <summary>The name being typed. Seeded from the file's own name, without the <c>.sql</c> — the
+    /// extension is not the user's to retype, and <c>RenameScriptAsync</c> puts it back.</summary>
+    [ObservableProperty] private string _renameDraft;
+
+    /// <summary>Start editing the name in place, from whatever it is called now.</summary>
+    public void BeginRename()
+    {
+        RenameDraft = Path.GetFileNameWithoutExtension(Name);
+        IsRenaming = true;
+    }
 }
 
 /// <summary>A folder (subdirectory of the scripts dir) in the Scripts tree. Holds subfolders and

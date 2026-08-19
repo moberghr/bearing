@@ -372,9 +372,15 @@
                        built in code-behind for *this* tab (OnTabContextRequested), not the selected one. -->
                   <StackPanel Orientation="Horizontal" DoubleTapped="OnTabHeaderDoubleTapped"
                               ContextRequested="OnTabContextRequested">
-                    <!-- Header is the backing file's name (scratch included); the tooltip adds its folder. -->
+                    <!-- Header is the backing file's name (scratch included); the tooltip adds its folder.
+                         Renaming swaps the label for a box in place (#39): Enter commits, Esc cancels,
+                         clicking away commits. Both live in the tree; only one is visible. -->
                     <TextBlock Text="{Binding Header}" VerticalAlignment="Center"
-                               ToolTip.Tip="{Binding HeaderTooltip}"/>
+                               ToolTip.Tip="{Binding HeaderTooltip}"
+                               IsVisible="{Binding !IsRenaming}"/>
+                    <TextBox Text="{Binding RenameDraft, Mode=TwoWay}" IsVisible="{Binding IsRenaming}"
+                             MinWidth="90" Padding="2,0" Margin="0,-2" VerticalAlignment="Center"
+                             KeyDown="OnTabRenameKeyDown" LostFocus="OnTabRenameLostFocus"/>
                     <!-- Running indicator: a rotating arc while this tab has a query in flight. Execution
                          is per-tab, so a background tab shows progress here without being the focused tab. -->
                     <Path Width="11" Height="11" Margin="6,0,0,0" VerticalAlignment="Center"

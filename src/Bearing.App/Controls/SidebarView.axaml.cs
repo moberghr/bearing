@@ -7,6 +7,8 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Bearing.App.Services;
 using Bearing.App.ViewModels;
 using Bearing.App.Views;
@@ -255,11 +257,58 @@ public partial class SidebarView : UserControl
         }
     }
 
-    private async void OnRenameScriptClick(object? sender, RoutedEventArgs e)
+    private void OnRenameScriptClick(object? sender, RoutedEventArgs e)
     {
-        if (Vm is null || ScriptOf(sender) is not { } script) return;
-        var name = await _dialogs.ShowTextPromptAsync("Rename script file", script.Name);
-        if (name is not null) await Vm.Scripts.RenameScriptAsync(script.FullPath, name);
+        if (ScriptOf(sender) is { } script) BeginScriptRename(script);
+    }
+
+    /// <summary>
+    /// Turn a script row into an editable box and put the caret in it. The box is already in the template
+    /// (hidden), so it can only be focused once a layout pass has made it visible — hence the posted lookup.
+    /// </summary>
+    private void BeginScriptRename(ScriptItem script)
+    {
+        script.BeginRename();
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            var box = ScriptsTree.GetVisualDescendants().OfType<TextBox>()
+                .FirstOrDefault(b => ReferenceEquals(b.DataContext, script));
+            if (box is null) return;
+            box.Focus();
+            box.SelectAll();
+        }, DispatcherPriority.Loaded);
+    }
+
+    private async void OnScriptRenameKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox { DataContext: ScriptItem script }) return;
+        switch (e.Key)
+        {
+            case Key.Enter:
+                e.Handled = true;   // also keeps the tree's own Enter (open the script) out of it
+                await CommitScriptRenameAsync(script);
+                break;
+            case Key.Escape:
+                e.Handled = true;
+                script.IsRenaming = false;
+                break;
+        }
+    }
+
+    /// <summary>Clicking away commits, as an inline edit should. Guarded on <c>IsRenaming</c>, which the commit
+    /// clears before it awaits, so the focus loss that follows can't come back round for a second rename.</summary>
+    private async void OnScriptRenameLostFocus(object? sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox { DataContext: ScriptItem script } && script.IsRenaming)
+            await CommitScriptRenameAsync(script);
+    }
+
+    private async Task CommitScriptRenameAsync(ScriptItem script)
+    {
+        var name = script.RenameDraft.Trim();
+        script.IsRenaming = false;
+        if (Vm is null || name.Length == 0) return;
+        await Vm.Scripts.RenameScriptAsync(script.FullPath, name);
     }
 
     private async void OnNewScriptFolderClick(object? sender, RoutedEventArgs e)

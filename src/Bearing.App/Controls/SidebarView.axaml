@@ -154,8 +154,14 @@
                     <Path Data="{StaticResource Icon.File}" Stroke="{DynamicResource Text.Dim}"
                           StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round" Stretch="Uniform"
                           Width="14" Height="14" VerticalAlignment="Center"/>
+                    <!-- Renaming swaps the label for a box in place (#39): Enter commits, Esc cancels,
+                         clicking away commits. Both live in the tree; only one is visible. -->
                     <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
-                               Foreground="{DynamicResource Text.Primary}"/>
+                               Foreground="{DynamicResource Text.Primary}"
+                               IsVisible="{Binding !IsRenaming}"/>
+                    <TextBox Text="{Binding RenameDraft, Mode=TwoWay}" IsVisible="{Binding IsRenaming}"
+                             MinWidth="90" Padding="2,0" Margin="0,-2" VerticalAlignment="Center"
+                             KeyDown="OnScriptRenameKeyDown" LostFocus="OnScriptRenameLostFocus"/>
                     <TextBlock Text="●" FontSize="11" VerticalAlignment="Center"
                                Foreground="{DynamicResource Accent.Brand}" ToolTip.Tip="Unsaved changes"
                                IsVisible="{Binding IsUnsaved}"/>

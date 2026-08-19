@@ -31,8 +31,8 @@ public partial class MainWindow
         r.Register(KeyCommand.Sync(CommandIds.TabNew, "New tab", KeyScope.Global, "File", () => Vm?.Workspace.NewTab()));
         r.Register(new KeyCommand(CommandIds.TabClose, "Close tab", KeyScope.Global, "File",
             async () => { if (Vm?.Workspace.SelectedTab is { } tab) await CloseTabAsync(tab); }, canRun: () => Vm?.Workspace.SelectedTab is not null));
-        r.Register(new KeyCommand(CommandIds.TabRename, "Rename tab…", KeyScope.Global, "File",
-            async () => { if (Vm?.Workspace.SelectedTab is { } tab) await RenameTabAsync(tab); }, canRun: () => Vm?.Workspace.SelectedTab is not null));
+        r.Register(KeyCommand.Sync(CommandIds.TabRename, "Rename tab", KeyScope.Global, "File",
+            () => { if (Vm?.Workspace.SelectedTab is { } tab) BeginTabRename(tab); }, canRun: () => Vm?.Workspace.SelectedTab is not null));
         r.Register(KeyCommand.Sync(CommandIds.ViewToggleSidePane, "Toggle side pane", KeyScope.Global, "View",
             () => { if (Vm is not null) Vm.SidePaneOpen = !Vm.SidePaneOpen; }));
         r.Register(KeyCommand.Sync(CommandIds.ViewToggleResults, "Toggle results", KeyScope.Global, "View", ToggleResultsVisible));
@@ -179,6 +179,9 @@ public partial class MainWindow
     {
         if (e.Handled || e.Key is not Key.Escape || Vm is null) return;
         if (_palette.AnyOpen || Vm.IsMenuTransient) return;
+        // An inline rename owns Escape (it cancels the edit) — this handler is in the tunnel phase, so
+        // without the check it would claim the key before the rename box ever saw it.
+        if (Vm.Workspace.AllTabs.Any(t => t.IsRenaming)) return;
         if (Vm.Execution.IsBusy) { Vm.Execution.CancelExecution(); e.Handled = true; }
     }
 

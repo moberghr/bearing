@@ -173,6 +173,24 @@ public sealed partial class EditorTabViewModel : ObservableObject
     /// </summary>
     public bool IsUserNamed { get; set; }
 
+    /// <summary>True while the tab header is an editable box rather than a label (#39). Renaming happens in
+    /// place; the modal prompt it replaced was a whole window for a one-word edit already on screen.</summary>
+    [ObservableProperty] private bool _isRenaming;
+
+    /// <summary>The name being typed into the header. Seeded by <see cref="BeginRename"/>.</summary>
+    [ObservableProperty] private string _renameDraft = "";
+
+    /// <summary>
+    /// Start editing the header in place, seeded with what the tab is called now: its file name without the
+    /// <c>.sql</c>, or the placeholder label while it has no file. Committing a scratch tab's new name is
+    /// still a promotion — see <see cref="WorkspaceViewModel.RenameTabAsync"/>.
+    /// </summary>
+    public void BeginRename()
+    {
+        RenameDraft = ScriptPath is { } path ? Path.GetFileNameWithoutExtension(path) : DisplayName;
+        IsRenaming = true;
+    }
+
     /// <summary>The connection this tab executes against; null means "no connection chosen".</summary>
     [ObservableProperty] private Guid? _connectionId;
 

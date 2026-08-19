@@ -1,9 +1,12 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Bearing.App.Controls;
 using Bearing.App.Input;
 using Bearing.App.Services;
@@ -22,19 +25,61 @@ public partial class MainWindow
         if (sender is Control { DataContext: EditorTabViewModel tab }) { e.Handled = true; await CloseTabAsync(tab); }
     }
 
-    private async void OnTabHeaderDoubleTapped(object? sender, TappedEventArgs e)
+    private void OnTabHeaderDoubleTapped(object? sender, TappedEventArgs e)
     {
-        if (sender is Control { DataContext: EditorTabViewModel tab }) await RenameTabAsync(tab);
+        if (sender is Control { DataContext: EditorTabViewModel tab }) BeginTabRename(tab);
     }
 
-    private async Task RenameTabAsync(EditorTabViewModel tab)
+    /// <summary>
+    /// Turn a tab's header into an editable box and put the caret in it. The box is already in the template
+    /// (hidden), so it can only be focused once a layout pass has made it visible — hence the posted lookup
+    /// rather than a Focus() call here.
+    /// </summary>
+    private void BeginTabRename(EditorTabViewModel tab)
     {
-        if (Vm is null) return;
-        // Prefill what the tab shows: its file name (which is its header) without the .sql, or the
-        // placeholder label while it has no file yet.
-        var current = tab.ScriptPath is { } path ? Path.GetFileNameWithoutExtension(path) : tab.DisplayName;
-        var name = await _dialogs.ShowTextPromptAsync(tab.IsScratch ? "Rename tab" : "Rename script file", current);
-        if (name is not null) await Vm.Workspace.RenameTabAsync(tab, name);
+        tab.BeginRename();
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            var box = TabStrip.GetVisualDescendants().OfType<TextBox>()
+                .FirstOrDefault(b => ReferenceEquals(b.DataContext, tab));
+            if (box is null) return;
+            box.Focus();
+            box.SelectAll();
+        }, DispatcherPriority.Loaded);
+    }
+
+    private async void OnTabRenameKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox { DataContext: EditorTabViewModel tab }) return;
+        switch (e.Key)
+        {
+            case Key.Enter:
+                e.Handled = true;
+                await CommitTabRenameAsync(tab);
+                break;
+            case Key.Escape:
+                e.Handled = true;
+                tab.IsRenaming = false;
+                Editor.TextArea.Focus();
+                break;
+        }
+    }
+
+    /// <summary>Clicking away commits, as an inline edit should — the box disappearing with the typing thrown
+    /// away reads as a bug. Guarded on <c>IsRenaming</c>, which the commit clears before it awaits, so the
+    /// focus loss that follows can't come back round for a second rename.</summary>
+    private async void OnTabRenameLostFocus(object? sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox { DataContext: EditorTabViewModel tab } && tab.IsRenaming)
+            await CommitTabRenameAsync(tab);
+    }
+
+    private async Task CommitTabRenameAsync(EditorTabViewModel tab)
+    {
+        var name = tab.RenameDraft.Trim();
+        tab.IsRenaming = false;
+        if (Vm is null || name.Length == 0) return;
+        await Vm.Workspace.RenameTabAsync(tab, name);
     }
 
     /// <summary>
@@ -52,7 +97,7 @@ public partial class MainWindow
 
         var menu = TabContextMenu.Build(
             tab,
-            rename: () => RenameTabAsync(tab),
+            rename: () => { BeginTabRename(tab); return Task.CompletedTask; },
             save: () => SaveTabAsync(tab),
             canSave: path is null || tab.IsModified,
             close: () => CloseTabAsync(tab),
@@ -177,9 +222,9 @@ public partial class MainWindow
     {
         if (Vm?.Workspace.SelectedTab is { } tab) await CloseTabAsync(tab);
     }
-    private async void OnMenuRenameTabClick(object? sender, RoutedEventArgs e)
+    private void OnMenuRenameTabClick(object? sender, RoutedEventArgs e)
     {
-        if (Vm?.Workspace.SelectedTab is { } tab) await RenameTabAsync(tab);
+        if (Vm?.Workspace.SelectedTab is { } tab) BeginTabRename(tab);
     }
     private void OnMenuSchemaClick(object? sender, RoutedEventArgs e) => Vm?.ShowPanel(SidePanel.Schema);
     private void OnMenuScriptsClick(object? sender, RoutedEventArgs e) => Vm?.ShowPanel(SidePanel.Scripts);
