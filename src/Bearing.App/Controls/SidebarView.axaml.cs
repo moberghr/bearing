@@ -85,8 +85,9 @@ public partial class SidebarView : UserControl
     // ---- schema tree type-ahead fuzzy jump ----
     private string _treeSearch = "";
 
-    /// <summary>Type letters to fuzzy-search the (realized) tree: highlight every match and jump the
-    /// selection to the next one; repeating the same/extending text cycles through matches.</summary>
+    /// <summary>Type letters to fuzzy-search the loaded tree: highlight every match and jump the selection to
+    /// the next one; repeating the same/extending text cycles through matches. A match under a collapsed
+    /// parent is reached by expanding it, not by being skipped.</summary>
     private void OnSchemaTreeTextInput(object? sender, TextInputEventArgs e)
     {
         if (string.IsNullOrEmpty(e.Text) || char.IsControl(e.Text[0])) return;
@@ -114,29 +115,70 @@ public partial class SidebarView : UserControl
 
     private void MoveToAdjacentMatch(int direction)
     {
-        var nodes = FlattenRealized();
-        var matches = nodes.Where(n => FuzzyMatch(n.Title, _treeSearch)).ToList();
+        var matches = SchemaTreeSearch.Matches(Roots, _treeSearch);
         if (matches.Count == 0) return;
         var current = SchemaTree.SelectedItem as SchemaNodeViewModel;
         var idx = current is null ? -1 : matches.IndexOf(current);
         idx = idx < 0
             ? (direction > 0 ? 0 : matches.Count - 1)
             : (idx + direction + matches.Count) % matches.Count;
-        SchemaTree.SelectedItem = matches[idx];
+        SelectMatch(matches[idx]);
     }
+
+    /// <summary>
+    /// Select a match and take keyboard focus with it. Setting <c>SelectedItem</c> alone leaves focus on
+    /// whatever row had it — the first row, after F6 into the tree — so Right and Enter expanded *that* row
+    /// instead of the highlighted match. The container only exists once the tree has auto-scrolled the
+    /// selection into view, which is why the focus call waits for the layout pass.
+    /// </summary>
+    private void SelectMatch(SchemaNodeViewModel node)
+    {
+        ExpandAncestorsOf(node);
+        SchemaTree.SelectedItem = node;
+        Dispatcher.UIThread.Post(() =>
+        {
+            // A later keystroke may already have moved on; don't yank focus back to a stale match.
+            if (!ReferenceEquals(SchemaTree.SelectedItem, node)) return;
+            SchemaTree.GetVisualDescendants().OfType<TreeViewItem>()
+                .FirstOrDefault(i => ReferenceEquals(i.DataContext, node))
+                ?.Focus(NavigationMethod.Directional);
+        }, DispatcherPriority.Loaded);
+    }
+
+    /// <summary>Open whatever stands between the tree roots and a match — a Views / Functions bucket, or a table
+    /// whose columns are still loaded from an earlier expand — so the selected node is on screen.</summary>
+    private void ExpandAncestorsOf(SchemaNodeViewModel node)
+    {
+        foreach (var ancestor in SchemaTreeSearch.AncestorsOf(Roots, node)) ancestor.IsExpanded = true;
+    }
+
+    private System.Collections.Generic.IEnumerable<SchemaNodeViewModel> Roots
+        => Vm?.Connections.ServerNodes ?? System.Linq.Enumerable.Empty<SchemaNodeViewModel>();
+
+    /// <summary>The live query as a delegate a node can hold: it reads <c>_treeSearch</c> at call time, so one
+    /// assignment stays correct as the text grows, shrinks, and empties (empty matches nothing).</summary>
+    private bool MatchesCurrentSearch(string title) => SchemaTreeSearch.FuzzyMatch(title, _treeSearch);
 
     private void ClearTreeSearch()
     {
         _treeSearch = "";
-        foreach (var n in FlattenRealized()) n.IsMatch = false;
+        foreach (var n in SchemaTreeSearch.Flatten(Roots)) n.IsMatch = false;
         if (Vm is not null) Vm.StatusText = "";
     }
 
     private void ApplyTreeSearch()
     {
-        var nodes = FlattenRealized();
-        var matches = nodes.Where(n => FuzzyMatch(n.Title, _treeSearch)).ToList();
-        foreach (var n in nodes) n.IsMatch = false;
+        // Highlight and reset over the *same* set the matching used, collapsed nodes included: a hidden node
+        // left out of the reset keeps a previous search's highlight until it is reopened.
+        var nodes = SchemaTreeSearch.Flatten(Roots);
+        var matches = nodes.Where(n => SchemaTreeSearch.FuzzyMatch(n.Title, _treeSearch)).ToList();
+        foreach (var n in nodes)
+        {
+            n.IsMatch = false;
+            // Leave the live query behind on every node: children loaded later inherit it and highlight
+            // themselves, so a collapsed table's columns come back tinted instead of blank.
+            n.MatchTest = MatchesCurrentSearch;
+        }
         foreach (var m in matches) m.IsMatch = true;
 
         if (matches.Count == 0) { Vm!.StatusText = $"No match for “{_treeSearch}”."; return; }
@@ -144,41 +186,9 @@ public partial class SidebarView : UserControl
         // Stay put while the current selection still matches (refining the query shouldn't jump you
         // around); otherwise land on the first match. Down/Up navigate between matches manually.
         var current = SchemaTree.SelectedItem as SchemaNodeViewModel;
-        if (current is null || !FuzzyMatch(current.Title, _treeSearch))
-            SchemaTree.SelectedItem = matches[0];
+        if (current is null || !SchemaTreeSearch.FuzzyMatch(current.Title, _treeSearch))
+            SelectMatch(matches[0]);
         Vm!.StatusText = $"“{_treeSearch}” · {matches.Count} match{(matches.Count == 1 ? "" : "es")}";
-    }
-
-    /// <summary>Depth-first list of realized (already-loaded, non-placeholder) tree nodes.</summary>
-    private System.Collections.Generic.List<SchemaNodeViewModel> FlattenRealized()
-    {
-        var list = new System.Collections.Generic.List<SchemaNodeViewModel>();
-        void Walk(System.Collections.Generic.IEnumerable<SchemaNodeViewModel> ns)
-        {
-            foreach (var n in ns)
-            {
-                if (n is MessageNodeViewModel) continue;
-                list.Add(n);
-                if (n.IsExpanded) Walk(n.Children);
-            }
-        }
-        if (Vm is not null) Walk(Vm.Connections.ServerNodes);
-        return list;
-    }
-
-    /// <summary>Case-insensitive subsequence (fuzzy) match: query chars appear in order in the text.</summary>
-    private static bool FuzzyMatch(string text, string query)
-    {
-        if (string.IsNullOrEmpty(query)) return false;
-        text = text.ToLowerInvariant(); query = query.ToLowerInvariant();
-        var ti = 0;
-        foreach (var c in query)
-        {
-            ti = text.IndexOf(c, ti);
-            if (ti < 0) return false;
-            ti++;
-        }
-        return true;
     }
 
     private async void OnEditServer(object? sender, RoutedEventArgs e)

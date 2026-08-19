@@ -20,8 +20,10 @@
               <Button Grid.Column="1" Content="＋" Padding="6,0" Click="OnAddConnectionClick"
                       ToolTip.Tip="Add connection"/>
             </Grid>
-            <!-- Type-ahead fuzzy jump: letters/digits build a search, matches are tinted, Enter/typing
-                 cycles to the next match (handled in code-behind OnSchemaTreeTextInput/KeyDown). -->
+            <!-- Type-ahead fuzzy jump: letters/digits build a search, matches are tinted, Down/Up cycle
+                 between them, Esc/Backspace unwind it (code-behind OnSchemaTreeTextInput/KeyDown).
+                 Landing on a match moves keyboard *focus* too, so Right/Enter act on the match and not on
+                 whichever row happened to hold focus, and it opens the Views/Functions bucket around it. -->
             <!-- KeyDown is hooked in the tunnel phase (code-behind) so Up/Down can pre-empt the tree's
                  own node navigation and cycle matches instead. -->
             <TreeView x:Name="SchemaTree" ItemsSource="{Binding Connections.ServerNodes}" Background="Transparent"
@@ -60,9 +62,16 @@
                           VerticalAlignment="Center"/>
                     <TextBlock Text="{Binding Glyph}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Muted}"
                                IsVisible="{Binding IconKey, Converter={x:Static ObjectConverters.IsNull}}"/>
-                    <TextBlock Text="{Binding Title}" VerticalAlignment="Center"
-                               Background="{Binding IsMatch, Converter={StaticResource MatchHighlight}}"
-                               Foreground="{DynamicResource Text.Primary}"/>
+                    <!-- A match is picked out the way a selected grid cell is: translucent accent fill,
+                         solid accent edge. Border and padding are always applied (transparent when the row
+                         isn't a match) and the negative margin cancels them, so the highlight bleeds outside
+                         the text without the row reflowing as you type. -->
+                    <Border BorderThickness="1" CornerRadius="3" Padding="4,1" Margin="-4,-1"
+                            Background="{Binding IsMatch, Converter={StaticResource MatchHighlight}}"
+                            BorderBrush="{Binding IsMatch, Converter={StaticResource MatchHighlight}, ConverterParameter=Border}">
+                      <TextBlock Text="{Binding Title}" VerticalAlignment="Center"
+                                 Foreground="{DynamicResource Text.Primary}"/>
+                    </Border>
                     <TextBlock Text="{Binding Detail}" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource Text.Dim}"/>
                   </StackPanel>
                 </TreeDataTemplate>
