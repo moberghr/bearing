@@ -46,6 +46,23 @@ public abstract partial class SchemaNodeViewModel : ObservableObject
     /// <summary>True when the node's title matches the current type-ahead search (drives the highlight).</summary>
     [ObservableProperty] private bool _isMatch;
 
+    /// <summary>
+    /// Tests a title against the sidebar's live type-ahead query. The search pass sets it on every loaded node,
+    /// and <see cref="EnsureChildrenAsync"/> hands it down to children as they arrive — otherwise a row created
+    /// *after* the search ran (a table's columns, loaded on first expand) came up unhighlighted while its
+    /// siblings were tinted, because nothing had ever tested it. Null (or an empty query) means no highlight.
+    /// </summary>
+    internal Func<string, bool>? MatchTest { get; set; }
+
+    /// <summary>Adopt the parent's live search and answer it immediately, for this node and anything it was
+    /// constructed holding (a Views / Functions bucket arrives pre-populated).</summary>
+    private void InheritSearch(SchemaNodeViewModel parent)
+    {
+        MatchTest = parent.MatchTest;
+        IsMatch = this is not MessageNodeViewModel && (MatchTest?.Invoke(Title) ?? false);
+        foreach (var child in Children) child.InheritSearch(this);
+    }
+
     /// <summary>True only for the root server node (drives its context-menu items + double-tap).</summary>
     public virtual bool IsServer => false;
 
@@ -78,7 +95,11 @@ public abstract partial class SchemaNodeViewModel : ObservableObject
         {
             var kids = await LoadChildrenAsync();
             Children.Clear();
-            foreach (var k in kids) Children.Add(k);
+            foreach (var k in kids)
+            {
+                k.InheritSearch(this);
+                Children.Add(k);
+            }
         }
         catch (Exception ex)
         {
@@ -144,7 +165,11 @@ public sealed class ServerNodeViewModel : SchemaNodeViewModel
     }
 }
 
-/// <summary>A database on the server. Expands to its objects (relations + routines), listed flat.</summary>
+/// <summary>
+/// A database on the server. Expands to its <b>tables</b> — the default schema's unprefixed and first, then
+/// the other schemas as <c>schema.name</c> — with views and functions tucked into collapsed buckets after
+/// them, so opening a database shows what queries actually start from instead of hundreds of rows.
+/// </summary>
 public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
 {
     private readonly ConnectionInfo _connection;
@@ -166,21 +191,48 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
     {
         var objects = await _browser.GetObjectsAsync(_connection, _database, CancellationToken.None);
         var snapshot = objects.Snapshot;
+        var defaultSchema = SchemaObjectLabel.DefaultSchemaOf(snapshot.SearchPath);
 
-        var nodes = new List<(int rank, string name, SchemaNodeViewModel node)>();
+        var tables = new List<Sortable>();
+        var views = new List<Sortable>();
         foreach (var t in snapshot.Tables)
-            nodes.Add((RelationRank(t.Kind), t.Name,
-                new RelationNodeViewModel(_connection, _database, t, snapshot, _browser)));
-        foreach (var r in objects.Routines)
-            nodes.Add((RoutineRank(r.Kind), r.Name,
-                new RoutineNodeViewModel(_connection, _database, r, _browser)));
+        {
+            var node = new RelationNodeViewModel(_connection, _database, t, snapshot, _browser, defaultSchema);
+            var entry = Entry(t.Schema, t.Name, RelationRank(t.Kind), defaultSchema, node);
+            (IsViewLike(t.Kind) ? views : tables).Add(entry);
+        }
 
-        return nodes
-            .OrderBy(x => x.rank)
-            .ThenBy(x => x.name, StringComparer.OrdinalIgnoreCase)
-            .Select(x => x.node)
+        var routines = objects.Routines
+            .Select(r => Entry(r.Schema, r.Name, RoutineRank(r.Kind), defaultSchema,
+                new RoutineNodeViewModel(_connection, _database, r, _browser, defaultSchema)))
             .ToList();
+
+        // Tables inline; the secondary object kinds behind one collapsed row each (skipped when empty
+        // rather than shown as an empty bucket).
+        var children = Ordered(tables);
+        if (views.Count > 0) children.Add(new SchemaGroupNodeViewModel("Views", "Icon.View", Ordered(views)));
+        if (routines.Count > 0) children.Add(new SchemaGroupNodeViewModel("Functions", "Icon.Function", Ordered(routines)));
+        return children;
     }
+
+    private Sortable Entry(string schema, string name, int rank, string defaultSchema, SchemaNodeViewModel node)
+        => new(SchemaObjectLabel.SchemaRank(schema, defaultSchema), schema, rank, name, node);
+
+    /// <summary>Default schema first, then the other schemas clustered by name — their rows carry a
+    /// <c>schema.</c> prefix, so interleaving them would make the prefixes look random. Kind then name
+    /// within each schema, as before.</summary>
+    private static List<SchemaNodeViewModel> Ordered(List<Sortable> entries) => entries
+        .OrderBy(x => x.SchemaRank)
+        .ThenBy(x => x.Schema, StringComparer.OrdinalIgnoreCase)
+        .ThenBy(x => x.Rank)
+        .ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+        .Select(x => x.Node)
+        .ToList();
+
+    private readonly record struct Sortable(int SchemaRank, string Schema, int Rank, string Name, SchemaNodeViewModel Node);
+
+    /// <summary>Views and materialized views are the "look it up when you need it" half of the relation list.</summary>
+    private static bool IsViewLike(RelationKind kind) => kind is RelationKind.View or RelationKind.MaterializedView;
 
     private static int RelationRank(RelationKind kind) => kind switch
     {
@@ -195,6 +247,29 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
     private static int RoutineRank(RoutineKind kind) => kind == RoutineKind.Procedure ? 5 : 4;
 }
 
+/// <summary>
+/// A collapsed bucket of secondary objects (views, functions) under a database. Its members are handed in
+/// already built — they come from the loaded snapshot, so there is no I/O to defer — which is also what lets
+/// the sidebar's type-ahead search reach into a bucket that has never been expanded.
+/// </summary>
+public sealed class SchemaGroupNodeViewModel : SchemaNodeViewModel
+{
+    private readonly string _iconKey;
+
+    public SchemaGroupNodeViewModel(string title, string iconKey, IReadOnlyList<SchemaNodeViewModel> members)
+        // hasChildren: false — nothing to load lazily, so no placeholder; the members below give the
+        // expander its arrow. Collapsed on construction is the point of the bucket.
+        : base("▸", title, members.Count.ToString(), hasChildren: false)
+    {
+        _iconKey = iconKey;
+        foreach (var m in members) Children.Add(m);
+    }
+
+    public override string? IconKey => _iconKey;
+
+    protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync() => Task.FromResult(None);
+}
+
 /// <summary>A relation (table/view/…). Expands to its columns; can show a definition (view SQL or DDL).</summary>
 public sealed class RelationNodeViewModel : SchemaNodeViewModel
 {
@@ -205,8 +280,12 @@ public sealed class RelationNodeViewModel : SchemaNodeViewModel
     private readonly ISchemaBrowser _browser;
 
     public RelationNodeViewModel(
-        ConnectionInfo connection, string database, TableInfo table, ISchemaSnapshot snapshot, ISchemaBrowser browser)
-        : base(Glyphs(table.Kind), table.Name, $"{KindLabel(table.Kind)} · {table.Schema}", hasChildren: true)
+        ConnectionInfo connection, string database, TableInfo table, ISchemaSnapshot snapshot, ISchemaBrowser browser,
+        string defaultSchema)
+        : base(Glyphs(table.Kind),
+            SchemaObjectLabel.Title(table.Schema, table.Name, defaultSchema),
+            SchemaObjectLabel.Detail(KindLabel(table.Kind), table.Schema, defaultSchema),
+            hasChildren: true)
     {
         _connection = connection;
         _database = database;
@@ -256,8 +335,12 @@ public sealed class RoutineNodeViewModel : SchemaNodeViewModel
     private readonly RoutineInfo _routine;
     private readonly ISchemaBrowser _browser;
 
-    public RoutineNodeViewModel(ConnectionInfo connection, string database, RoutineInfo routine, ISchemaBrowser browser)
-        : base(GlyphFor(routine.Kind), routine.Name, DetailFor(routine), hasChildren: false)
+    public RoutineNodeViewModel(
+        ConnectionInfo connection, string database, RoutineInfo routine, ISchemaBrowser browser, string defaultSchema)
+        : base(GlyphFor(routine.Kind),
+            SchemaObjectLabel.Title(routine.Schema, routine.Name, defaultSchema),
+            SchemaObjectLabel.Detail(KindLabel(routine.Kind), routine.Schema, defaultSchema),
+            hasChildren: false)
     {
         _connection = connection;
         _database = database;
@@ -274,17 +357,13 @@ public sealed class RoutineNodeViewModel : SchemaNodeViewModel
 
     private static string GlyphFor(RoutineKind kind) => kind == RoutineKind.Procedure ? "▷" : "ƒ";
 
-    private static string DetailFor(RoutineInfo r)
+    private static string KindLabel(RoutineKind kind) => kind switch
     {
-        var label = r.Kind switch
-        {
-            RoutineKind.Procedure => "procedure",
-            RoutineKind.Aggregate => "aggregate",
-            RoutineKind.Window => "window",
-            _ => "function",
-        };
-        return $"{label} · {r.Schema}";
-    }
+        RoutineKind.Procedure => "procedure",
+        RoutineKind.Aggregate => "aggregate",
+        RoutineKind.Window => "window",
+        _ => "function",
+    };
 }
 
 /// <summary>A column of a relation. Leaf; shows type + PK / NOT NULL.</summary>
