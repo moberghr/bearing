@@ -56,5 +56,5 @@ Bearing.Desktop      thin entry point
   execution/tabs/panels out of the VM) and the code-behind overlay-builder split are still pending. See
   `.claude/rules/project-specific.md` §9.1.
 - **`Microsoft.Extensions.DependencyInjection` is referenced but unused** as a container — wiring is manual.
-- **Secret fallback is unencrypted** when no OS keyring exists (surfaced to the user, not silent).
+- **No secret fallback**: with no OS keyring, passwords aren't stored at all (surfaced to the user, not silent).
 - **TLS not enforced** — `sslmode` is opt-in per connection.

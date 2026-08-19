@@ -40,14 +40,14 @@ public class PlatformKeychainTests
     {
         var store = await RequireStoreAsync();
 
-        // Guards against the quiet failure this work exists to fix: falling through to the file fallback on a
+        // Guards against the quiet failure this work exists to fix: storing nothing at all on a
         // platform that does have a credential store.
         if (OperatingSystem.IsLinux()) Assert.IsType<SecretToolSecretStore>(store);
         else if (OperatingSystem.IsWindows()) Assert.IsType<WindowsCredentialSecretStore>(store);
         else if (OperatingSystem.IsMacOS()) Assert.IsType<MacKeychainSecretStore>(store);
 
         Assert.True(store.IsSecure);    // drives the status bar and the connection dialog's warnings
-        Assert.True(store.CanStore);    // a real keychain has nothing to opt into
+        Assert.True(store.CanStore);    // a real keychain is the only thing that stores a password at all
 
         // …and the factory hands the same store to the app, rather than the fallback.
         var chosen = await SecretStoreFactory.CreateAsync();

@@ -12,9 +12,9 @@ namespace Bearing.Persistence;
 /// </para>
 /// <para>
 /// That matters far beyond a retry being nice to have. The startup probe treats one refusal as "this machine
-/// has no credential store" and demotes the whole session to <see cref="FileFallbackSecretStore"/>, which by
-/// default <b>refuses to store passwords at all</b> — so a 1-in-80 dice roll was silently costing users their
-/// keychain. Three attempts takes ~1.2% to ~0.015%.
+/// has no credential store" and demotes the whole session to <see cref="NoSecretStore"/>, which <b>stores no
+/// passwords at all</b> — so a 1-in-80 dice roll was silently costing users their keychain. Three attempts
+/// takes ~1.2% to ~0.015%.
 /// </para>
 /// <para>
 /// <b>There is a second, quieter fault that a retry alone cannot see</b>, found the same day by

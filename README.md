@@ -82,7 +82,7 @@ Bearing separates data by *shareability*:
 |---|---|---|---|
 | **Project** | `<project>/project.json` + `scripts/*.sql` | Connection settings (**no passwords**), SQL scripts | Yes — meant to be committed |
 | **Session** | `<project>/.bearing/session.json` | Open tabs, caret, active connection, pane layout | No — gitignored |
-| **App-global — data** | platform data dir (below) | `query-log.sqlite`, `secrets/`, default project | No |
+| **App-global — data** | platform data dir (below) | `query-log.sqlite`, default project | No |
 | **App-global — config** | platform config dir (below) | recent projects, `keybindings.json`, `settings.json` | No |
 
 The two app-global directories follow each platform's own convention:
@@ -116,13 +116,13 @@ Connection passwords are **never** written to `project.json`. They are stored ke
   Manager ▸ Windows Credentials), and a login-keychain generic password on **macOS** (visible in Keychain
   Access). Which one you get is decided at startup by actually storing and reading back a throwaway secret, so
   an absent helper or a locked keyring falls back rather than failing later when you connect.
-  *The Windows and macOS backends are new and have only been verified on Linux so far — `dotnet test` on
-  those platforms runs the full store contract (`PlatformKeychainTests`).*
-- **Fallback:** with no credential store reachable, a password is **not saved at all** — the connection keeps
-  it in memory for the session and asks again next time, and the app says so in the status bar. Opting into
-  Settings ▸ Security ▸ *Store passwords on disk when no keyring is available* writes per-connection files
-  under `secrets/` in the data dir (mode `0600` where the OS supports it) instead; **that is base64, not
-  encrypted storage**, and it stays warned about for as long as it's on.
+  *`dotnet test` on each platform runs the full store contract (`PlatformKeychainTests`).*
+- **No credential store reachable?** Then the password is **not saved at all** — the connection keeps it in
+  memory for the session and asks again next time. There is no on-disk fallback and nothing to opt into: the
+  status bar and the connection dialog say so, and the dialog shows what the credential store actually
+  reported (a locked keyring and a missing helper want different fixes). Because the check can fail simply by
+  running before the keyring is serving, it is re-run every time the connection dialog opens — an upgrade
+  only, so a working keychain is never dropped mid-session.
 
 ### Query log
 

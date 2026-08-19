@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using Bearing.Core.Data;
 using Bearing.Core.Workspace;
 using Bearing.Persistence;
@@ -211,32 +210,19 @@ public class WorkspacePersistenceTests : IDisposable
     }
 
     [Fact]
-    public async Task File_fallback_secret_store_round_trips_and_stays_out_of_project()
+    public async Task With_no_keychain_nothing_is_stored_anywhere()
     {
-        var store = new FileFallbackSecretStore(Path.Combine(_root, "secrets"));
+        // The file fallback this replaced wrote base64 under the data dir; the store now keeps nothing at
+        // all, so there is no file to find, rotate, or lock down. See SecretStorePolicyTests for the policy.
+        var store = new NoSecretStore("secret-tool not found");
         var id = Guid.NewGuid();
 
         Assert.False(store.IsSecure);
+        await Assert.ThrowsAsync<SecretStorageRefusedException>(
+            () => store.SetPasswordAsync(id, "s3cr3t!", CancellationToken.None));
+
         Assert.Null(await store.GetPasswordAsync(id, CancellationToken.None));
-
-        await store.SetPasswordAsync(id, "s3cr3t!", CancellationToken.None);
-        Assert.Equal("s3cr3t!", await store.GetPasswordAsync(id, CancellationToken.None));
-
-        // Overwriting an existing secret replaces it cleanly and leaves no .tmp scratch file behind.
-        await store.SetPasswordAsync(id, "rotated", CancellationToken.None);
-        Assert.Equal("rotated", await store.GetPasswordAsync(id, CancellationToken.None));
-        var secretsDir = Path.Combine(_root, "secrets");
-        Assert.Empty(Directory.GetFiles(secretsDir, "*.tmp"));
-
-        // On Unix the stored file is owner-only (0600) — never world-readable, even transiently.
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            var mode = File.GetUnixFileMode(Path.Combine(secretsDir, id.ToString("N")));
-            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, mode);
-        }
-
-        await store.DeleteAsync(id, CancellationToken.None);
-        Assert.Null(await store.GetPasswordAsync(id, CancellationToken.None));
+        Assert.False(Directory.Exists(Path.Combine(_root, "secrets")));
     }
 
     // The OS keychain round-trip lives in PlatformKeychainTests, which runs it against whichever real

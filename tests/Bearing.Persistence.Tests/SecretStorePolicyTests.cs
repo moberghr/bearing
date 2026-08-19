@@ -5,78 +5,60 @@ using Xunit;
 namespace Bearing.Persistence.Tests;
 
 /// <summary>
-/// Writing to the file fallback is opt-in. Base64 under the data dir is plaintext with extra steps, so with
-/// no keyring and no explicit consent the store refuses a new password instead of leaving a recoverable copy
-/// on disk — while still reading and deleting whatever is already there.
+/// With no OS credential store there is nowhere for a password to go, and no opt-in to change that: the
+/// store refuses the write, keeps nothing, and reports why it couldn't be used. The old on-disk fallback
+/// (base64 under the data dir, opt-in via a setting) was removed on 2026-08-19 — these tests are what stops
+/// it coming back in some other shape.
 /// </summary>
-public class SecretStorePolicyTests : IDisposable
+public class SecretStorePolicyTests
 {
-    private readonly string _root = Path.Combine(Path.GetTempPath(), "bearing-secret-policy", Guid.NewGuid().ToString("N"));
-
-    public void Dispose() { try { if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true); } catch { } }
-
-    private string Dir => Path.Combine(_root, "secrets");
+    private static CancellationToken Ct => CancellationToken.None;
 
     [Fact]
-    public async Task Refuses_to_write_when_storing_is_not_allowed_and_leaves_no_file()
+    public async Task Refuses_to_write_and_stores_nothing()
     {
-        var store = new FileFallbackSecretStore(Dir, allowStore: () => false);
+        var store = new NoSecretStore();
         var id = Guid.NewGuid();
 
         Assert.False(store.CanStore);
+        Assert.False(store.IsSecure);
+
         var ex = await Assert.ThrowsAsync<SecretStorageRefusedException>(
-            () => store.SetPasswordAsync(id, "s3cr3t!", CancellationToken.None));
+            () => store.SetPasswordAsync(id, "s3cr3t!", Ct));
         Assert.Contains("keyring", ex.Message);
+        // The message has to name the way out, because there is no "save it anyway" any more.
+        Assert.Contains("Prompt each time", ex.Message);
 
-        // Nothing was written — not the secret, not a temp file.
-        Assert.Empty(Directory.GetFiles(Dir));
-        Assert.Null(await store.GetPasswordAsync(id, CancellationToken.None));
+        Assert.Null(await store.GetPasswordAsync(id, Ct));
     }
 
     [Fact]
-    public async Task Stores_when_the_user_has_opted_in()
+    public async Task Reads_find_nothing_and_deletes_are_a_no_op()
     {
-        var store = new FileFallbackSecretStore(Dir, allowStore: () => true);
-        var id = Guid.NewGuid();
+        var store = new NoSecretStore();
 
-        Assert.True(store.CanStore);
-        await store.SetPasswordAsync(id, "s3cr3t!", CancellationToken.None);
-
-        Assert.Equal("s3cr3t!", await store.GetPasswordAsync(id, CancellationToken.None));
-        Assert.False(store.IsSecure); // opting in doesn't make it secure — the warning stays earned
+        Assert.Null(await store.GetPasswordAsync(Guid.NewGuid(), Ct));
+        await store.DeleteAsync(Guid.NewGuid(), Ct);   // clearing a password that was never stored is fine
     }
 
     [Fact]
-    public async Task A_secret_written_while_opted_in_still_reads_and_deletes_after_opting_out()
+    public void The_probe_reason_is_carried_for_the_UI_to_explain_itself()
     {
-        var allow = true;
-        var store = new FileFallbackSecretStore(Dir, allowStore: () => allow);
-        var id = Guid.NewGuid();
-        await store.SetPasswordAsync(id, "existing", CancellationToken.None);
-
-        allow = false; // the setting is read live, so this takes effect immediately
-
-        Assert.False(store.CanStore);
-        // Existing installs don't lose access to what they already stored …
-        Assert.Equal("existing", await store.GetPasswordAsync(id, CancellationToken.None));
-        // … they just can't add more.
-        await Assert.ThrowsAsync<SecretStorageRefusedException>(
-            () => store.SetPasswordAsync(id, "replacement", CancellationToken.None));
-        Assert.Equal("existing", await store.GetPasswordAsync(id, CancellationToken.None));
-
-        // Clearing a secret is always allowed — that's the way *out* of the insecure store.
-        await store.DeleteAsync(id, CancellationToken.None);
-        Assert.Null(await store.GetPasswordAsync(id, CancellationToken.None));
+        // Why this exists: the warnings used to assert "No system keyring found" without having checked.
+        Assert.Equal("secret-tool: no such collection",
+            new NoSecretStore("secret-tool: no such collection").UnavailableReason);
+        Assert.Null(new NoSecretStore().UnavailableReason);
     }
 
     [Fact]
-    public async Task The_factory_defaults_to_refusing_when_no_opt_in_is_supplied()
+    public async Task The_factory_never_returns_a_store_that_writes_outside_the_keychain()
     {
-        // Only meaningful where the factory actually falls back (no reachable Secret Service). On a box with
-        // a keyring this returns the keychain store, which stores by definition — assert per posture.
+        // On a box with a keyring this is the platform store, which stores by definition; without one it is
+        // NoSecretStore. Either way "can store" and "is secure" must agree — a store that writes passwords
+        // somewhere weaker is exactly what no longer exists.
         var store = await SecretStoreFactory.CreateAsync();
 
-        if (store.IsSecure) Assert.True(store.CanStore);
-        else Assert.False(store.CanStore);
+        Assert.Equal(store.IsSecure, store.CanStore);
+        if (!store.IsSecure) Assert.IsType<NoSecretStore>(store);
     }
 }

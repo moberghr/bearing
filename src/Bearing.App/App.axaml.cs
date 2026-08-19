@@ -118,13 +118,14 @@ public partial class App : Application
 
     private static async Task InitializeAsync(ShellViewModel vm, Settings.SettingsService settings)
     {
-        // The opt-in is read live (not captured), so flipping it in the settings window takes effect at once.
-        var secretStore = await SecretStoreFactory.CreateAsync(
-            allowUnencryptedFile: () => settings.Current.AllowUnencryptedSecretFile);
+        // One-time cleanup of the removed on-disk secret fallback. Off the UI thread with the rest of startup;
+        // it is best-effort and never blocks the app (§5.2).
+        LegacySecretFiles.Purge();
+
+        var secretStore = await SecretStoreFactory.CreateAsync();
         // The same call is handed over as the re-probe: this one runs very early, and a keyring that wasn't
-        // serving yet at this instant would otherwise pin the whole session into the file fallback.
-        vm.AttachSecretStore(secretStore, reprobe: ct => SecretStoreFactory.CreateAsync(
-            allowUnencryptedFile: () => settings.Current.AllowUnencryptedSecretFile, ct));
+        // serving yet at this instant would otherwise pin the whole session into storing nothing.
+        vm.AttachSecretStore(secretStore, reprobe: SecretStoreFactory.CreateAsync);
         // Reopen the last-used project; fall back to the default project on first run (or if it's gone).
         await vm.ResumeLastProjectAsync(DefaultProjectDirectory());
         // Opt-in convenience: seed the local pagila demo connection only when BEARING_SEED_DEMO is set.

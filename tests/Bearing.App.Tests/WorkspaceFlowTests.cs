@@ -23,6 +23,10 @@ public class WorkspaceFlowTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "bearing-flow", Guid.NewGuid().ToString("N"));
 
+    /// <summary>One store for the whole test, so a secret saved through one view model still
+    /// resolves through the next — the on-disk store this replaced was shared the same way.</summary>
+    private readonly FakeSecretStore _secrets = new();
+
     public void Dispose() { try { if (Directory.Exists(_root)) Directory.Delete(_root, true); } catch { } }
 
     private static string Host => PgTestServer.Host;
@@ -37,7 +41,7 @@ public class WorkspaceFlowTests : IDisposable
         new JsonSessionStore(),
         new SqliteQueryLog(Path.Combine(_root, "log.sqlite")),
         new FileRecentProjects(Path.Combine(_root, "recent.json")),
-        new FileFallbackSecretStore(Path.Combine(_root, "secrets")),
+        _secrets,
         // Autosave off so dirty-state assertions stay meaningful; the modes have their own suite.
         settings: SettingsService.InMemory(new Bearing.Core.Workspace.AppSettings { AutosaveMode = Bearing.Core.Workspace.AutosaveMode.Off }));
 

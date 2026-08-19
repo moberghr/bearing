@@ -58,14 +58,13 @@ public sealed partial class ShellViewModel
         }
     }
 
-    /// <summary>Where this session's passwords live, for the status bar. Three postures, because "no keyring"
-    /// no longer implies "on disk": by default nothing is written and connections prompt instead.</summary>
-    private string SecretPosture() => SecretStorage switch
-    {
-        { Secure: true } => "Secrets: OS keychain.",
-        { CanStore: true } => "⚠ No keyring — passwords stored unencrypted on disk.",
-        _ => "⚠ No keyring — passwords aren't saved; you'll be asked when connecting.",
-    };
+    /// <summary>Where this session's passwords live, for the status bar. Two postures: the OS keychain, or
+    /// nothing at all — there is no on-disk fallback. "Couldn't be reached" rather than "not found" because
+    /// the probe can't tell a missing keyring from a locked or not-yet-serving one; the connection dialog
+    /// shows the reason it was given.</summary>
+    private string SecretPosture() => SecretStorage.Secure
+        ? "Secrets: OS keychain."
+        : "⚠ No keyring reachable — passwords aren't saved; you'll be asked when connecting.";
 
     /// <summary>
     /// Startup entry: reopen the most-recently-used project that still exists on disk, falling back to

@@ -192,7 +192,18 @@ public sealed partial class ShellViewModel : ObservableObject
         try { candidate = await _reprobeSecretStore(ct).ConfigureAwait(true); }
         catch { return false; }   // best-effort, like every other probe on this path
 
-        if (!candidate.IsSecure) return false;
+        if (!candidate.IsSecure)
+        {
+            // Still nowhere to store a password — but the *reason* may have moved on since startup (a keyring
+            // that wasn't serving then may report a dismissed unlock prompt now), and the reason is what the
+            // dialog shows the user. Take the fresher one; it isn't an adoption, both stores keep nothing.
+            if (candidate.UnavailableReason != _secretStore?.UnavailableReason)
+            {
+                _secretStore = candidate;
+                OnPropertyChanged(nameof(SecretStorage));
+            }
+            return false;
+        }
 
         _secretStore = candidate;
         OnPropertyChanged(nameof(SecretStorageSecure));
@@ -217,14 +228,16 @@ public sealed partial class ShellViewModel : ObservableObject
         if (_workspace.Tabs.Contains(tab)) _workspace.SelectedTab = tab;
     }
 
-    /// <summary>True when secrets go to a real OS keychain; false when they fall back to a plaintext-equivalent file.</summary>
+    /// <summary>True when secrets go to a real OS keychain; false when none could be reached, in which case
+    /// nothing is stored at all.</summary>
     public bool SecretStorageSecure => _secretStore?.IsSecure == true;
 
     /// <summary>What the connection editor needs to know about where a password would end up: whether the
-    /// store is a real keychain, and whether it will accept a password at all.</summary>
+    /// store is a real keychain, whether it will accept a password at all, and — when it won't — why.</summary>
     public SecretStoragePosture SecretStorage => new(
         Secure: _secretStore?.IsSecure == true,
-        CanStore: _secretStore?.CanStore == true);
+        CanStore: _secretStore?.CanStore == true,
+        Reason: _secretStore?.UnavailableReason);
 
     /// <summary>Dispose all live connections (query sessions + schema-browser pools); safe to call fire-and-forget from the close path.</summary>
     public async ValueTask DisposeSessionsAsync()
