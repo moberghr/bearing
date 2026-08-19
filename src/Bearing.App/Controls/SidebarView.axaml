@@ -104,6 +104,18 @@
                 <Style Selector="StackPanel.dragging">
                   <Setter Property="Opacity" Value="0.4"/>
                 </Style>
+                <!-- Folder glyphs. Both kinds of folder use the folder shape — the scratch one wore the
+                     *file* glyph, so the one folder the app owns didn't read as a folder at all. It's told
+                     apart by colour and by being filled rather than outlined: dimmed, like the "auto" badge
+                     beside it, because it's a holding pen and not something the user curated.
+                     Stroke is set here, not on the Path, so these setters aren't beaten by a local value. -->
+                <Style Selector="Path.folderGlyph">
+                  <Setter Property="Stroke" Value="#E3B457"/>
+                </Style>
+                <Style Selector="Path.folderGlyph.scratch">
+                  <Setter Property="Stroke" Value="{DynamicResource Text.Dim}"/>
+                  <Setter Property="Fill" Value="{DynamicResource Bg.TileActive}"/>
+                </Style>
               </TreeView.Styles>
               <TreeView.DataTemplates>
                 <!-- Folder: amber glyph + name + right-aligned count. A drop target for scripts. -->
@@ -123,16 +135,12 @@
                       </ContextMenu>
                     </Border.ContextMenu>
                   <Grid ColumnDefinitions="Auto,*,Auto">
-                    <!-- Curated folders get the amber folder glyph; the app-owned scratch folder is dimmed
-                         and marked so it reads as a holding pen rather than something the user curated. -->
-                    <Path Grid.Column="0" Data="{StaticResource Icon.Folder}" Stroke="#E3B457"
+                    <!-- One glyph for both kinds of folder (styled above), so they can't drift apart in
+                         size or alignment the way two different geometries did. -->
+                    <Path Grid.Column="0" Classes="folderGlyph" Classes.scratch="{Binding IsScratch}"
+                          Data="{StaticResource Icon.Folder}"
                           StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round" Stretch="Uniform"
-                          Width="15" Height="15" VerticalAlignment="Center" Margin="0,0,6,0"
-                          IsVisible="{Binding !IsScratch}"/>
-                    <Path Grid.Column="0" Data="{StaticResource Icon.File}" Stroke="{DynamicResource Text.Dim}"
-                          StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round" Stretch="Uniform"
-                          Width="15" Height="15" VerticalAlignment="Center" Margin="0,0,6,0"
-                          IsVisible="{Binding IsScratch}"/>
+                          Width="15" Height="15" VerticalAlignment="Center" Margin="0,0,6,0"/>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                       <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
                                  Foreground="{DynamicResource Text.Primary}"/>
