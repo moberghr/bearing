@@ -31,7 +31,7 @@ internal static class TabContextMenu
         bool canSave,
         Func<Task> close,
         Action? reveal,
-        Action? openFolder,
+        Func<Task>? openFolder,
         KeyGesture? renameGesture = null,
         KeyGesture? saveGesture = null,
         KeyGesture? closeGesture = null)
@@ -48,7 +48,7 @@ internal static class TabContextMenu
         {
             menu.Items.Add(new Separator());
             if (reveal is not null) menu.Items.Add(Sync("Reveal in Scripts", reveal));
-            if (openFolder is not null) menu.Items.Add(Sync("Open containing folder", openFolder));
+            if (openFolder is not null) menu.Items.Add(Item("Open containing folder", null, openFolder));
         }
 
         return menu;

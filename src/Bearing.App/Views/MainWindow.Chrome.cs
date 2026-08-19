@@ -57,7 +57,7 @@ public partial class MainWindow
             canSave: path is null || tab.IsModified,
             close: () => CloseTabAsync(tab),
             reveal: path is null ? null : () => vm.RevealScript(path),
-            openFolder: path is null ? null : () => OpenContainingFolder(path),
+            openFolder: path is null ? null : () => OpenContainingFolderAsync(path),
             renameGesture: MenuGesture(CommandIds.TabRename),
             saveGesture: MenuGesture(CommandIds.FileSave),
             closeGesture: MenuGesture(CommandIds.TabClose));
@@ -81,11 +81,11 @@ public partial class MainWindow
             await Vm.Workspace.SaveScriptAsync(tab, chosen, tab.Text);
     }
 
-    /// <summary>Show a script in the OS file manager. The reveal swallows its own failures and just reports
-    /// false (no file manager, or launching one isn't permitted), so say so rather than dropping it.</summary>
-    private void OpenContainingFolder(string path)
+    /// <summary>Show a script in the OS file manager, selected. The reveal swallows its own failures and just
+    /// reports false (no file manager, or launching one isn't permitted), so say so rather than dropping it.</summary>
+    private async Task OpenContainingFolderAsync(string path)
     {
-        if (Vm is { } vm && !FileReveal.OpenContainingFolder(path))
+        if (!await FileReveal.OpenContainingFolderAsync(path) && Vm is { } vm)
             vm.StatusText = $"Could not open the folder for {Path.GetFileName(path)}.";
     }
 

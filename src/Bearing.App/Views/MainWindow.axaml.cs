@@ -247,7 +247,7 @@ public partial class MainWindow : Window
                 title: "Export complete",
                 message: $"{export.RowCount:N0} rows → {System.IO.Path.GetFileName(export.Path)}",
                 clickHint: "Click to open the folder.",
-                onClick: () => FileReveal.OpenContainingFolder(export.Path),
+                onClick: () => _ = FileReveal.OpenContainingFolderAsync(export.Path),
                 // Unlike a query completion, this one is redundant the moment it's read — the file is already
                 // on disk and the status bar says so too — so it doesn't sit there until dismissed.
                 expiration: TimeSpan.FromSeconds(10)));
