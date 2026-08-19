@@ -378,8 +378,8 @@
                     <TextBlock Text="{Binding Header}" VerticalAlignment="Center"
                                ToolTip.Tip="{Binding HeaderTooltip}"
                                IsVisible="{Binding !IsRenaming}"/>
-                    <TextBox Text="{Binding RenameDraft, Mode=TwoWay}" IsVisible="{Binding IsRenaming}"
-                             MinWidth="90" Padding="2,0" Margin="0,-2" VerticalAlignment="Center"
+                    <TextBox Classes="inline" Text="{Binding RenameDraft, Mode=TwoWay}"
+                             IsVisible="{Binding IsRenaming}" MinWidth="90" VerticalAlignment="Center"
                              KeyDown="OnTabRenameKeyDown" LostFocus="OnTabRenameLostFocus"/>
                     <!-- Running indicator: a rotating arc while this tab has a query in flight. Execution
                          is per-tab, so a background tab shows progress here without being the focused tab. -->

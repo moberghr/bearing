@@ -144,6 +144,39 @@
       <Setter Property="FontFamily" Value="{StaticResource MonoFontFamily}"/>
       <Setter Property="FontSize" Value="13"/>
     </Style>
+
+    <!-- Inline rename boxes (tab headers, script rows). A stock TextBox stands in for a one-line label and
+         towers over it: Fluent gives it a 32px min height, generous padding and a 2px focus border, all of
+         which have to be undone here — including on the template's own border element, which carries the
+         min height itself. Global, so both surfaces can't drift apart. -->
+    <Style Selector="TextBox.inline">
+      <Setter Property="MinHeight" Value="0"/>
+      <Setter Property="Padding" Value="4,0"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="CornerRadius" Value="3"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Accent.Brand}"/>
+      <Setter Property="Background" Value="{DynamicResource Bg.Editor}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+      <Setter Property="SelectionBrush" Value="{DynamicResource Accent.Brand}"/>
+    </Style>
+    <!-- The box is only ever on screen while focused, so the focused look is the look: same 1px accent
+         outline, not Fluent's thicker one, which would resize the row as the caret lands. -->
+    <Style Selector="TextBox.inline:focus">
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Accent.Brand}"/>
+      <Setter Property="Background" Value="{DynamicResource Bg.Editor}"/>
+    </Style>
+    <Style Selector="TextBox.inline:pointerover /template/ Border#PART_BorderElement">
+      <Setter Property="BorderBrush" Value="{DynamicResource Accent.Brand}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+    </Style>
+    <Style Selector="TextBox.inline /template/ Border#PART_BorderElement">
+      <Setter Property="MinHeight" Value="0"/>
+    </Style>
+    <Style Selector="TextBox.inline /template/ DataValidationErrors">
+      <Setter Property="MinHeight" Value="0"/>
+    </Style>
   </Application.Styles>
 
 </Application>
