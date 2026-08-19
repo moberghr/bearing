@@ -363,6 +363,7 @@ public partial class SidebarView : UserControl
     private Point _dragStart;
     private ScriptItem? _dragItem;
     private PointerPressedEventArgs? _dragPress; // DoDragDropAsync requires the originating press args
+    private DragGhost? _ghost;                   // the labelled box that follows the pointer while dragging
 
     private void OnScriptPointerPressed(object? sender, PointerPressedEventArgs e)
     {
@@ -396,6 +397,10 @@ public partial class SidebarView : UserControl
         if (Vm is not null)
             Vm.StatusText = $"Moving {dragged.Name} — drop it on a folder, or anywhere else for the scripts root.";
 
+        // The box that follows the pointer. Not a cursor because Avalonia doesn't offer one — see DragGhost.
+        _ghost = new DragGhost(this);
+        _ghost.Show(dragged.Name);
+
         // Awaited so both marks are released however the drag ends — dropped, cancelled with Esc, or let go
         // outside the window, where no DragLeave arrives to do it. The result also says whether a drop
         // happened at all: a completed move reports itself, so only a cancelled one has to take its own line
@@ -404,6 +409,8 @@ public partial class SidebarView : UserControl
         try { outcome = await DragDrop.DoDragDropAsync(press, transfer, DragDropEffects.Move); }
         finally
         {
+            _ghost?.Dispose();
+            _ghost = null;
             Vm?.Scripts.MarkDragging(null);
             ClearDropTarget();
             if (outcome == DragDropEffects.None && Vm is not null) Vm.StatusText = "";
@@ -417,6 +424,7 @@ public partial class SidebarView : UserControl
         // Both the folder rows and the tree itself route here, and the folder's handler marks the event
         // handled — so whichever call this is already tells us what a drop would hit right now.
         MarkDropTarget(carrying ? FolderOf(sender) : null);
+        if (carrying) _ghost?.FollowPointer(e);
         e.Handled = true;
     }
 
@@ -429,7 +437,10 @@ public partial class SidebarView : UserControl
     {
         var p = e.GetPosition(ScriptsTree);
         if (p.X < 0 || p.Y < 0 || p.X > ScriptsTree.Bounds.Width || p.Y > ScriptsTree.Bounds.Height)
+        {
             ClearDropTarget();
+            _ghost?.Hide();   // no drop surface under the pointer, so there's nothing to follow
+        }
     }
 
     private void MarkDropTarget(ScriptFolderViewModel? folder) => Vm?.Scripts.MarkDropTarget(folder);
