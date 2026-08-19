@@ -42,35 +42,25 @@ public sealed partial class ScriptsViewModel : ObservableObject
 
     partial void OnScriptFilterChanged(string value) => RefreshScripts();
 
-    /// <summary>
-    /// True while a dragged script is over the tree but not over any folder — the drop would move it to the
-    /// scripts root, which is an outcome in its own right and needs its own mark (the tree's edge), not just
-    /// the absence of a highlighted folder.
-    /// </summary>
-    [ObservableProperty] private bool _isRootDropTarget;
-
     /// <summary>The folder currently painted as the drop target. Tracked so it can be un-painted when the
     /// pointer moves on — the tree is rebuilt often enough that hunting for "whichever one is lit" isn't safe.</summary>
     private ScriptFolderViewModel? _dropFolder;
 
     /// <summary>
-    /// Show where a dragged script would land: one folder row, or — with <paramref name="root"/> — the tree's
-    /// own edge for the scripts root. Exactly one target is ever marked. View-model state rather than
-    /// code-behind state (§2.2), which is also the only way it can be tested (§4.3).
+    /// Show where a dragged script would land: the folder row under the pointer, or nothing at all — which is
+    /// itself the mark for "this drop goes to the scripts root". Exactly one folder is ever highlighted.
+    /// View-model state rather than code-behind state (§2.2), which is also the only way it can be tested (§4.3).
     /// </summary>
-    public void MarkDropTarget(ScriptFolderViewModel? folder, bool root)
+    public void MarkDropTarget(ScriptFolderViewModel? folder)
     {
-        if (!ReferenceEquals(_dropFolder, folder))
-        {
-            if (_dropFolder is not null) _dropFolder.IsDropTarget = false;
-            _dropFolder = folder;
-            if (folder is not null) folder.IsDropTarget = true;
-        }
-        IsRootDropTarget = root;
+        if (ReferenceEquals(_dropFolder, folder)) return;
+        if (_dropFolder is not null) _dropFolder.IsDropTarget = false;
+        _dropFolder = folder;
+        if (folder is not null) folder.IsDropTarget = true;
     }
 
     /// <summary>The drag is over — nothing is a drop target any more.</summary>
-    public void ClearDropTarget() => MarkDropTarget(null, root: false);
+    public void ClearDropTarget() => MarkDropTarget(null);
 
     /// <summary>
     /// The tree's selected node (two-way bound to the TreeView) — a <see cref="ScriptItem"/> or a

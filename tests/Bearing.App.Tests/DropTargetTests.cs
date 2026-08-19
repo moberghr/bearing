@@ -13,7 +13,7 @@ namespace Bearing.App.Tests;
 /// Where a dragged script will land. Moving a script between folders worked, but nothing on screen said
 /// which folder would take it, so the only way to find out was to drop and look. What the highlight looks
 /// like is eyeball-QA (§4.3); this covers the state that drives it, and in particular that exactly one
-/// target is ever marked.
+/// folder is ever marked.
 /// </summary>
 public class DropTargetTests : IDisposable
 {
@@ -45,11 +45,10 @@ public class DropTargetTests : IDisposable
         var reports = Folder(vm, "Reports");
         var archive = Folder(vm, "Archive");
 
-        vm.Scripts.MarkDropTarget(reports, root: false);
+        vm.Scripts.MarkDropTarget(reports);
 
         Assert.True(reports.IsDropTarget);
         Assert.False(archive.IsDropTarget);
-        Assert.False(vm.Scripts.IsRootDropTarget);
     }
 
     [Fact]
@@ -60,40 +59,38 @@ public class DropTargetTests : IDisposable
         var vm = await Project();
         var reports = Folder(vm, "Reports");
         var archive = Folder(vm, "Archive");
-        vm.Scripts.MarkDropTarget(reports, root: false);
+        vm.Scripts.MarkDropTarget(reports);
 
-        vm.Scripts.MarkDropTarget(archive, root: false);
+        vm.Scripts.MarkDropTarget(archive);
 
         Assert.False(reports.IsDropTarget);
         Assert.True(archive.IsDropTarget);
     }
 
     [Fact]
-    public async Task Over_the_tree_but_not_a_folder_marks_the_root_instead()
+    public async Task Leaving_the_folders_behind_marks_nothing()
     {
-        // Dropping on anything that isn't a folder row moves the script to the scripts root — a real
-        // outcome, so it gets its own mark rather than reading as "nothing will happen".
+        // Dropping on anything that isn't a folder row moves the script to the scripts root, and no
+        // highlight is how that reads — an outline round the whole pane was tried and was just noise.
         var vm = await Project();
         var reports = Folder(vm, "Reports");
-        vm.Scripts.MarkDropTarget(reports, root: false);
+        vm.Scripts.MarkDropTarget(reports);
 
-        vm.Scripts.MarkDropTarget(null, root: true);
+        vm.Scripts.MarkDropTarget(null);
 
         Assert.False(reports.IsDropTarget);
-        Assert.True(vm.Scripts.IsRootDropTarget);
     }
 
     [Fact]
-    public async Task Ending_the_drag_clears_everything()
+    public async Task Ending_the_drag_clears_the_highlight()
     {
         var vm = await Project();
         var reports = Folder(vm, "Reports");
-        vm.Scripts.MarkDropTarget(reports, root: true);
+        vm.Scripts.MarkDropTarget(reports);
 
         vm.Scripts.ClearDropTarget();
 
         Assert.False(reports.IsDropTarget);
-        Assert.False(vm.Scripts.IsRootDropTarget);
     }
 
     [Fact]
@@ -101,12 +98,11 @@ public class DropTargetTests : IDisposable
     {
         var vm = await Project();
         var reports = Folder(vm, "Reports");
-        vm.Scripts.MarkDropTarget(reports, root: false);
+        vm.Scripts.MarkDropTarget(reports);
 
         vm.Scripts.RefreshScripts();   // a completed move refreshes, and every node is rebuilt
 
         Assert.False(reports.IsDropTarget);
         Assert.False(Folder(vm, "Reports").IsDropTarget);
-        Assert.False(vm.Scripts.IsRootDropTarget);
     }
 }

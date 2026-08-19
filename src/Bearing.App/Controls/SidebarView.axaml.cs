@@ -386,10 +386,19 @@ public partial class SidebarView : UserControl
         var press = _dragPress;
         _dragItem = null;
         _dragPress = null;
-        // Awaited so the drop highlight is cleared however the drag ends — dropped, cancelled with Esc, or
-        // let go outside the window, where no DragLeave arrives to do it.
+        // A move cursor for the duration: the platform drag gives no cursor feedback here, so without this
+        // the only sign a drag is in progress is the highlight under the pointer.
+        using var cursor = new Cursor(StandardCursorType.DragMove);
+        var restore = ScriptsTree.Cursor;
+        ScriptsTree.Cursor = cursor;
+        // Awaited so the cursor and the drop highlight are both released however the drag ends — dropped,
+        // cancelled with Esc, or let go outside the window, where no DragLeave arrives to do it.
         try { await DragDrop.DoDragDropAsync(press, transfer, DragDropEffects.Move); }
-        finally { ClearDropTarget(); }
+        finally
+        {
+            ScriptsTree.Cursor = restore;
+            ClearDropTarget();
+        }
     }
 
     private void OnScriptDragOver(object? sender, DragEventArgs e)
@@ -398,8 +407,7 @@ public partial class SidebarView : UserControl
         e.DragEffects = carrying ? DragDropEffects.Move : DragDropEffects.None;
         // Both the folder rows and the tree itself route here, and the folder's handler marks the event
         // handled — so whichever call this is already tells us what a drop would hit right now.
-        var folder = carrying ? FolderOf(sender) : null;
-        MarkDropTarget(folder, root: carrying && folder is null);
+        MarkDropTarget(carrying ? FolderOf(sender) : null);
         e.Handled = true;
     }
 
@@ -415,7 +423,7 @@ public partial class SidebarView : UserControl
             ClearDropTarget();
     }
 
-    private void MarkDropTarget(ScriptFolderViewModel? folder, bool root) => Vm?.Scripts.MarkDropTarget(folder, root);
+    private void MarkDropTarget(ScriptFolderViewModel? folder) => Vm?.Scripts.MarkDropTarget(folder);
 
     private void ClearDropTarget() => Vm?.Scripts.ClearDropTarget();
 

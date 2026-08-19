@@ -88,13 +88,10 @@
             <!-- Enter opens the selected script; drag a script onto a folder to move it (OnScripts* handlers). -->
             <!-- SelectedItem is bound so a view-model can set it: "Reveal in Scripts" selects a tab's file,
                  and the selection then survives the wholesale rebuild in RefreshScripts. -->
-            <!-- The tree's own edge lights up while a drag would land in the scripts root (dropping on
-                 anything that isn't a folder row moves the script there). Kept to a soft 1px line that is
-                 always there — transparent when idle — so nothing reflows when it appears. -->
+            <!-- A drag that isn't over a folder lands in the scripts root, and is marked by *nothing* being
+                 highlighted: an outline round the whole pane was tried for it and read as noise. -->
             <TreeView x:Name="ScriptsTree" ItemsSource="{Binding Scripts.ScriptNodes}" Background="Transparent"
                       SelectedItem="{Binding Scripts.SelectedNode, Mode=TwoWay}"
-                      BorderThickness="1" CornerRadius="4"
-                      BorderBrush="{Binding Scripts.IsRootDropTarget, Converter={StaticResource DropTarget}, ConverterParameter=Border}"
                       KeyDown="OnScriptsTreeKeyDown" DragDrop.AllowDrop="True"
                       DragDrop.DragOver="OnScriptDragOver" DragDrop.DragLeave="OnScriptDragLeave"
                       DragDrop.Drop="OnScriptDropOnRoot">
@@ -106,12 +103,13 @@
               <TreeView.DataTemplates>
                 <!-- Folder: amber glyph + name + right-aligned count. A drop target for scripts. -->
                 <TreeDataTemplate DataType="vm:ScriptFolderViewModel" ItemsSource="{Binding Children}">
-                  <!-- A Border, not a bare Grid, so the drop highlight is a rounded inset chip rather than a
-                       flat band running to the pane's edge. No BorderThickness: the tint appears and goes
-                       without moving the row, and the fill alone reads as a target without competing with
-                       the (blue) selection. Transparent otherwise, so the row still takes the pointer. -->
+                  <!-- A Border, not a bare Grid, so the drop highlight is a padded chip rather than a filled
+                       row: the padding is what makes it read as a zone the script goes *into*. Applied always,
+                       target or not, so the row doesn't jump when the tint appears — folder rows end up a
+                       little taller than file rows, which suits them as headers. No BorderThickness; the fill
+                       alone marks the target without competing with the (blue) selection. -->
                   <Border Background="{Binding IsDropTarget, Converter={StaticResource DropTarget}}"
-                          CornerRadius="4" Margin="0,1,6,1" Padding="2,0"
+                          CornerRadius="6" Margin="0,1,10,1" Padding="6,4"
                           DragDrop.AllowDrop="True" DragDrop.DragOver="OnScriptDragOver" DragDrop.Drop="OnScriptDropOnFolder">
                     <Border.ContextMenu>
                       <ContextMenu>
