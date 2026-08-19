@@ -8,8 +8,11 @@ public sealed class SchemaSnapshot : ISchemaSnapshot
 {
     private readonly Dictionary<long, List<ColumnInfo>> _columnsByTable;
     private readonly Dictionary<long, List<ForeignKeyInfo>> _fksByTable;
-    // (schema, lower-name) and (lower-name) lookups
-    private readonly Dictionary<(string schema, string name), TableInfo> _bySchemaName;
+    // Case-folded (schema, name) and (name) lookups. Both map to a *list*: Postgres lets one schema
+    // hold two relations differing only by case (quoted identifiers reach them), so folding the key can
+    // collide. A plain dictionary threw while *building* the snapshot, taking completion, the schema
+    // browser and editability resolution down for the whole database.
+    private readonly Dictionary<(string schema, string name), List<TableInfo>> _bySchemaName;
     private readonly Dictionary<string, List<TableInfo>> _byName;
 
     public string Database { get; }
@@ -44,7 +47,9 @@ public sealed class SchemaSnapshot : ISchemaSnapshot
                 Add(_fksByTable, fk.ReferencedTableId, fk);
         }
 
-        _bySchemaName = tables.ToDictionary(t => (t.Schema.ToLowerInvariant(), t.Name.ToLowerInvariant()), t => t);
+        _bySchemaName = tables
+            .GroupBy(t => (t.Schema.ToLowerInvariant(), t.Name.ToLowerInvariant()))
+            .ToDictionary(g => g.Key, g => g.ToList());
         _byName = tables
             .GroupBy(t => t.Name.ToLowerInvariant())
             .ToDictionary(g => g.Key, g => g.ToList());
@@ -63,20 +68,42 @@ public sealed class SchemaSnapshot : ISchemaSnapshot
     {
         var n = name.ToLowerInvariant();
         if (schema is not null)
-            return _bySchemaName.TryGetValue((schema.ToLowerInvariant(), n), out var t) ? t : null;
+        {
+            if (!_bySchemaName.TryGetValue((schema.ToLowerInvariant(), n), out var inSchema))
+                return null;
+            // The caller's spelling wins when it names a relation exactly: `"Users"` must not answer
+            // `users`. Only fall back to the folded hit when nothing matches case-sensitively, which is
+            // the unquoted path Postgres folds (`from users` finding `Users` in a one-relation schema).
+            return ExactName(inSchema, name) ?? inSchema[0];
+        }
 
         if (!_byName.TryGetValue(n, out var candidates) || candidates.Count == 0)
             return null;
         if (candidates.Count == 1)
             return candidates[0];
 
+        // Same rule, one step earlier: narrow to the exact-case spellings before search_path breaks ties,
+        // so a `Users` in a later schema is not shadowed by a `users` in an earlier one (they are
+        // different relations to Postgres, not two candidates for the same name).
+        var pool = candidates.Where(t => string.Equals(t.Name, name, StringComparison.Ordinal)).ToList();
+        if (pool.Count == 0) pool = candidates;
+        if (pool.Count == 1) return pool[0];
+
         // Ambiguous bare name: prefer the earliest schema in search_path order.
         foreach (var s in Schemas)
         {
-            var hit = candidates.FirstOrDefault(t => string.Equals(t.Schema, s, StringComparison.OrdinalIgnoreCase));
+            var hit = pool.FirstOrDefault(t => string.Equals(t.Schema, s, StringComparison.OrdinalIgnoreCase));
             if (hit is not null) return hit;
         }
-        return candidates[0];
+        return pool[0];
+    }
+
+    /// <summary>The first candidate spelled exactly as the caller spelled it, or null when none is.</summary>
+    private static TableInfo? ExactName(List<TableInfo> candidates, string name)
+    {
+        foreach (var t in candidates)
+            if (string.Equals(t.Name, name, StringComparison.Ordinal)) return t;
+        return null;
     }
 
     public IReadOnlyList<ForeignKeyInfo> ForeignKeysTouching(long tableId)
