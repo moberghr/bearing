@@ -19,6 +19,7 @@
       <conv:EnumToBoolConverter x:Key="EnumToBool"/>
       <conv:ResourceGeometryConverter x:Key="ResourceGeometry"/>
       <conv:MatchHighlightConverter x:Key="MatchHighlight"/>
+      <conv:DropTargetConverter x:Key="DropTarget"/>
       <conv:PanelActiveConverter x:Key="PanelActive"/>
       <!-- Shared monospace family for the code editor(s) and result grid. Iosevka is
            installed as the "Nerd Font Mono" build; the rest are fallbacks. -->

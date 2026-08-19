@@ -88,10 +88,15 @@
             <!-- Enter opens the selected script; drag a script onto a folder to move it (OnScripts* handlers). -->
             <!-- SelectedItem is bound so a view-model can set it: "Reveal in Scripts" selects a tab's file,
                  and the selection then survives the wholesale rebuild in RefreshScripts. -->
+            <!-- The tree's own edge lights up while a drag would land in the scripts root (dropping on
+                 anything that isn't a folder row moves the script there). -->
             <TreeView x:Name="ScriptsTree" ItemsSource="{Binding Scripts.ScriptNodes}" Background="Transparent"
                       SelectedItem="{Binding Scripts.SelectedNode, Mode=TwoWay}"
+                      BorderThickness="1" CornerRadius="4"
+                      BorderBrush="{Binding Scripts.IsRootDropTarget, Converter={StaticResource DropTarget}, ConverterParameter=Border}"
                       KeyDown="OnScriptsTreeKeyDown" DragDrop.AllowDrop="True"
-                      DragDrop.DragOver="OnScriptDragOver" DragDrop.Drop="OnScriptDropOnRoot">
+                      DragDrop.DragOver="OnScriptDragOver" DragDrop.DragLeave="OnScriptDragLeave"
+                      DragDrop.Drop="OnScriptDropOnRoot">
               <TreeView.Styles>
                 <Style Selector="TreeViewItem">
                   <Setter Property="IsExpanded" Value="{ReflectionBinding IsExpanded, Mode=TwoWay}"/>
@@ -100,7 +105,10 @@
               <TreeView.DataTemplates>
                 <!-- Folder: amber glyph + name + right-aligned count. A drop target for scripts. -->
                 <TreeDataTemplate DataType="vm:ScriptFolderViewModel" ItemsSource="{Binding Children}">
-                  <Grid ColumnDefinitions="Auto,*,Auto" Background="Transparent"
+                  <!-- Tinted while a dragged script hovers it: the row is the drop target, and until now
+                       nothing said so. Transparent otherwise, so the row still takes the pointer. -->
+                  <Grid ColumnDefinitions="Auto,*,Auto"
+                        Background="{Binding IsDropTarget, Converter={StaticResource DropTarget}}"
                         DragDrop.AllowDrop="True" DragDrop.DragOver="OnScriptDragOver" DragDrop.Drop="OnScriptDropOnFolder">
                     <Grid.ContextMenu>
                       <ContextMenu>

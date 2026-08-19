@@ -317,7 +317,7 @@ public partial class SidebarView : UserControl
         }
     }
 
-    private void OnScriptPointerMoved(object? sender, PointerEventArgs e)
+    private async void OnScriptPointerMoved(object? sender, PointerEventArgs e)
     {
         if (_dragItem is null || _dragPress is null || !e.GetCurrentPoint(sender as Visual).Properties.IsLeftButtonPressed) return;
         var pos = e.GetPosition(null);
@@ -328,17 +328,32 @@ public partial class SidebarView : UserControl
         var press = _dragPress;
         _dragItem = null;
         _dragPress = null;
-        _ = DragDrop.DoDragDropAsync(press, transfer, DragDropEffects.Move);
+        // Awaited so the drop highlight is cleared however the drag ends — dropped, cancelled with Esc, or
+        // let go outside the window, where no DragLeave arrives to do it.
+        try { await DragDrop.DoDragDropAsync(press, transfer, DragDropEffects.Move); }
+        finally { ClearDropTarget(); }
     }
 
     private void OnScriptDragOver(object? sender, DragEventArgs e)
     {
-        e.DragEffects = e.DataTransfer.Contains(ScriptPathFormat) ? DragDropEffects.Move : DragDropEffects.None;
+        var carrying = e.DataTransfer.Contains(ScriptPathFormat);
+        e.DragEffects = carrying ? DragDropEffects.Move : DragDropEffects.None;
+        // Both the folder rows and the tree itself route here, and the folder's handler marks the event
+        // handled — so whichever call this is already tells us what a drop would hit right now.
+        var folder = carrying ? FolderOf(sender) : null;
+        MarkDropTarget(folder, root: carrying && folder is null);
         e.Handled = true;
     }
 
+    private void OnScriptDragLeave(object? sender, DragEventArgs e) => ClearDropTarget();
+
+    private void MarkDropTarget(ScriptFolderViewModel? folder, bool root) => Vm?.Scripts.MarkDropTarget(folder, root);
+
+    private void ClearDropTarget() => Vm?.Scripts.ClearDropTarget();
+
     private void OnScriptDropOnFolder(object? sender, DragEventArgs e)
     {
+        ClearDropTarget();
         if (Vm is not null && FolderOf(sender) is { } folder && e.DataTransfer.TryGetValue(ScriptPathFormat) is string src)
         {
             Vm.Scripts.MoveScript(src, folder.FullPath);
@@ -348,6 +363,7 @@ public partial class SidebarView : UserControl
 
     private void OnScriptDropOnRoot(object? sender, DragEventArgs e)
     {
+        ClearDropTarget();
         if (Vm?.ScriptsDirectory is { } root && e.DataTransfer.TryGetValue(ScriptPathFormat) is string src)
         {
             Vm.Scripts.MoveScript(src, root);
