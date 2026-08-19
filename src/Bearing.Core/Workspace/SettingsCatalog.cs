@@ -49,6 +49,17 @@ public static class SettingsCatalog
             Get = s => s.RestoreWindowSize,
             Set = (s, v) => s with { RestoreWindowSize = v },
         },
+        new BoolSetting
+        {
+            Key = "general.showMenuBar",
+            CategoryId = General,
+            Title = "Always show the menu bar",
+            Description = "Keep the File/Edit/View/Query/Help bar on screen. Off, tap Alt to reveal it and "
+                        + "Esc or a click elsewhere to hide it again.",
+            Keywords = "menu menubar bar alt hidden pinned toolbar",
+            Get = s => s.ShowMenuBar,
+            Set = (s, v) => s with { ShowMenuBar = v },
+        },
 
         // ---- Editor ----------------------------------------------------------------------------
         new EnumSetting

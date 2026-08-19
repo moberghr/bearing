@@ -73,7 +73,16 @@ public sealed partial class ShellViewModel : ObservableObject
             credentialPrompt: credentialPrompt, entraTokens: entraTokens, settings: settings);
         _ctx.Status = text => StatusText = text;
         EditorFontSize = _ctx.Settings.EditorFontSize;
-        _ctx.SettingsService.Changed += s => EditorFontSize = s.EditorFontSize;
+        IsMenuVisible = _ctx.Settings.ShowMenuBar;
+        _ctx.SettingsService.Changed += s =>
+        {
+            EditorFontSize = s.EditorFontSize;
+            // Pinning shows the bar at once; unpinning takes it away again rather than leaving it stranded
+            // on screen with nothing left that would hide it.
+            OnPropertyChanged(nameof(IsMenuPinned));
+            OnPropertyChanged(nameof(IsMenuTransient));
+            IsMenuVisible = s.ShowMenuBar;
+        };
         _connections = new ConnectionsViewModel(_ctx);
         _scripts = new ScriptsViewModel(_ctx, UpdateTitle);
         // The workspace owns the tabs and coordinates with the scripts concern (refresh tree / rename file)
@@ -114,8 +123,22 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The inline history panel (day-grouped, filterable) shown when ActivePanel = History.</summary>
     public HistoryPanelViewModel History { get; }
 
-    /// <summary>The Alt-toggled menu bar (File/Edit/View/Query/Help); hidden by default (design §).</summary>
-    [ObservableProperty] private bool _isMenuVisible;
+    /// <summary>Whether the menu bar is on screen — pinned, or revealed by an Alt tap (design §).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsMenuTransient))]
+    private bool _isMenuVisible;
+
+    /// <summary>Whether the menu bar is pinned open (Settings ▸ General). Kept separate from
+    /// <see cref="IsMenuVisible"/>, which only says whether it is on screen: every auto-hide path asks this
+    /// first, or using the menu would make it vanish.</summary>
+    public bool IsMenuPinned => _ctx.Settings.ShowMenuBar;
+
+    /// <summary>
+    /// The menu bar is showing as a transient Alt reveal. That state <em>is</em> modal-ish — it owns Escape
+    /// and suppresses global keys until it's dismissed. A pinned bar must do neither: it's furniture, and it
+    /// would otherwise swallow every shortcut in the app for the whole session.
+    /// </summary>
+    public bool IsMenuTransient => IsMenuVisible && !IsMenuPinned;
 
     /// <summary>Show a side panel: switch to it <em>and</em> reveal the pane. Both halves are explicit on
     /// purpose. Revealing used to be a side effect of <see cref="OnActivePanelChanged"/>, but

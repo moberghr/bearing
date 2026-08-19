@@ -52,6 +52,13 @@ public sealed record AppSettings
     /// <summary>Whether the main window reopens at the size it was last closed at.</summary>
     public bool RestoreWindowSize { get; init; } = true;
 
+    /// <summary>
+    /// Whether the menu bar stays on screen. Off, it is Alt-tap-to-reveal only — invisible to anyone who
+    /// doesn't know the gesture. Pinned, it is furniture: nothing auto-hides it, and it no longer counts as
+    /// a modal-ish surface that swallows global shortcuts.
+    /// </summary>
+    public bool ShowMenuBar { get; init; }
+
     // ---- persisted state, not user-facing preferences (no catalog entry; see SettingsCatalogTests) ----
 
     /// <summary>Last main-window width, written on close. Null until a window has been closed once.</summary>

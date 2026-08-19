@@ -109,8 +109,9 @@
 
   <DockPanel LastChildFill="True">
 
-    <!-- Alt-toggled menu bar (design §Interactions): hidden by default. Docked above the toolbar so it
-         sits at the very top when shown. Open/Save live only here. -->
+    <!-- Menu bar (design §Interactions): hidden by default and revealed by an Alt tap, or pinned open by
+         Settings ▸ General ▸ Always show the menu bar. Docked above the toolbar so it sits at the very top
+         when shown. Open/Save live only here. -->
     <Menu x:Name="MainMenu" DockPanel.Dock="Top" IsVisible="{Binding IsMenuVisible}" Background="{DynamicResource Bg.Window}"
           BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
       <!-- InputGesture text is set in code from the active keymap (see SyncMenuGestures) so the menu

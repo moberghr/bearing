@@ -41,7 +41,7 @@ public partial class MainWindow
         // Escape only claims the key when there's something to dismiss; otherwise it falls through.
         r.Register(KeyCommand.Sync(CommandIds.AppEscape, "Escape / cancel", KeyScope.Global, "View",
             () => HandleEscape(),
-            canRun: () => Vm is not null && (_palette.AnyOpen || Vm.IsMenuVisible || Vm.Execution.IsBusy)));
+            canRun: () => Vm is not null && (_palette.AnyOpen || Vm.IsMenuTransient || Vm.Execution.IsBusy)));
         r.Register(KeyCommand.Sync(CommandIds.PaletteOpen, "Command palette", KeyScope.Global, "View",
             () => { if (Vm is not null) _palette.TogglePalette(); }));
         r.Register(KeyCommand.Sync(CommandIds.TabNext, "Next tab (visual order)", KeyScope.Global, "Tabs", () => WithWorkspace(ws => _tabs.SelectAdjacent(ws, +1))));
@@ -149,7 +149,9 @@ public partial class MainWindow
         if (e.Key is Key.LeftAlt or Key.RightAlt && _altAlone && Vm is not null)
         {
             _altAlone = false;
-            Vm.IsMenuVisible = !Vm.IsMenuVisible;
+            // Pinned, there is nothing to toggle — Alt just moves the keyboard into the bar that's already
+            // there. Toggling would hide the menu the user asked to keep.
+            if (!Vm.IsMenuPinned) Vm.IsMenuVisible = !Vm.IsMenuVisible;
             if (Vm.IsMenuVisible) Dispatcher.UIThread.Post(() => MainMenu.Focus()); // enable keyboard menu nav
         }
     }
@@ -174,32 +176,35 @@ public partial class MainWindow
     private void OnWindowEscapeCancel(object? sender, KeyEventArgs e)
     {
         if (e.Handled || e.Key is not Key.Escape || Vm is null) return;
-        if (_palette.AnyOpen || Vm.IsMenuVisible) return;
+        if (_palette.AnyOpen || Vm.IsMenuTransient) return;
         if (Vm.Execution.IsBusy) { Vm.Execution.CancelExecution(); e.Handled = true; }
     }
 
-    /// <summary>Esc unwinds, most-modal first: an overlay → the menu bar → a running query.</summary>
+    /// <summary>Esc unwinds, most-modal first: an overlay → a transient menu bar → a running query. A pinned
+    /// bar isn't a surface to dismiss, so Esc goes straight past it to the query.</summary>
     private bool HandleEscape()
     {
         if (Vm is null) return false;
         if (_palette.HideTopmost()) return true;
-        if (Vm.IsMenuVisible) { Vm.IsMenuVisible = false; return true; }
+        if (Vm.IsMenuTransient) { Vm.IsMenuVisible = false; return true; }
         if (Vm.Execution.IsBusy) { Vm.Execution.CancelExecution(); return true; }
         return false;
     }
 
-    /// <summary>A press anywhere outside the menu bar dismisses it. Clicks on an open submenu land on a
-    /// separate popup top-level, so they never reach this window handler — only genuine outside clicks do.</summary>
+    /// <summary>A press anywhere outside a transient menu bar dismisses it (a pinned one stays). Clicks on an
+    /// open submenu land on a separate popup top-level, so they never reach this window handler — only genuine
+    /// outside clicks do.</summary>
     private void OnWindowPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (Vm?.IsMenuVisible == true && e.Source is Visual v && !FocusRing.IsWithin(v, MainMenu))
+        if (Vm?.IsMenuTransient == true && e.Source is Visual v && !FocusRing.IsWithin(v, MainMenu))
             Vm.IsMenuVisible = false;
     }
 
-    /// <summary>Invoking a leaf menu item (one that does something, not a submenu header) closes the bar.</summary>
+    /// <summary>Invoking a leaf menu item (one that does something, not a submenu header) closes a transient
+    /// bar. A pinned bar stays — it would otherwise vanish the moment it was used.</summary>
     private void OnMenuItemInvoked(object? sender, RoutedEventArgs e)
     {
-        if (Vm is not null && e.Source is MenuItem { ItemCount: 0 }) Vm.IsMenuVisible = false;
+        if (Vm?.IsMenuTransient == true && e.Source is MenuItem { ItemCount: 0 }) Vm.IsMenuVisible = false;
     }
 
     /// <summary>Set each menu item's shown gesture from the active keymap, so the menu can never drift
