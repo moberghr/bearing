@@ -341,8 +341,12 @@ internal sealed class FakeSecretStore : ISecretStore
     public bool IsSecure { get; init; } = true;
     public List<Guid> Fetched { get; } = new();
 
-    /// <summary>False models a machine with no keyring and no opt-in: writes are refused, reads still work.</summary>
+    /// <summary>False models a machine with no reachable keychain: writes are refused and nothing is kept.</summary>
     public bool CanStore { get; init; } = true;
+
+    /// <summary>What the store said when it was rejected — carried to the UI so a warning can explain
+    /// itself instead of asserting a cause (see SecretStorageAdvice).</summary>
+    public string? UnavailableReason { get; init; }
 
     public Task SetPasswordAsync(Guid id, string password, CancellationToken ct)
     {
@@ -351,8 +355,8 @@ internal sealed class FakeSecretStore : ISecretStore
         return Task.CompletedTask;
     }
 
-    /// <summary>Seed a secret regardless of <see cref="CanStore"/> — models one written before the opt-in
-    /// was withdrawn, or by a keyring that later went away.</summary>
+    /// <summary>Seed a secret regardless of <see cref="CanStore"/> — models one written by a keyring that
+    /// later went away.</summary>
     public void Seed(Guid id, string password) => _store[id] = password;
 
     /// <summary>Thrown from <see cref="GetPasswordAsync"/> — a keyring that *errored* rather than answering

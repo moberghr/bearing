@@ -5,11 +5,18 @@ Shared checklist: `.claude/references/security-checklist.md`.
 
 ## §1.1 — Secrets
 - NEVER log, print, or write connection passwords to disk outside the secret store.
-- Passwords go through `ISecretStore`. When no OS keyring is available the fallback stores secrets
-  **unencrypted** (base64) under `~/.local/share/bearing/secrets/<guid>` — this is surfaced to the user
-  (`SecretStorageSecure`, amber warning). DO NOT silently weaken or hide that posture.
-- Platform keychain / real fallback encryption is deferred, not abandoned — don't remove the warning as
-  a shortcut.
+- Passwords go through `ISecretStore`, and the only implementations that store anything are the three OS
+  credential stores (`SecretToolSecretStore`, `WindowsCredentialSecretStore`, `MacKeychainSecretStore`).
+- WHEN no keychain is reachable the store is `NoSecretStore`: `SetPasswordAsync` throws
+  `SecretStorageRefusedException`, reads return null, and the connection prompts and holds the password in
+  memory for the session. **There is no on-disk fallback and no setting to re-enable one** (removed
+  2026-08-19, with `LegacySecretFiles.Purge` deleting what the old opt-in wrote). DO NOT add a "save it
+  anyway" path — an encrypted-at-rest store keyed by something the user supplies would be a new design, not
+  a flag.
+- The posture is surfaced, never silent: `SecretStorageSecure` in the status bar, and the connection
+  dialog's amber block. That warning must say the keychain **couldn't be reached** and show the reason the
+  probe reported (`ISecretStore.UnavailableReason` → `SecretStorageAdvice`) — never assert a cause nobody
+  checked.
 
 ## §1.2 — Write guard (destructive SQL)
 - `Bearing.Sql.WriteGuard` flags data-modifying / DDL statements (INSERT/UPDATE/DELETE/MERGE, DROP/

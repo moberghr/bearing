@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Bearing.App.Connections;
 using Bearing.App.Services;
 using Bearing.Core.Data;
 
@@ -72,18 +73,19 @@ public partial class ConnectionDialog : Window
 
     private void OnCredentialKindChanged(object? sender, SelectionChangedEventArgs e) => UpdateCredentialVisibility();
 
-    /// <summary>Only the stored-password kind shows the password box + a no-keyring warning; prompt and
-    /// Entra never persist a secret (nothing to store), and Entra shows the az hint instead. Which warning
-    /// appears depends on the posture: with no keyring the password *can't* be saved (default), unless the
-    /// user has opted into the unencrypted file, in which case it can — badly.</summary>
+    /// <summary>Only the stored-password kind shows the password box + the no-keychain warning; prompt and
+    /// Entra never persist a secret (nothing to store), and Entra shows the az hint instead. With no reachable
+    /// keychain a password can't be saved at all — the warning says so and, where the probe's reason allows,
+    /// what to do about it.</summary>
     private void UpdateCredentialVisibility()
     {
         var kind = SelectedCredentialKind();
         var stored = kind == CredentialKind.StoredPassword;
         PasswordLabel.IsVisible = stored;
         PasswordBox.IsVisible = stored;
-        InsecureWarning.IsVisible = stored && !_storage.Secure && _storage.CanStore;
         NoStorageWarning.IsVisible = stored && !_storage.CanStore;
+        if (NoStorageWarning.IsVisible)
+            NoStorageWarningText.Text = SecretStorageAdvice.NoStorageWarning(_storage.Reason);
         EntraHint.IsVisible = kind == CredentialKind.EntraToken;
     }
 

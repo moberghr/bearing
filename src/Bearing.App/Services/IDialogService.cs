@@ -33,12 +33,12 @@ public enum CloseChoice
 }
 
 /// <summary>
-/// Where a connection password would end up, as the connection editor needs to see it.
-/// <see cref="Secure"/> false + <see cref="CanStore"/> true is the opted-in file fallback (base64 on disk,
-/// warn loudly); both false is the default no-keyring posture, where a password can't be saved at all and
-/// the connection must prompt for it instead.
+/// Where a connection password would end up, as the connection editor needs to see it. Either a real OS
+/// keychain (both flags true), or no keychain could be reached — in which case nothing is stored anywhere
+/// and the connection must prompt for the password instead. <see cref="Reason"/> carries what the store
+/// actually said, so the warning can explain itself rather than guess.
 /// </summary>
-public readonly record struct SecretStoragePosture(bool Secure, bool CanStore)
+public readonly record struct SecretStoragePosture(bool Secure, bool CanStore, string? Reason = null)
 {
     /// <summary>The posture to assume when no store is attached yet (headless/tests): a real keychain, so
     /// nothing warns and nothing is blocked.</summary>

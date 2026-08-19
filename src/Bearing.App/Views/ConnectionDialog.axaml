@@ -39,19 +39,13 @@
     <TextBlock x:Name="EntraHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,4,0,0"
                Text="Signs in via the Azure CLI (`az account get-access-token`). Run `az login` first. The token is refreshed automatically and never touches the secret store."/>
 
-    <Border x:Name="InsecureWarning" IsVisible="False"
-            Background="#2F2B22" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
-            Padding="8,6" Margin="0,4,0,0">
-      <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Warn.Amber}" FontSize="12"
-                 Text="⚠ No system keyring found — this password will be stored unencrypted on disk (base64) in your data directory. Anyone who can read your files can recover it."/>
-    </Border>
-
-    <!-- Default no-keyring posture: nothing is written to disk, so say what will happen instead. -->
+    <!-- No keychain: nothing is stored anywhere, so say what will happen instead — and why, which the
+         code-behind fills in from what the store actually reported (SecretStorageAdvice). -->
     <Border x:Name="NoStorageWarning" IsVisible="False"
             Background="#2F2B22" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
             Padding="8,6" Margin="0,4,0,0">
-      <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Warn.Amber}" FontSize="12"
-                 Text="⚠ No system keyring found — this password will NOT be saved. Bearing asks for it when you connect and keeps it in memory for this session only. Choose &quot;Prompt each time&quot; to make that explicit, or enable Settings ▸ Security ▸ &quot;Store passwords on disk…&quot; to save it unencrypted anyway."/>
+      <TextBlock x:Name="NoStorageWarningText" TextWrapping="Wrap"
+                 Foreground="{DynamicResource Warn.Amber}" FontSize="12"/>
     </Border>
 
     <Separator Margin="0,4"/>

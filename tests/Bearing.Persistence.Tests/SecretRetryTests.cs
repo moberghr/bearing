@@ -8,7 +8,7 @@ namespace Bearing.Persistence.Tests;
 /// The probe retries, and why. A healthy libsecret refuses roughly one secret transfer in 80 (measured
 /// 2026-08-13: 3 failures in 250 store→read→delete cycles, all
 /// <c>"The secret was transferred or encrypted in an invalid way."</c>). The probe used to treat one refusal as
-/// "this machine has no credential store", which demoted the session to the password-refusing file fallback —
+/// "this machine has no credential store", which demoted the session to storing no passwords at all —
 /// the actual cause of the "No system keyring found" reports on a machine whose keyring worked.
 /// </summary>
 public class SecretRetryTests

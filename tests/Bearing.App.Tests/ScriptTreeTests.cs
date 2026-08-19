@@ -14,13 +14,17 @@ namespace Bearing.App.Tests;
 public class ScriptTreeTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "bearing-scripts", Guid.NewGuid().ToString("N"));
+
+    /// <summary>One store for the whole test, so a secret saved through one view model still
+    /// resolves through the next — the on-disk store this replaced was shared the same way.</summary>
+    private readonly FakeSecretStore _secrets = new();
     public void Dispose() { try { if (Directory.Exists(_root)) Directory.Delete(_root, true); } catch { } }
 
     private ShellViewModel NewVm() => new(
         new ProviderRegistry(), new JsonProjectStore(), new JsonSessionStore(),
         new SqliteQueryLog(Path.Combine(_root, "log.sqlite")),
         new FileRecentProjects(Path.Combine(_root, "recent.json")),
-        new FileFallbackSecretStore(Path.Combine(_root, "secrets")));
+        _secrets);
 
     [Fact]
     public async Task Scripts_group_into_folders_and_filter()

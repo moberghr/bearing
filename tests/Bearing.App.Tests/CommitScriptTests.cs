@@ -17,6 +17,10 @@ namespace Bearing.App.Tests;
 public class CommitScriptTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "bearing-commit", Guid.NewGuid().ToString("N"));
+
+    /// <summary>One store for the whole test, so a secret saved through one view model still
+    /// resolves through the next — the on-disk store this replaced was shared the same way.</summary>
+    private readonly FakeSecretStore _secrets = new();
     public void Dispose() { try { if (Directory.Exists(_root)) Directory.Delete(_root, true); } catch { } }
 
     private ShellViewModel NewVm() => new(
@@ -25,7 +29,7 @@ public class CommitScriptTests : IDisposable
         new JsonSessionStore(),
         new SqliteQueryLog(Path.Combine(_root, "log.sqlite")),
         new FileRecentProjects(Path.Combine(_root, "recent.json")),
-        new FileFallbackSecretStore(Path.Combine(_root, "secrets")));
+        _secrets);
 
     private static ResultSetViewModel EditableResultWith(Action<ResultSetViewModel> stage)
     {

@@ -12,7 +12,7 @@ namespace Bearing.App.Tests;
 
 /// <summary>
 /// Re-asking whether this machine has a usable keychain. The startup probe runs once, extremely early, and a
-/// keyring that wasn't serving yet at that instant used to pin the app into the file fallback for the whole
+/// keyring that wasn't serving yet at that instant used to pin the app into storing nothing for the whole
 /// session — refusing to save passwords, warning that no keyring exists, with no way to re-check but a
 /// restart. That is a real Linux case (reported 2026-08-13 on a machine whose libsecret worked perfectly).
 /// <para>
@@ -37,6 +37,47 @@ public class SecretStorageRefreshTests : IDisposable
 
     private static FakeSecretStore NoKeyring => new() { IsSecure = false, CanStore = false };
     private static FakeSecretStore Keychain => new() { IsSecure = true, CanStore = true };
+
+    [Fact]
+    public void The_posture_carries_why_the_store_is_unusable()
+    {
+        // The connection dialog turns this into advice (SecretStorageAdviceTests); without it the warning is
+        // back to asserting a cause nobody checked.
+        var vm = NewVm();
+        vm.AttachSecretStore(new FakeSecretStore
+        {
+            IsSecure = false,
+            CanStore = false,
+            UnavailableReason = "secret-tool: the prompt was dismissed",
+        });
+
+        Assert.Equal("secret-tool: the prompt was dismissed", vm.SecretStorage.Reason);
+
+        vm.AttachSecretStore(Keychain);
+        Assert.Null(vm.SecretStorage.Reason);   // nothing to explain when it works
+    }
+
+    [Fact]
+    public async Task A_re_probe_that_still_finds_nothing_refreshes_the_reason()
+    {
+        // The posture didn't improve, so nothing is announced — but the dialog is about to explain *why*
+        // passwords can't be saved, and the startup reason may be stale by now.
+        var vm = NewVm();
+        var later = new FakeSecretStore
+        {
+            IsSecure = false,
+            CanStore = false,
+            UnavailableReason = "secret-tool: the prompt was dismissed",
+        };
+        vm.AttachSecretStore(
+            new FakeSecretStore { IsSecure = false, CanStore = false, UnavailableReason = "no session bus" },
+            reprobe: _ => Task.FromResult<ISecretStore>(later));
+
+        Assert.False(await vm.RefreshSecretStorageAsync());   // still no keychain: nothing improved
+
+        Assert.False(vm.SecretStorage.CanStore);
+        Assert.Equal("secret-tool: the prompt was dismissed", vm.SecretStorage.Reason);
+    }
 
     [Fact]
     public async Task A_keychain_that_appears_after_startup_is_adopted()

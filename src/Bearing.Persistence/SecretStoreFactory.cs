@@ -3,30 +3,30 @@ using Bearing.Core.Workspace;
 namespace Bearing.Persistence;
 
 /// <summary>The outcome of asking this platform's credential store whether it works: the store when it does,
-/// and a reason fit for a log when it doesn't. Exactly one of the two is set.</summary>
-public readonly record struct PlatformStoreProbe(ISecretStore? Store, string? Failure);
+/// and — when it doesn't — the reason it was rejected plus the name of what rejected it. <see cref="Store"/>
+/// and <see cref="Failure"/> are mutually exclusive; exactly one is set.</summary>
+public readonly record struct PlatformStoreProbe(ISecretStore? Store, string? Failure, string? StoreName = null);
 
-/// <summary>Picks this platform's OS credential store when one is actually reachable, else the local file
-/// fallback (which by default refuses to store anything — see <see cref="FileFallbackSecretStore"/>).</summary>
+/// <summary>Picks this platform's OS credential store when one is actually reachable, else
+/// <see cref="NoSecretStore"/> — which keeps nothing. There is no on-disk fallback and nothing to opt into
+/// (removed 2026-08-19): a password Bearing can't hand to the keychain is prompted for and held in memory.</summary>
 public static class SecretStoreFactory
 {
     private const string ProbeValue = "probe";
 
-    /// <param name="allowUnencryptedFile">Whether the file fallback may write passwords to disk — the user's
-    /// opt-in, read live so the setting applies without a restart. Null means "not allowed", which is the
-    /// default posture: no keyring means no stored password, and connections prompt instead.</param>
-    public static async Task<ISecretStore> CreateAsync(
-        Func<bool>? allowUnencryptedFile = null, CancellationToken ct = default)
+    public static async Task<ISecretStore> CreateAsync(CancellationToken ct = default)
     {
         var probe = await ProbePlatformStoreAsync(ct).ConfigureAwait(false);
         if (probe.Store is { } keychain) return keychain;
 
-        // Record *why* we fell back. Without this the app reports one confident "no system keyring" for four
-        // quite different situations — no helper on PATH, no session bus, a locked collection, or a store that
-        // took the write and handed something else back — and the user has no way to tell them apart.
-        if (probe.Failure is { } why) CrashLog.Note("secret-store", $"Using the file fallback: {why}");
+        // Record *why*, and carry the same reason into the store so the UI can show it. Without this the app
+        // reports one confident "no system keyring" for four quite different situations — no helper on PATH,
+        // no session bus, a locked collection, or a store that took the write and handed something else back
+        // — and the user has no way to tell them apart.
+        if (probe.Failure is { } why)
+            CrashLog.Note("secret-store", $"Storing no passwords ({probe.StoreName ?? "no platform store"}): {why}");
 
-        return new FileFallbackSecretStore(allowStore: allowUnencryptedFile ?? (static () => false));
+        return new NoSecretStore(probe.Failure);
     }
 
     /// <summary>
@@ -49,9 +49,11 @@ public static class SecretStoreFactory
             return new PlatformStoreProbe(null, "no OS credential store is implemented for this platform.");
 
         var failure = await ProbeFailureAsync(store, ct).ConfigureAwait(false);
+        // The rejecting store's name rides alongside the reason rather than being glued onto the front of it:
+        // the reason is shown to the user, and "SecretToolSecretStore probe failed" is log text, not UI text.
         return failure is null
             ? new PlatformStoreProbe(store, null)
-            : new PlatformStoreProbe(null, $"{store.GetType().Name} probe failed — {failure}");
+            : new PlatformStoreProbe(null, failure, store.GetType().Name);
     }
 
     /// <summary>Which store this OS would use, before asking whether it works.</summary>
@@ -60,7 +62,7 @@ public static class SecretStoreFactory
         if (OperatingSystem.IsLinux()) return new SecretToolSecretStore();
         if (OperatingSystem.IsWindows()) return new WindowsCredentialSecretStore();
         if (OperatingSystem.IsMacOS()) return new MacKeychainSecretStore();
-        return null;    // anything else (BSD, a container image without either) — the file fallback decides.
+        return null;    // anything else (BSD, a container image without either) — nothing is stored there.
     }
 
     /// <summary>
@@ -77,7 +79,7 @@ public static class SecretStoreFactory
     {
         // Retried because one refusal is not evidence of a missing keychain: a healthy keyring rejects roughly
         // 1 transfer in 80 (see SecretRetry). Deciding "no credential store here" on a single sample of that is
-        // what put a working-libsecret machine on the password-refusing file fallback for a whole session.
+        // what put a working-libsecret machine on the password-refusing no-store posture for a whole session.
         // Attempts are independent — fresh probe id, fresh helper process — so the last failure is the honest
         // one to report.
         string? failure = null;

@@ -23,7 +23,6 @@ public static class SettingsCatalog
     public const string Results = "results";
     public const string Connections = "connections";
     public const string History = "history";
-    public const string Security = "security";
 
     /// <summary>Sections, in the order the window lists them. A section with no descriptors is not shown.</summary>
     public static IReadOnlyList<SettingsCategory> Categories { get; } =
@@ -33,7 +32,6 @@ public static class SettingsCatalog
         new(Results, "Results", "The result grid and paging."),
         new(Connections, "Connections", "Connection lifetime and pooling."),
         new(History, "History", "The local query log."),
-        new(Security, "Security", "Where credentials are kept."),
     ];
 
     /// <summary>Every described setting. Order within a section is the order declared here.</summary>
@@ -159,22 +157,6 @@ public static class SettingsCatalog
             AppliesNote = "Pruning runs at the next startup.",
             Get = s => s.QueryLogRetentionDays,
             Set = (s, v) => s with { QueryLogRetentionDays = v },
-        },
-
-        // ---- Security --------------------------------------------------------------------------
-        new BoolSetting
-        {
-            Key = "security.allowUnencryptedSecretFile",
-            CategoryId = Security,
-            Title = "Store passwords on disk when no keyring is available",
-            Description = "Off by default: with no OS keyring there is nowhere safe to keep a password, so "
-                        + "connections ask for it and hold it in memory for the session only. Turn this on to "
-                        + "save passwords under your data directory instead — they are only base64-encoded, so "
-                        + "anyone who can read your files (or a backup of them) can recover them. Has no effect "
-                        + "when a keyring is present.",
-            Keywords = "password secret keyring keychain plaintext unencrypted credentials disk",
-            Get = s => s.AllowUnencryptedSecretFile,
-            Set = (s, v) => s with { AllowUnencryptedSecretFile = v },
         },
     ];
 

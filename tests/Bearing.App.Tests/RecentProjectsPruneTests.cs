@@ -20,6 +20,10 @@ public class RecentProjectsPruneTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "bearing-recent", Guid.NewGuid().ToString("N"));
 
+    /// <summary>One store for the whole test, so a secret saved through one view model still
+    /// resolves through the next — the on-disk store this replaced was shared the same way.</summary>
+    private readonly FakeSecretStore _secrets = new();
+
     public void Dispose() { try { if (Directory.Exists(_root)) Directory.Delete(_root, true); } catch { } }
 
     private string RecentPath => Path.Combine(_root, "recent.json");
@@ -30,7 +34,7 @@ public class RecentProjectsPruneTests : IDisposable
         new JsonSessionStore(),
         new SqliteQueryLog(Path.Combine(_root, "log.sqlite")),
         new FileRecentProjects(RecentPath),
-        new FileFallbackSecretStore(Path.Combine(_root, "secrets")),
+        _secrets,
         settings: SettingsService.InMemory(new AppSettings { AutosaveMode = AutosaveMode.Off }));
 
     [Fact]
