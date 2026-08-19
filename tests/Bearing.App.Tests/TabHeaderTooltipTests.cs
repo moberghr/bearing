@@ -5,8 +5,9 @@ using Xunit;
 namespace Bearing.App.Tests;
 
 /// <summary>
-/// The tab title's hover text — the only place a scratch tab's backing file name is visible, since
-/// <see cref="EditorTabViewModel.Header"/> hides it by design.
+/// The tab title's hover text — which file on disk a tab actually is. The header names the file too (#1),
+/// but only by its file name; this is where the folder it sits in shows, and it's the only way to tell two
+/// same-named scripts in different folders apart.
 /// </summary>
 public class TabHeaderTooltipTests
 {

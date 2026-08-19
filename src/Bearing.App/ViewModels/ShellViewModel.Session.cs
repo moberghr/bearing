@@ -68,7 +68,9 @@ public sealed partial class ShellViewModel
         {
             ScriptPath = t.ScriptPath is not null ? Path.GetRelativePath(project.Directory, t.ScriptPath) : null,
             ScratchText = t.Text,
-            ScratchName = t.IsScratch ? t.DisplayName : null,
+            // Only a label the user typed on a tab with no file is worth carrying: a tab with a file is
+            // named after that file (#1), and the "Scratch N" placeholder is regenerated on restore.
+            ScratchName = t.ScriptPath is null && t.IsUserNamed ? t.DisplayName : null,
             CaretOffset = t.CaretOffset,
             ConnectionId = t.ConnectionId,
         }).ToList();

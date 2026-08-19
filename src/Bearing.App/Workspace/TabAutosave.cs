@@ -161,10 +161,13 @@ public sealed class TabAutosave : IDisposable
 
         try
         {
-            var path = tab.ScriptPath ?? CreateScratchPath(owner!);
+            var path = tab.ScriptPath ?? CreatePath(tab, owner!);
             await _ctx.ScriptStore.WriteTextAsync(path, tab.Text, CancellationToken.None);
             var isNew = tab.ScriptPath is null;
             tab.ScriptPath = path;
+            // Creating the file settles what the tab is: a user-named buffer lands outside the scratch
+            // folder, which promotes it. Anything that repoints ScriptPath has to re-derive this.
+            if (isNew) tab.IsScratch = ScratchNaming.IsUnderScratch(path, owner!.ScratchDirectory);
             tab.MarkSaved(tab.Text);
             if (isNew) FileCreated?.Invoke();      // a new file changes the tree; an update doesn't
         }
@@ -177,18 +180,40 @@ public sealed class TabAutosave : IDisposable
         }
     }
 
-    /// <summary>Reserve the next free dated filename in the scratch folder.</summary>
-    private string CreateScratchPath(Project project)
+    /// <summary>
+    /// Where this tab's first file goes. A tab the user has already named goes straight to the scripts root
+    /// under that name — naming a buffer is what promotes it, and deferring the file creation must not cost
+    /// the user their name (#1). Everything else gets the next free dated name in the scratch folder.
+    /// </summary>
+    private string CreatePath(EditorTabViewModel tab, Project project)
     {
+        if (tab.IsUserNamed && NamedPath(tab, project) is { } named) return named;
+
         var dir = project.ScratchDirectory;
         _ctx.ScriptStore.CreateFolder(dir);
+        return Path.Combine(dir, ScratchNaming.NextFileName(_today(), TakenIn(dir)));
+    }
+
+    /// <summary>The scripts-root path for a user-named buffer, or null when that name can't be used (invalid
+    /// or already taken) — the caller then falls back to a dated scratch name rather than losing the write.</summary>
+    private string? NamedPath(EditorTabViewModel tab, Project project)
+    {
+        var dir = project.ScriptsDirectory;
+        _ctx.ScriptStore.CreateFolder(dir);
+        return ScratchNaming.NamedFileName(tab.DisplayName, TakenIn(dir)) is { } name
+            ? Path.Combine(dir, name)
+            : null;
+    }
+
+    /// <summary>File names already in use in <paramref name="dir"/>: on disk, plus the ones open tabs have
+    /// claimed but not yet written — two tabs typing on the same day must not race onto the same file. Tabs
+    /// are scanned across every open project (parked included), since they can share a scratch folder.</summary>
+    private IEnumerable<string> TakenIn(string dir)
+    {
         var existing = _ctx.ScriptStore.ReadTree(dir)?.Files.Select(f => f.Name) ?? Enumerable.Empty<string>();
-        // Names already claimed by other open tabs count as taken — two tabs typing on the same day must
-        // not race onto the same file before either has been written. Scanned across every open project's
-        // tabs (parked included), since they can share this scratch folder.
         var claimed = _ctx.AllTabs.Where(t => t.ScriptPath is not null)
             .Select(t => Path.GetFileName(t.ScriptPath!));
-        return Path.Combine(dir, ScratchNaming.NextFileName(_today(), existing.Concat(claimed)));
+        return existing.Concat(claimed);
     }
 
     public void Dispose()

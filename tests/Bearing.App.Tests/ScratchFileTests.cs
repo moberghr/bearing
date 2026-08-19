@@ -241,13 +241,12 @@ public class ScratchFileTests : IDisposable
     // ---- session round-trip ----
 
     [Fact]
-    public async Task A_scratch_tab_comes_back_pointing_at_its_file_and_keeps_its_label()
+    public async Task A_scratch_tab_comes_back_pointing_at_its_file_and_named_after_it()
     {
         var vm = await Project();
         var scratch = vm.Workspace.SelectedTab!;
         scratch.Text = "select 'still scratch';";
         var scratchPath = await WaitForPath(scratch);
-        var label = scratch.DisplayName;
         vm.SaveWorkspace();
 
         var vm2 = NewVm();
@@ -257,7 +256,7 @@ public class ScratchFileTests : IDisposable
         Assert.Equal(scratchPath, restored.ScriptPath);
         Assert.True(restored.IsScratch);                  // re-derived from where the file lives
         Assert.False(restored.IsDirty);
-        Assert.Equal(label, restored.Header);             // the label, not the generated filename
+        Assert.Equal(Path.GetFileName(scratchPath), restored.Header);   // the file, not a "Scratch N" label
         Assert.Equal("select 'still scratch';", restored.Text);
     }
 
@@ -277,6 +276,111 @@ public class ScratchFileTests : IDisposable
         var restored = Assert.Single(vm2.Workspace.Tabs);
         Assert.False(restored.IsScratch);                 // it lives outside the scratch folder now
         Assert.Equal("keeper.sql", restored.Header);
+    }
+
+    // ---- the tab is named after its file (#1) ----
+
+    [Fact]
+    public async Task A_scratch_tabs_header_becomes_its_file_name_when_autosave_creates_the_file()
+    {
+        // The label and the file name used to be unrelated: the tab said "Scratch 1" while the file was
+        // 2026-08-19-01.sql, and nothing on screen connected the two.
+        var vm = await Project();
+        var tab = vm.Workspace.SelectedTab!;
+        Assert.Equal("Scratch 1", tab.Header);            // the placeholder, while there is no file
+
+        tab.Text = "select 1;";
+        var path = await WaitForPath(tab);
+
+        Assert.Equal(Path.GetFileName(path), tab.Header);
+        Assert.True(tab.IsScratch);                        // still scratch — it's the *name* that changed
+    }
+
+    [Fact]
+    public async Task Opening_a_saved_script_does_not_consume_a_scratch_number()
+    {
+        // The counter used to advance on every NewTab, so opening one script left a permanent hole in the
+        // numbering ("Scratch 1", then "Scratch 3").
+        var vm = await Project();
+        var script = Path.Combine(vm.ScriptsDirectory!, "named.sql");
+        await File.WriteAllTextAsync(script, "select 1;");
+
+        await vm.Workspace.OpenScriptInNewTabAsync(script);
+        var next = vm.Workspace.NewTab();
+
+        Assert.Equal("Scratch 2", next.Header);
+    }
+
+    [Fact]
+    public async Task Naming_an_empty_scratch_tab_names_the_file_it_later_gets()
+    {
+        // Renaming an empty scratch has no file to promote, so it keeps the typed label. That label must
+        // then be what the file is called, or the first keystroke would replace it with a dated name.
+        var vm = await Project();
+        var tab = vm.Workspace.SelectedTab!;
+        await vm.Workspace.RenameTabAsync(tab, "morning check");
+        Assert.Equal("morning check", tab.Header);
+
+        tab.Text = "select 1;";
+        var path = await WaitForPath(tab);
+
+        Assert.Equal(Path.Combine(vm.ScriptsDirectory!, "morning check.sql"), path);
+        Assert.False(tab.IsScratch);                       // named + on disk = a curated script
+        Assert.Equal("morning check.sql", tab.Header);
+        Assert.Equal("select 1;", await File.ReadAllTextAsync(path));
+    }
+
+    [Fact]
+    public async Task A_named_empty_scratch_tab_falls_back_to_a_dated_name_when_its_name_is_taken()
+    {
+        var vm = await Project();
+        await File.WriteAllTextAsync(Path.Combine(vm.ScriptsDirectory!, "taken.sql"), "-- someone else's");
+        var tab = vm.Workspace.SelectedTab!;
+        await vm.Workspace.RenameTabAsync(tab, "taken");
+
+        tab.Text = "select 1;";
+        var path = await WaitForPath(tab);
+
+        // The write lands rather than being lost to the clash, and the existing script is untouched.
+        Assert.Equal(Path.GetFullPath(ScratchDir(vm)), Path.GetFullPath(Path.GetDirectoryName(path)!));
+        Assert.True(tab.IsScratch);
+        Assert.Equal("-- someone else's", await File.ReadAllTextAsync(Path.Combine(vm.ScriptsDirectory!, "taken.sql")));
+    }
+
+    [Fact]
+    public async Task A_typed_label_survives_a_session_round_trip_but_a_placeholder_is_regenerated()
+    {
+        var vm = await Project();
+        await vm.Workspace.RenameTabAsync(vm.Workspace.SelectedTab!, "later");
+        vm.Workspace.NewTab();                             // an untouched placeholder tab alongside it
+        vm.SaveWorkspace();
+
+        var vm2 = NewVm();
+        await vm2.InitializeAsync(vm.ProjectDirectory!);
+
+        Assert.Equal("later", vm2.Workspace.Tabs[0].Header);
+        Assert.Equal("Scratch 2", vm2.Workspace.Tabs[1].Header);   // renumbered from scratch, not persisted
+    }
+
+    [Fact]
+    public async Task A_placeholder_label_from_an_older_session_never_names_a_file()
+    {
+        // Sessions written before the header was derived from the file name persisted "Scratch N" too.
+        var vm = await Project();
+        var dir = vm.ProjectDirectory!;
+        var session = new SessionState
+        {
+            OpenEditors = new() { new OpenEditor { ScratchName = "Scratch 4" } },
+        };
+        new JsonSessionStore().Save(dir, session);
+
+        var vm2 = NewVm();
+        await vm2.InitializeAsync(dir);
+        var tab = Assert.Single(vm2.Workspace.Tabs);
+        tab.Text = "select 1;";
+        var path = await WaitForPath(tab);
+
+        Assert.Equal(Path.GetFullPath(ScratchDir(vm2)), Path.GetFullPath(Path.GetDirectoryName(path)!));
     }
 
     [Fact]
@@ -299,9 +403,11 @@ public class ScratchFileTests : IDisposable
         Assert.Equal("select 'legacy';", tab.Text);
         Assert.Equal("Old work", tab.Header);
 
-        // ...and it gets a real file on the next edit, migrating itself forward.
+        // ...and it gets a real file on the next edit, migrating itself forward. The label was the user's,
+        // so the file is named after it and the tab is promoted rather than getting a dated scratch name.
         tab.Text = "select 'legacy'; -- now backed";
         var path = await WaitForPath(tab);
-        Assert.Equal(Path.GetFullPath(ScratchDir(vm2)), Path.GetFullPath(Path.GetDirectoryName(path)!));
+        Assert.Equal(Path.Combine(vm2.ScriptsDirectory!, "Old work.sql"), path);
+        Assert.False(tab.IsScratch);
     }
 }

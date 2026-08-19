@@ -26,7 +26,9 @@ public partial class MainWindow
     private async Task RenameTabAsync(EditorTabViewModel tab)
     {
         if (Vm is null) return;
-        var current = tab.IsScratch ? tab.DisplayName : tab.Header;
+        // Prefill what the tab shows: its file name (which is its header) without the .sql, or the
+        // placeholder label while it has no file yet.
+        var current = tab.ScriptPath is { } path ? System.IO.Path.GetFileNameWithoutExtension(path) : tab.DisplayName;
         var name = await _dialogs.ShowTextPromptAsync(tab.IsScratch ? "Rename tab" : "Rename script file", current);
         if (name is not null) await Vm.Workspace.RenameTabAsync(tab, name);
     }

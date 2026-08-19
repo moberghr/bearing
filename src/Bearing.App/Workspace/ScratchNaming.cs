@@ -32,6 +32,36 @@ public static class ScratchNaming
     }
 
     /// <summary>
+    /// File name for a scratch buffer the user has already named but that has no file yet: their label,
+    /// stripped of characters a filesystem won't take, plus <c>.sql</c>. Null when the label can't be a
+    /// file name (nothing left after stripping) or the name is already taken — the caller falls back to a
+    /// dated scratch name, so a clash never costs the buffer its file.
+    /// <para>
+    /// This is what keeps the tab header and the file name the same thing (#1): the label a user typed on
+    /// an empty scratch tab becomes the file's name when the first keystroke creates it, rather than being
+    /// replaced by a generated one.
+    /// </para>
+    /// </summary>
+    public static string? NamedFileName(string label, IEnumerable<string> existingFileNames)
+    {
+        var safe = string.Concat(label.Trim().Split(Path.GetInvalidFileNameChars())).Trim();
+        if (safe.Length == 0) return null;
+        if (!safe.EndsWith(".sql", StringComparison.OrdinalIgnoreCase)) safe += ".sql";
+        return existingFileNames.Contains(safe, StringComparer.OrdinalIgnoreCase) ? null : safe;
+    }
+
+    /// <summary>
+    /// True for a label this class generated rather than one the user typed (<c>Scratch 7</c>). Used when
+    /// restoring a session written before the header was derived from the file name: those sessions
+    /// persisted the placeholder too, and a placeholder must not end up naming a file.
+    /// </summary>
+    public static bool IsGeneratedLabel(string? label)
+        => label is not null
+            && label.StartsWith("Scratch ", StringComparison.Ordinal)
+            && label.Length > 8
+            && label.Skip(8).All(char.IsAsciiDigit);
+
+    /// <summary>
     /// True when <paramref name="path"/> lives in <paramref name="scratchDirectory"/> (directly or nested).
     /// This — not "has no file" — is what makes a tab scratch once buffers are file-backed, so a tab whose
     /// file has been moved out of the folder stops being scratch by construction.

@@ -160,8 +160,18 @@ public sealed partial class EditorTabViewModel : ObservableObject
 
     [ObservableProperty] private string _header = "";
 
-    /// <summary>Scratch display label ("Scratch N" or a user rename); ignored once backed by a file.</summary>
+    /// <summary>
+    /// Placeholder label for a tab with no file yet ("Scratch N", or a user rename). Ignored once the tab
+    /// is backed by a file — from then on the file's name <i>is</i> the header (see <see cref="UpdateHeader"/>).
+    /// </summary>
     [ObservableProperty] private string _displayName;
+
+    /// <summary>
+    /// True when <see cref="DisplayName"/> came from the user renaming the tab rather than the generated
+    /// "Scratch N" placeholder. Autosave reads it to name the file after the label when it finally creates
+    /// one, so a name the user typed on an empty scratch tab isn't thrown away by a generated filename.
+    /// </summary>
+    public bool IsUserNamed { get; set; }
 
     /// <summary>The connection this tab executes against; null means "no connection chosen".</summary>
     [ObservableProperty] private Guid? _connectionId;
@@ -197,12 +207,14 @@ public sealed partial class EditorTabViewModel : ObservableObject
 
     partial void OnScriptPathChanged(string? value) { UpdateHeader(); OnPropertyChanged(nameof(HasUnsavedWork)); }
     partial void OnDisplayNameChanged(string value) => UpdateHeader();
-    partial void OnIsScratchChanged(bool value) => UpdateHeader();
 
-    /// <summary>A scratch tab shows its label ("Scratch 1"), not its generated <c>2026-08-06-01.sql</c>
-    /// filename — the file is an implementation detail until the tab is named and promoted.</summary>
+    /// <summary>
+    /// The tab is named after its file, scratch included: the label and the file name used to be unrelated
+    /// (the tab said "Scratch 3" while the file was <c>2026-08-13-02.sql</c>, with nothing on screen
+    /// connecting them). <see cref="DisplayName"/> is only the placeholder until the file exists.
+    /// </summary>
     private void UpdateHeader()
-        => Header = IsScratch || ScriptPath is null ? DisplayName : Path.GetFileName(ScriptPath);
+        => Header = ScriptPath is null ? DisplayName : Path.GetFileName(ScriptPath);
 
     /// <summary>
     /// Hover text for the tab title: which file on disk this tab actually is. A scratch tab's

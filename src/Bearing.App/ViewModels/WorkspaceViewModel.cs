@@ -81,12 +81,19 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     // ---- Tab lifecycle -----------------------------------------------------------------------
 
     /// <summary>Open a tab. With no <paramref name="scriptPath"/> it's a scratch buffer, which autosave
-    /// backs with a real file in the scratch folder as soon as it has content.</summary>
+    /// backs with a real file in the scratch folder as soon as it has content.
+    /// <para>
+    /// The <c>Scratch N</c> placeholder is only minted for a tab that has no file to be named after, so the
+    /// counter no longer skips numbers every time a saved script is opened.
+    /// </para></summary>
     public EditorTabViewModel NewTab(string text = "", string? scriptPath = null)
     {
         var inherit = SelectedTab?.ConnectionId ?? _ctx.DefaultConnectionId;
         var isScratch = scriptPath is null || ScratchNaming.IsUnderScratch(scriptPath, _ctx.Project?.ScratchDirectory);
-        var tab = new EditorTabViewModel($"Scratch {++_scratchCounter}", text, scriptPath, isScratch)
+        var label = scriptPath is null
+            ? $"Scratch {++_scratchCounter}"
+            : Path.GetFileNameWithoutExtension(scriptPath);
+        var tab = new EditorTabViewModel(label, text, scriptPath, isScratch)
         {
             ConnectionId = inherit,
             ProjectDirectory = _ctx.Project?.Directory,   // fixed for the tab's life; survives project switches
@@ -197,8 +204,8 @@ public sealed partial class WorkspaceViewModel : ObservableObject
                 tab = NewTab(buffer, abs);   // NewTab re-derives IsScratch from where the file lives
                 tab.MarkSaved(disk);
                 tab.CaretOffset = Math.Clamp(e.CaretOffset, 0, buffer.Length);
-                // A scratch file keeps its label rather than showing its generated filename.
-                if (tab.IsScratch && e.ScratchName is { Length: > 0 } label) tab.DisplayName = label;
+                // No label to re-apply: a tab with a file is named after that file (#1). Older sessions
+                // still carry a ScratchName for these; it described a header that no longer exists.
             }
             else
             {
@@ -207,7 +214,12 @@ public sealed partial class WorkspaceViewModel : ObservableObject
                 // give it a fresh file on the next keystroke.
                 tab = NewTab(e.ScratchText ?? "");
                 tab.CaretOffset = Math.Clamp(e.CaretOffset, 0, tab.Text.Length);
-                if (e.ScratchName is { Length: > 0 } name) tab.DisplayName = name;
+                if (e.ScratchName is { Length: > 0 } name)
+                {
+                    tab.DisplayName = name;
+                    // A placeholder from an older session must not go on to name a file (#1).
+                    tab.IsUserNamed = !ScratchNaming.IsGeneratedLabel(name);
+                }
             }
             tab.ConnectionId = e.ConnectionId ?? _ctx.DefaultConnectionId;
         }
@@ -288,6 +300,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
 
         await _autosave.FlushAsync(tab);   // make sure there's a file to move, and that it's current
         tab.DisplayName = newName;
+        tab.IsUserNamed = true;            // if it has no file yet, this label is what autosave will name it
         if (tab.ScriptPath is not { } path || ProjectOf(tab) is not { } project) return;
 
         await _scripts.RenameScriptAsync(path, newName, project.ScriptsDirectory);

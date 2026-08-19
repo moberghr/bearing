@@ -69,6 +69,45 @@ public class ScratchNamingTests
     public void Trailing_separator_on_the_directory_is_tolerated()
         => Assert.True(ScratchNaming.IsUnderScratch(Norm("/p/scripts/scratch/a.sql"), Norm("/p/scripts/scratch") + Path.DirectorySeparatorChar));
 
+    // ---- naming the file after a label the user typed ----
+
+    [Fact]
+    public void A_user_label_becomes_a_sql_file_name()
+        => Assert.Equal("morning check.sql", ScratchNaming.NamedFileName("morning check", Array.Empty<string>()));
+
+    [Fact]
+    public void A_label_that_already_ends_in_sql_is_not_doubled_up()
+        => Assert.Equal("report.sql", ScratchNaming.NamedFileName("report.sql", Array.Empty<string>()));
+
+    [Fact]
+    public void A_taken_name_is_refused_so_the_caller_can_fall_back()
+        => Assert.Null(ScratchNaming.NamedFileName("report", new[] { "REPORT.SQL" }));
+
+    [Fact]
+    public void Characters_a_filesystem_wont_take_are_stripped()
+        => Assert.Equal("abc.sql", ScratchNaming.NamedFileName("a/b\0c", Array.Empty<string>()));
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("//")]
+    public void A_label_with_no_usable_characters_is_refused(string label)
+        => Assert.Null(ScratchNaming.NamedFileName(label, Array.Empty<string>()));
+
+    // ---- placeholder labels ----
+
+    [Theory]
+    [InlineData("Scratch 1", true)]
+    [InlineData("Scratch 42", true)]
+    [InlineData("Scratch", false)]
+    [InlineData("Scratch ", false)]
+    [InlineData("Scratch pad", false)]
+    [InlineData("scratch 1", false)]     // the generated form is capitalised
+    [InlineData("My Scratch 1", false)]
+    [InlineData(null, false)]
+    public void Generated_labels_are_told_apart_from_typed_ones(string? label, bool expected)
+        => Assert.Equal(expected, ScratchNaming.IsGeneratedLabel(label));
+
     /// <summary>Make a posix-style test path usable on the host OS.</summary>
     private static string Norm(string p) => Path.GetFullPath(p.Replace('/', Path.DirectorySeparatorChar));
 }
