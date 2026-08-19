@@ -403,7 +403,17 @@ public partial class SidebarView : UserControl
         e.Handled = true;
     }
 
-    private void OnScriptDragLeave(object? sender, DragEventArgs e) => ClearDropTarget();
+    /// <summary>
+    /// DragLeave bubbles up from every row the pointer crosses, so acting on it directly cleared the
+    /// highlight between each DragOver and the next — which is what made the indicator flicker as the mouse
+    /// moved. Only a pointer genuinely outside the tree's bounds counts as leaving.
+    /// </summary>
+    private void OnScriptDragLeave(object? sender, DragEventArgs e)
+    {
+        var p = e.GetPosition(ScriptsTree);
+        if (p.X < 0 || p.Y < 0 || p.X > ScriptsTree.Bounds.Width || p.Y > ScriptsTree.Bounds.Height)
+            ClearDropTarget();
+    }
 
     private void MarkDropTarget(ScriptFolderViewModel? folder, bool root) => Vm?.Scripts.MarkDropTarget(folder, root);
 

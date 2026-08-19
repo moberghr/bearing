@@ -21,8 +21,10 @@ public sealed class DropTargetConverter : IValueConverter
     private static IBrush? _fill;
     private static IBrush? _edge;
 
-    private static IBrush Fill => _fill ??= ThemeBrush.AtAlpha("Accent.Brand", 0x38, Fallback);
-    private static IBrush Edge => _edge ??= ThemeBrush.AtAlpha("Accent.Brand", 0xCC, Fallback);
+    // Both deliberately faint: this is a hint that follows the pointer, not a selection. A stronger fill
+    // read as a second selection colour, and a stronger edge as a modal outline around the whole pane.
+    private static IBrush Fill => _fill ??= ThemeBrush.AtAlpha("Accent.Brand", 0x2A, Fallback);
+    private static IBrush Edge => _edge ??= ThemeBrush.AtAlpha("Accent.Brand", 0x66, Fallback);
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
         => value is not true

@@ -89,7 +89,8 @@
             <!-- SelectedItem is bound so a view-model can set it: "Reveal in Scripts" selects a tab's file,
                  and the selection then survives the wholesale rebuild in RefreshScripts. -->
             <!-- The tree's own edge lights up while a drag would land in the scripts root (dropping on
-                 anything that isn't a folder row moves the script there). -->
+                 anything that isn't a folder row moves the script there). Kept to a soft 1px line that is
+                 always there — transparent when idle — so nothing reflows when it appears. -->
             <TreeView x:Name="ScriptsTree" ItemsSource="{Binding Scripts.ScriptNodes}" Background="Transparent"
                       SelectedItem="{Binding Scripts.SelectedNode, Mode=TwoWay}"
                       BorderThickness="1" CornerRadius="4"
@@ -105,17 +106,20 @@
               <TreeView.DataTemplates>
                 <!-- Folder: amber glyph + name + right-aligned count. A drop target for scripts. -->
                 <TreeDataTemplate DataType="vm:ScriptFolderViewModel" ItemsSource="{Binding Children}">
-                  <!-- Tinted while a dragged script hovers it: the row is the drop target, and until now
-                       nothing said so. Transparent otherwise, so the row still takes the pointer. -->
-                  <Grid ColumnDefinitions="Auto,*,Auto"
-                        Background="{Binding IsDropTarget, Converter={StaticResource DropTarget}}"
-                        DragDrop.AllowDrop="True" DragDrop.DragOver="OnScriptDragOver" DragDrop.Drop="OnScriptDropOnFolder">
-                    <Grid.ContextMenu>
+                  <!-- A Border, not a bare Grid, so the drop highlight is a rounded inset chip rather than a
+                       flat band running to the pane's edge. No BorderThickness: the tint appears and goes
+                       without moving the row, and the fill alone reads as a target without competing with
+                       the (blue) selection. Transparent otherwise, so the row still takes the pointer. -->
+                  <Border Background="{Binding IsDropTarget, Converter={StaticResource DropTarget}}"
+                          CornerRadius="4" Margin="0,1,6,1" Padding="2,0"
+                          DragDrop.AllowDrop="True" DragDrop.DragOver="OnScriptDragOver" DragDrop.Drop="OnScriptDropOnFolder">
+                    <Border.ContextMenu>
                       <ContextMenu>
                         <MenuItem Header="New subfolder…" Click="OnNewSubfolderClick"/>
                         <MenuItem Header="New script here…" Click="OnNewScriptInFolderClick"/>
                       </ContextMenu>
-                    </Grid.ContextMenu>
+                    </Border.ContextMenu>
+                  <Grid ColumnDefinitions="Auto,*,Auto">
                     <!-- Curated folders get the amber folder glyph; the app-owned scratch folder is dimmed
                          and marked so it reads as a holding pen rather than something the user curated. -->
                     <Path Grid.Column="0" Data="{StaticResource Icon.Folder}" Stroke="#E3B457"
@@ -137,6 +141,7 @@
                     <TextBlock Grid.Column="2" Text="{Binding Count}" VerticalAlignment="Center"
                                FontSize="11" Margin="6,0,4,0" Foreground="{DynamicResource Text.Faint}"/>
                   </Grid>
+                  </Border>
                 </TreeDataTemplate>
                 <!-- Script leaf: file glyph + name + unsaved dot. Draggable to a folder. -->
                 <TreeDataTemplate DataType="vm:ScriptItem">
@@ -159,8 +164,8 @@
                     <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
                                Foreground="{DynamicResource Text.Primary}"
                                IsVisible="{Binding !IsRenaming}"/>
-                    <TextBox Text="{Binding RenameDraft, Mode=TwoWay}" IsVisible="{Binding IsRenaming}"
-                             MinWidth="90" Padding="2,0" Margin="0,-2" VerticalAlignment="Center"
+                    <TextBox Classes="inline" Text="{Binding RenameDraft, Mode=TwoWay}"
+                             IsVisible="{Binding IsRenaming}" MinWidth="90" VerticalAlignment="Center"
                              KeyDown="OnScriptRenameKeyDown" LostFocus="OnScriptRenameLostFocus"/>
                     <TextBlock Text="●" FontSize="11" VerticalAlignment="Center"
                                Foreground="{DynamicResource Accent.Brand}" ToolTip.Tip="Unsaved changes"
