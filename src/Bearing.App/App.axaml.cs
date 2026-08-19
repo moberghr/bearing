@@ -7,12 +7,14 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
+using Bearing.App.Services;
 using Bearing.App.ViewModels;
 using Bearing.App.Views;
 using Bearing.Core.Logging;
 using Bearing.Core.Workspace;
 using Bearing.Data;
 using Bearing.Persistence;
+using Bearing.Updates;
 
 namespace Bearing.App;
 
@@ -67,6 +69,21 @@ public partial class App : Application
             LogStartup("vm created");
             var window = new MainWindow { DataContext = vm };
             LogStartup("window constructed");
+
+            // Self-update (#20). The coordinator owns the policy (one check per launch, honour the setting,
+            // never install on its own); the strip above the status bar is its only surface. Restart is a
+            // plain window close so the shutdown pipeline below still runs before the updater swaps the
+            // install — an update must never be the reason an unsaved buffer or a live query is lost.
+            // Messages cross from the coordinator's background work to the UI thread here, as with
+            // SettingsService.SaveFailed above.
+            var updates = new UpdateCoordinator(
+                new VelopackUpdateService(),
+                autoUpdateEnabled: () => settings.Current.AutoUpdate,
+                requestShutdown: () => Dispatcher.UIThread.Post(() => window.Close()),
+                report: message => Dispatcher.UIThread.Post(() => vm.StatusText = message));
+            vm.Updates = new UpdateViewModel(updates);
+            window.Opened += (_, _) => CrashReporter.Observe(
+                Task.Run(() => updates.StartAsync()), "update check");
 
             // Window size is persisted state, not a preference — the setting only decides whether it is
             // replayed. Position is deliberately left to the window manager (Wayland won't honour it

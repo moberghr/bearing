@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Bearing.Updates: the release feed and the self-update mechanism (Velopack). The ONLY project that
+       references the updater package — Core defines IUpdateService, App and Desktop go through it. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\Bearing.Core\Bearing.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Velopack" />
+  </ItemGroup>
+
+</Project>

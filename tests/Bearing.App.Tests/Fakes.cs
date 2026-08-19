@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Bearing.App.Connections;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
+using Bearing.Core.Updates;
 using Bearing.Core.Workspace;
 
 namespace Bearing.App.Tests;
@@ -541,4 +542,56 @@ internal sealed class FakeSettingsStore : IAppSettingsStore
         Saves.Add(settings);
         _settings = settings;
     }
+}
+
+/// <summary>
+/// A scriptable <see cref="IUpdateService"/>: decides what a check finds, how the download progresses, and
+/// which step (if any) throws. Counts calls so a test can assert that a check did <em>not</em> happen, which
+/// is half of what the update policy promises.
+/// </summary>
+internal sealed class FakeUpdateService : IUpdateService
+{
+    /// <summary>The version a check reports. Null means "already up to date".</summary>
+    public string? Available { get; set; }
+
+    public bool IsSupported { get; set; } = true;
+
+    public Exception? CheckThrows { get; set; }
+    public Exception? DownloadThrows { get; set; }
+    public Exception? ApplyThrows { get; set; }
+
+    /// <summary>Progress values handed to the caller during a download.</summary>
+    public int[] ProgressSteps { get; set; } = new[] { 50, 100 };
+
+    public int Checks { get; private set; }
+    public int Downloads { get; private set; }
+
+    /// <summary>The update staged for install-on-exit, if <see cref="ApplyOnExit"/> was called.</summary>
+    public UpdateCheck? AppliedOnExit { get; private set; }
+
+    /// <summary>The update applied with an immediate relaunch — the path the app must never take.</summary>
+    public UpdateCheck? AppliedImmediately { get; private set; }
+
+    public Task<UpdateCheck?> CheckAsync(CancellationToken ct = default)
+    {
+        Checks++;
+        if (CheckThrows is not null) return Task.FromException<UpdateCheck?>(CheckThrows);
+        return Task.FromResult(Available is null ? null : new UpdateCheck(Available, Available));
+    }
+
+    public Task DownloadAsync(UpdateCheck update, IProgress<int>? progress = null, CancellationToken ct = default)
+    {
+        Downloads++;
+        if (DownloadThrows is not null) return Task.FromException(DownloadThrows);
+        foreach (var step in ProgressSteps) progress?.Report(step);
+        return Task.CompletedTask;
+    }
+
+    public void ApplyOnExit(UpdateCheck update)
+    {
+        if (ApplyThrows is not null) throw ApplyThrows;
+        AppliedOnExit = update;
+    }
+
+    public void ApplyAndRestart(UpdateCheck update) => AppliedImmediately = update;
 }

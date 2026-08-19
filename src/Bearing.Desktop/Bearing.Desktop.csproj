@@ -26,6 +26,9 @@
 
   <ItemGroup>
     <PackageReference Include="Avalonia.Desktop" />
+    <!-- For the VelopackApp hook in Program.Main, which `vpk pack` verifies is in the entry assembly.
+         The rest of the update machinery lives in Bearing.Updates behind Core's IUpdateService. -->
+    <PackageReference Include="Velopack" />
   </ItemGroup>
 
 </Project>

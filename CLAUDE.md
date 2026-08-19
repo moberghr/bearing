@@ -76,4 +76,5 @@ Full reference docs (read on-demand by skills and review agents):
 - **DI:** manual composition root in `src/Bearing.App/App.axaml.cs` (no container)
 - **Database targets:** PostgreSQL
 - **Test stack:** xUnit + `Xunit.SkippableFact`, hand-rolled fakes (`tests/**/Fakes.cs`), no Moq/NSubstitute, no EF InMemory
-- **Layout:** `src/Bearing.{Core,Sql,Data,Persistence,App,Desktop}` — dependency-free `Core` ← `Sql`/`Data`/`Persistence` ← `App` ← `Desktop`
+- **Layout:** `src/Bearing.{Core,Sql,Data,Persistence,Updates,App,Desktop}` — dependency-free `Core` ← `Sql`/`Data`/`Persistence`/`Updates` ← `App` ← `Desktop`
+- **Distribution:** Velopack installers + delta auto-update, published to this repo's GitHub Releases by `build/velopack.sh` (see `docs/RELEASING.md`). `build/release.sh` is the older archive path, kept.

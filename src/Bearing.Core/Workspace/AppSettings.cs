@@ -59,6 +59,13 @@ public sealed record AppSettings
     /// </summary>
     public bool ShowMenuBar { get; init; }
 
+    /// <summary>
+    /// Whether the app checks the release feed on startup and downloads a newer version in the background.
+    /// Installing is never automatic — a downloaded update waits for the user to restart, so a running query
+    /// or an unsaved buffer is never interrupted by one.
+    /// </summary>
+    public bool AutoUpdate { get; init; } = true;
+
     // ---- persisted state, not user-facing preferences (no catalog entry; see SettingsCatalogTests) ----
 
     /// <summary>Last main-window width, written on close. Null until a window has been closed once.</summary>

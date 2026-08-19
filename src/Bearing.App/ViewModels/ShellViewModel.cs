@@ -123,6 +123,12 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The inline history panel (day-grouped, filterable) shown when ActivePanel = History.</summary>
     public HistoryPanelViewModel History { get; }
 
+    /// <summary>
+    /// The update strip, or null when this build has no updater wired (tests, headless construction). Set by
+    /// the composition root once the window exists, because applying an update means closing that window.
+    /// </summary>
+    [ObservableProperty] private UpdateViewModel? _updates;
+
     /// <summary>Whether the menu bar is on screen — pinned, or revealed by an Alt tap (design §).</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsMenuTransient))]

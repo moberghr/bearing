@@ -8,7 +8,7 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <AccelerateBuildsInVisualStudio>true</AccelerateBuildsInVisualStudio>
     <!-- Single source of truth for the app version; surfaced in Help ▸ About. -->
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <!-- Bearing: a fast SQL query tool & script manager. See plans/i-want-to-create-bubbly-sunset.md -->
   </PropertyGroup>
 

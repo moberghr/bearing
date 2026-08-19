@@ -27,6 +27,22 @@ Code-built visuals resolve token brushes through `Controls/Tokens` (`Res` / `Tin
 private `FindResource` helper; six of them were consolidated. `Theming.ThemeBrush.AtAlpha` is the one
 exception (it takes an explicit fallback colour, for converters and custom margins).
 
+## §9.6 — The Velopack pack id is NOT `bearing`
+`build/velopack.sh` packs with `--packId BearingSql --packTitle "Bearing"`. The Windows installer owns
+`%LocalAppData%\<packId>` and **deletes it on uninstall**, and `BearingPaths.DataDir` on Windows is
+`%LOCALAPPDATA%\bearing` (query log, default project) — a pack id of `bearing` would put the install root on
+top of the user's data and take their query history with it on uninstall. Do NOT "tidy" the id to match the
+binary name.
+- `packId` is also the permanent update identity: renaming it orphans every installed client (each needs a
+  manual re-install), so it is not a cosmetic string.
+- `VelopackApp.Build().Run()` stays the first statement in `Bearing.Desktop/Program.cs` — `vpk pack` verifies
+  it is in the entry assembly and refuses to package without it. Everything else about updating lives behind
+  `Bearing.Core.Updates.IUpdateService` in `Bearing.Updates`.
+- Velopack builds publish **without** `PublishSingleFile` (deltas are per-file; one compressed exe makes every
+  update a full ~65 MB download). `build/release.sh`'s single-file archive path is separate and unchanged.
+- Applying an update goes through the ordinary window close (`UpdateCoordinator.RestartToApply`), never
+  `ApplyUpdatesAndRestart` from under the UI — the shutdown pipeline is what saves the session.
+
 ## §9.2 — Input goes through the unified pipeline
 - Keyboard handling flows through `src/Bearing.App/Input/` (`Gesture`/`GestureParser`, `Keymap`,
   `CommandRegistry`/`KeyCommand`, `KeyDispatcher`, `CommandIds`, `KeyScope`). Views call `TryHandle(e, scope)`.

@@ -61,6 +61,19 @@ public static class SettingsCatalog
             Set = (s, v) => s with { ShowMenuBar = v },
         },
 
+        new BoolSetting
+        {
+            Key = "general.autoUpdate",
+            CategoryId = General,
+            Title = "Download updates automatically",
+            Description = "Check for a newer Bearing on startup and download it in the background. Installing "
+                        + "always waits for you to restart, so an update never interrupts a query or loses an "
+                        + "unsaved buffer.",
+            Keywords = "update updates upgrade version release download automatic",
+            Get = s => s.AutoUpdate,
+            Set = (s, v) => s with { AutoUpdate = v },
+        },
+
         // ---- Editor ----------------------------------------------------------------------------
         new EnumSetting
         {

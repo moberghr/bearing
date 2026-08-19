@@ -3,7 +3,8 @@
 Layered clean architecture. Reference: `.claude/references/architecture-principles.md`.
 
 ## §2.1 — `Bearing.Core` is dependency-free
-`Core` holds only abstractions and records: `Data/`, `Schema/`, `Workspace/`, `Logging/`, `Completion/`.
+`Core` holds only abstractions and records: `Data/`, `Schema/`, `Workspace/`, `Logging/`, `Completion/`,
+`Updates/`.
 - NEVER add a `PackageReference` or `ProjectReference` to `Bearing.Core`.
 - Every other project references `Core`; `Core` references nothing. Provider/impl types (Npgsql, SQLite,
   Avalonia) live in the outer projects and are injected behind `Core` interfaces
@@ -11,9 +12,10 @@ Layered clean architecture. Reference: `.claude/references/architecture-principl
 
 ## §2.2 — Dependency direction (never invert)
 ```
-Core  ←  Sql, Data, Persistence  ←  App  ←  Desktop
+Core  ←  Sql, Data, Persistence, Updates  ←  App  ←  Desktop
 ```
-- `Sql` (SQL parsing/completion), `Data` (Postgres/Npgsql), `Persistence` (SQLite) each depend on `Core` only.
+- `Sql` (SQL parsing/completion), `Data` (Postgres/Npgsql), `Persistence` (SQLite), `Updates` (Velopack
+  release feed / self-update) each depend on `Core` only.
 - `App` (Avalonia MVVM) composes them; `Desktop` is the thin entry point.
 - DO NOT reference `App`/Avalonia types from `Core`/`Sql`/`Data`/`Persistence`.
 

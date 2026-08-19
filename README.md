@@ -30,11 +30,31 @@ The solution (`Bearing.slnx`) is layered so the SQL engine is testable in isolat
 | `Bearing.Sql` | SQL parsing + completion (ANTLR grammar, antlr4-c3, DML generation) | ANTLR runtime |
 | `Bearing.Data` | PostgreSQL implementation of the provider interfaces | Npgsql |
 | `Bearing.Persistence` | Project files, session state, query log (SQLite), secret store | Microsoft.Data.Sqlite |
+| `Bearing.Updates` | Release feed + self-update (installers, delta updates) | Velopack |
 | `Bearing.App` | Avalonia UI — views, view models, input pipeline | Avalonia |
 | `Bearing.Desktop` | Thin `WinExe` entry point (kept separate so `App` stays test-referenceable) | Avalonia.Desktop |
 
 `vendor/` holds the antlr4-c3 C# port and the grammars-v4 PostgreSQL grammar base classes; the parser is
 generated at build time by `Antlr4BuildTasks` (which downloads a JRE + the ANTLR tool jar on first build).
+
+## Install
+
+Packaged builds carry their own updater: the app checks once per launch, downloads a new version in the
+background, and offers a restart. Nothing is installed while you work.
+
+| Platform | Download | Notes |
+|---|---|---|
+| Windows | `BearingSql-win-Setup.exe` | Per-user install to `%LOCALAPPDATA%\BearingSql`, Start Menu entry. No admin needed. |
+| Linux | `BearingSql.AppImage` | `chmod +x` and run it. Updates itself in place. |
+
+Releases are on the repository's [Releases page](https://github.com/moberghr/bearing/releases). While this
+repository is private, self-update needs `BEARING_UPDATE_TOKEN` set to a token that can read it — see
+[docs/RELEASING.md](docs/RELEASING.md).
+
+`build/release.sh` remains as the no-updater alternative: a single-file `.tar.gz` (Linux, with a per-user
+installer and `.desktop` entry) or `.zip` (Windows, with PowerShell install/uninstall scripts). Updating one
+of those means downloading the next one. Cutting a release is `build/velopack.sh` — see
+[docs/RELEASING.md](docs/RELEASING.md).
 
 ## Build & run
 

@@ -142,6 +142,8 @@
         <MenuItem x:Name="MenuRun" Header="Run" Click="OnRunClick"/>
       </MenuItem>
       <MenuItem Header="_Help">
+        <MenuItem Header="Check for Updates…" Command="{Binding Updates.CheckNowCommand}"/>
+        <Separator/>
         <MenuItem Header="About Bearing" Click="OnAboutClick"/>
       </MenuItem>
     </Menu>
@@ -255,6 +257,23 @@
         <TextBlock Text="{Binding Execution.ElapsedText}" VerticalAlignment="Center"
                    IsVisible="{Binding Execution.IsBusy}"
                    Foreground="{DynamicResource Ok.Green}"/>
+      </StackPanel>
+    </Border>
+
+    <!-- Update strip (#20): the only surface auto-update has. Silent unless a newer version is downloading
+         or has been staged; Restart closes the window the ordinary way, so the unsaved-work prompt, editor
+         flush and session save all still run before the updater takes over. -->
+    <Border DockPanel.Dock="Bottom" Padding="10,6" Background="{DynamicResource Bg.Chrome}"
+            BorderBrush="{DynamicResource Border}" BorderThickness="0,1,0,0"
+            IsVisible="{Binding Updates.IsVisible, FallbackValue=False}">
+      <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+        <TextBlock Text="{Binding Updates.Message}" VerticalAlignment="Center"/>
+        <Button Content="Restart now" Padding="8,2"
+                Command="{Binding Updates.RestartCommand}"
+                IsVisible="{Binding Updates.CanRestart, FallbackValue=False}"/>
+        <Button Content="Later" Padding="8,2"
+                Command="{Binding Updates.DismissCommand}"
+                IsVisible="{Binding Updates.CanRestart, FallbackValue=False}"/>
       </StackPanel>
     </Border>
 

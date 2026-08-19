@@ -6,6 +6,7 @@
     <Project Path="src/Bearing.Desktop/Bearing.Desktop.csproj" />
     <Project Path="src/Bearing.Persistence/Bearing.Persistence.csproj" />
     <Project Path="src/Bearing.Sql/Bearing.Sql.csproj" />
+    <Project Path="src/Bearing.Updates/Bearing.Updates.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Bearing.App.Tests/Bearing.App.Tests.csproj" />
