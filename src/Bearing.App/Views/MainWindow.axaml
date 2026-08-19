@@ -365,7 +365,10 @@
               </TabStrip.Styles>
               <TabStrip.ItemTemplate>
                 <DataTemplate x:DataType="vm:EditorTabViewModel">
-                  <StackPanel Orientation="Horizontal" DoubleTapped="OnTabHeaderDoubleTapped">
+                  <!-- Right-click: Rename / Save / Close / Reveal in Scripts / Open containing folder,
+                       built in code-behind for *this* tab (OnTabContextRequested), not the selected one. -->
+                  <StackPanel Orientation="Horizontal" DoubleTapped="OnTabHeaderDoubleTapped"
+                              ContextRequested="OnTabContextRequested">
                     <!-- Header is the backing file's name (scratch included); the tooltip adds its folder. -->
                     <TextBlock Text="{Binding Header}" VerticalAlignment="Center"
                                ToolTip.Tip="{Binding HeaderTooltip}"/>

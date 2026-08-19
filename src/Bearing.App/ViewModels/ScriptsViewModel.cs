@@ -42,6 +42,26 @@ public sealed partial class ScriptsViewModel : ObservableObject
 
     partial void OnScriptFilterChanged(string value) => RefreshScripts();
 
+    /// <summary>
+    /// The tree's selected node (two-way bound to the TreeView) — a <see cref="ScriptItem"/> or a
+    /// <see cref="ScriptFolderViewModel"/>. Owned here rather than left to the control so the selection can
+    /// be <em>set</em> from a view-model (<see cref="Reveal"/>) and can survive a refresh: the tree is
+    /// rebuilt wholesale, which would otherwise drop it every time a file appears.
+    /// </summary>
+    [ObservableProperty] private object? _selectedNode;
+
+    /// <summary>Path of the selected node, kept across the wholesale rebuild in <see cref="RefreshScripts"/>
+    /// (the node objects themselves don't survive it).</summary>
+    private string? _selectedPath;
+
+    partial void OnSelectedNodeChanged(object? value)
+        => _selectedPath = value switch
+        {
+            ScriptItem item => item.FullPath,
+            ScriptFolderViewModel folder => folder.FullPath,
+            _ => null,
+        };
+
     public void RefreshScripts()
     {
         Scripts.Clear();
@@ -62,6 +82,42 @@ public sealed partial class ScriptsViewModel : ObservableObject
             && string.Equals(Path.GetFullPath(path), Path.GetFullPath(scratchDir), StringComparison.OrdinalIgnoreCase);
 
         BuildScriptNodes(tree, ScriptNodes, filter, Matches, Make, IsScratchFolder);
+
+        // Re-point the selection at the rebuilt node for the same path (or drop it if the file is gone).
+        SelectedNode = _selectedPath is { } path ? Locate(path) : null;
+    }
+
+    /// <summary>
+    /// Select the node for <paramref name="absolutePath"/> and expand everything above it — "Reveal in
+    /// Scripts", the answer to "which file is this tab?". Returns false when the path isn't under the
+    /// project's scripts folder at all; a name filter hiding it is not a failure, it's cleared first.
+    /// </summary>
+    public bool Reveal(string absolutePath)
+    {
+        if (Locate(absolutePath) is null)
+        {
+            // Either the tree predates the file (one created outside the app), or a name filter is hiding
+            // it. Clearing the filter re-reads the tree too, so both routes end in a refresh.
+            if (ScriptFilter.Length > 0) ScriptFilter = ""; else RefreshScripts();
+        }
+
+        var chain = ScriptTreeReveal.PathTo(ScriptNodes, absolutePath);
+        if (chain.Count == 0) return false;
+
+        // Expand the ancestors before selecting: the scratch folder in particular is collapsed by default,
+        // and a selection inside a collapsed folder is invisible.
+        foreach (var node in chain)
+            if (node is ScriptFolderViewModel folder) folder.IsExpanded = true;
+
+        SelectedNode = chain[^1];
+        return true;
+    }
+
+    /// <summary>The tree node for a path, or null when the tree doesn't hold it.</summary>
+    private object? Locate(string absolutePath)
+    {
+        var chain = ScriptTreeReveal.PathTo(ScriptNodes, absolutePath);
+        return chain.Count == 0 ? null : chain[^1];
     }
 
     /// <summary>Recursively fill <paramref name="target"/> with subfolders (each nested) then scripts;

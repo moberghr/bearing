@@ -86,7 +86,10 @@
             <TextBox DockPanel.Dock="Top" Text="{Binding Scripts.ScriptFilter, Mode=TwoWay}"
                      PlaceholderText="Filter scripts…" Margin="0,0,0,6"/>
             <!-- Enter opens the selected script; drag a script onto a folder to move it (OnScripts* handlers). -->
+            <!-- SelectedItem is bound so a view-model can set it: "Reveal in Scripts" selects a tab's file,
+                 and the selection then survives the wholesale rebuild in RefreshScripts. -->
             <TreeView x:Name="ScriptsTree" ItemsSource="{Binding Scripts.ScriptNodes}" Background="Transparent"
+                      SelectedItem="{Binding Scripts.SelectedNode, Mode=TwoWay}"
                       KeyDown="OnScriptsTreeKeyDown" DragDrop.AllowDrop="True"
                       DragDrop.DragOver="OnScriptDragOver" DragDrop.Drop="OnScriptDropOnRoot">
               <TreeView.Styles>

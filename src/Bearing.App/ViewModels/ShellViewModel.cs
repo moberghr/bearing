@@ -228,6 +228,21 @@ public sealed partial class ShellViewModel : ObservableObject
         if (_workspace.Tabs.Contains(tab)) _workspace.SelectedTab = tab;
     }
 
+    /// <summary>
+    /// Show the Scripts panel with <paramref name="absolutePath"/> selected and its folders expanded — the
+    /// tab context menu's "Reveal in Scripts", and the answer to "which file is this tab?" now that a tab is
+    /// named after its file. Coordination only (a panel plus the scripts concern), which is why it sits here
+    /// rather than in the code-behind (§2.2); the tree walk itself is pure (<see cref="ScriptTreeReveal"/>).
+    /// </summary>
+    /// <returns>False when the file isn't in this project's scripts folder — reported, not silent.</returns>
+    public bool RevealScript(string absolutePath)
+    {
+        ShowPanel(SidePanel.Scripts);
+        if (_scripts.Reveal(absolutePath)) return true;
+        StatusText = $"{Path.GetFileName(absolutePath)} isn't in this project's scripts folder.";
+        return false;
+    }
+
     /// <summary>True when secrets go to a real OS keychain; false when none could be reached, in which case
     /// nothing is stored at all.</summary>
     public bool SecretStorageSecure => _secretStore?.IsSecure == true;

@@ -1,8 +1,12 @@
 using System;
+using System.IO;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Bearing.App.Controls;
+using Bearing.App.Input;
+using Bearing.App.Services;
 using Bearing.App.ViewModels;
 
 namespace Bearing.App.Views;
@@ -28,9 +32,61 @@ public partial class MainWindow
         if (Vm is null) return;
         // Prefill what the tab shows: its file name (which is its header) without the .sql, or the
         // placeholder label while it has no file yet.
-        var current = tab.ScriptPath is { } path ? System.IO.Path.GetFileNameWithoutExtension(path) : tab.DisplayName;
+        var current = tab.ScriptPath is { } path ? Path.GetFileNameWithoutExtension(path) : tab.DisplayName;
         var name = await _dialogs.ShowTextPromptAsync(tab.IsScratch ? "Rename tab" : "Rename script file", current);
         if (name is not null) await Vm.Workspace.RenameTabAsync(tab, name);
+    }
+
+    /// <summary>
+    /// Right-click on a tab title: build that tab's menu and show it at the pointer. Built per click, so
+    /// "can this be saved?" is evaluated now rather than being a stale answer from when the tab appeared.
+    /// </summary>
+    private void OnTabContextRequested(object? sender, ContextRequestedEventArgs e)
+    {
+        if (Vm is not { } vm || sender is not Control { DataContext: EditorTabViewModel tab } host) return;
+
+        // The editor control holds the selected tab's live buffer, so both the Save action and the
+        // is-there-anything-to-save test have to see what's on screen, not the last-synced text.
+        FlushActiveEditor();
+        var path = tab.ScriptPath;
+
+        var menu = TabContextMenu.Build(
+            tab,
+            rename: () => RenameTabAsync(tab),
+            save: () => SaveTabAsync(tab),
+            canSave: path is null || tab.IsModified,
+            close: () => CloseTabAsync(tab),
+            reveal: path is null ? null : () => vm.RevealScript(path),
+            openFolder: path is null ? null : () => OpenContainingFolder(path),
+            renameGesture: MenuGesture(CommandIds.TabRename),
+            saveGesture: MenuGesture(CommandIds.FileSave),
+            closeGesture: MenuGesture(CommandIds.TabClose));
+
+        menu.ShowAt(host, showAtPointer: true);
+        e.Handled = true;
+    }
+
+    /// <summary>Save one tab — which may not be the selected one, so it can't go through
+    /// <see cref="SaveAsync"/>. A tab with no file yet needs a destination first.</summary>
+    private async Task SaveTabAsync(EditorTabViewModel tab)
+    {
+        if (Vm is null) return;
+        FlushActiveEditor();   // the selected tab's buffer lives in the editor control, not on the tab
+        if (tab.ScriptPath is { } existing)
+        {
+            await Vm.Workspace.SaveScriptAsync(tab, existing, tab.Text);
+            return;
+        }
+        if (await _dialogs.PickSaveScriptAsync($"{tab.DisplayName}.sql", Vm.ScriptsDirectory) is { } chosen)
+            await Vm.Workspace.SaveScriptAsync(tab, chosen, tab.Text);
+    }
+
+    /// <summary>Show a script in the OS file manager. The reveal swallows its own failures and just reports
+    /// false (no file manager, or launching one isn't permitted), so say so rather than dropping it.</summary>
+    private void OpenContainingFolder(string path)
+    {
+        if (Vm is { } vm && !FileReveal.OpenContainingFolder(path))
+            vm.StatusText = $"Could not open the folder for {Path.GetFileName(path)}.";
     }
 
     // ---- side pane ----
