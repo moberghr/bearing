@@ -114,6 +114,51 @@ public static class GridSelectionOps
         return cells;
     }
 
+    /// <summary>What a Set NULL over a selection would write, and how many cells it refuses.</summary>
+    public sealed record SetNullPlan(IReadOnlyList<(object?[] Row, int Col)> Targets, int NotNullable);
+
+    /// <summary>Which of the selected cells a Set NULL writes (#33). Two kinds drop out:
+    /// <list type="bullet">
+    /// <item>a cell in a <b>NOT NULL</b> column — counted, so the caller can say so rather than staging an
+    /// UPDATE the server is certain to reject (the same rule the checkbox cycle already follows);</item>
+    /// <item>a cell that <b>already holds NULL</b> — silently, since there is nothing to write and marking its
+    /// row edited would put a pending change on the toolbar that saves nothing.</item>
+    /// </list>
+    /// Row-then-column order (the selection model keeps its cells in a hash set).</summary>
+    public static SetNullPlan PlanSetNull(
+        ResultSetViewModel result, IReadOnlyCollection<(object?[] Row, int Col)> cells)
+    {
+        var targets = new List<(object?[] Row, int Col)>();
+        var notNullable = 0;
+        foreach (var (row, col) in cells)
+        {
+            if (col < 0 || col >= result.Columns.Count || col >= row.Length) continue;
+            if (!result.AllowsNull(col)) { notNullable++; continue; }
+            if (IsNullValue(row[col])) continue;
+            targets.Add((row, col));
+        }
+        return new SetNullPlan(Ordered(result, targets), notNullable);
+    }
+
+    /// <summary>Whether a cell already means NULL — a real null, or the token a previous edit/paste left in
+    /// the buffer (the grid holds raw edit text until save-time coercion).</summary>
+    private static bool IsNullValue(object? value)
+        => value is null || CellFormat.IsNullToken(value as string);
+
+    /// <summary>A selection in row-then-column order, so anything that walks it (a paste fill, a Set NULL)
+    /// writes deterministically — the model holds the cells in a hash set.</summary>
+    public static List<(object?[] Row, int Col)> Ordered(
+        ResultSetViewModel result, IReadOnlyCollection<(object?[] Row, int Col)> selection)
+    {
+        var ordered = new List<(object?[] Row, int Col)>(selection);
+        ordered.Sort((a, b) =>
+        {
+            var byRow = result.Rows.IndexOf(a.Row).CompareTo(result.Rows.IndexOf(b.Row));
+            return byRow != 0 ? byRow : a.Col.CompareTo(b.Col);
+        });
+        return ordered;
+    }
+
     /// <summary>The selection as tab-separated rows, condensed to the selected rows × columns. A
     /// non-rectangular selection keeps its shape by emitting a blank for each gap, so pasted columns still
     /// line up.</summary>

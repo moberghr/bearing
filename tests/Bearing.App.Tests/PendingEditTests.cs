@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using Bearing.App.Formatting;
 using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
@@ -97,6 +98,40 @@ public class PendingEditTests
         Assert.True(rs.IsRowEdited(row));   // the row is still *marked* — we only skip the no-op SQL
 
         Assert.Empty(ResultEditModel.BuildPendingChanges(rs, Target));
+    }
+
+    [Fact]
+    public void The_null_token_saves_as_a_null_assignment_not_as_the_text()
+    {
+        var rs = OneRow(1, "one", 5);
+        var row = rs.Rows[0];
+
+        // What Set NULL (#33) writes, and what typing "(null)" into the cell has always written — one value
+        // path, so the token can never end up in the database as the literal text.
+        rs.SetCell(row, 1, CellFormat.NullToken);
+        var change = Assert.Single(ResultEditModel.BuildPendingChanges(rs, Target));
+
+        Assert.Equal(ResultEditModel.ChangeKind.Update, change.Kind);
+        Assert.Contains("name", change.Command.Sql);
+        Assert.Contains(change.Command.Parameters, p => p.Value is null);
+        Assert.DoesNotContain(change.Command.Parameters, p => Equals(p.Value, CellFormat.NullToken));
+    }
+
+    [Fact]
+    public void The_null_token_on_a_new_row_inserts_an_explicit_null_where_a_blank_cell_takes_the_default()
+    {
+        var rs = OneRow(1, "one", 5);
+
+        var blank = rs.AddRow();
+        rs.SetCell(blank, 1, "two");           // qty left untouched → not in the INSERT, so the default fills it
+        var fromDefault = Assert.Single(ResultEditModel.BuildPendingChanges(rs, Target));
+        Assert.Equal(ResultEditModel.ChangeKind.Insert, fromDefault.Kind);
+        Assert.DoesNotContain("qty", fromDefault.Command.Sql);
+
+        rs.SetCell(blank, 2, CellFormat.NullToken);   // Set NULL on the same cell → explicitly NULL instead
+        var explicitNull = Assert.Single(ResultEditModel.BuildPendingChanges(rs, Target));
+        Assert.Contains("qty", explicitNull.Command.Sql);
+        Assert.Contains(explicitNull.Command.Parameters, p => p.Value is null);
     }
 
     [Fact]

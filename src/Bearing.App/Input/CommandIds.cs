@@ -77,6 +77,7 @@ public static class CommandIds
     public const string GridSelectAll = "grid.selectAll";
     public const string GridDelete = "grid.delete";
     public const string GridBeginEdit = "grid.beginEdit";
+    public const string GridSetNull = "grid.setNull";
     public const string GridAddRow = "grid.addRow";
     public const string GridSave = "grid.save";
     public const string GridDiscard = "grid.discard";

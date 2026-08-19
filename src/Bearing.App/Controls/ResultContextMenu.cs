@@ -7,9 +7,9 @@ using Bearing.App.ViewModels;
 namespace Bearing.App.Controls;
 
 /// <summary>
-/// The results grid's right-click menu: Copy, Copy as ▸, Paste, Export ▸, and Fetch all rows. Its own class rather
-/// than another slab of <see cref="ResultView"/> (§9.1) — the menu owns which actions it offers and when
-/// they're applicable, and gets the actions themselves as callbacks.
+/// The results grid's right-click menu: Copy, Copy as ▸, Paste, Set NULL, Export ▸, and Fetch all rows. Its
+/// own class rather than another slab of <see cref="ResultView"/> (§9.1) — the menu owns which actions it
+/// offers and when they're applicable, and gets the actions themselves as callbacks.
 /// <para>
 /// Enabled state is recomputed on open, not at build time: a menu built with the grid empty would otherwise
 /// stay greyed out for the life of the result.
@@ -20,6 +20,9 @@ internal static class ResultContextMenu
     /// <param name="paste">Null for a read-only result (then the item is hidden — a locked grid should not
     /// advertise a write it will refuse).</param>
     /// <param name="canPaste">Whether a paste has a cursor to anchor on right now.</param>
+    /// <param name="setNull">Null for a read-only result (hidden, like Paste). This is the discoverable way to
+    /// enter NULL — typing the <c>(null)</c> token was the only one (#33) — and the only way at all on a
+    /// checkbox column, which has no text editor.</param>
     /// <param name="fetchAll">Null when the host hasn't wired paging (then the item is hidden).</param>
     /// <param name="export">Null when the host hasn't wired export (then the submenu is hidden).</param>
     public static MenuFlyout Build(
@@ -29,6 +32,7 @@ internal static class ResultContextMenu
         Action<CopyFormat> copyAs,
         Func<Task>? paste,
         Func<bool> canPaste,
+        Action? setNull,
         Func<Task>? fetchAll,
         Func<ExportFormat, Task>? export)
     {
@@ -55,6 +59,14 @@ internal static class ResultContextMenu
             pasteItem = new MenuItem { Header = "Paste" };
             pasteItem.Click += async (_, _) => await paste();
             menu.Items.Add(pasteItem);
+        }
+
+        MenuItem? setNullItem = null;
+        if (setNull is not null)
+        {
+            setNullItem = new MenuItem { Header = "Set NULL" };
+            setNullItem.Click += (_, _) => setNull();
+            menu.Items.Add(setNullItem);
         }
 
         MenuItem? fetchItem = null;
@@ -88,6 +100,8 @@ internal static class ResultContextMenu
             copyAsItem.IsEnabled = selected;
             // Paste writes at the cursor, not over the selection, so it has its own applicability test.
             if (pasteItem is not null) pasteItem.IsEnabled = canPaste();
+            // Set NULL writes over the selection, so it shares Copy's applicability test.
+            if (setNullItem is not null) setNullItem.IsEnabled = selected;
             if (fetchItem is not null) fetchItem.IsEnabled = result.IsPageable && result.HasMore;
         };
         return menu;

@@ -114,6 +114,15 @@ public class KeybindingTests
     }
 
     [Fact]
+    public void Set_null_is_a_grid_gesture_and_does_not_shadow_a_global_one()
+    {
+        Assert.Equal(CommandIds.GridSetNull,
+            Defaults.Resolve(KeyScope.Grid, KeyModifiers.Control | KeyModifiers.Shift, Key.N, NoPhys));
+        // Ctrl+N (new tab) must survive next door: a Set NULL gesture that ate it would be a bad trade.
+        Assert.Equal(CommandIds.TabNew, Defaults.Resolve(KeyScope.Global, KeyModifiers.Control, Key.N, NoPhys));
+    }
+
+    [Fact]
     public void Ctrl_S_saves_the_grids_rows_but_only_inside_the_grid()
     {
         // grid.save is guarded on there being pending row edits, so a clean grid leaves Ctrl+S unhandled and

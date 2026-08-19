@@ -166,6 +166,9 @@ public sealed partial class ResultView : UserControl
         r.Register(KeyCommand.Sync(CommandIds.GridDelete, "Delete rows", KeyScope.Grid, "Grid",
             () => { if (GridTarget() is { } t) _selection.DeleteSelectedRows(t.Grid, t.Result); },
             canRun: () => GridTarget()?.Result.IsEditable == true));
+        r.Register(KeyCommand.Sync(CommandIds.GridSetNull, "Set NULL", KeyScope.Grid, "Grid",
+            () => { if (GridTarget() is { } t) SetNullIn(t.Grid, t.Result); },
+            canRun: () => GridTarget() is { } t && t.Result.IsEditable && _selection.HasSelection(t.Result)));
         r.Register(KeyCommand.Sync(CommandIds.GridBeginEdit, "Edit cell", KeyScope.Grid, "Grid",
             () => { if (GridTarget() is { } t) _selection.BeginEditActive(t.Grid, t.Result); },
             canRun: () => GridTarget()?.Result.IsEditable == true));
@@ -202,6 +205,13 @@ public sealed partial class ResultView : UserControl
         var row = result.AddRow();
         ResultRowPainter.RefreshRowColors(grid, result);
         _selection.MoveActive(grid, result, row, GridSelectionOps.FirstColumn(result), extend: false);
+    }
+
+    /// <summary>grid.setNull and the context menu's Set NULL: NULL the selected cells and report what it did
+    /// (a selection spanning a NOT NULL column is written in part, and has to say so).</summary>
+    private void SetNullIn(DataGrid grid, ResultSetViewModel result)
+    {
+        if (_selection.SetNullSelected(grid, result) is { } report) Status?.Invoke(report);
     }
 
     /// <summary>Paste the clipboard into a grid and report the outcome — including how many cells were

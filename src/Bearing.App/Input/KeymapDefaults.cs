@@ -78,6 +78,10 @@ public static class KeymapDefaults
         yield return R(CommandIds.GridBeginEdit, "F2");
         yield return R(CommandIds.GridBeginEdit, "Space");     // on a checkbox cell this is the cycle
         yield return R(CommandIds.GridAddRow, "Alt+Insert");   // joins Delete / Ctrl+Insert / Shift+Insert
+        // Set NULL over the selection. The one value a cell can hold that isn't typeable as itself — the
+        // "(null)" token was tribal knowledge (#33) — and the only way to NULL a checkbox cell, which has no
+        // text editor to type into.
+        yield return R(CommandIds.GridSetNull, "Ctrl+Shift+N");
         // Commit + revert the pending row edits. Both are guarded on there being pending changes, so with a
         // clean grid Ctrl+S falls straight through to file.save — the grid only claims it when it has
         // something of its own to save. Revert is deliberately not Ctrl+Z: it drops *every* pending change,

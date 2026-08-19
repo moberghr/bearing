@@ -58,7 +58,7 @@ public static class GridPaste
         {
             var value = block[0][0];
             var targets = selection.Count > 0
-                ? Ordered(result, selection)
+                ? GridSelectionOps.Ordered(result, selection)
                 : new List<(object?[] Row, int Col)> { active };
             foreach (var (row, col) in targets)
                 if (InRange(result, row, col)) writes.Add((row, col, value));
@@ -99,18 +99,4 @@ public static class GridPaste
 
     private static bool InRange(ResultSetViewModel result, object?[] row, int col)
         => col >= 0 && col < result.Columns.Count && col < row.Length;
-
-    /// <summary>The selection in row-then-column order, so a fill writes deterministically (the model keeps
-    /// it in a hash set).</summary>
-    private static List<(object?[] Row, int Col)> Ordered(
-        ResultSetViewModel result, IReadOnlyCollection<(object?[] Row, int Col)> selection)
-    {
-        var ordered = new List<(object?[] Row, int Col)>(selection);
-        ordered.Sort((a, b) =>
-        {
-            var byRow = result.Rows.IndexOf(a.Row).CompareTo(result.Rows.IndexOf(b.Row));
-            return byRow != 0 ? byRow : a.Col.CompareTo(b.Col);
-        });
-        return ordered;
-    }
 }

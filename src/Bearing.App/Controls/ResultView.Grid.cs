@@ -70,9 +70,9 @@ public sealed partial class ResultView
             _selection.ToggleBoolAt(grid, result, e);
         };
 
-        // Right-click menu: copy (in any format), fetch the rest, export. The cells collapse the selection
-        // onto themselves on a right-click outside it (see ResultCellFactory), so what the menu acts on is
-        // always what the user is pointing at.
+        // Right-click menu: copy (in any format), paste, set NULL, fetch the rest, export. The cells collapse
+        // the selection onto themselves on a right-click outside it (see ResultCellFactory), so what the menu
+        // acts on is always what the user is pointing at.
         grid.ContextFlyout = ResultContextMenu.Build(
             result,
             hasSelection: () => _selection.HasSelection(result),
@@ -80,6 +80,7 @@ public sealed partial class ResultView
             copyAs: format => _selection.CopyAs(result, format),
             paste: result.IsEditable ? () => PasteInto(grid, result) : null,
             canPaste: () => _selection.CanPasteInto(result),
+            setNull: result.IsEditable ? () => SetNullIn(grid, result) : null,
             fetchAll: result.IsPageable ? () => FetchAll?.Invoke(result) ?? Task.CompletedTask : null,
             export: format => Export?.Invoke(result, format) ?? Task.CompletedTask);
 

@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.VisualTree;
+using Bearing.App.Formatting;
 using Bearing.App.Results;
 using Bearing.App.Services;
 using Bearing.App.ViewModels;
@@ -454,6 +455,43 @@ public sealed class GridSelectionController
         ResultRowPainter.RefreshRowColors(grid, result);
         Notify();
     }
+
+    /// <summary>grid.setNull (Ctrl+Shift+N) and the context menu's Set NULL: write NULL over every selected
+    /// cell. The discoverable path to a value that was otherwise reachable only by knowing to type the
+    /// <c>(null)</c> token into a cell (#33) — and the only path at all on a checkbox column, which has no
+    /// text editor to type it into.
+    /// <para>
+    /// Writes the token itself through <see cref="ResultSetViewModel.SetCell"/>, exactly as the editor and a
+    /// paste do, so this inherits the one value path (save-time coercion in <c>ResultEditModel</c>) instead of
+    /// growing a second way for a cell to mean NULL. On a pending-new row that also matters: the token is an
+    /// explicit NULL in the INSERT, where a blank cell is left to the column's default.
+    /// </para>
+    /// Returns what to tell the user, or null when nothing was attempted.</summary>
+    public string? SetNullSelected(DataGrid grid, ResultSetViewModel result)
+    {
+        if (!result.IsEditable || !ReferenceEquals(Model.Result, result) || Model.Cells.Count == 0) return null;
+
+        var plan = GridSelectionOps.PlanSetNull(result, Model.Cells);
+        if (plan.Targets.Count == 0)
+            return plan.NotNullable > 0
+                ? $"Nothing set to NULL — {Refused(plan.NotNullable)}."
+                : "Nothing set to NULL — the selected cells are already NULL.";
+
+        foreach (var (row, col) in plan.Targets) result.SetCell(row, col, CellFormat.NullToken);
+        ResultRowPainter.RefreshRowColors(grid, result);
+        Notify(); // also re-reads the checkbox cells this wrote through
+
+        var set = $"Set {CellCount(plan.Targets.Count)} to NULL.";
+        if (plan.NotNullable == 0) return set;
+        var columns = plan.NotNullable == 1 ? "a NOT NULL column" : "NOT NULL columns";
+        return $"{set} {plan.NotNullable} skipped — {columns}.";
+    }
+
+    private static string CellCount(int count) => count == 1 ? "1 cell" : $"{count} cells";
+
+    private static string Refused(int count) => count == 1
+        ? "1 cell is in a NOT NULL column"
+        : $"{count} cells are in NOT NULL columns";
 
     /// <summary>grid.beginEdit (Enter/F2): start editing the active cell via the DataGrid's own machinery —
     /// except on a checkbox column, which has no text editor and cycles its value instead.</summary>

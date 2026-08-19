@@ -50,6 +50,8 @@ Editable: `title` (always inline), `rental_rate` (read-only until **double-click
 - **New** — mint `#5FC9AD` bar + mint row number, tint `rgba(152,187,108,.07)`; inserted via **＋ Add row**.
 - **Deleted** — red `#D2555A` bar, tint `rgba(195,64,67,.07)`, strikethrough; toggled by the row glyph `✕` → `↺`. New rows are removed outright instead of marked.
 
+**Entering NULL.** `(null)` is both how a NULL cell renders and the token you type to set one (trimmed, case-insensitive) — but typing it is not the discoverable path, so the grid offers **Set NULL** in the right-click menu and as `grid.setNull` (`Ctrl+Shift+N`, palette-reachable). It writes over the whole selection, skips cells in NOT NULL columns (reporting how many), and is the only way to NULL a checkbox cell, which has no text editor. Note that **clearing** a cell is not the same thing: an empty editor saves `''` on a text column and NULL on every other type.
+
 ### Commit bar (only when changes are pending)
 In the meta row, left of the always-present `＋ Add row` / `⭳ Export`:
 `● N pending` (teal dot + count) · `‹ › Script` (outline) · `Discard` (red text, `#3a2530` border) · `✓ Save changes` (mint fill, `#0F1319` text) · divider.
