@@ -10,10 +10,11 @@ using Xunit;
 namespace Bearing.App.Tests;
 
 /// <summary>
-/// Where a dragged script will land. Moving a script between folders worked, but nothing on screen said
-/// which folder would take it, so the only way to find out was to drop and look. What the highlight looks
-/// like is eyeball-QA (§4.3); this covers the state that drives it, and in particular that exactly one
-/// folder is ever marked.
+/// Drag feedback in the Scripts tree: what is in flight, and where it would land. Moving a script between
+/// folders worked, but nothing on screen said either, so the only way to find out was to drop and look — and
+/// a drag cursor isn't available to say it, since the platform owns the pointer for the duration of a drag.
+/// What the marks look like is eyeball-QA (§4.3); this covers the state that drives them, and in particular
+/// that only ever one row is marked as each.
 /// </summary>
 public class DropTargetTests : IDisposable
 {
@@ -37,6 +38,13 @@ public class DropTargetTests : IDisposable
 
     private static ScriptFolderViewModel Folder(ShellViewModel vm, string name)
         => vm.Scripts.ScriptNodes.OfType<ScriptFolderViewModel>().Single(f => f.Name == name);
+
+    private static async Task<ScriptItem> Script(ShellViewModel vm, string name)
+    {
+        await File.WriteAllTextAsync(Path.Combine(vm.ScriptsDirectory!, name), "select 1;");
+        vm.Scripts.RefreshScripts();
+        return vm.Scripts.Scripts.Single(s => s.Name == name);
+    }
 
     [Fact]
     public async Task Hovering_a_folder_marks_only_that_folder()
@@ -93,6 +101,45 @@ public class DropTargetTests : IDisposable
         Assert.False(reports.IsDropTarget);
     }
 
+    // ---- what is in flight ----
+
+    [Fact]
+    public async Task The_dragged_script_is_marked_so_it_can_be_dimmed()
+    {
+        var vm = await Project();
+        var script = await Script(vm, "moving.sql");
+
+        vm.Scripts.MarkDragging(script);
+
+        Assert.True(script.IsDragging);
+    }
+
+    [Fact]
+    public async Task Only_one_script_is_ever_in_flight()
+    {
+        var vm = await Project();
+        var first = await Script(vm, "first.sql");
+        var second = await Script(vm, "second.sql");
+        vm.Scripts.MarkDragging(first);
+
+        vm.Scripts.MarkDragging(second);
+
+        Assert.False(first.IsDragging);
+        Assert.True(second.IsDragging);
+    }
+
+    [Fact]
+    public async Task Ending_the_drag_un_marks_the_script()
+    {
+        var vm = await Project();
+        var script = await Script(vm, "moving.sql");
+        vm.Scripts.MarkDragging(script);
+
+        vm.Scripts.MarkDragging(null);
+
+        Assert.False(script.IsDragging);
+    }
+
     [Fact]
     public async Task A_tree_refresh_drops_the_highlight_rather_than_leaving_it_on_a_replaced_node()
     {
@@ -104,5 +151,19 @@ public class DropTargetTests : IDisposable
 
         Assert.False(reports.IsDropTarget);
         Assert.False(Folder(vm, "Reports").IsDropTarget);
+    }
+
+    [Fact]
+    public async Task A_tree_refresh_also_drops_the_in_flight_mark()
+    {
+        // A completed move refreshes the tree, so the row that was dragged is replaced by a new instance.
+        var vm = await Project();
+        var script = await Script(vm, "moved.sql");
+        vm.Scripts.MarkDragging(script);
+
+        vm.Scripts.RefreshScripts();
+
+        Assert.False(script.IsDragging);
+        Assert.False(vm.Scripts.Scripts.Single(s => s.Name == "moved.sql").IsDragging);
     }
 }

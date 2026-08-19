@@ -62,6 +62,22 @@ public sealed partial class ScriptsViewModel : ObservableObject
     /// <summary>The drag is over — nothing is a drop target any more.</summary>
     public void ClearDropTarget() => MarkDropTarget(null);
 
+    /// <summary>The script currently being dragged, so it can be un-dimmed when the drag ends.</summary>
+    private ScriptItem? _dragging;
+
+    /// <summary>
+    /// Mark the script being dragged (null when the drag ends). At most one is ever in flight. Paired with
+    /// <see cref="MarkDropTarget"/>: between them the two answer "what am I dragging?" and "where will it
+    /// go?", which is the feedback a drag cursor would have given if the platform let the app set one.
+    /// </summary>
+    public void MarkDragging(ScriptItem? script)
+    {
+        if (ReferenceEquals(_dragging, script)) return;
+        if (_dragging is not null) _dragging.IsDragging = false;
+        _dragging = script;
+        if (script is not null) script.IsDragging = true;
+    }
+
     /// <summary>
     /// The tree's selected node (two-way bound to the TreeView) — a <see cref="ScriptItem"/> or a
     /// <see cref="ScriptFolderViewModel"/>. Owned here rather than left to the control so the selection can
@@ -86,7 +102,9 @@ public sealed partial class ScriptsViewModel : ObservableObject
     {
         Scripts.Clear();
         ScriptNodes.Clear();
-        ClearDropTarget();   // the node it pointed at is about to be replaced
+        // The nodes these point at are about to be replaced.
+        ClearDropTarget();
+        MarkDragging(null);
         var dir = _ctx.Project?.ScriptsDirectory;
         if (dir is null || _ctx.ScriptStore.ReadTree(dir) is not { } tree) return;
 

@@ -27,6 +27,13 @@ public sealed partial class ScriptItem : ObservableObject
     /// <summary>True while this row is an editable box rather than a label.</summary>
     [ObservableProperty] private bool _isRenaming;
 
+    /// <summary>
+    /// True while this script is the one being dragged. The row dims, so it's visible <em>what</em> is in
+    /// flight — the cursor can't say it (the platform owns the pointer during a drag) and the drop highlight
+    /// only says where it would land.
+    /// </summary>
+    [ObservableProperty] private bool _isDragging;
+
     /// <summary>The name being typed. Seeded from the file's own name, without the <c>.sql</c> — the
     /// extension is not the user's to retype, and <c>RenameScriptAsync</c> puts it back.</summary>
     [ObservableProperty] private string _renameDraft;

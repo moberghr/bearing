@@ -99,6 +99,11 @@
                 <Style Selector="TreeViewItem">
                   <Setter Property="IsExpanded" Value="{ReflectionBinding IsExpanded, Mode=TwoWay}"/>
                 </Style>
+                <!-- The row being dragged fades, the way a cut item does: this is the "something is in
+                     flight, and it's this" half of the drag feedback. -->
+                <Style Selector="StackPanel.dragging">
+                  <Setter Property="Opacity" Value="0.4"/>
+                </Style>
               </TreeView.Styles>
               <TreeView.DataTemplates>
                 <!-- Folder: amber glyph + name + right-aligned count. A drop target for scripts. -->
@@ -144,6 +149,7 @@
                 <!-- Script leaf: file glyph + name + unsaved dot. Draggable to a folder. -->
                 <TreeDataTemplate DataType="vm:ScriptItem">
                   <StackPanel Orientation="Horizontal" Spacing="6" Background="Transparent"
+                              Classes.dragging="{Binding IsDragging}"
                               DoubleTapped="OnScriptActivated" PointerPressed="OnScriptPointerPressed"
                               PointerMoved="OnScriptPointerMoved">
                     <StackPanel.ContextMenu>

@@ -384,20 +384,29 @@ public partial class SidebarView : UserControl
         var transfer = new DataTransfer();
         transfer.Add(DataTransferItem.Create(ScriptPathFormat, _dragItem.FullPath));
         var press = _dragPress;
+        var dragged = _dragItem;
         _dragItem = null;
         _dragPress = null;
-        // A move cursor for the duration: the platform drag gives no cursor feedback here, so without this
-        // the only sign a drag is in progress is the highlight under the pointer.
-        using var cursor = new Cursor(StandardCursorType.DragMove);
-        var restore = ScriptsTree.Cursor;
-        ScriptsTree.Cursor = cursor;
-        // Awaited so the cursor and the drop highlight are both released however the drag ends — dropped,
-        // cancelled with Esc, or let go outside the window, where no DragLeave arrives to do it.
-        try { await DragDrop.DoDragDropAsync(press, transfer, DragDropEffects.Move); }
+
+        // Say what is in flight, two ways that don't depend on the platform: the row fades, and the status
+        // bar names the file and the rule for dropping outside a folder. An app-set drag cursor is not one of
+        // the options here — the pointer is grabbed for the duration of the drag, so the cursor is the
+        // platform's, not ours.
+        Vm?.Scripts.MarkDragging(dragged);
+        if (Vm is not null)
+            Vm.StatusText = $"Moving {dragged.Name} — drop it on a folder, or anywhere else for the scripts root.";
+
+        // Awaited so both marks are released however the drag ends — dropped, cancelled with Esc, or let go
+        // outside the window, where no DragLeave arrives to do it. The result also says whether a drop
+        // happened at all: a completed move reports itself, so only a cancelled one has to take its own line
+        // back down.
+        var outcome = DragDropEffects.None;
+        try { outcome = await DragDrop.DoDragDropAsync(press, transfer, DragDropEffects.Move); }
         finally
         {
-            ScriptsTree.Cursor = restore;
+            Vm?.Scripts.MarkDragging(null);
             ClearDropTarget();
+            if (outcome == DragDropEffects.None && Vm is not null) Vm.StatusText = "";
         }
     }
 
