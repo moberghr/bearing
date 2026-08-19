@@ -58,6 +58,7 @@ public partial class MainWindow
             close: () => CloseTabAsync(tab),
             reveal: path is null ? null : () => vm.RevealScript(path),
             openFolder: path is null ? null : () => OpenContainingFolderAsync(path),
+            delete: path is null ? null : () => DeleteTabFileAsync(tab),
             renameGesture: MenuGesture(CommandIds.TabRename),
             saveGesture: MenuGesture(CommandIds.FileSave),
             closeGesture: MenuGesture(CommandIds.TabClose));
@@ -79,6 +80,14 @@ public partial class MainWindow
         }
         if (await _dialogs.PickSaveScriptAsync($"{tab.DisplayName}.sql", Vm.ScriptsDirectory) is { } chosen)
             await Vm.Workspace.SaveScriptAsync(tab, chosen, tab.Text);
+    }
+
+    /// <summary>Delete a tab's backing file, behind a confirm, closing the tab with it.</summary>
+    private async Task DeleteTabFileAsync(EditorTabViewModel tab)
+    {
+        if (Vm is null || tab.ScriptPath is not { } path) return;
+        if (!await _dialogs.ConfirmDeleteScriptAsync(Path.GetFileName(path))) return;
+        if (Vm.Workspace.DeleteScript(path)) LoadEditorFromSelectedTab();
     }
 
     /// <summary>Show a script in the OS file manager, selected. The reveal swallows its own failures and just

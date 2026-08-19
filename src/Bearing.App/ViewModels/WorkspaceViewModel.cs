@@ -282,6 +282,30 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Delete a script file and close the tabs that were showing it. The caller has already confirmed.
+    /// <para>
+    /// Order matters: any pending autosave is <b>discarded</b> first, or the debounced write would recreate
+    /// the file moments after it was deleted. The tabs then close without the unsaved-work prompt — there is
+    /// nothing left to save them to, and asking would be offering to write the file back.
+    /// </para>
+    /// </summary>
+    /// <returns>False when the delete failed, leaving the tabs open.</returns>
+    public bool DeleteScript(string absolutePath)
+    {
+        var backing = AllTabs.Where(t => string.Equals(t.ScriptPath, absolutePath, StringComparison.Ordinal)).ToList();
+        foreach (var tab in backing) _autosave.Discard(tab);
+
+        if (!_scripts.DeleteScript(absolutePath)) return false;
+
+        foreach (var tab in backing)
+        {
+            tab.CancelRun();
+            Remove(tab);   // no prompt: the file it would save to is gone
+        }
+        return true;
+    }
+
+    /// <summary>
     /// Rename a tab. For a named script that's a file rename in place. For a scratch tab it's a
     /// <b>promotion</b>: the pending buffer is flushed, then its file moves out of the scratch folder to
     /// the scripts root under the new name — naming a scratch buffer is what makes it a curated script.

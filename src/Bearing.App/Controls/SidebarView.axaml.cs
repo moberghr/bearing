@@ -269,6 +269,15 @@ public partial class SidebarView : UserControl
         if (!string.IsNullOrWhiteSpace(name)) Vm.Scripts.CreateScriptFolder(name);
     }
 
+    /// <summary>Delete a script from the tree, behind the same confirm the tab menu uses — and through the
+    /// same workspace call, so a tab showing the file closes with it instead of pointing at nothing.</summary>
+    private async void OnDeleteScriptClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is null || (sender as Control)?.DataContext is not ScriptItem script) return;
+        if (!await _dialogs.ConfirmDeleteScriptAsync(script.Name)) return;
+        if (Vm.Workspace.DeleteScript(script.FullPath)) EditorSyncRequested?.Invoke();
+    }
+
     private static ScriptFolderViewModel? FolderOf(object? sender) => (sender as Control)?.DataContext as ScriptFolderViewModel;
 
     private async void OnNewSubfolderClick(object? sender, RoutedEventArgs e)

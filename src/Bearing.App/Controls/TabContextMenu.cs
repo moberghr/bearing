@@ -24,6 +24,7 @@ internal static class TabContextMenu
     /// <param name="canSave">False when the buffer matches what's on disk, so Save has nothing to do.</param>
     /// <param name="reveal">Select this tab's file in the Scripts panel; null hides the item.</param>
     /// <param name="openFolder">Show this tab's file in the OS file manager; null hides the item.</param>
+    /// <param name="delete">Delete this tab's file and close it; null hides the item.</param>
     public static MenuFlyout Build(
         EditorTabViewModel tab,
         Func<Task> rename,
@@ -32,6 +33,7 @@ internal static class TabContextMenu
         Func<Task> close,
         Action? reveal,
         Func<Task>? openFolder,
+        Func<Task>? delete,
         KeyGesture? renameGesture = null,
         KeyGesture? saveGesture = null,
         KeyGesture? closeGesture = null)
@@ -49,6 +51,14 @@ internal static class TabContextMenu
             menu.Items.Add(new Separator());
             if (reveal is not null) menu.Items.Add(Sync("Reveal in Scripts", reveal));
             if (openFolder is not null) menu.Items.Add(Item("Open containing folder", null, openFolder));
+        }
+
+        // Last, behind its own separator: the destructive one shouldn't sit next to Close, which it looks
+        // like and isn't.
+        if (delete is not null)
+        {
+            menu.Items.Add(new Separator());
+            menu.Items.Add(Item("Delete file…", null, delete));
         }
 
         return menu;

@@ -90,6 +90,11 @@ public interface IDialogService
         Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
         SecretStoragePosture storage);
 
+    /// <summary>Confirm deleting a script file. True = delete it. Implementations with no window
+    /// (headless/tests) return false: as with <see cref="ConfirmRemoveProjectAsync"/>, nothing deletes a file
+    /// without someone saying so.</summary>
+    Task<bool> ConfirmDeleteScriptAsync(string fileName);
+
     /// <summary>Ask what to do with a project the user wants gone: forget it, or delete its folder too.
     /// <paramref name="directory"/> is shown, since that is what a delete would remove. Implementations with
     /// no window (headless/tests) return <see cref="ProjectRemoval.Cancel"/> — deliberately the opposite of

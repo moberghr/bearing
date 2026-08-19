@@ -34,4 +34,8 @@ public interface IScriptStore
 
     /// <summary>Move/rename a file.</summary>
     void Move(string sourcePath, string destinationPath);
+
+    /// <summary>Delete a script file. Irreversible — the caller confirms first. A path that isn't there is
+    /// not an error: the goal state ("this file is gone") already holds.</summary>
+    void Delete(string path);
 }

@@ -147,6 +147,8 @@
                       <ContextMenu>
                         <MenuItem Header="Open" Click="OnOpenScriptClick"/>
                         <MenuItem Header="Rename…" Click="OnRenameScriptClick"/>
+                        <Separator/>
+                        <MenuItem Header="Delete…" Click="OnDeleteScriptClick"/>
                       </ContextMenu>
                     </StackPanel.ContextMenu>
                     <Path Data="{StaticResource Icon.File}" Stroke="{DynamicResource Text.Dim}"

@@ -36,4 +36,6 @@ public sealed class FileScriptStore : IScriptStore
     public void CreateFolder(string path) => Directory.CreateDirectory(path);
 
     public void Move(string sourcePath, string destinationPath) => File.Move(sourcePath, destinationPath);
+
+    public void Delete(string path) => File.Delete(path);   // no-op when it's already gone
 }

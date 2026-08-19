@@ -442,6 +442,19 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
         return Task.FromResult(_choice);
     }
 
+    /// <summary>What the delete-script prompt answers. False by default: nothing deletes a file unless a
+    /// test says so explicitly.</summary>
+    public bool DeleteScriptAnswer { get; set; }
+
+    /// <summary>The file names the delete prompt was raised for, in order.</summary>
+    public List<string> DeleteScriptPrompts { get; } = new();
+
+    public Task<bool> ConfirmDeleteScriptAsync(string fileName)
+    {
+        DeleteScriptPrompts.Add(fileName);
+        return Task.FromResult(DeleteScriptAnswer);
+    }
+
     /// <summary>What the remove-project prompt answers. Cancel by default: nothing deletes a folder unless
     /// a test says so explicitly.</summary>
     public Bearing.App.Services.ProjectRemoval RemoveProjectAnswer { get; set; } = Bearing.App.Services.ProjectRemoval.Cancel;

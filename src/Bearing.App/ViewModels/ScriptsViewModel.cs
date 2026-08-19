@@ -230,6 +230,25 @@ public sealed partial class ScriptsViewModel : ObservableObject
         _ctx.SetStatus($"Moved {Path.GetFileName(sourcePath)}.");
     }
 
+    /// <summary>
+    /// Delete a script file. The caller has confirmed, and is responsible for the tabs that were backing it
+    /// (see <see cref="WorkspaceViewModel.DeleteScript"/>) — deleting a file under a live tab whose
+    /// autosave is still armed would simply put it back.
+    /// </summary>
+    /// <returns>False when the delete failed; the reason is in the status bar.</returns>
+    public bool DeleteScript(string path)
+    {
+        try { _ctx.ScriptStore.Delete(path); }
+        catch (Exception ex)
+        {
+            _ctx.SetStatus($"Could not delete {Path.GetFileName(path)}: {ex.Message}");
+            return false;
+        }
+        RefreshScripts();
+        _ctx.SetStatus($"Deleted {Path.GetFileName(path)}.");
+        return true;
+    }
+
     /// <summary>Rename a script, optionally relocating it to <paramref name="targetDir"/> in the same move
     /// — that combination is how naming a scratch tab promotes its file out of the scratch folder.</summary>
     public async Task RenameScriptAsync(string oldPath, string newName, string? targetDir = null)
