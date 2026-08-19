@@ -161,6 +161,61 @@ public sealed partial class ShellViewModel
         StatusText = $"Created project '{name}'.";
     }
 
+    /// <summary>
+    /// Recent projects that can be removed: everything except the ones currently open. Bound by the
+    /// remove-project picker, so a project you're using is never offered as a thing to delete.
+    /// </summary>
+    public IReadOnlyList<RecentProjectItem> RemovableProjects
+        => RecentProjects.Where(p => !IsOpen(p.Directory)).ToList();
+
+    /// <summary>
+    /// Remove a project the user is done with: drop its recent-list entry and, when
+    /// <paramref name="deleteFromDisk"/>, delete its directory too. Pruning of <em>missing</em> folders
+    /// already self-heals in <see cref="RefreshRecentAsync"/>; this is the deliberate half, for a project
+    /// that is still there.
+    /// <para>
+    /// Refuses a project that is open — active or parked. Those have live tabs, buffers and sessions pointing
+    /// at the files, so a delete would pull the ground out from under them, and a list removal would be undone
+    /// by the next switch anyway (every activation touches the list).
+    /// </para>
+    /// </summary>
+    /// <returns>True when the project was removed.</returns>
+    public async Task<bool> RemoveRecentProjectAsync(string directory, bool deleteFromDisk)
+    {
+        var full = Path.GetFullPath(directory);
+        var name = RecentProjects.FirstOrDefault(p =>
+                       string.Equals(Path.GetFullPath(p.Directory), full, StringComparison.Ordinal))?.Name
+                   ?? new DirectoryInfo(full).Name;
+
+        if (IsOpen(full))
+        {
+            StatusText = $"'{name}' is open — switch to another project first.";
+            return false;
+        }
+
+        if (deleteFromDisk)
+        {
+            // The store refuses anything that isn't a project, so this also catches a stale entry pointing
+            // somewhere that has since become an ordinary folder.
+            try { await _projectStore.DeleteAsync(full, CancellationToken.None); }
+            catch (Exception ex)
+            {
+                StatusText = $"Could not delete '{name}': {ex.Message}";
+                return false;
+            }
+        }
+
+        await _recentProjects.RemoveAsync(full, CancellationToken.None);
+        await RefreshRecentAsync();
+        StatusText = deleteFromDisk
+            ? $"Deleted project '{name}' and its folder."
+            : $"Removed '{name}' from recent projects. Its files are untouched.";
+        return true;
+    }
+
+    /// <summary>Whether a project is open this session — the active one, or one parked behind a switch.</summary>
+    private bool IsOpen(string directory) => _ctx.Find(directory) is not null;
+
     private async Task RefreshRecentAsync()
     {
         var list = await _recentProjects.ListAsync(CancellationToken.None);

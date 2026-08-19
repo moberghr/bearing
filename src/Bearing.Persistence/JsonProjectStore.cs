@@ -32,6 +32,21 @@ public sealed class JsonProjectStore : IProjectStore
         return new Project { Directory = directory, Manifest = manifest };
     }
 
+    /// <summary>
+    /// Delete the whole project directory. Guarded on the manifest being there: this removes a tree
+    /// recursively, and that check is what stands between a mistaken path and someone's home folder. A
+    /// project whose manifest is already gone is not deleted — it is pruned from the recent list instead.
+    /// </summary>
+    public Task DeleteAsync(string directory, CancellationToken ct)
+    {
+        var full = Path.GetFullPath(directory);
+        var manifest = Path.Combine(full, ManifestFileName);
+        if (!File.Exists(manifest))
+            throw new FileNotFoundException($"No {ManifestFileName} in '{full}' — refusing to delete it.", manifest);
+
+        return Task.Run(() => Directory.Delete(full, recursive: true), ct);
+    }
+
     public async Task SaveAsync(Project project, CancellationToken ct)
     {
         Directory.CreateDirectory(project.Directory);

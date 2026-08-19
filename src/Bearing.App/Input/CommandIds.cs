@@ -29,6 +29,10 @@ public static class CommandIds
     public const string FocusEditor = "focus.editor";
     public const string FocusResults = "focus.results";
     public const string SelectProject = "select.project";
+
+    /// <summary>Remove a project from the recent list (and optionally delete its folder). Palette-only —
+    /// deliberately unbound, like <see cref="SelectProject"/>.</summary>
+    public const string ProjectRemove = "project.remove";
     public const string SelectConnection = "select.connection";
     public const string SelectDatabase = "select.database";
 

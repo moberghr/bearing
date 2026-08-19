@@ -42,6 +42,11 @@ public sealed class DialogService : IDialogService
             ? new ConfirmCloseDialog(tabName).ShowDialog<CloseChoice>(window)
             : Task.FromResult(CloseChoice.Discard); // no window → close as it did before the prompt existed
 
+    public Task<ProjectRemoval> ConfirmRemoveProjectAsync(string name, string directory)
+        => Owner is { } window
+            ? new ConfirmRemoveProjectDialog(name, directory).ShowDialog<ProjectRemoval>(window)
+            : Task.FromResult(ProjectRemoval.Cancel); // no window → do nothing; a delete needs a real answer
+
     public Task<ConnectionDialogResult?> ShowConnectionDialogAsync(
         ConnectionInfo? existing,
         string? existingPassword,

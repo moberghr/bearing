@@ -442,6 +442,19 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
         return Task.FromResult(_choice);
     }
 
+    /// <summary>What the remove-project prompt answers. Cancel by default: nothing deletes a folder unless
+    /// a test says so explicitly.</summary>
+    public Bearing.App.Services.ProjectRemoval RemoveProjectAnswer { get; set; } = Bearing.App.Services.ProjectRemoval.Cancel;
+
+    /// <summary>The (name, directory) pairs the remove-project prompt was raised for, in order.</summary>
+    public List<(string Name, string Directory)> RemoveProjectPrompts { get; } = new();
+
+    public Task<Bearing.App.Services.ProjectRemoval> ConfirmRemoveProjectAsync(string name, string directory)
+    {
+        RemoveProjectPrompts.Add((name, directory));
+        return Task.FromResult(RemoveProjectAnswer);
+    }
+
     public Task<string?> PickSaveScriptAsync(string suggestedName, string? startDir)
     {
         SavePickerCalls++;

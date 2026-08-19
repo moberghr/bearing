@@ -165,6 +165,8 @@
               <MenuItem Header="Rename project…" Click="OnRenameProjectClick"/>
               <MenuItem Header="Open project…" Click="OnOpenProjectClick"/>
               <MenuItem Header="New project…" Click="OnNewProjectClick"/>
+              <Separator/>
+              <MenuItem Header="Remove project…" Click="OnRemoveProjectClick"/>
             </MenuFlyout>
           </Button.Flyout>
         </Button>

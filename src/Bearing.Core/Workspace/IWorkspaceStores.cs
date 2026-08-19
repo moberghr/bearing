@@ -51,6 +51,13 @@ public interface IProjectStore
     Task<Project> CreateAsync(string directory, string name, CancellationToken ct);
     Task<Project> OpenAsync(string directory, CancellationToken ct);
     Task SaveAsync(Project project, CancellationToken ct);
+
+    /// <summary>
+    /// Delete a project's directory and everything under it — scripts, scratch and session state included.
+    /// Irreversible: the caller confirms first. Implementations must refuse a directory that isn't
+    /// recognisably a project, so a wrong path can never take an unrelated folder with it.
+    /// </summary>
+    Task DeleteAsync(string directory, CancellationToken ct);
 }
 
 public interface ISessionStore

@@ -33,6 +33,23 @@ public enum CloseChoice
 }
 
 /// <summary>
+/// What the user chose when asked about removing a project. <see cref="Cancel"/> is the zero value, so a
+/// dialog dismissed any way at all does nothing — and unlike <see cref="CloseChoice"/>, a headless caller
+/// gets this one too: nothing may delete a folder without someone saying so.
+/// </summary>
+public enum ProjectRemoval
+{
+    /// <summary>Leave the project alone.</summary>
+    Cancel = 0,
+
+    /// <summary>Forget it — drop the recent-list entry and leave the files where they are.</summary>
+    FromList,
+
+    /// <summary>Delete the project directory as well.</summary>
+    FromDisk,
+}
+
+/// <summary>
 /// Where a connection password would end up, as the connection editor needs to see it. Either a real OS
 /// keychain (both flags true), or no keychain could be reached — in which case nothing is stored anywhere
 /// and the connection must prompt for the password instead. <see cref="Reason"/> carries what the store
@@ -72,6 +89,12 @@ public interface IDialogService
         string? existingPassword,
         Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
         SecretStoragePosture storage);
+
+    /// <summary>Ask what to do with a project the user wants gone: forget it, or delete its folder too.
+    /// <paramref name="directory"/> is shown, since that is what a delete would remove. Implementations with
+    /// no window (headless/tests) return <see cref="ProjectRemoval.Cancel"/> — deliberately the opposite of
+    /// <see cref="ConfirmCloseTabAsync"/>: a headless close still closes, but nothing headless deletes files.</summary>
+    Task<ProjectRemoval> ConfirmRemoveProjectAsync(string name, string directory);
 
     /// <summary>Prompt for a single line of text (rename, new folder/script, project name). Null if cancelled.</summary>
     Task<string?> ShowTextPromptAsync(string prompt, string initial = "");

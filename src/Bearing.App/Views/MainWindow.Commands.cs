@@ -60,6 +60,7 @@ public partial class MainWindow
         r.Register(KeyCommand.Sync(CommandIds.SelectProject, "Select project…", KeyScope.Global, "Connection", OpenProjectPicker));
         r.Register(KeyCommand.Sync(CommandIds.SelectConnection, "Select connection…", KeyScope.Global, "Connection", OpenConnectionPicker));
         r.Register(KeyCommand.Sync(CommandIds.SelectDatabase, "Select database…", KeyScope.Global, "Connection", OpenDatabasePicker));
+        r.Register(KeyCommand.Sync(CommandIds.ProjectRemove, "Remove project…", KeyScope.Global, "Connection", RemoveProject));
         // ShowPanel, not a bare ActivePanel assignment: these must reveal a collapsed pane even when the
         // requested panel is already the active one (see ShellViewModel.ShowPanel).
         r.Register(KeyCommand.Sync(CommandIds.PanelConnections, "Show Connections panel", KeyScope.Global, "View",
@@ -258,6 +259,34 @@ public partial class MainWindow
         if (Vm is null) return;
         _palette.ShowQuickPick("Select project…", Vm.RecentProjects.Select(p =>
             (p.Name, (Action)(() => ProjectCombo.SelectedItem = p))).ToList());
+    }
+
+    /// <summary>
+    /// project.remove: pick a project that isn't open, then ask what "remove" means for it before anything
+    /// happens. Two steps rather than a per-item ✕ in the switcher, because one of the outcomes deletes a
+    /// folder and that must never be one stray click away.
+    /// </summary>
+    private void RemoveProject()
+    {
+        if (Vm is null) return;
+        var candidates = Vm.RemovableProjects;
+        if (candidates.Count == 0)
+        {
+            Vm.StatusText = "Nothing to remove — every project in the list is open.";
+            return;
+        }
+
+        _palette.ShowQuickPick("Remove project…", candidates
+            .Select(p => (p.Name, (Action)(() => _ = ConfirmAndRemoveProjectAsync(p)))).ToList());
+    }
+
+    private async Task ConfirmAndRemoveProjectAsync(RecentProjectItem project)
+    {
+        if (Vm is null) return;
+        var choice = await _dialogs.ConfirmRemoveProjectAsync(project.Name, project.Directory);
+        if (choice == Bearing.App.Services.ProjectRemoval.Cancel) return;
+        await Vm.RemoveRecentProjectAsync(project.Directory,
+            deleteFromDisk: choice == Bearing.App.Services.ProjectRemoval.FromDisk);
     }
 
     private void OpenConnectionPicker()
