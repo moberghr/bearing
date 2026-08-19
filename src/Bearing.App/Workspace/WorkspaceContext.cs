@@ -136,6 +136,30 @@ public sealed class WorkspaceContext
         catch { return directory; }   // malformed path: key it verbatim rather than throwing on lookup
     }
 
+    /// <summary>
+    /// Close a project for good — the one operation that is <em>not</em> a view change. Drops it from the
+    /// registry and returns the tabs that were on it (visible or parked) so the caller can settle them; the
+    /// registry entry goes first, so autosave sees the tabs leave <see cref="AllTabs"/> and stops watching
+    /// them rather than writing into a folder that is being removed.
+    /// </summary>
+    /// <returns>The tabs the project owned; empty when no such project was open.</returns>
+    public IReadOnlyList<EditorTabViewModel> Close(string directory)
+    {
+        if (!_open.Remove(Key(directory), out var workspace)) return Array.Empty<EditorTabViewModel>();
+
+        var closed = workspace.ParkedTabs.ToList();
+        workspace.ParkedTabs.Clear();
+        if (ReferenceEquals(workspace.Project, Project))
+        {
+            closed.AddRange(Tabs);
+            SelectedTab = null;
+            Tabs.Clear();
+            Project = null;
+            DefaultConnectionId = null;
+        }
+        return closed;
+    }
+
     /// <summary>Park the active project: stash its tabs and layout, then clear the visible tab list. The
     /// tab view-models stay alive on the <see cref="ProjectWorkspace"/> — nothing is disposed or cancelled.</summary>
     public void Park(bool sidePaneOpen, double sidePaneWidth, ResultsViewMode resultsViewMode)

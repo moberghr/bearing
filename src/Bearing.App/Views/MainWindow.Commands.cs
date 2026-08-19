@@ -60,7 +60,8 @@ public partial class MainWindow
         r.Register(KeyCommand.Sync(CommandIds.SelectProject, "Select project…", KeyScope.Global, "Connection", OpenProjectPicker));
         r.Register(KeyCommand.Sync(CommandIds.SelectConnection, "Select connection…", KeyScope.Global, "Connection", OpenConnectionPicker));
         r.Register(KeyCommand.Sync(CommandIds.SelectDatabase, "Select database…", KeyScope.Global, "Connection", OpenDatabasePicker));
-        r.Register(KeyCommand.Sync(CommandIds.ProjectRemove, "Remove project…", KeyScope.Global, "Connection", RemoveProject));
+        r.Register(new KeyCommand(CommandIds.ProjectRemove, "Remove project…", KeyScope.Global, "Connection",
+            async () => await RemoveCurrentProjectAsync()));
         // ShowPanel, not a bare ActivePanel assignment: these must reveal a collapsed pane even when the
         // requested panel is already the active one (see ShellViewModel.ShowPanel).
         r.Register(KeyCommand.Sync(CommandIds.PanelConnections, "Show Connections panel", KeyScope.Global, "View",
@@ -262,31 +263,20 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// project.remove: pick a project that isn't open, then ask what "remove" means for it before anything
-    /// happens. Two steps rather than a per-item ✕ in the switcher, because one of the outcomes deletes a
-    /// folder and that must never be one stray click away.
+    /// project.remove: ask what "remove" means for the project that's open, then do it. One dialog rather
+    /// than two menu items, because the difference between forgetting a project and deleting its folder is
+    /// the whole question and is only answerable next to the actual path.
     /// </summary>
-    private void RemoveProject()
+    private async Task RemoveCurrentProjectAsync()
     {
-        if (Vm is null) return;
-        var candidates = Vm.RemovableProjects;
-        if (candidates.Count == 0)
-        {
-            Vm.StatusText = "Nothing to remove — every project in the list is open.";
-            return;
-        }
+        if (Vm is null || Vm.CurrentProjectName is not { } name || Vm.ProjectDirectory is not { } directory) return;
 
-        _palette.ShowQuickPick("Remove project…", candidates
-            .Select(p => (p.Name, (Action)(() => _ = ConfirmAndRemoveProjectAsync(p)))).ToList());
-    }
-
-    private async Task ConfirmAndRemoveProjectAsync(RecentProjectItem project)
-    {
-        if (Vm is null) return;
-        var choice = await _dialogs.ConfirmRemoveProjectAsync(project.Name, project.Directory);
+        FlushActiveEditor();   // the removal saves the session (when forgetting), so it needs the live buffer
+        var choice = await _dialogs.ConfirmRemoveProjectAsync(name, directory);
         if (choice == Bearing.App.Services.ProjectRemoval.Cancel) return;
-        await Vm.RemoveRecentProjectAsync(project.Directory,
-            deleteFromDisk: choice == Bearing.App.Services.ProjectRemoval.FromDisk);
+
+        if (await Vm.RemoveCurrentProjectAsync(deleteFromDisk: choice == Bearing.App.Services.ProjectRemoval.FromDisk))
+            LoadEditorFromSelectedTab();   // a different project's tabs are on screen now
     }
 
     private void OpenConnectionPicker()

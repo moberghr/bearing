@@ -36,9 +36,10 @@ public sealed class ConfirmRemoveProjectDialog : Window
 
         var body = new TextBlock
         {
-            Text = "Removing it from the list leaves every file where it is — the project is only forgotten, "
+            Text = "Bearing will close it and switch to your next most-recent project either way.\n\n"
+                 + "Removing it from the list leaves every file where it is — the project is only forgotten, "
                  + "and you can open it again from its folder. Deleting the folder takes its scripts, scratch "
-                 + "buffers and session with it and cannot be undone.",
+                 + "buffers, session and saved passwords with it, and cannot be undone.",
             TextWrapping = TextWrapping.Wrap,
             Opacity = 0.85,
             Margin = new Thickness(0, 8, 0, 0),

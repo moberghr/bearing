@@ -119,6 +119,16 @@ public sealed class TabAutosave : IDisposable
         await SaveAsync(tab);
     }
 
+    /// <summary>
+    /// Throw away a tab's pending write instead of landing it — for a project being deleted, where the
+    /// debounced write would otherwise recreate a scratch file inside the folder as it's removed. The
+    /// buffer itself is untouched; this only cancels the timer.
+    /// </summary>
+    public void Discard(EditorTabViewModel tab)
+    {
+        if (_pending.Remove(tab, out var cts)) { cts.Cancel(); cts.Dispose(); }
+    }
+
     /// <summary>Flush every watched tab (project switch).</summary>
     public async Task FlushAllAsync()
     {

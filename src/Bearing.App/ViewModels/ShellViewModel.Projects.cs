@@ -74,6 +74,8 @@ public sealed partial class ShellViewModel
     /// </summary>
     public async Task ResumeLastProjectAsync(string fallbackDir)
     {
+        // Remembered so removing the last project still has somewhere to land (see RemoveCurrentProjectAsync).
+        _fallbackProjectDirectory = fallbackDir;
         var recent = await _recentProjects.ListAsync(CancellationToken.None);
         foreach (var dir in recent)
         {
@@ -161,60 +163,107 @@ public sealed partial class ShellViewModel
         StatusText = $"Created project '{name}'.";
     }
 
-    /// <summary>
-    /// Recent projects that can be removed: everything except the ones currently open. Bound by the
-    /// remove-project picker, so a project you're using is never offered as a thing to delete.
-    /// </summary>
-    public IReadOnlyList<RecentProjectItem> RemovableProjects
-        => RecentProjects.Where(p => !IsOpen(p.Directory)).ToList();
+    /// <summary>The default project directory, from startup — where a removal lands when the recent list has
+    /// nothing else in it. Null in tests that call <see cref="InitializeAsync"/> directly.</summary>
+    private string? _fallbackProjectDirectory;
 
     /// <summary>
-    /// Remove a project the user is done with: drop its recent-list entry and, when
-    /// <paramref name="deleteFromDisk"/>, delete its directory too. Pruning of <em>missing</em> folders
-    /// already self-heals in <see cref="RefreshRecentAsync"/>; this is the deliberate half, for a project
-    /// that is still there.
+    /// Remove the project that is open: drop its recent-list entry and, when
+    /// <paramref name="deleteFromDisk"/>, delete its directory too. The project is <b>closed</b> (not parked)
+    /// and the app switches to the next most-recent one, since there is always a project on screen.
     /// <para>
-    /// Refuses a project that is open — active or parked. Those have live tabs, buffers and sessions pointing
-    /// at the files, so a delete would pull the ground out from under them, and a list removal would be undone
-    /// by the next switch anyway (every activation touches the list).
+    /// Deleting is the irreversible half and is ordered accordingly: pending autosaves are discarded first so
+    /// nothing recreates a scratch file inside the folder as it goes, the delete happens while the project is
+    /// still open (so a failure changes nothing at all), and only then is the project closed and forgotten.
+    /// Forgetting instead flushes and saves the session, so reopening the folder later resumes where it left off.
     /// </para>
     /// </summary>
     /// <returns>True when the project was removed.</returns>
-    public async Task<bool> RemoveRecentProjectAsync(string directory, bool deleteFromDisk)
+    public async Task<bool> RemoveCurrentProjectAsync(bool deleteFromDisk)
     {
-        var full = Path.GetFullPath(directory);
-        var name = RecentProjects.FirstOrDefault(p =>
-                       string.Equals(Path.GetFullPath(p.Directory), full, StringComparison.Ordinal))?.Name
-                   ?? new DirectoryInfo(full).Name;
+        if (_project is not { } project) return false;
+        var directory = project.Directory;
+        var name = project.Manifest.Name;
 
-        if (IsOpen(full))
+        if (await SuccessorProjectAsync(directory) is not { } successor)
         {
-            StatusText = $"'{name}' is open — switch to another project first.";
+            StatusText = $"'{name}' is the only project — open or create another one first.";
             return false;
+        }
+
+        // A query still running on one of its tabs is about to lose its project either way.
+        foreach (var tab in _workspace.Tabs) tab.CancelRun();
+
+        if (deleteFromDisk)
+        {
+            foreach (var tab in _workspace.Tabs) _workspace.Autosave.Discard(tab);
+        }
+        else
+        {
+            await _workspace.FlushScratchAsync();
+            SaveWorkspace();
         }
 
         if (deleteFromDisk)
         {
-            // The store refuses anything that isn't a project, so this also catches a stale entry pointing
-            // somewhere that has since become an ordinary folder.
-            try { await _projectStore.DeleteAsync(full, CancellationToken.None); }
+            try { await _projectStore.DeleteAsync(directory, CancellationToken.None); }
             catch (Exception ex)
             {
                 StatusText = $"Could not delete '{name}': {ex.Message}";
-                return false;
+                return false;   // nothing has been closed or forgotten yet — the project is still usable
             }
+            // The manifest is gone, so these connections can never be used again: drop their live sessions,
+            // cached schema, and stored passwords rather than leaving orphans behind (§1.1).
+            await ForgetConnectionsAsync(project);
         }
 
-        await _recentProjects.RemoveAsync(full, CancellationToken.None);
-        await RefreshRecentAsync();
+        _ctx.Close(directory);
+        await _recentProjects.RemoveAsync(directory, CancellationToken.None);
+        await OpenProjectAsync(successor);
+
         StatusText = deleteFromDisk
-            ? $"Deleted project '{name}' and its folder."
-            : $"Removed '{name}' from recent projects. Its files are untouched.";
+            ? $"Deleted project '{name}' and its folder. Now in '{CurrentProjectName}'."
+            : $"Removed '{name}' from recent projects; its files are untouched. Now in '{CurrentProjectName}'.";
         return true;
     }
 
-    /// <summary>Whether a project is open this session — the active one, or one parked behind a switch.</summary>
-    private bool IsOpen(string directory) => _ctx.Find(directory) is not null;
+    /// <summary>
+    /// Where to go after removing <paramref name="directory"/>: the most-recent other project that actually
+    /// opens, else the startup default. Null when there is nowhere to land — the caller then refuses rather
+    /// than leaving the app with no project.
+    /// </summary>
+    private async Task<string?> SuccessorProjectAsync(string directory)
+    {
+        var removed = Path.GetFullPath(directory);
+        bool IsRemoved(string dir) => string.Equals(Path.GetFullPath(dir), removed, StringComparison.Ordinal);
+
+        foreach (var candidate in await _recentProjects.ListAsync(CancellationToken.None))
+        {
+            if (IsRemoved(candidate) || !Directory.Exists(candidate)) continue;
+            // Probe as ResumeLastProjectAsync does: don't switch to something that can't be opened.
+            try { await _projectStore.OpenAsync(candidate, CancellationToken.None); }
+            catch { continue; }
+            return candidate;
+        }
+        return _fallbackProjectDirectory is { } fallback && !IsRemoved(fallback) ? fallback : null;
+    }
+
+    /// <summary>Drop everything cached for a deleted project's connections — live sessions, schema, and the
+    /// keychain entries keyed by their ids. Best-effort: a keychain that refuses must not fail the removal.</summary>
+    private async Task ForgetConnectionsAsync(Project project)
+    {
+        foreach (var connection in project.Manifest.Connections)
+        {
+            try
+            {
+                await _sessions.EvictAsync(connection.Id);
+                _sessions.InvalidateSchema(connection.Id);
+                await _schemaBrowser.InvalidateAsync(connection.Id);   // its own per-conn+db reader cache (§9.4)
+                if (_secretStore is { } store) await store.DeleteAsync(connection.Id, CancellationToken.None);
+            }
+            catch { /* best-effort cleanup (§5.2); the project is already gone */ }
+        }
+    }
 
     private async Task RefreshRecentAsync()
     {

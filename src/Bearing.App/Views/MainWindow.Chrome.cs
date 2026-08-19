@@ -112,7 +112,7 @@ public partial class MainWindow
         if (name is not null) await Vm.RenameProjectAsync(name);
     }
 
-    private void OnRemoveProjectClick(object? sender, RoutedEventArgs e) => RemoveProject();
+    private async void OnRemoveProjectClick(object? sender, RoutedEventArgs e) => await RemoveCurrentProjectAsync();
 
     private async void OnOpenProjectClick(object? sender, RoutedEventArgs e)
     {
