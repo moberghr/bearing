@@ -119,6 +119,12 @@ public partial class MainWindow : Window
         // Editor-editing shortcuts must pre-empt AvaloniaEdit, which consumes Enter/'/'/brackets on
         // its own KeyDown — so handle them during the tunnel phase, before the editor sees them.
         Editor.AddHandler(KeyDownEvent, OnEditorKeyDown, RoutingStrategies.Tunnel);
+
+        // The server pill's selection has also been seen to go missing with nothing in the view-model
+        // having changed — most likely a container recycle or the window surface being re-realized across
+        // a suspend/resume. There is no event for that, so re-assert it whenever the window is activated:
+        // by the time it is being looked at, the pill is right again.
+        Activated += (_, _) => SyncConnectionPicker();
     }
 
     /// <summary>The sidebar (Connections/Scripts/History) is its own control; it owns its dialogs and tree
@@ -181,6 +187,10 @@ public partial class MainWindow : Window
         Vm.Connections.PropertyChanged += OnViewModelPropertyChanged;
         Vm.Connections.TabDatabases.CollectionChanged -= OnTabDatabasesChanged;
         Vm.Connections.TabDatabases.CollectionChanged += OnTabDatabasesChanged;
+        // A Clear() + N adds rebuild (RefreshConnections, on every connection save/delete) drops the
+        // server pill's rendered selection; re-select once it has settled.
+        Vm.Connections.Connections.CollectionChanged -= OnConnectionsListChanged;
+        Vm.Connections.Connections.CollectionChanged += OnConnectionsListChanged;
         // A run that finishes on a tab the user isn't looking at can't use the status bar (that describes
         // the tab on screen), so it toasts instead — the only notification sink in the app.
         Vm.Execution.BackgroundCompleted -= OnBackgroundCompleted;
@@ -196,6 +206,7 @@ public partial class MainWindow : Window
         LoadEditorFromSelectedTab();
         SyncProjectCombo();
         SyncDbPicker();
+        SyncConnectionPicker();
         App.SetConnectionAccent(Vm.Connections.ActiveConnectionColor); // seed the accent for the initial tab
         _tabs.Sync(Vm.Workspace.Tabs);
         if (Vm.Workspace.SelectedTab is { } seedTab) _tabs.Promote(seedTab);
@@ -312,6 +323,8 @@ public partial class MainWindow : Window
             App.SetConnectionAccent(Vm?.Connections.ActiveConnectionColor); // recolor tab accent, dots, results, status line
         else if (e.PropertyName == nameof(ConnectionsViewModel.SelectedTabDatabase))
             SyncDbPicker();
+        else if (e.PropertyName == nameof(ConnectionsViewModel.SelectedTabConnection))
+            QueueConnectionPickerSync();
         else if (e.PropertyName == nameof(ShellViewModel.ResultsViewMode))
             ResultsView.ViewMode = Vm?.ResultsViewMode ?? Bearing.Core.Workspace.ResultsViewMode.Stacked;
         else if (e.PropertyName is nameof(ShellViewModel.Title) or nameof(ShellViewModel.ProjectDirectory))

@@ -177,8 +177,9 @@
         <Border Width="1" Height="22" Background="{DynamicResource Border}" Margin="4,0"/>
 
         <!-- Server (connection) -->
+        <!-- Selection is driven from code-behind (SyncConnectionPicker), not bound: see MainWindow.Chrome.cs. -->
         <ComboBox x:Name="ConnectionPicker" Classes="pill" Width="210"
-                  ItemsSource="{Binding Connections.Connections}" SelectedItem="{Binding Connections.SelectedTabConnection}"
+                  ItemsSource="{Binding Connections.Connections}" SelectionChanged="OnConnectionSelected"
                   PlaceholderText="— server —" ToolTip.Tip="Server / connection">
           <ComboBox.ItemTemplate>
             <DataTemplate x:DataType="data:ConnectionInfo">

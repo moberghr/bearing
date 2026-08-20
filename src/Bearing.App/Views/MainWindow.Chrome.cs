@@ -213,6 +213,61 @@ public partial class MainWindow
         if (DatabasePicker.SelectedItem is string db) Vm.Connections.SelectedTabDatabase = db;
     }
 
+    // ---- server (connection) pill selection ----
+    //
+    // Driven in code for the same reason as the database pill, plus one this pill has on its own: a
+    // `SelectedItem` binding cannot repair a selection the ComboBox has *lost*. `RefreshConnections()`
+    // rebuilds the list with Clear() + N adds, which drops the rendered selection, and the
+    // `OnPropertyChanged(nameof(SelectedTabConnection))` that follows re-pushes the value the binding
+    // already holds — a no-op. That left the pill on its "— server —" placeholder while the tab, the
+    // accent, and the database pill all still knew the connection, and a tab switch (which only re-raises
+    // the same property) could not heal it either.
+    //
+    // SyncConnectionPicker assigns null *first*, so every sync is a real change and any lost selection is
+    // restored. Write-back also no longer nulls the tab's connection when the list is cleared: only a
+    // ConnectionInfo the user actually picked is pushed to the view-model.
+    private bool _syncingConnection;
+    private bool _connectionSyncQueued;
+
+    private void SyncConnectionPicker()
+    {
+        if (Vm is null) return;
+        if (ConnectionPicker.IsDropDownOpen) return;   // don't yank the list out from under the user
+        _syncingConnection = true;
+        ConnectionPicker.SelectedItem = null;          // force a change even when the value is unchanged
+        ConnectionPicker.SelectedItem = Vm.Connections.SelectedTabConnection;
+        _syncingConnection = false;
+    }
+
+    /// <summary>
+    /// Sync once the current notification has unwound. Same hazard as <c>OnTabDatabasesChanged</c> — the
+    /// ComboBox's own ItemsSourceView subscribes after this window does, so assigning a selection from
+    /// inside a CollectionChanged (or from inside the SelectionChanged this assignment itself raises)
+    /// re-enters the selection model over a list it still reports the old contents of.
+    /// </summary>
+    private void QueueConnectionPickerSync()
+    {
+        if (_connectionSyncQueued) return;
+        _connectionSyncQueued = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _connectionSyncQueued = false;
+            SyncConnectionPicker();
+        });
+    }
+
+    private void OnConnectionsListChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        => QueueConnectionPickerSync();
+
+    private void OnConnectionSelected(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingConnection || Vm is null) return;
+        // Only a real pick writes back. A Clear() during a list rebuild also raises this with a null
+        // selection, and treating that as the user choosing "no connection" would unset the tab's server.
+        if (ConnectionPicker.SelectedItem is Bearing.Core.Data.ConnectionInfo c)
+            Vm.Connections.SelectedTabConnection = c;
+    }
+
     // ---- menu & rail click handlers ----
 
     private async void OnSaveAsClick(object? sender, RoutedEventArgs e) => await SaveAsAsync();
