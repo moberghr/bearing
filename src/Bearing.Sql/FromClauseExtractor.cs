@@ -13,7 +13,14 @@ namespace Bearing.Sql;
 /// </summary>
 public static class FromClauseExtractor
 {
-    public static IReadOnlyList<TableRef> Extract(string sql, ISchemaSnapshot schema)
+    /// <param name="caretOffset">
+    /// When set, the bare name the caret is editing is not reported as a source. That word is the
+    /// relation being *chosen*, not one already in scope, and counting it made its own text a taken
+    /// alias: completing at <c>from u</c> offered <c>users u2</c> because "u" was "already in scope",
+    /// so the auto-alias depended on how much of the name had been typed when the popup opened.
+    /// Only an unaliased name is dropped — an alias the query actually wrote stays in scope.
+    /// </param>
+    public static IReadOnlyList<TableRef> Extract(string sql, ISchemaSnapshot schema, int? caretOffset = null)
     {
         var toks = PgParsing.LexAll(sql)
             .Where(t => t.Channel == TokenConstants.DefaultChannel && t.Type != TokenConstants.EOF)
@@ -35,10 +42,13 @@ public static class FromClauseExtractor
                 if (!IsName(toks[j])) break;
 
                 var nameParts = new List<string> { toks[j].Text };
+                var nameStart = toks[j].StartIndex;
+                var nameStop = toks[j].StopIndex;
                 var k = j + 1;
                 while (k + 1 < toks.Count && toks[k].Type == PostgreSQLParser.DOT && IsName(toks[k + 1]))
                 {
                     nameParts.Add(toks[k + 1].Text);
+                    nameStop = toks[k + 1].StopIndex;
                     k += 2;
                 }
 
@@ -54,16 +64,24 @@ public static class FromClauseExtractor
                 }
 
                 var (schemaName, name) = SplitQualified(nameParts);
-                refs.Add(new TableRef
-                {
-                    Schema = schemaName,
-                    RawName = name,
-                    Alias = Unquote(alias),
-                    // Quoting is kept here (and only here) so generated predicates can spell the
-                    // qualifier the way the query does — `"__MigrationHistory".id`, not `.id` folded.
-                    ReferenceText = alias ?? nameParts[^1],
-                    Resolved = schema.ResolveTable(schemaName, name),
-                });
+
+                // Same span ResolveCaret treats as the word to overwrite: inside the name, or just
+                // after its last character — but not immediately before it, which is an insertion
+                // point in front of a source that really is in scope.
+                var caretIsEditingThisName = alias is null && caretOffset is { } caret
+                    && caret > nameStart && caret <= nameStop + 1;
+
+                if (!caretIsEditingThisName)
+                    refs.Add(new TableRef
+                    {
+                        Schema = schemaName,
+                        RawName = name,
+                        Alias = Unquote(alias),
+                        // Quoting is kept here (and only here) so generated predicates can spell the
+                        // qualifier the way the query does — `"__MigrationHistory".id`, not `.id` folded.
+                        ReferenceText = alias ?? nameParts[^1],
+                        Resolved = schema.ResolveTable(schemaName, name),
+                    });
 
                 if (k < toks.Count && toks[k].Type == PostgreSQLParser.COMMA) { j = k + 1; continue; }
                 break;

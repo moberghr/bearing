@@ -26,7 +26,9 @@ public sealed partial class CompletionEngine : ICompletionEngine
         parsed.Parser.Reset();
 
         // FROM/JOIN scope is extracted resiliently (token-isolated), independent of select-list garbage.
-        var sources = FromClauseExtractor.Extract(sql, schema);
+        // The caret is passed so the half-typed name being completed isn't counted as a source of its
+        // own — that is what made the auto-alias depend on how far the name had been typed (#42).
+        var sources = FromClauseExtractor.Extract(sql, schema, caretOffset);
 
         var core = new CodeCompletionCore(parsed.Parser, PgCompletionRules.PreferredRules.ToHashSet(),
             PgCompletionRules.IgnoredTokens.ToHashSet());
