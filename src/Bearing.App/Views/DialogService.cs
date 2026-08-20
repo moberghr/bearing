@@ -7,8 +7,8 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Layout;
-using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using Bearing.App.Editing;
 using Bearing.App.Results;
 using Bearing.App.Services;
 using Bearing.Core.Data;
@@ -119,21 +119,14 @@ public sealed class DialogService : IDialogService
         return file?.TryGetLocalPath();
     }
 
-    /// <summary>Show SQL in a read-only, monospace preview window (selectable to copy).</summary>
+    /// <summary>Show SQL in a read-only, monospace preview window (selectable to copy), syntax-highlighted
+    /// like every other SQL surface — this is a generated <c>CREATE TABLE</c>, a view's source, or the DML an
+    /// inline edit is about to run, all of which are read closely enough to want colour. No word wrap: the
+    /// window is wide and the text is pre-formatted, so wrapping would only break its alignment.</summary>
     public void ShowSqlPreview(string sql, string title = "SQL preview — changes to save")
     {
         if (Owner is not { } owner) return;
-        var box = new AvaloniaEdit.TextEditor
-        {
-            Text = sql,
-            IsReadOnly = true,
-            FontFamily = new FontFamily("Cascadia Code,Cascadia Mono,Consolas,Menlo,monospace"),
-            FontSize = 13,
-            Margin = new Thickness(8),
-            ShowLineNumbers = false,
-            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
-            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
-        };
+        var box = SqlViewer.Create(sql);
 
         var win = new Window
         {

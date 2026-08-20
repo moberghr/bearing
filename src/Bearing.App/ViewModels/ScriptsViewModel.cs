@@ -37,10 +37,125 @@ public sealed partial class ScriptsViewModel : ObservableObject
     /// <summary>The Scripts tree: folders (nested) then ungrouped root scripts.</summary>
     public ObservableCollection<object> ScriptNodes { get; } = new();
 
-    /// <summary>Name filter for the Scripts tree (empty = show all).</summary>
+    /// <summary>Filter for the Scripts tree: file names always, and file <em>contents</em> once it is long
+    /// enough to be worth reading them for (empty = show all).</summary>
     [ObservableProperty] private string _scriptFilter = "";
 
-    partial void OnScriptFilterChanged(string value) => RefreshScripts();
+    partial void OnScriptFilterChanged(string value)
+    {
+        CancelContentSearch();
+        // Hits belong to the filter that found them, so a changed filter invalidates them and the refresh
+        // below is what takes them off screen. Content-only rows therefore blink out while you type and come
+        // back when the next pass lands, which is the honest order: the tree never shows a file that doesn't
+        // match what is currently typed.
+        _contentHits.Clear();
+        RefreshScripts();                                  // name matches, synchronously, exactly as before
+        var filter = value.Trim();
+        if (ScriptSearch.WantsContentSearch(filter))
+            _ = SearchContentsAsync(filter, ContentSearchDelay, StartContentSearch());
+    }
+
+    // ---- content search (#47) --------------------------------------------------------------------------
+    // The name filter is synchronous off the property setter, and stays that way: re-walking the directory
+    // per keystroke is cheap, reading every file's text is not, and IScriptStore only offers an async read.
+    // So contents are a second, debounced, cancelable pass that ends by re-running the same refresh.
+
+    /// <summary>How long typing has to stop before contents are read. A keystroke inside the window
+    /// abandons the pass in flight rather than queueing another.</summary>
+    private static readonly TimeSpan ContentSearchDelay = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>At most this many files are read per pass. A scripts folder large enough to hit the cap is
+    /// one where a read per file per pass is the wrong shape anyway (an mtime-keyed text cache would be the
+    /// answer); the count is surfaced rather than silently truncated.</summary>
+    private const int MaxContentFiles = 400;
+
+    /// <summary>Content hits from the last completed pass: path → the line that matched. Read by
+    /// <see cref="RefreshScripts"/>, which is why a pass ends in a refresh rather than editing the tree.</summary>
+    private readonly Dictionary<string, string> _contentHits = new(StringComparer.Ordinal);
+
+    private CancellationTokenSource? _contentSearch;
+
+    private void CancelContentSearch()
+    {
+        _contentSearch?.Cancel();
+        _contentSearch?.Dispose();
+        _contentSearch = null;
+    }
+
+    private CancellationToken StartContentSearch()
+    {
+        _contentSearch = new CancellationTokenSource();
+        return _contentSearch.Token;
+    }
+
+    /// <summary>
+    /// Look inside the scripts the name filter didn't already reach and re-run the refresh with what matched.
+    /// Continuations stay on the caller's context — the UI thread in the app, because the filter setter runs
+    /// there — since the refresh at the end touches observable collections.
+    /// </summary>
+    private async Task SearchContentsAsync(string filter, TimeSpan debounce, CancellationToken ct)
+    {
+        try
+        {
+            if (debounce > TimeSpan.Zero) await Task.Delay(debounce, ct);
+            var dir = _ctx.Project?.ScriptsDirectory;
+            if (dir is null || _ctx.ScriptStore.ReadTree(dir) is not { } tree) return;
+
+            // An open tab's buffer beats the file it came from: with autosave off (or on-execute) a script
+            // can sit edited indefinitely, and the text just typed is the text most likely being searched
+            // for. Reading from disk here would search a version the user cannot see.
+            var buffers = Tabs.Where(t => t.ScriptPath is not null)
+                              .GroupBy(t => t.ScriptPath!, StringComparer.Ordinal)
+                              .ToDictionary(g => g.Key, g => g.First().Text, StringComparer.Ordinal);
+
+            var hits = new Dictionary<string, string>(StringComparer.Ordinal);
+            var read = 0;
+            var skipped = 0;
+            foreach (var file in Candidates(tree, filter))
+            {
+                ct.ThrowIfCancellationRequested();
+                string text;
+                if (buffers.TryGetValue(file.Path, out var live)) text = live;
+                else if (file.SizeBytes > ScriptSearch.MaxContentBytes) { skipped++; continue; }
+                else if (read >= MaxContentFiles) { skipped++; continue; }
+                else
+                {
+                    read++;
+                    try { text = await _ctx.ScriptStore.ReadTextAsync(file.Path, ct); }
+                    catch (OperationCanceledException) { throw; }
+                    catch { continue; }   // unreadable file: it simply doesn't match
+                }
+                if (ScriptSearch.MatchingLine(text, filter) is { } line) hits[file.Path] = line;
+            }
+
+            if (ct.IsCancellationRequested) return;
+            _contentHits.Clear();
+            foreach (var (path, line) in hits) _contentHits[path] = line;
+            RefreshScripts();
+            if (skipped > 0)
+                _ctx.SetStatus($"Searched script contents for “{filter}”: {hits.Count} file(s) matched, {skipped} not searched (too large, or past the {MaxContentFiles}-file cap).");
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by a newer filter (or a project switch). The refresh for that one owns the tree.
+        }
+    }
+
+    /// <summary>Every script the name filter didn't already reach — a name hit is its own reason to show a
+    /// row, and its own explanation, so there is nothing to gain by reading it.</summary>
+    private static IEnumerable<ScriptFileRef> Candidates(ScriptTree tree, string filter)
+    {
+        foreach (var file in tree.Files)
+            if (!ScriptSearch.MatchesName(file.Name, filter)) yield return file;
+        foreach (var sub in tree.Folders)
+            foreach (var file in Candidates(sub, filter)) yield return file;
+    }
+
+    /// <summary>Run a content pass now, with no debounce, and return once the tree has been refreshed with
+    /// what it found. The production path is fire-and-forget by nature; tests need a pass they can await
+    /// rather than race (§4.3 — none of this is reachable from a headless UI test).</summary>
+    internal Task SearchContentsNowAsync(string filter, CancellationToken ct = default)
+        => SearchContentsAsync(filter.Trim(), TimeSpan.Zero, ct);
 
     /// <summary>The folder currently painted as the drop target. Tracked so it can be un-painted when the
     /// pointer moves on — the tree is rebuilt often enough that hunting for "whichever one is lit" isn't safe.</summary>
@@ -113,14 +228,20 @@ public sealed partial class ScriptsViewModel : ObservableObject
                            .Select(t => t.ScriptPath!)
                            .ToHashSet(StringComparer.Ordinal);
         var filter = ScriptFilter?.Trim() ?? "";
-        bool Matches(string name) => filter.Length == 0 || name.Contains(filter, StringComparison.OrdinalIgnoreCase);
-        ScriptItem Make(ScriptFileRef f) => new(f.Name, f.Path) { IsUnsaved = unsaved.Contains(f.Path) };
+        // Either reason puts a file in the tree: its name matched, or the last content pass found the filter
+        // inside it.
+        bool Include(ScriptItem s) => ScriptSearch.MatchesName(s.Name, filter) || s.MatchLine is not null;
+        ScriptItem Make(ScriptFileRef f) => new(f.Name, f.Path)
+        {
+            IsUnsaved = unsaved.Contains(f.Path),
+            MatchLine = _contentHits.GetValueOrDefault(f.Path),
+        };
 
         var scratchDir = _ctx.Project?.ScratchDirectory;
         bool IsScratchFolder(string path) => scratchDir is not null
             && string.Equals(Path.GetFullPath(path), Path.GetFullPath(scratchDir), StringComparison.OrdinalIgnoreCase);
 
-        BuildScriptNodes(tree, ScriptNodes, filter, Matches, Make, IsScratchFolder);
+        BuildScriptNodes(tree, ScriptNodes, filter, Include, Make, IsScratchFolder);
 
         // Re-point the selection at the rebuilt node for the same path (or drop it if the file is gone).
         SelectedNode = _selectedPath is { } path ? Locate(path) : null;
@@ -129,14 +250,15 @@ public sealed partial class ScriptsViewModel : ObservableObject
     /// <summary>
     /// Select the node for <paramref name="absolutePath"/> and expand everything above it — "Reveal in
     /// Scripts", the answer to "which file is this tab?". Returns false when the path isn't under the
-    /// project's scripts folder at all; a name filter hiding it is not a failure, it's cleared first.
+    /// project's scripts folder at all; the filter hiding it — by name or by contents — is not a failure,
+    /// it's cleared first.
     /// </summary>
     public bool Reveal(string absolutePath)
     {
         if (Locate(absolutePath) is null)
         {
-            // Either the tree predates the file (one created outside the app), or a name filter is hiding
-            // it. Clearing the filter re-reads the tree too, so both routes end in a refresh.
+            // Either the tree predates the file (one created outside the app), or the filter is hiding it.
+            // Clearing the filter re-reads the tree too, so both routes end in a refresh.
             if (ScriptFilter.Length > 0) ScriptFilter = ""; else RefreshScripts();
         }
 
@@ -165,7 +287,7 @@ public sealed partial class ScriptsViewModel : ObservableObject
     /// only if it has a matching descendant. The scratch folder is pinned above the curated folders
     /// (it's the app's, not the user's) and collapsed by default so it stays out of the way.</summary>
     private int BuildScriptNodes(ScriptTree node, IList<object> target,
-        string filter, Func<string, bool> matches, Func<ScriptFileRef, ScriptItem> make,
+        string filter, Func<ScriptItem, bool> include, Func<ScriptFileRef, ScriptItem> make,
         Func<string, bool> isScratchFolder)
     {
         var total = 0;
@@ -177,7 +299,7 @@ public sealed partial class ScriptsViewModel : ObservableObject
                 IsExpanded = filter.Length > 0 || !scratch,
                 IsScratch = scratch,
             };
-            var n = BuildScriptNodes(sub, folder.Children, filter, matches, make, isScratchFolder);
+            var n = BuildScriptNodes(sub, folder.Children, filter, include, make, isScratchFolder);
             folder.Count = n;
             total += n;
             if (n > 0 || filter.Length == 0)
@@ -190,7 +312,7 @@ public sealed partial class ScriptsViewModel : ObservableObject
         {
             var item = make(file);
             Scripts.Add(item);
-            if (matches(item.Name)) { target.Add(item); total++; }
+            if (include(item)) { target.Add(item); total++; }
         }
         return total;
     }

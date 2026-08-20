@@ -9,6 +9,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Bearing.App.Editing;
 using Bearing.App.Services;
 using Bearing.App.ViewModels;
 using Bearing.App.Views;
@@ -40,6 +41,9 @@ public partial class SidebarView : UserControl
         // Intercept Up/Down/Esc/Backspace before the TreeView's built-in node navigation, so a search
         // cycles matches instead of walking every row (same trick the shell used before extraction).
         SchemaTree.AddHandler(KeyDownEvent, OnSchemaTreeKeyDown, RoutingStrategies.Tunnel);
+        // Cheap viewer chrome now; the TextMate registry is only touched when a history row is first
+        // clicked (see ShowHistoryPreview) — it must not be on the window's construction path.
+        SqlViewer.ApplyChrome(HistoryPreview, wordWrap: true);
         DataContextChanged += OnDataContextChanged;
     }
 
@@ -494,22 +498,53 @@ public partial class SidebarView : UserControl
         }
     }
 
+    /// <summary>
+    /// The row the user clicked owns the selection. Only a *pick* is written back to the view-model: the
+    /// null this also fires with, when a sibling day's list drops a selection it no longer contains, is
+    /// exactly the write that used to collapse the preview (#43).
+    /// </summary>
+    private void OnHistorySelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (Vm is not null && (sender as ListBox)?.SelectedItem is HistoryRowViewModel row)
+            Vm.History.SelectedRow = row;
+    }
+
     // ---- history preview row (real pixel row so the splitter resizes it; 0 when nothing selected) ----
     private double _historyPreviewHeight = 220;
+
+    /// <summary>Floor on a remembered drag size. A splitter dragged to the bottom — or a 0 read from a
+    /// spurious collapse — would otherwise persist as the height the preview reopens at, leaving a pane that
+    /// looks broken with nothing to say why.</summary>
+    private const double MinHistoryPreviewHeight = 60;
+
+    private bool _historyPreviewHighlighted;
 
     private void UpdateHistoryPreviewRow()
     {
         var row = HistoryGrid.RowDefinitions[2];
-        if (Vm?.History.SelectedRow is not null)
+        if (Vm?.History.SelectedRow is { } selected)
         {
+            ShowHistoryPreview(selected.Sql);
             row.Height = new GridLength(_historyPreviewHeight);
         }
         else
         {
-            if (row.Height.IsAbsolute && row.Height.Value > 0)
+            if (row.Height.IsAbsolute && row.Height.Value >= MinHistoryPreviewHeight)
                 _historyPreviewHeight = row.Height.Value; // remember the user's drag size
             row.Height = new GridLength(0);
         }
+    }
+
+    /// <summary>Put a query in the preview, installing syntax highlighting the first time. Deferred to here
+    /// rather than the ctor because the first install in the process builds the TextMate registry (~100ms) —
+    /// on a panel that may never be opened that is startup cost for nothing, and by the time a row is
+    /// clicked the main editor has already built the shared registry, so this is free.</summary>
+    private void ShowHistoryPreview(string sql)
+    {
+        HistoryPreview.Text = sql;
+        if (_historyPreviewHighlighted) return;
+        _historyPreviewHighlighted = true;
+        EditorChrome.InstallSqlHighlighting(HistoryPreview);
     }
 
     // ---- side-pane resize grip ----

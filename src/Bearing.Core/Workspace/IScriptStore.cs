@@ -8,8 +8,9 @@ public sealed record ScriptTree(
     IReadOnlyList<ScriptTree> Folders,
     IReadOnlyList<ScriptFileRef> Files);
 
-/// <summary>A <c>.sql</c> file in the scripts tree.</summary>
-public sealed record ScriptFileRef(string Path, string Name);
+/// <summary>A <c>.sql</c> file in the scripts tree. <c>SizeBytes</c> comes free with the
+/// directory scan and is what lets a content search skip a file it should never read (0 = unknown).</summary>
+public sealed record ScriptFileRef(string Path, string Name, long SizeBytes = 0);
 
 /// <summary>
 /// Filesystem access for the project's scripts folder, behind an interface so the scripts / workspace

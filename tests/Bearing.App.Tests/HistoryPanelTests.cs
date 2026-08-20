@@ -83,6 +83,23 @@ public class HistoryPanelTests
         Assert.Equal("#D2555A", row.QueryColorHex);   // Error.Red
     }
 
+    [Fact]
+    public async Task Regrouping_drops_a_selection_whose_row_no_longer_exists()
+    {
+        // Rows are rebuilt wholesale, so the view-model owns clearing the selection — the per-day lists are
+        // bound one-way precisely so they can't (#43), and a stale selection would leave a query in the
+        // preview with nothing selected to explain where it came from.
+        var now = DateTimeOffset.Now;
+        var vm = Make(new[] { Entry(now, ok: true), Entry(now.AddDays(-1), ok: true) });
+        await vm.ReloadAsync(CancellationToken.None);
+        vm.SelectedRow = vm.Groups[1].Rows[0];      // a row under yesterday
+        Assert.NotNull(vm.SelectedRow);
+
+        await vm.ReloadAsync(CancellationToken.None);
+
+        Assert.Null(vm.SelectedRow);
+    }
+
     private static HistoryPanelViewModel Make(IReadOnlyList<QueryLogEntry> entries)
         => new(
             (_, _) => Task.FromResult(entries),

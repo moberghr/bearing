@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:controls="using:Bearing.App.Controls"
              xmlns:vm="using:Bearing.App.ViewModels"
+             xmlns:ae="using:AvaloniaEdit"
              x:Class="Bearing.App.Controls.SidebarView"
              x:DataType="vm:ShellViewModel">
         <DockPanel LastChildFill="True">
@@ -93,7 +94,7 @@
                       ToolTip.Tip="New script (Ctrl+T)"/>
             </Grid>
             <TextBox DockPanel.Dock="Top" Text="{Binding Scripts.ScriptFilter, Mode=TwoWay}"
-                     PlaceholderText="Filter scripts…" Margin="0,0,0,6"/>
+                     PlaceholderText="Filter name or contents…" Margin="0,0,0,6"/>
             <!-- Enter opens the selected script; drag a script onto a folder to move it (OnScripts* handlers). -->
             <!-- SelectedItem is bound so a view-model can set it: "Reveal in Scripts" selects a tab's file,
                  and the selection then survives the wholesale rebuild in RefreshScripts. -->
@@ -163,9 +164,11 @@
                   </Grid>
                   </Border>
                 </TreeDataTemplate>
-                <!-- Script leaf: file glyph + name + unsaved dot. Draggable to a folder. -->
+                <!-- Script leaf: file glyph + name + unsaved dot, over the matching line when the filter
+                     reached this file by its *contents* (#47) — a content hit that looked identical to a
+                     name hit read as noise. Draggable to a folder. -->
                 <TreeDataTemplate DataType="vm:ScriptItem">
-                  <StackPanel Orientation="Horizontal" Spacing="6" Background="Transparent"
+                  <StackPanel Background="Transparent"
                               Classes.dragging="{Binding IsDragging}"
                               DoubleTapped="OnScriptActivated" PointerPressed="OnScriptPointerPressed"
                               PointerMoved="OnScriptPointerMoved">
@@ -177,20 +180,29 @@
                         <MenuItem Header="Delete…" Click="OnDeleteScriptClick"/>
                       </ContextMenu>
                     </StackPanel.ContextMenu>
-                    <Path Data="{StaticResource Icon.File}" Stroke="{DynamicResource Text.Dim}"
-                          StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round" Stretch="Uniform"
-                          Width="14" Height="14" VerticalAlignment="Center"/>
-                    <!-- Renaming swaps the label for a box in place (#39): Enter commits, Esc cancels,
-                         clicking away commits. Both live in the tree; only one is visible. -->
-                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
-                               Foreground="{DynamicResource Text.Primary}"
-                               IsVisible="{Binding !IsRenaming}"/>
-                    <TextBox Classes="inline" Text="{Binding RenameDraft, Mode=TwoWay}"
-                             IsVisible="{Binding IsRenaming}" MinWidth="90" VerticalAlignment="Center"
-                             KeyDown="OnScriptRenameKeyDown" LostFocus="OnScriptRenameLostFocus"/>
-                    <TextBlock Text="●" FontSize="11" VerticalAlignment="Center"
-                               Foreground="{DynamicResource Accent.Brand}" ToolTip.Tip="Unsaved changes"
-                               IsVisible="{Binding IsUnsaved}"/>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <Path Data="{StaticResource Icon.File}" Stroke="{DynamicResource Text.Dim}"
+                            StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round" Stretch="Uniform"
+                            Width="14" Height="14" VerticalAlignment="Center"/>
+                      <!-- Renaming swaps the label for a box in place (#39): Enter commits, Esc cancels,
+                           clicking away commits. Both live in the tree; only one is visible. -->
+                      <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
+                                 Foreground="{DynamicResource Text.Primary}"
+                                 IsVisible="{Binding !IsRenaming}"/>
+                      <TextBox Classes="inline" Text="{Binding RenameDraft, Mode=TwoWay}"
+                               IsVisible="{Binding IsRenaming}" MinWidth="90" VerticalAlignment="Center"
+                               KeyDown="OnScriptRenameKeyDown" LostFocus="OnScriptRenameLostFocus"/>
+                      <TextBlock Text="●" FontSize="11" VerticalAlignment="Center"
+                                 Foreground="{DynamicResource Accent.Brand}" ToolTip.Tip="Unsaved changes"
+                                 IsVisible="{Binding IsUnsaved}"/>
+                    </StackPanel>
+                    <!-- The line that matched, monospace and dim: the row's answer to "why is this here?".
+                         Absent (and the row is a single line, as before) for a name hit. -->
+                    <TextBlock Text="{Binding MatchLine}" Margin="20,0,0,2"
+                               IsVisible="{Binding MatchLine, Converter={x:Static ObjectConverters.IsNotNull}}"
+                               FontFamily="{StaticResource MonoFontFamily}" FontSize="10"
+                               Foreground="{DynamicResource Text.Faint}" TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding MatchLine}"/>
                   </StackPanel>
                 </TreeDataTemplate>
               </TreeView.DataTemplates>
@@ -230,9 +242,14 @@
                     <StackPanel Margin="0,0,0,8">
                       <TextBlock Text="{Binding Caption}" FontSize="10" FontWeight="Bold"
                                  Foreground="{DynamicResource Text.Faint}" Margin="2,2,2,3"/>
+                      <!-- One SelectedRow, one ListBox per day: bound *one-way*, plus an explicit write from
+                           the SelectionChanged handler. Two-way made the day-A list write its own
+                           deselection back over the row just clicked in day B, collapsing the preview (#43);
+                           one-way keeps a list that is merely losing selection silent. -->
                       <ListBox Classes="history" ItemsSource="{Binding Rows}" Background="Transparent"
                                BorderThickness="0" Padding="0"
-                               SelectedItem="{ReflectionBinding DataContext.History.SelectedRow, RelativeSource={RelativeSource AncestorType=Window}, Mode=TwoWay}">
+                               SelectionChanged="OnHistorySelectionChanged"
+                               SelectedItem="{ReflectionBinding DataContext.History.SelectedRow, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay}">
                         <ListBox.ItemTemplate>
                           <DataTemplate x:DataType="vm:HistoryRowViewModel">
                             <Grid ColumnDefinitions="Auto,*,Auto" Background="Transparent"
@@ -264,12 +281,11 @@
               <DockPanel Margin="6">
                 <TextBlock DockPanel.Dock="Top" Text="PREVIEW" FontSize="10" FontWeight="Bold"
                            Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,4"/>
-                <TextBox Text="{Binding History.SelectedRow.Sql, Mode=OneWay}" IsReadOnly="True"
-                         FontFamily="{StaticResource MonoFontFamily}" FontSize="12"
-                         Background="Transparent" BorderThickness="0"
-                         TextWrapping="NoWrap" AcceptsReturn="True"
-                         ScrollViewer.VerticalScrollBarVisibility="Auto"
-                         ScrollViewer.HorizontalScrollBarVisibility="Auto"/>
+                <!-- The read-only SQL viewer (#48), not a TextBox: syntax-highlighted like every other SQL
+                     surface, still selectable — the preview is the read-and-copy path for a past query.
+                     Text and the (once-per-control) highlight install are driven from code-behind, where
+                     the show/collapse of this row already lives. -->
+                <ae:TextEditor x:Name="HistoryPreview" FontSize="12" BorderThickness="0"/>
               </DockPanel>
             </Border>
             </Grid>
