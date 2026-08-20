@@ -60,8 +60,9 @@ public partial class MainWindow : Window
         _palette = new CommandPaletteHost(this, _commands, () => _dispatcher!.Keymap);
         _resultsPane = new ResultsPaneController(WorkspaceGrid, ResultsSplitter, ResultsView);
         // The editor's FontSize is applied here rather than bound in XAML: one editor serves every tab,
-        // and each tab carries its own zoom over the configured base size.
-        _zoom = new EditorZoomController(Editor, () => Vm?.EditorFontSize ?? 14);
+        // and each tab carries its own zoom over the configured base size. The controller also owns the
+        // Ctrl+wheel gesture; this window only says where the resulting size is announced.
+        _zoom = new EditorZoomController(Editor, () => Vm?.EditorFontSize ?? 14, ReportZoom);
 
         // One keybinding pipeline for the whole app: the registry holds command delegates, the keymap
         // maps gestures to command ids, the dispatcher resolves keystrokes per scope. Global + Editor
@@ -321,6 +322,14 @@ public partial class MainWindow : Window
             // The open inspector keeps the size it was opened at (re-rendering it would drop its folds);
             // the next value you inspect uses the new one.
             ResultsView.InspectorFontSize = Vm?.InspectorFontSize ?? 13;
+    }
+
+    /// <summary>Say what a zoom did. A one-point change is easy to miss, and the status line is the only
+    /// affordance the zoom has — the Ctrl+wheel gesture reports through here too, so the two routes read as
+    /// one feature.</summary>
+    private void ReportZoom(double size)
+    {
+        if (Vm is { } vm) vm.StatusText = $"Editor font {size:0.#} pt (this tab)";
     }
 
     private void LoadEditorFromSelectedTab()

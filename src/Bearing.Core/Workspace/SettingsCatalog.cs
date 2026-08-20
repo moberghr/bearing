@@ -100,8 +100,10 @@ public static class SettingsCatalog
             Key = "editor.fontSize",
             CategoryId = Editor,
             Title = "Font size",
-            Description = "Point size of the SQL editor text.",
-            Keywords = "text zoom bigger smaller point",
+            Description = "Point size the SQL editor starts every tab at. Ctrl+wheel over the editor, and "
+                        + "Ctrl+= / Ctrl+-, zoom the current tab on top of this without changing it — "
+                        + "Ctrl+0 puts that tab back here.",
+            Keywords = "text zoom bigger smaller point wheel scroll",
             Min = 8,
             Max = 32,
             Unit = "pt",

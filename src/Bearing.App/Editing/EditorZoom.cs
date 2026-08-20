@@ -32,3 +32,28 @@ public static class EditorZoom
         return size < MinSize || size > MaxSize ? steps : next;
     }
 }
+
+/// <summary>
+/// Turns wheel deltas into whole zoom steps. A mouse notch arrives as ±1 and spends immediately; a
+/// precision trackpad sends a stream of fractions, and treating each one as a notch (the
+/// <c>Math.Sign(delta)</c> shortcut) runs the font from 14 to 48 in a single swipe — so fractions are
+/// banked and only whole notches are spent. Reversing direction drops what was banked the other way,
+/// otherwise a flick back has to pay off the previous swipe before anything moves.
+/// <para>Stateful but UI-free, so the gesture's feel is testable without a pointer (§2.5, §4.3).</para>
+/// </summary>
+public sealed class WheelZoomAccumulator
+{
+    private double _banked;
+
+    /// <summary>The steps <paramref name="delta"/> releases — signed, and 0 while a swipe is still short of
+    /// a whole notch.</summary>
+    public int Add(double delta)
+    {
+        if (delta == 0) return 0;
+        if (Math.Sign(delta) != Math.Sign(_banked)) _banked = 0;
+        _banked += delta;
+        var steps = (int)_banked;   // truncates toward zero, so the remainder stays banked
+        _banked -= steps;
+        return steps;
+    }
+}
