@@ -104,10 +104,15 @@ fi
 if [[ "${PUBLISH:-0}" == "1" ]]; then
   HEAD_SHA="$(git rev-parse HEAD)"
   # An annotated tag lists twice: the tag object, then the peeled commit as "<tag>^{}". The peeled line is
-  # the one to compare; a lightweight tag has only the first, which already is the commit.
-  REMOTE_REFS="$(git ls-remote --tags origin "refs/tags/$TAG" 2>/dev/null || true)"
-  REMOTE_SHA="$(printf '%s\n' "$REMOTE_REFS" | grep '\^{}$' | cut -f1 || true)"
-  [[ -z "$REMOTE_SHA" ]] && REMOTE_SHA="$(printf '%s\n' "$REMOTE_REFS" | cut -f1 | head -1)"
+  # the one to compare — the tag object's own sha is not a commit and would never match HEAD. A lightweight
+  # tag has only the first line, which already is the commit.
+  #
+  # Listed unfiltered on purpose: passing "refs/tags/$TAG" as a pattern drops the "^{}" line, because that is
+  # not the ref name being matched. Comparing whole ref names in awk also avoids a pattern like "v0.2.1*"
+  # matching v0.2.10.
+  REMOTE_REFS="$(git ls-remote --tags origin 2>/dev/null || true)"
+  REMOTE_SHA="$(printf '%s\n' "$REMOTE_REFS" | awk -v t="refs/tags/$TAG^{}" '$2 == t {print $1; exit}')"
+  [[ -z "$REMOTE_SHA" ]] && REMOTE_SHA="$(printf '%s\n' "$REMOTE_REFS" | awk -v t="refs/tags/$TAG" '$2 == t {print $1; exit}')"
 
   if [[ -z "$REMOTE_SHA" ]]; then
     echo "ERROR: $TAG is not on origin. Push it first, or the release would be tagged against" >&2
