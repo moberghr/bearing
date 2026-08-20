@@ -14,6 +14,7 @@ public sealed class VelopackUpdateService : IUpdateService
     private readonly string? _accessToken;
     private UpdateManager? _manager;
     private bool _unavailable;
+    private string? _unavailableReason;
 
     public VelopackUpdateService(string? repoUrl = null, string? accessToken = null)
     {
@@ -27,6 +28,20 @@ public sealed class VelopackUpdateService : IUpdateService
     /// network and never reports a failure the user can do nothing about.
     /// </summary>
     public bool IsSupported => Manager?.IsInstalled == true;
+
+    /// <summary>
+    /// Set only when building the update manager <i>failed</i>, which is a configuration fault (a malformed
+    /// feed URL, say) rather than the ordinary "not an installed build". Null in the ordinary case, so a
+    /// caller can tell a misconfigured updater from an absent one instead of reporting both as nothing.
+    /// </summary>
+    public string? UnavailableReason
+    {
+        get
+        {
+            _ = Manager;   // resolve first: the reason is only known once construction has been attempted
+            return _unavailableReason;
+        }
+    }
 
     public async Task<UpdateCheck?> CheckAsync(CancellationToken ct = default)
     {
@@ -69,9 +84,18 @@ public sealed class VelopackUpdateService : IUpdateService
             {
                 _manager = new UpdateManager(new GithubSource(_repoUrl, _accessToken, prerelease: false));
             }
-            catch (Exception)
+            catch (InvalidOperationException)
             {
+                // No Velopack locator, i.e. the VelopackApp hook never ran — so this host is not an installed
+                // app at all (a test host, a designer, a tool). Ordinary and expected; not a fault to report.
                 _unavailable = true;
+            }
+            catch (Exception ex)
+            {
+                // Anything else is a configuration fault — a malformed feed URL, for instance. Keep the
+                // message: an updater that is broken must not look identical to one that is merely absent.
+                _unavailable = true;
+                _unavailableReason = ex.Message;
             }
 
             return _manager;

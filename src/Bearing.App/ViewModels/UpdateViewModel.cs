@@ -67,6 +67,13 @@ public sealed partial class UpdateViewModel : ObservableObject
                 IsVisible = true;
                 CanRestart = true;
                 break;
+            case UpdatePhase.Applying:
+                // The close can still be refused — a running query prompts — so say what will happen rather
+                // than pretending the app is already gone.
+                Message = $"Bearing {version} installs when Bearing closes.";
+                IsVisible = true;
+                CanRestart = false;
+                break;
             default:
                 // Checking, up to date, dismissed, or failed. A failure has already gone to the status bar;
                 // repeating it in a strip the user has to close would make a missed update feel like a fault.

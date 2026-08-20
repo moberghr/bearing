@@ -18,7 +18,7 @@ its bare-binary path.
 
 ```bash
 dotnet tool install -g vpk       # the Velopack CLI (needs ~/.dotnet/tools on PATH)
-gh auth login                    # the release feed is a private repo; the script reads `gh auth token`
+gh auth login                    # publishing needs write access; the script reads `gh auth token`
 ```
 
 ## Cutting a release
@@ -46,19 +46,31 @@ version makes it refuse to pack. The history has to come from what is actually p
 
 Useful switches: `SKIP_TESTS=1` (the script runs `dotnet test` by default), `CONFIG=Debug`.
 
-## Updating from a private repo (interim)
+Before publishing, the script also checks the tag is **on origin and points at HEAD**. That is not
+belt-and-braces: `vpk upload github --tag` creates a missing tag at the default branch head, so a tag that
+was never pushed would produce a release whose assets came from one commit and whose tag names another.
 
-The feed is a private repository, so reading it needs a GitHub token — and a token compiled into the app
-would be a published secret, which is exactly the on-disk-secret posture §1.1 removed. So the app reads one
-from the environment and never stores it:
+## Release notes
 
-```
-BEARING_UPDATE_TOKEN=<a token with read access to moberghr/bearing>
-```
+The release description comes from `docs/release-notes/<version>.md` when that file exists. Write one for
+anything worth explaining — it is the text people see on the Releases page, and it also travels inside the
+package.
 
-Without it, the update check fails, reports one line in the status bar, and stops — no retries, no dialog.
-**When the repository goes public, delete the variable and nothing else changes**: `UpdateFeed.AccessToken`
-returns null and the same code path reads the public feed.
+Without that file the notes are generated from the commit subjects since the previous tag. Because this
+repo's subjects carry `(#nn)` refs, GitHub renders them as links to the issues the release closed, so the
+generated notes are useful on their own. Either way the notes are passed to `vpk pack --releaseNotes` and
+then written to the GitHub release body with `gh release edit`, so both platform runs produce the same text.
+
+## The update token is optional
+
+The repository is public, so the app reads the feed anonymously and needs no credential. `vpk download` and
+the app's own check both work with nothing set.
+
+`BEARING_UPDATE_TOKEN` remains as an opt-in for the cases where anonymous isn't enough — GitHub's
+unauthenticated API limit is 60 requests/hour per IP, which a shared egress address can exhaust, and a
+private fork of this repo would need one. Wherever it is used it comes from the environment and is never
+written to disk: a token compiled into the binary is a published secret, and an on-disk one is the posture
+§1.1 removed. A token that fails is reported once in the status bar and not retried.
 
 ## What the installer does and does not own
 

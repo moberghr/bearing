@@ -1,4 +1,3 @@
-using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -61,19 +60,7 @@ public sealed class AboutDialog : Window
     }
 
     /// <summary>The build version, without any "+&lt;git-hash&gt;" build metadata suffix.</summary>
-    public static string Version
-    {
-        get
-        {
-            var info = Assembly.GetExecutingAssembly()
-                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-            if (string.IsNullOrEmpty(info))
-                info = Assembly.GetExecutingAssembly().GetName().Version?.ToString();
-            var value = info ?? "unknown";
-            var plus = value.IndexOf('+');
-            return plus >= 0 ? value[..plus] : value;
-        }
-    }
+    public static string Version => AppVersion.Display;
 
     /// <summary>Show the dialog (owned by <paramref name="owner"/> when available), unless one is already up.</summary>
     public static void Open(Window? owner)

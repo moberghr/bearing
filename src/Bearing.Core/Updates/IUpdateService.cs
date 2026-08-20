@@ -27,6 +27,17 @@ public interface IUpdateService
     /// </summary>
     bool IsSupported { get; }
 
+    /// <summary>
+    /// Why <see cref="IsSupported"/> is false, when the reason is something other than "this simply isn't an
+    /// installed build" — a malformed feed URL, say. Null when there is nothing to add.
+    /// <para>
+    /// Exists so an unsupported updater can never be silently indistinguishable from a misconfigured one,
+    /// the same reason <c>ISecretStore.UnavailableReason</c> exists (§1.1): never assert a cause nobody
+    /// checked, and never hide one that was.
+    /// </para>
+    /// </summary>
+    string? UnavailableReason { get; }
+
     /// <summary>The newest version on the feed, or null when the running version is current.</summary>
     Task<UpdateCheck?> CheckAsync(CancellationToken ct = default);
 

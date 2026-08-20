@@ -16,14 +16,20 @@ public enum UpdatePhase
     /// <summary>Downloaded and staged. The only phase the user is prompted about.</summary>
     Ready,
 
-    /// <summary>The feed could not be reached, or the download failed. Reported once, never retried on its own.</summary>
+    /// <summary>
+    /// The user accepted, so the update installs when the app closes. A distinct phase because the close can
+    /// still be refused (a running query prompts), and the strip has to keep telling the truth if it is.
+    /// </summary>
+    Applying,
+
+    /// <summary>The feed could not be reached, or the download failed. Never retried on its own.</summary>
     Failed,
 }
 
 /// <summary>
 /// Drives <see cref="IUpdateService"/> for the running app: one check per launch, download in the
 /// background, and then <b>stop</b> — installing waits for the user. The single place that decides an update
-/// failure is a status-bar line rather than a crash, which is why every call out of here is wrapped.
+/// failure is a reportable message rather than a crash, which is why every call out of here is wrapped.
 /// <para>
 /// Deliberately free of Avalonia so the whole state machine is unit-testable (§2.5/§4.3) — the view-model
 /// mirrors it onto the UI thread.
@@ -34,7 +40,16 @@ public sealed class UpdateCoordinator
     private readonly IUpdateService _service;
     private readonly Func<bool> _autoUpdateEnabled;
     private readonly Action _requestShutdown;
+
+    /// <summary>
+    /// One check or download at a time. The phase alone can't police this: the startup check runs on a
+    /// background thread while Help ▸ Check for Updates comes off the UI thread, so both could pass a phase
+    /// test before either had set it and end up downloading the same package twice.
+    /// </summary>
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
     private UpdateCheck? _staged;
+    private bool _applyOnExit;
     private bool _autoRun;
 
     /// <param name="service">The update mechanism; <see cref="IUpdateService.IsSupported"/> gates everything.</param>
@@ -42,7 +57,8 @@ public sealed class UpdateCoordinator
     /// it takes effect without a restart.</param>
     /// <param name="requestShutdown">Closes the app the ordinary way (unsaved-work prompt, editor flush,
     /// session save, connection disposal), which is how an update gets applied without losing work.</param>
-    /// <param name="report">Status-bar sink, as <c>SettingsService.SaveFailed</c> uses. Null drops the message.</param>
+    /// <param name="report">Status-bar sink, as <c>SettingsService.SaveFailed</c> uses. Only ever given
+    /// messages the user asked for — see <see cref="Announce"/>. Null drops them.</param>
     public UpdateCoordinator(
         IUpdateService service,
         Func<bool> autoUpdateEnabled,
@@ -58,26 +74,33 @@ public sealed class UpdateCoordinator
     /// <summary>Raised after any state change, on whatever thread the work happened on.</summary>
     public event Action? Changed;
 
-    /// <summary>Status-bar sink for the messages a user asked to see (and for a failure, once).</summary>
+    /// <summary>
+    /// Sink for messages the user is waiting on. Deliberately <b>not</b> used by the startup check: it writes
+    /// to the shared status line, which nothing restores, so a background failure would park itself over the
+    /// connection status for the rest of the session.
+    /// </summary>
     public Action<string>? Report { get; set; }
 
     public UpdatePhase Phase { get; private set; } = UpdatePhase.Idle;
 
-    /// <summary>The version found, once there is one. Null before that, and after a dismissed offer.</summary>
+    /// <summary>The version found, once there is one. Null before that.</summary>
     public string? AvailableVersion { get; private set; }
 
     /// <summary>Download progress, 0-100.</summary>
     public int Progress { get; private set; }
 
-    /// <summary>Why the last attempt failed. Null unless <see cref="Phase"/> is <see cref="UpdatePhase.Failed"/>.</summary>
+    /// <summary>
+    /// Why the last attempt failed, whether or not it was reported. Survives so an explicit check can say
+    /// what a silent background failure ran into.
+    /// </summary>
     public string? FailureMessage { get; private set; }
 
     /// <summary>True once an update is downloaded and only a restart is missing.</summary>
     public bool IsStaged => _staged is not null;
 
     /// <summary>
-    /// The startup path: honours the setting, runs at most once per launch, and says nothing unless it finds
-    /// something (or fails). Safe to call from a background thread — nothing here touches the UI.
+    /// The startup path: honours the setting, runs at most once per launch, and stays silent throughout —
+    /// including on failure. Safe to call from a background thread; nothing here touches the UI.
     /// </summary>
     public async Task StartAsync(CancellationToken ct = default)
     {
@@ -93,7 +116,11 @@ public sealed class UpdateCoordinator
     /// </summary>
     public async Task CheckNowAsync(CancellationToken ct = default)
     {
-        if (Phase is UpdatePhase.Checking or UpdatePhase.Downloading) return;
+        if (Phase == UpdatePhase.Applying)
+        {
+            Announce($"Bearing {AvailableVersion} installs when Bearing closes.");
+            return;
+        }
 
         if (IsStaged)
         {
@@ -106,7 +133,11 @@ public sealed class UpdateCoordinator
 
         if (!_service.IsSupported)
         {
-            Announce("This build cannot update itself — it was not installed by the Bearing installer.");
+            // A build that can't update itself is ordinary; a *broken* updater is not, and must not look the
+            // same (§1.1's rule about never asserting a cause nobody checked, applied to updates).
+            Announce(_service.UnavailableReason is { Length: > 0 } reason
+                ? $"Couldn't set up the updater: {reason}"
+                : "This build cannot update itself — it was not installed by the Bearing installer.");
             return;
         }
 
@@ -114,23 +145,41 @@ public sealed class UpdateCoordinator
     }
 
     /// <summary>
-    /// Apply the staged update: stage it for install-on-exit, then close the app normally so the shutdown
-    /// pipeline still runs. The updater relaunches once this process is gone.
+    /// Accept the staged update. Only requests the close — the install is staged on the way out, in
+    /// <see cref="ApplyIfPending"/>, precisely because this close can be refused: the quit guard cancels it
+    /// while a query is running. Staging first would leave the updater waiting on a process that then carries
+    /// on running.
     /// </summary>
     public void RestartToApply()
     {
         if (_staged is null) return;
+        _applyOnExit = true;
+        Set(UpdatePhase.Applying);
+        _requestShutdown();
+    }
+
+    /// <summary>
+    /// Hand the update to the updater, now that the app really is closing. Call from the window's
+    /// <c>Closed</c> event — which only fires for a close that was not cancelled — while the process is still
+    /// alive, since the updater waits on its exit.
+    /// </summary>
+    /// <returns>Null on success or when there was nothing to apply; otherwise why it failed, for the caller
+    /// to log. There is no UI left to show it in by this point.</returns>
+    public string? ApplyIfPending()
+    {
+        if (!_applyOnExit || _staged is null) return null;
+        _applyOnExit = false;
         try
         {
             _service.ApplyOnExit(_staged);
+            return null;
         }
         catch (Exception ex)
         {
-            Fail($"Could not start the update: {ex.Message}");
-            return;
+            FailureMessage = $"Could not start the update: {ex.Message}";
+            Phase = UpdatePhase.Failed;
+            return FailureMessage;
         }
-
-        _requestShutdown();
     }
 
     /// <summary>Put the offer away for this session without applying it. It stays staged for the next launch.</summary>
@@ -143,58 +192,67 @@ public sealed class UpdateCoordinator
 
     private async Task RunAsync(bool announce, CancellationToken ct)
     {
-        Set(UpdatePhase.Checking);
-        if (announce) Announce("Checking for updates…");
-
-        UpdateCheck? found;
+        // Drop rather than queue: whoever holds the gate is already doing this exact work.
+        if (!await _gate.WaitAsync(0, ct).ConfigureAwait(false)) return;
         try
         {
-            found = await _service.CheckAsync(ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            Set(UpdatePhase.Idle);
-            return;
-        }
-        catch (Exception ex)
-        {
-            Fail($"Could not check for updates: {ex.Message}");
-            return;
-        }
+            Set(UpdatePhase.Checking);
+            if (announce) Announce("Checking for updates…");
 
-        if (found is null)
-        {
-            Set(UpdatePhase.Idle);
-            if (announce) Announce("Bearing is up to date.");
-            return;
-        }
-
-        AvailableVersion = found.Version;
-        Progress = 0;
-        Set(UpdatePhase.Downloading);
-
-        try
-        {
-            await _service.DownloadAsync(found, new InlineProgress(p =>
+            UpdateCheck? found;
+            try
             {
-                Progress = p;
-                Changed?.Invoke();
-            }), ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            Set(UpdatePhase.Idle);
-            return;
-        }
-        catch (Exception ex)
-        {
-            Fail($"Could not download Bearing {found.Version}: {ex.Message}");
-            return;
-        }
+                found = await _service.CheckAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                Set(UpdatePhase.Idle);
+                return;
+            }
+            catch (Exception ex)
+            {
+                Fail($"Could not check for updates: {ex.Message}", announce);
+                return;
+            }
 
-        _staged = found;
-        Progress = 100;
-        Set(UpdatePhase.Ready);
+            if (found is null)
+            {
+                Set(UpdatePhase.Idle);
+                if (announce) Announce("Bearing is up to date.");
+                return;
+            }
+
+            AvailableVersion = found.Version;
+            Progress = 0;
+            Set(UpdatePhase.Downloading);
+
+            try
+            {
+                await _service.DownloadAsync(found, new InlineProgress(p =>
+                {
+                    Progress = p;
+                    Changed?.Invoke();
+                }), ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                Set(UpdatePhase.Idle);
+                return;
+            }
+            catch (Exception ex)
+            {
+                Fail($"Could not download Bearing {found.Version}: {ex.Message}", announce);
+                return;
+            }
+
+            _staged = found;
+            Progress = 100;
+            Set(UpdatePhase.Ready);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     private void Set(UpdatePhase phase)
@@ -206,15 +264,17 @@ public sealed class UpdateCoordinator
     }
 
     /// <summary>
-    /// A failed update is a status-bar line and a dead end for this launch — no retry loop, no dialog. Missing
-    /// one update is an inconvenience; nagging about it, or crashing over it, is worse.
+    /// A failed update is a dead end for this launch — no retry loop, no dialog. It is only <i>reported</i>
+    /// when the user asked for the check; a background failure is kept in <see cref="FailureMessage"/> for the
+    /// next explicit check to explain. Missing one update is an inconvenience; hijacking the status line over
+    /// it, or crashing, is worse.
     /// </summary>
-    private void Fail(string message)
+    private void Fail(string message, bool announce)
     {
         FailureMessage = message;
         Phase = UpdatePhase.Failed;
         Changed?.Invoke();
-        Report?.Invoke(message);
+        if (announce) Report?.Invoke(message);
     }
 
     private void Announce(string message) => Report?.Invoke(message);

@@ -37,7 +37,7 @@ public class VelopackUpdateServiceTests
     public void The_feed_token_is_read_from_the_environment_and_nowhere_else()
     {
         // §1.1: no token is compiled in and none is written to disk. Absent variable means "no token",
-        // which is what makes the private-repo feed fail quietly rather than ship a credential.
+        // which is the normal case now the feed is public — the token is only an opt-in for API rate limits.
         var original = Environment.GetEnvironmentVariable("BEARING_UPDATE_TOKEN");
         try
         {

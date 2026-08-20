@@ -84,6 +84,14 @@ public partial class App : Application
             vm.Updates = new UpdateViewModel(updates);
             window.Opened += (_, _) => CrashReporter.Observe(
                 Task.Run(() => updates.StartAsync()), "update check");
+            // Hand a staged update over on the way out, not when the user clicks Restart: Closed fires only
+            // for a close that actually happened, and MainWindow.OnClosing cancels it while a query is
+            // running. Staging any earlier would leave the updater waiting on a process that carries on
+            // running. Still early enough — the process is alive, which is what the updater waits for.
+            window.Closed += (_, _) =>
+            {
+                if (updates.ApplyIfPending() is { } failure) CrashLog.Note("update apply-on-exit", failure);
+            };
 
             // Window size is persisted state, not a preference — the setting only decides whether it is
             // replayed. Position is deliberately left to the window manager (Wayland won't honour it

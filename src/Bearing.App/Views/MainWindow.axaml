@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ae="using:AvaloniaEdit"
+        xmlns:app="using:Bearing.App"
         xmlns:controls="using:Bearing.App.Controls"
         xmlns:vm="using:Bearing.App.ViewModels"
         xmlns:data="using:Bearing.Core.Data"
@@ -248,16 +249,25 @@
          one prominent db-color surface, independent of connection state — then the status dot + metadata. -->
     <Border DockPanel.Dock="Bottom" Padding="8,4" Background="{DynamicResource Bg.Window}"
             BorderBrush="{DynamicResource ConnectionBrush}" BorderThickness="0,3,0,0">
-      <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-        <controls:ConnectionStatusView VerticalAlignment="Center"/>
-        <TextBlock Text="·" Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
-        <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center"
-                   Foreground="{DynamicResource Text.Dim}"/>
-        <!-- Live execution timer: ticks while the selected tab's query runs, hidden otherwise. -->
-        <TextBlock Text="{Binding Execution.ElapsedText}" VerticalAlignment="Center"
-                   IsVisible="{Binding Execution.IsBusy}"
-                   Foreground="{DynamicResource Ok.Green}"/>
-      </StackPanel>
+      <DockPanel LastChildFill="True">
+        <!-- Running version, pinned right. Static data (AppVersion), so it binds with x:Static rather than
+             going through the view-model to carry a constant. Tooltip carries the +git-sha form, which is
+             what identifies the exact build in a bug report. -->
+        <TextBlock DockPanel.Dock="Right" Text="{x:Static app:AppVersion.Label}"
+                   VerticalAlignment="Center" Margin="8,0,0,0" FontSize="11"
+                   Foreground="{DynamicResource Text.Faint}"
+                   ToolTip.Tip="{x:Static app:AppVersion.Full}"/>
+        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <controls:ConnectionStatusView VerticalAlignment="Center"/>
+          <TextBlock Text="·" Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
+          <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center"
+                     Foreground="{DynamicResource Text.Dim}"/>
+          <!-- Live execution timer: ticks while the selected tab's query runs, hidden otherwise. -->
+          <TextBlock Text="{Binding Execution.ElapsedText}" VerticalAlignment="Center"
+                     IsVisible="{Binding Execution.IsBusy}"
+                     Foreground="{DynamicResource Ok.Green}"/>
+        </StackPanel>
+      </DockPanel>
     </Border>
 
     <!-- Update strip (#20): the only surface auto-update has. Silent unless a newer version is downloading

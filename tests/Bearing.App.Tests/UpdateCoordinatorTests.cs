@@ -115,9 +115,10 @@ public class UpdateCoordinatorTests
     }
 
     [Fact]
-    public async Task An_unreachable_feed_is_reported_once_and_not_retried()
+    public async Task A_background_failure_stays_off_the_status_line_but_is_remembered()
     {
-        // The private-repo case with no BEARING_UPDATE_TOKEN set looks exactly like this.
+        // What an offline machine, a rate-limited IP or a bad token looks like from here. The status line is
+        // shared and nothing restores it, so a failure nobody asked about must not park itself there.
         var (coordinator, service, reports, _) = Build();
         service.CheckThrows = new IOException("404 (Not Found)");
 
@@ -126,9 +127,33 @@ public class UpdateCoordinatorTests
 
         Assert.Equal(UpdatePhase.Failed, coordinator.Phase);
         Assert.Equal(1, service.Checks);
-        Assert.Single(reports);
-        Assert.Contains("404 (Not Found)", reports[0]);
+        Assert.Empty(reports);
         Assert.Contains("404 (Not Found)", coordinator.FailureMessage);
+    }
+
+    [Fact]
+    public async Task The_same_failure_is_reported_when_the_user_asks()
+    {
+        var (coordinator, service, reports, _) = Build();
+        service.CheckThrows = new IOException("404 (Not Found)");
+
+        await coordinator.CheckNowAsync();
+
+        Assert.Equal(UpdatePhase.Failed, coordinator.Phase);
+        Assert.Contains("404 (Not Found)", reports[^1]);
+    }
+
+    [Fact]
+    public async Task A_misconfigured_updater_does_not_look_like_an_absent_one()
+    {
+        var (coordinator, service, reports, _) = Build();
+        service.IsSupported = false;
+        service.UnavailableReason = "Invalid URI: nonsense";
+
+        await coordinator.CheckNowAsync();
+
+        Assert.Contains("Invalid URI: nonsense", reports[^1]);
+        Assert.Equal(0, service.Checks);
     }
 
     [Fact]
@@ -141,38 +166,71 @@ public class UpdateCoordinatorTests
 
         Assert.Equal(UpdatePhase.Failed, coordinator.Phase);
         Assert.False(coordinator.IsStaged);
-        Assert.Single(reports);
-        Assert.Contains("0.3.0", reports[0]);
+        Assert.Empty(reports);
+        Assert.Contains("0.3.0", coordinator.FailureMessage);
     }
 
     [Fact]
-    public async Task Restarting_stages_the_update_and_closes_the_app_normally()
+    public async Task Restarting_asks_the_app_to_close_but_stages_nothing_yet()
     {
+        // The close can be refused (the quit guard prompts while a query runs). Handing the update over
+        // before knowing that would leave the updater waiting on a process that keeps running.
         var (coordinator, service, _, shutdowns) = Build();
         await coordinator.StartAsync();
 
         coordinator.RestartToApply();
 
+        Assert.Single(shutdowns);
+        Assert.Null(service.AppliedOnExit);
+        Assert.Equal(UpdatePhase.Applying, coordinator.Phase);
+    }
+
+    [Fact]
+    public async Task The_update_is_staged_once_the_close_actually_happens()
+    {
+        var (coordinator, service, _, _) = Build();
+        await coordinator.StartAsync();
+        coordinator.RestartToApply();
+
+        Assert.Null(coordinator.ApplyIfPending());
+
         Assert.NotNull(service.AppliedOnExit);
         Assert.Equal("0.3.0", service.AppliedOnExit!.Version);
-        Assert.Single(shutdowns);
         // Never the path that ends the process from under the UI — unsaved work would go with it.
         Assert.Null(service.AppliedImmediately);
     }
 
     [Fact]
-    public async Task A_failure_to_stage_keeps_the_app_open()
+    public async Task A_refused_close_leaves_the_update_pending_and_nothing_staged()
     {
-        var (coordinator, service, reports, shutdowns) = Build();
+        var (coordinator, service, _, _) = Build();
         await coordinator.StartAsync();
+
+        coordinator.RestartToApply();      // user clicks Restart
+                                           // ...quit guard cancels the close; no Closed event fires
+        Assert.Null(service.AppliedOnExit);
+        Assert.Equal(UpdatePhase.Applying, coordinator.Phase);
+
+        // Closing later for real still applies it — the user's answer to "install this" stands.
+        Assert.Null(coordinator.ApplyIfPending());
+        Assert.NotNull(service.AppliedOnExit);
+    }
+
+    [Fact]
+    public async Task A_failure_to_stage_at_close_time_is_returned_for_logging_not_thrown()
+    {
+        // There is no UI left to show it in, and throwing here would fault the shutdown path.
+        var (coordinator, service, reports, _) = Build();
+        await coordinator.StartAsync();
+        coordinator.RestartToApply();
         service.ApplyThrows = new IOException("update.exe is busy");
 
-        coordinator.RestartToApply();
+        var failure = coordinator.ApplyIfPending();
 
-        Assert.Empty(shutdowns);
+        Assert.NotNull(failure);
+        Assert.Contains("update.exe is busy", failure);
         Assert.Equal(UpdatePhase.Failed, coordinator.Phase);
-        Assert.Single(reports);
-        Assert.Contains("update.exe is busy", reports[0]);
+        Assert.Empty(reports);
     }
 
     [Fact]
@@ -184,6 +242,23 @@ public class UpdateCoordinatorTests
 
         Assert.Null(service.AppliedOnExit);
         Assert.Empty(shutdowns);
+        Assert.Null(coordinator.ApplyIfPending());
+    }
+
+    [Fact]
+    public async Task Two_checks_at_once_do_the_work_once()
+    {
+        // The startup check runs on a background thread while Help ▸ Check for Updates comes off the UI
+        // thread; both could pass a phase test before either had set it.
+        var (coordinator, service, _, _) = Build();
+
+        await Task.WhenAll(
+            Task.Run(() => coordinator.StartAsync()),
+            Task.Run(() => coordinator.CheckNowAsync()));
+
+        Assert.Equal(1, service.Checks);
+        Assert.Equal(1, service.Downloads);
+        Assert.Equal(UpdatePhase.Ready, coordinator.Phase);
     }
 
     [Fact]

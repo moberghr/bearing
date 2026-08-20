@@ -556,6 +556,9 @@ internal sealed class FakeUpdateService : IUpdateService
 
     public bool IsSupported { get; set; } = true;
 
+    /// <summary>Set to model a misconfigured updater rather than an absent one.</summary>
+    public string? UnavailableReason { get; set; }
+
     public Exception? CheckThrows { get; set; }
     public Exception? DownloadThrows { get; set; }
     public Exception? ApplyThrows { get; set; }

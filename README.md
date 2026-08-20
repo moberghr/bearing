@@ -47,9 +47,9 @@ background, and offers a restart. Nothing is installed while you work.
 | Windows | `BearingSql-win-Setup.exe` | Per-user install to `%LOCALAPPDATA%\BearingSql`, Start Menu entry. No admin needed. |
 | Linux | `BearingSql.AppImage` | `chmod +x` and run it. Updates itself in place. |
 
-Releases are on the repository's [Releases page](https://github.com/moberghr/bearing/releases). While this
-repository is private, self-update needs `BEARING_UPDATE_TOKEN` set to a token that can read it — see
-[docs/RELEASING.md](docs/RELEASING.md).
+Releases are on the repository's [Releases page](https://github.com/moberghr/bearing/releases). Nothing
+needs configuring for updates to work; the installers are unsigned, so Windows SmartScreen warns on first
+run.
 
 `build/release.sh` remains as the no-updater alternative: a single-file `.tar.gz` (Linux, with a per-user
 installer and `.desktop` entry) or `.zip` (Windows, with PowerShell install/uninstall scripts). Updating one

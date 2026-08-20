@@ -91,16 +91,42 @@ if [[ "$HEAD_TAG" != "$TAG" ]]; then
   fi
 fi
 
+TAG_STATUS=""
+
 if [[ "${PUBLISH:-0}" == "1" && "${ALLOW_UNTAGGED:-0}" == "1" ]]; then
   echo "ERROR: refusing to PUBLISH an untagged build." >&2
   exit 1
+fi
+
+# The tag must also be on the remote, and point where we think it does. `vpk upload github --tag` creates a
+# missing tag at the DEFAULT BRANCH HEAD, so a tag that was never pushed yields a release whose assets were
+# built from one commit and whose tag names another — silently. Checked before the long build, not after.
+if [[ "${PUBLISH:-0}" == "1" ]]; then
+  HEAD_SHA="$(git rev-parse HEAD)"
+  # An annotated tag lists twice: the tag object, then the peeled commit as "<tag>^{}". The peeled line is
+  # the one to compare; a lightweight tag has only the first, which already is the commit.
+  REMOTE_REFS="$(git ls-remote --tags origin "refs/tags/$TAG" 2>/dev/null || true)"
+  REMOTE_SHA="$(printf '%s\n' "$REMOTE_REFS" | grep '\^{}$' | cut -f1 || true)"
+  [[ -z "$REMOTE_SHA" ]] && REMOTE_SHA="$(printf '%s\n' "$REMOTE_REFS" | cut -f1 | head -1)"
+
+  if [[ -z "$REMOTE_SHA" ]]; then
+    echo "ERROR: $TAG is not on origin. Push it first, or the release would be tagged against" >&2
+    echo "       whatever the default branch points at:  git push origin $TAG" >&2
+    exit 1
+  fi
+  if [[ "$REMOTE_SHA" != "$HEAD_SHA" ]]; then
+    echo "ERROR: origin's $TAG is $REMOTE_SHA but HEAD is $HEAD_SHA." >&2
+    echo "       The release would not match the build. Reconcile the tag before publishing." >&2
+    exit 1
+  fi
+  TAG_STATUS=" · verified on origin"
 fi
 
 PUBDIR="$ROOT/artifacts/velopack/$RID"
 RELEASE_DIR="$ROOT/dist/velopack/$CHANNEL"
 
 echo "==> Bearing release (Velopack)"
-echo "    version : $VERSION   (tag $TAG)"
+echo "    version : $VERSION   (tag $TAG$TAG_STATUS)"
 echo "    runtime : $RID   channel $CHANNEL"
 echo "    packId  : $PACK_ID"
 echo "    output  : $RELEASE_DIR"
@@ -144,20 +170,49 @@ rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 
 # --- Previous release, so a delta can be built against it ---------------------
-# Optional by design: the first release has nothing to diff against, and a token problem here must not
-# block building a package — it only costs users a full download.
-if command -v gh >/dev/null 2>&1 && TOKEN="$(gh auth token 2>/dev/null)" && [[ -n "$TOKEN" ]]; then
-  echo "==> Fetching the previous $CHANNEL release (for the delta)"
-  vpk download github \
-    --repoUrl "$REPO_URL" --token "$TOKEN" \
-    --channel "$CHANNEL" --outputDir "$RELEASE_DIR" \
-    || echo "    none found (or unreachable) — this build will ship as a full package only."
-  echo
+# The repo is public, so reading the feed needs no credential; a token is passed when one is available only
+# to stay clear of the 60/hr anonymous API rate limit. Optional by design either way: the first release has
+# nothing to diff against, and a failure here must not block building a package — it only costs users a full
+# download instead of a delta.
+TOKEN="$(gh auth token 2>/dev/null || true)"
+echo "==> Fetching the previous $CHANNEL release (for the delta)"
+DOWNLOAD_ARGS=(--repoUrl "$REPO_URL" --channel "$CHANNEL" --outputDir "$RELEASE_DIR")
+[[ -n "$TOKEN" ]] && DOWNLOAD_ARGS+=(--token "$TOKEN")
+vpk download github "${DOWNLOAD_ARGS[@]}" \
+  || echo "    none found (or unreachable) — this build will ship as a full package only."
+echo
+
+# --- Release notes ------------------------------------------------------------
+# A hand-written docs/release-notes/<version>.md wins; otherwise they are derived from the commit subjects
+# since the previous tag. Those subjects already carry "(#nn)" refs, which GitHub renders as issue links, so
+# the generated notes link back to the issues each release closed without any extra bookkeeping.
+NOTES="$ROOT/docs/release-notes/$VERSION.md"
+if [[ -f "$NOTES" ]]; then
+  echo "==> Release notes: docs/release-notes/$VERSION.md"
 else
-  TOKEN=""
-  echo "==> No gh token; skipping the previous-release fetch (no delta will be built)."
-  echo
+  NOTES="$ROOT/artifacts/velopack/release-notes-$VERSION.md"
+  mkdir -p "$(dirname "$NOTES")"
+  # HEAD^ so a tag on HEAD doesn't find itself. Empty on the very first release.
+  PREV_TAG="$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)"
+  echo "==> Release notes: generated${PREV_TAG:+ from $PREV_TAG..HEAD}"
+  {
+    if [[ -n "$PREV_TAG" ]]; then
+      echo "Changes since ${PREV_TAG}:"
+      echo
+      git log --no-merges --pretty="- %s" "$PREV_TAG..HEAD"
+    else
+      echo "First packaged release."
+    fi
+    echo
+    echo "### Install"
+    echo
+    echo "- **Windows** — \`${PACK_ID}-win-Setup.exe\` (per-user, no admin). Updates itself from here on."
+    echo "- **Linux** — \`${PACK_ID}.AppImage\`, \`chmod +x\` and run. Updates itself in place."
+    echo
+    echo "Unsigned, so Windows SmartScreen warns on first run."
+  } > "$NOTES"
 fi
+echo
 
 # --- Pack ---------------------------------------------------------------------
 echo "==> Packing"
@@ -181,6 +236,7 @@ vpk "$DIRECTIVE" pack \
   --runtime "$RID" \
   --channel "$CHANNEL" \
   --outputDir "$RELEASE_DIR" \
+  --releaseNotes "$NOTES" \
   "${EXTRA_PACK_ARGS[@]}"
 echo
 
@@ -202,6 +258,16 @@ if [[ "${PUBLISH:-0}" == "1" ]]; then
     --channel "$CHANNEL" --outputDir "$RELEASE_DIR" \
     --publish --merge \
     --releaseName "Bearing $VERSION" --tag "$TAG"
+
+  # vpk carries the notes inside the package but leaves the GitHub release body to us. Set it here rather
+  # than at pack time so it is the same text either platform run produces — last writer wins, same content.
+  if command -v gh >/dev/null 2>&1; then
+    echo
+    echo "==> Setting the release description"
+    gh release edit "$TAG" --notes-file "$NOTES" >/dev/null \
+      && echo "    done: $(gh release view "$TAG" --json url --jq .url)" \
+      || echo "    WARNING: couldn't set the release description; add it by hand." >&2
+  fi
 else
   echo "Not published (set PUBLISH=1 to upload to GitHub Releases)."
   if [[ "$OS_FAMILY" == "windows" ]]; then
