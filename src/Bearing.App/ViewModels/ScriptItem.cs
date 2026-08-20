@@ -24,6 +24,13 @@ public sealed partial class ScriptItem : ObservableObject
     /// <summary>True when an open tab backs this file and has unsaved edits (snapshot at refresh time).</summary>
     public bool IsUnsaved { get; init; }
 
+    /// <summary>
+    /// The line that made this file a hit for the filter's <em>contents</em>, shown under the name — or null
+    /// when the row is here because its name matched, or because nothing is being filtered. A content hit
+    /// that looked identical to a name hit read as noise: this is what says why the file is in the list (#47).
+    /// </summary>
+    public string? MatchLine { get; init; }
+
     /// <summary>True while this row is an editable box rather than a label.</summary>
     [ObservableProperty] private bool _isRenaming;
 

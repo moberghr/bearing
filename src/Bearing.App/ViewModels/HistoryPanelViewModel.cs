@@ -74,6 +74,13 @@ public sealed partial class HistoryPanelViewModel : ObservableObject
 
         Groups.Clear();
         foreach (var g in rows) Groups.Add(g);
+
+        // Row objects are rebuilt wholesale, so a selection made before this call now points at a row that
+        // is in no list. Dropping it here is what collapses the preview after a reload or a filter switch;
+        // the view no longer does it (the per-day lists are bound one-way precisely so they can't — #43),
+        // and leaving it would keep a query on screen with nothing selected to explain where it came from.
+        if (SelectedRow is not null && !Groups.Any(g => g.Rows.Contains(SelectedRow)))
+            SelectedRow = null;
     }
 
     private bool Matches(QueryLogEntry e) => Filter switch

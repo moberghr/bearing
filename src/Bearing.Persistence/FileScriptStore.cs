@@ -14,9 +14,11 @@ public sealed class FileScriptStore : IScriptStore
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
             .Select(ReadFolder)
             .ToList();
-        var files = Directory.EnumerateFiles(dir, "*.sql")
-            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
-            .Select(p => new ScriptFileRef(p, Path.GetFileName(p)))
+        // DirectoryInfo, not Directory: the enumeration already carries each entry's length, so the size a
+        // content search filters on costs nothing extra here.
+        var files = new DirectoryInfo(dir).EnumerateFiles("*.sql")
+            .OrderBy(f => f.FullName, StringComparer.OrdinalIgnoreCase)
+            .Select(f => new ScriptFileRef(f.FullName, f.Name, f.Length))
             .ToList();
         return new ScriptTree(dir, Path.GetFileName(dir), folders, files);
     }
