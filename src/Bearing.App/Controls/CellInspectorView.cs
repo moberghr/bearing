@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Bearing.App.Results;
@@ -36,14 +37,22 @@ public sealed class CellInspectorView : UserControl
     /// <see cref="Run"/> per span is fine for a document, ruinous for a 50k-line one.</summary>
     private const int MaxColouredLines = 4000;
 
-    // The fold gutter is positioned by arithmetic, so the text's line box has to be a known height.
-    private const double JsonFontSize = 13;      // matches the result grids
-    private const double JsonLineHeight = 19;
-    private const double GutterWidth = 16;
-    private const double ChevronSize = 11;
+    /// <summary>Zoom range, kept in step with the <c>results.inspectorFontSize</c> setting's own limits so
+    /// a zoom can always be written back to it.</summary>
+    private const double MinFontSize = 8;
+    private const double MaxFontSize = 32;
 
     private readonly string _raw;
     private readonly bool _isJson;
+    private readonly Action<double>? _onFontSize;
+    private double _fontSize;
+
+    // The fold gutter is positioned by arithmetic, so the text's line box has to be a known height rather
+    // than whatever the font asks for — and every metric has to follow the zoom.
+    private double LineHeight => Math.Ceiling(_fontSize * 1.45);
+    private double GutterWidth => Math.Ceiling(_fontSize) + 5;
+    private double ChevronSize => Math.Round(_fontSize);
+
     private readonly IReadOnlyList<JsonLine> _lines;
     private readonly HashSet<string> _folded = new();
     private readonly ContentControl _bodyHost = new() { HorizontalAlignment = HorizontalAlignment.Stretch };
@@ -60,35 +69,37 @@ public sealed class CellInspectorView : UserControl
     private readonly SelectableTextBlock _jsonText = new()
     {
         FontFamily = MonoFont,
-        FontSize = JsonFontSize,
-        LineHeight = JsonLineHeight,
         TextWrapping = TextWrapping.NoWrap,   // structure over reflow; Raw wraps if that's what you want
         VerticalAlignment = VerticalAlignment.Top,
     };
 
     /// <summary>Top, not the default Stretch: a Canvas with an explicit Height gets *centred* in the
     /// leftover space, which parked the chevrons halfway down the pane whenever the document was short.</summary>
-    private readonly Canvas _jsonGutter = new()
-    {
-        Width = GutterWidth,
-        VerticalAlignment = VerticalAlignment.Top,
-    };
+    private readonly Canvas _jsonGutter = new() { VerticalAlignment = VerticalAlignment.Top };
 
     private TextBlock? _matchCount;
     private bool _formatted = true;
     private string _find = "";
 
     /// <summary>Build an inspector for a result's cell.</summary>
-    public static CellInspectorView For(ResultSetViewModel result, int index, object?[] row, Action onClose)
+    public static CellInspectorView For(
+        ResultSetViewModel result, int index, object?[] row, Action onClose,
+        double fontSize = 13, Action<double>? onFontSize = null)
         => new(
             title: ResultMetaText.InspectorTitle(result, index, row),
             raw: GridSelectionOps.CellText(row, index),
             typeName: result.Columns[index].DataTypeName,
-            onClose: onClose);
+            onClose: onClose,
+            fontSize: fontSize,
+            onFontSize: onFontSize);
 
-    public CellInspectorView(string title, string raw, string typeName, Action onClose)
+    public CellInspectorView(
+        string title, string raw, string typeName, Action onClose,
+        double fontSize = 13, Action<double>? onFontSize = null)
     {
         _raw = raw;
+        _fontSize = Math.Clamp(fontSize, MinFontSize, MaxFontSize);
+        _onFontSize = onFontSize;
         var parsed = JsonTree.Parse(raw);
         // A declared json/jsonb column, or any value whose text opens like a document.
         _isJson = parsed is not null && (ColumnKinds.IsJson(typeName) || ColumnKinds.LooksJson(raw));
@@ -107,6 +118,24 @@ public sealed class CellInspectorView : UserControl
             BorderBrush = SeparatorBrush,
             Child = panel, // width comes from the resizable grid column
         };
+
+        // Tunnelling: the ScrollViewer inside would otherwise scroll instead of zooming.
+        AddHandler(PointerWheelChangedEvent, OnPointerWheel, RoutingStrategies.Tunnel);
+    }
+
+    /// <summary>Ctrl+wheel zooms the value text, a point per notch, and reports the new size so it sticks
+    /// for the next value you open (and shows up in Settings ▸ Results).</summary>
+    private void OnPointerWheel(object? sender, PointerWheelEventArgs e)
+    {
+        if (!e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.Delta.Y == 0) return;
+
+        var next = Math.Clamp(_fontSize + Math.Sign(e.Delta.Y), MinFontSize, MaxFontSize);
+        e.Handled = true;
+        if (next == _fontSize) return;
+
+        _fontSize = next;
+        RenderBody();          // in-place: folds and scroll position survive a zoom
+        _onFontSize?.Invoke(next);
     }
 
     /// <summary>Header: <c>film[42].description</c> + a type badge, then copy and close.</summary>
@@ -123,11 +152,12 @@ public sealed class CellInspectorView : UserControl
             _isJson ? (ColumnKinds.IsJson(typeName) ? typeName.ToLowerInvariant() : "json") : "text",
             _isJson ? "Syntax.Table" : "Text.Dim");
 
-        var copy = ResultChrome.IconTextButton("⧉", "Copy value");
+        // Drawn, not typed: the ⧉ and ✕ glyphs aren't in every UI font and came out clipped.
+        var copy = ResultChrome.GlyphIconButton("M4,4 H12 V12 H4 Z M1.5,9 V1.5 H9", "Copy value");
         // The whole document, from the same renderer the view uses — never the folded placeholders.
         copy.Click += (_, _) => TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(
             _isJson ? JsonText.Plain(_lines) : _raw);
-        var close = ResultChrome.IconTextButton("✕", "Close");
+        var close = ResultChrome.GlyphIconButton("M1.5,1.5 L11.5,11.5 M11.5,1.5 L1.5,11.5", "Close", size: 11);
         close.Click += (_, _) => onClose();
 
         var titleWrap = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
@@ -170,16 +200,17 @@ public sealed class CellInspectorView : UserControl
         rawToggle.Click += (_, _) => { _formatted = false; SyncToggles(); RenderBody(); };
         SyncToggles();
 
-        var collapseAll = ResultChrome.IconTextButton("⊟", "Collapse all");
+        var collapseAll = ResultChrome.IconTextButton("⊟", "Collapse all", fontSize: 17);
         collapseAll.Click += (_, _) =>
         {
             _folded.Clear();
-            foreach (var path in JsonText.FoldablePaths(_lines)) _folded.Add(path);
+            // Not the root: collapsing it hides the whole value, and the user can still fold it by hand.
+            foreach (var path in JsonText.FoldablePaths(_lines, includeRoot: false)) _folded.Add(path);
             _formatted = true;
             SyncToggles();
             RenderBody();
         };
-        var expandAll = ResultChrome.IconTextButton("⊞", "Expand all");
+        var expandAll = ResultChrome.IconTextButton("⊞", "Expand all", fontSize: 17);
         expandAll.Click += (_, _) =>
         {
             _folded.Clear();
@@ -272,6 +303,9 @@ public sealed class CellInspectorView : UserControl
     private void FillText(IReadOnlyList<JsonRow> rows)
     {
         // Its own collection, not a fresh one: the control wires the InlineCollection it creates to itself.
+        _jsonText.FontSize = _fontSize;
+        _jsonText.LineHeight = LineHeight;
+
         var inlines = _jsonText.Inlines!;
         inlines.Clear();
 
@@ -296,7 +330,8 @@ public sealed class CellInspectorView : UserControl
     private void FillGutter(IReadOnlyList<JsonRow> rows)
     {
         _jsonGutter.Children.Clear();
-        _jsonGutter.Height = rows.Count * JsonLineHeight;
+        _jsonGutter.Width = GutterWidth;
+        _jsonGutter.Height = rows.Count * LineHeight;
 
         for (var i = 0; i < rows.Count; i++)
         {
@@ -307,8 +342,8 @@ public sealed class CellInspectorView : UserControl
                 Text = rows[i].IsFolded ? "▸" : "▾",
                 FontSize = ChevronSize,
                 Width = GutterWidth,
-                Height = JsonLineHeight,
-                LineHeight = JsonLineHeight,          // centres the glyph in its row
+                Height = LineHeight,
+                LineHeight = LineHeight,              // centres the glyph in its row
                 TextAlignment = TextAlignment.Center,
                 Foreground = Res("Text.Faint"),
                 Cursor = new Cursor(StandardCursorType.Hand),
@@ -322,7 +357,7 @@ public sealed class CellInspectorView : UserControl
                 RenderBody();
             };
 
-            Canvas.SetTop(chevron, i * JsonLineHeight);
+            Canvas.SetTop(chevron, i * LineHeight);
             _jsonGutter.Children.Add(chevron);
         }
     }
@@ -338,6 +373,7 @@ public sealed class CellInspectorView : UserControl
         Background = Brushes.Transparent,
         Foreground = Res("Text.Code"),
         FontFamily = _isJson ? MonoFont : FontFamily.Default,
+        FontSize = _fontSize,
         Margin = new Thickness(8),
     };
 

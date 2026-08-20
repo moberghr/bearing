@@ -161,9 +161,13 @@ public static class JsonText
         return rows;
     }
 
-    /// <summary>Every foldable path in the document, for collapse-all.</summary>
-    public static IReadOnlyList<string> FoldablePaths(IReadOnlyList<JsonLine> lines)
-        => lines.Where(l => l.CanFold).Select(l => l.Path).ToList();
+    /// <summary>
+    /// Every foldable path in the document, for collapse-all. <paramref name="includeRoot"/> is off for
+    /// collapse-all itself: folding the root would replace the whole value with one <c>{…12…}</c>
+    /// line, which is never what "collapse all" means — the root chevron is still there to do it by hand.
+    /// </summary>
+    public static IReadOnlyList<string> FoldablePaths(IReadOnlyList<JsonLine> lines, bool includeRoot = true)
+        => lines.Where(l => l.CanFold && (includeRoot || l.Path != RootPath)).Select(l => l.Path).ToList();
 
     /// <summary>
     /// The containers that have to open for every match on <paramref name="query"/> to be visible — the

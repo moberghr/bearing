@@ -158,6 +158,15 @@ public class JsonTextTests
     }
 
     [Fact]
+    public void Collapse_all_skips_the_root_so_the_value_does_not_vanish()
+    {
+        var lines = Lines("""{"a":{"b":1},"c":[2]}""");
+
+        Assert.Equal(new[] { "$", "$.0", "$.1" }, JsonText.FoldablePaths(lines));
+        Assert.Equal(new[] { "$.0", "$.1" }, JsonText.FoldablePaths(lines, includeRoot: false));
+    }
+
+    [Fact]
     public void Rows_carry_a_chevron_only_on_the_lines_that_open_a_container()
     {
         var rows = Rows("""{"tags":["a"]}""");

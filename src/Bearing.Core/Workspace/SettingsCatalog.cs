@@ -137,6 +137,20 @@ public static class SettingsCatalog
         },
         new IntSetting
         {
+            Key = "results.inspectorFontSize",
+            CategoryId = Results,
+            Title = "Cell inspector font size",
+            Description = "Point size of the value text in the cell inspector pane. Ctrl+wheel over the "
+                        + "pane changes it too, and lands back here.",
+            Keywords = "json preview zoom bigger smaller point text",
+            Min = 8,
+            Max = 32,
+            Unit = "pt",
+            Get = s => s.InspectorFontSize,
+            Set = (s, v) => s with { InspectorFontSize = v },
+        },
+        new IntSetting
+        {
             Key = "results.fetchAllMaxRows",
             CategoryId = Results,
             Title = "Stop “Fetch all rows” at",

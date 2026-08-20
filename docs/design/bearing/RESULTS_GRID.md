@@ -70,10 +70,12 @@ Generation in the prototype is naive by design (title/rate in the UPDATE, film_i
 ## 6. Cell inspector
 Opens as a **400px right pane** (`ink-800`, 1px left border) when a `metadata` cell or its `⤢` is clicked; the inspected cell gets a `rgba(126,156,216,.12)` tint.
 
-**JSON (`jsonb`)** — *Formatted*: the actual JSON document, indented 2 spaces per depth and syntax-highlighted — keys azure, strings mint, numbers `#E9A46B`, bool/null violet. Selectable monospace text, no horizontal reflow (long lines scroll). Objects and arrays fold: a `▾`/`▸` chevron in a 14px left gutter beside every line that opens a non-empty container, collapsing it to `{…N…}` / `[…N…]` on that same line; toolbar `⊟` collapse-all / `⊞` expand-all. *Raw*: unformatted single-line value.
+**JSON (`jsonb`)** — *Formatted*: the actual JSON document, indented 2 spaces per depth and syntax-highlighted — keys azure, strings mint, numbers `#E9A46B`, bool/null violet. Selectable monospace text, no horizontal reflow (long lines scroll). Objects and arrays fold: a `▾`/`▸` chevron in a 14px left gutter beside every line that opens a non-empty container, collapsing it to `{…N…}` / `[…N…]` on that same line; toolbar `⊟` collapse-all / `⊞` expand-all — collapse-all deliberately spares the root, since folding that replaces the whole value with one `{…N…}` line. *Raw*: unformatted single-line value.
 > Revised by issue #34: *Formatted* was a `TreeView`, one row per node. Navigating the tree was harder than reading the document, so the document became the view and folding moved into its gutter.
 **Text** — multiline preserved (`pre-wrap`); badge reads `text`.
 **Find in value** — live search across keys and values; the matched substring alone is highlighted `#294a45` / `#EAEEF3`, the toolbar reports the hit count, and any container hiding a match unfolds itself.
+
+**Text size** — Settings ▸ Results ▸ *Cell inspector font size* (default 13pt), or Ctrl+wheel over the pane, which writes back to that setting so the next value opens at the size you chose. Line height, gutter width and chevron size all derive from it. An open inspector keeps the size it was opened at when the setting changes elsewhere — re-rendering it would drop its folds.
 
 Header: `film[<id>].<column>` (monospace 600) + type badge + `⧉ Copy` (pretty value) + `✕`. Formatted/Raw segmented toggle: active segment teal fill with `#1A2027` text.
 

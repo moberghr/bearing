@@ -50,7 +50,7 @@ public sealed partial class ResultView : UserControl
     {
         get => _results;
         // A new run resets the inspector + selection (and with it the stats bars).
-        set { _results = value; _inspector.Hide(); _selection.Clear(); Rebuild(); }
+        set { _results = value; CloseInspector(); _selection.Clear(); Rebuild(); }
     }
 
     private ResultsViewMode _viewMode = ResultsViewMode.Stacked;
@@ -186,6 +186,8 @@ public sealed partial class ResultView : UserControl
         r.Register(KeyCommand.Sync(CommandIds.GridClearSelection, "Clear selection", KeyScope.Grid, "Grid",
             () => _selection.ClearAndNotify(),
             canRun: () => _selection.Model.Cells.Count > 0));
+        r.Register(KeyCommand.Sync(CommandIds.GridInspect, "Inspect value", KeyScope.Grid, "Grid",
+            ToggleInspectActiveCell, canRun: () => InspectableActiveCell() is not null));
         r.Register(KeyCommand.Sync(CommandIds.GridFollowFk, "Follow foreign key", KeyScope.Grid, "Grid",
             FollowActiveFk, canRun: _selection.ActiveCellIsFk));
         r.Register(KeyCommand.Sync(CommandIds.GridBack, "Back (foreign-key navigation)", KeyScope.Grid, "Grid",
@@ -231,8 +233,59 @@ public sealed partial class ResultView : UserControl
 
     // ---- inspector ---------------------------------------------------------------------------
 
+    /// <summary>Base point size for the inspector's value text (Settings ▸ Results, pushed in by the
+    /// shell). A Ctrl+wheel zoom inside the pane updates this and reports it through
+    /// <see cref="InspectorFontSizeChanged"/> so it persists.</summary>
+    public double InspectorFontSize { get; set; } = 13;
+
+    /// <summary>Raised when the user zooms the inspector, for the shell to write back to settings.</summary>
+    public Action<double>? InspectorFontSizeChanged { get; set; }
+
+    /// <summary>Which cell the pane is open on, so <c>grid.inspectValue</c> can tell "inspect this" from
+    /// "close the one I already opened".</summary>
+    private (object?[] Row, int Col)? _inspected;
+
     private void ShowInspector(ResultSetViewModel result, int index, object?[] row)
-        => _inspector.Show(() => CellInspectorView.For(result, index, row, _inspector.Hide));
+    {
+        _inspected = (row, index);
+        _inspector.Show(() => CellInspectorView.For(
+            result, index, row, CloseInspector,
+            fontSize: InspectorFontSize,
+            onFontSize: size =>
+            {
+                InspectorFontSize = size;
+                InspectorFontSizeChanged?.Invoke(size);
+            }));
+    }
+
+    private void CloseInspector()
+    {
+        _inspected = null;
+        _inspector.Hide();
+    }
+
+    /// <summary>The active cell, when there is one to inspect — guards <c>grid.inspectValue</c>.</summary>
+    private (ResultSetViewModel Result, object?[] Row, int Col)? InspectableActiveCell()
+    {
+        if (GridTarget() is not { } t || _selection.Model.Active is not { } a) return null;
+        return a.Col < t.Result.Columns.Count ? (t.Result, a.Row, a.Col) : null;
+    }
+
+    /// <summary>
+    /// grid.inspectValue (F7): the keyboard path to the ⤢ affordance, which only appears on json and long
+    /// values — F7 opens any cell. Pressing it again on the same cell closes the pane, so it reads as a peek
+    /// rather than a one-way door; on a different cell it re-points the pane instead of closing it.
+    /// </summary>
+    private void ToggleInspectActiveCell()
+    {
+        if (InspectableActiveCell() is not { } cell) return;
+        if (_inspected is { } open && ReferenceEquals(open.Row, cell.Row) && open.Col == cell.Col)
+        {
+            CloseInspector();
+            return;
+        }
+        ShowInspector(cell.Result, cell.Col, cell.Row);
+    }
 
     // ---- paging ------------------------------------------------------------------------------
 

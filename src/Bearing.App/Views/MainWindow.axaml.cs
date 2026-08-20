@@ -189,6 +189,9 @@ public partial class MainWindow : Window
         Vm.Execution.ExportCompleted -= OnExportCompleted;
         Vm.Execution.ExportCompleted += OnExportCompleted;
         ResultsView.ViewMode = Vm.ResultsViewMode; // seed before the first results render
+        ResultsView.InspectorFontSize = Vm.InspectorFontSize;
+        ResultsView.InspectorFontSizeChanged = size =>
+            Vm?.SettingsService.Update(s => s with { InspectorFontSize = (int)size });
         LoadEditorFromSelectedTab();
         SyncProjectCombo();
         SyncDbPicker();
@@ -314,6 +317,10 @@ public partial class MainWindow : Window
             SyncProjectCombo();
         else if (e.PropertyName == nameof(ShellViewModel.EditorFontSize))
             _zoom.Refresh();   // settings changed the base size; keep the selected tab's zoom on top of it
+        else if (e.PropertyName == nameof(ShellViewModel.InspectorFontSize))
+            // The open inspector keeps the size it was opened at (re-rendering it would drop its folds);
+            // the next value you inspect uses the new one.
+            ResultsView.InspectorFontSize = Vm?.InspectorFontSize ?? 13;
     }
 
     private void LoadEditorFromSelectedTab()
