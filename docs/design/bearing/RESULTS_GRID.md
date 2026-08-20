@@ -70,13 +70,18 @@ Generation in the prototype is naive by design (title/rate in the UPDATE, film_i
 ## 6. Cell inspector
 Opens as a **400px right pane** (`ink-800`, 1px left border) when a `metadata` cell or its `⤢` is clicked; the inspected cell gets a `rgba(126,156,216,.12)` tint.
 
-**JSON (`jsonb`)** — *Formatted*: syntax-highlighted tree, keys azure, strings mint, numbers `#E9A46B`, bool/null violet; every object/array node has a fold triangle (`▾`/`▸`), collapsed nodes show `{…N…}` / `[…N…]`; toolbar `⊟` collapse-all / `⊞` expand-all. *Raw*: unformatted single-line value. Indent 16px per depth.
+**JSON (`jsonb`)** — *Formatted*: the actual JSON document, indented 2 spaces per depth and syntax-highlighted — keys azure, strings mint, numbers `#E9A46B`, bool/null violet. Selectable monospace text, no horizontal reflow (long lines scroll). Objects and arrays fold: a `▾`/`▸` chevron in a 14px left gutter beside every line that opens a non-empty container, collapsing it to `{…N…}` / `[…N…]` on that same line; toolbar `⊟` collapse-all / `⊞` expand-all. *Raw*: unformatted single-line value.
+> Revised by issue #34: *Formatted* was a `TreeView`, one row per node. Navigating the tree was harder than reading the document, so the document became the view and folding moved into its gutter.
 **Text** — multiline preserved (`pre-wrap`); badge reads `text`.
-**Find in value** — live search across keys and values; matches highlighted `#294a45` / `#EAEEF3`.
+**Find in value** — live search across keys and values; the matched substring alone is highlighted `#294a45` / `#EAEEF3`, the toolbar reports the hit count, and any container hiding a match unfolds itself.
 
 Header: `film[<id>].<column>` (monospace 600) + type badge + `⧉ Copy` (pretty value) + `✕`. Formatted/Raw segmented toggle: active segment teal fill with `#1A2027` text.
 
-State: `Inspect {RowId, Col}`, `JsonMode {Formatted|Raw}`, `InspectorSearch`, `Collapsed` (node paths). In Avalonia back this with a `TreeView` + custom item template rather than a hand-rolled tree.
+State: `Inspect {RowId, Col}`, `JsonMode {Formatted|Raw}`, `InspectorSearch`, `Folded` (value paths).
+
+In Avalonia the formatted body is one `SelectableTextBlock` of coloured `Run`s beside a `Canvas` of chevrons, both built from the pure `Results/JsonText`: `Render` gives the expanded lines, `Flatten` applies the folded set, `PathsToReveal` opens what a find match is hiding under. `⧉ Copy` uses the same renderer's full document, so what you read is what you copy — never a `{…N…}` placeholder.
+
+The gutter is positioned arithmetically (`row × 19px`), which is why the text block pins `FontSize 13` / `LineHeight 19` rather than letting the font decide. The text block, gutter and scroller are long-lived and each render refills them in place — handing the scroller new content zeroes its offset for a frame, which read as a bounce off the top. Folding only ever removes lines *below* the line you clicked, so holding the offset keeps that line exactly where it was; no compensation needed.
 
 ---
 
