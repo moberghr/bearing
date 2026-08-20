@@ -136,6 +136,11 @@ if [[ ! -f "$PUBDIR/$MAIN_EXE" ]]; then
   exit 1
 fi
 
+# Start from empty and let the feed repopulate it below. vpk reads this directory as the release history,
+# so a leftover package from an earlier local run of the same version makes it refuse to pack ("there is a
+# release ... equal or greater to the current version") — the history has to come from what is actually
+# published, not from what this machine happens to have lying around.
+rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 
 # --- Previous release, so a delta can be built against it ---------------------

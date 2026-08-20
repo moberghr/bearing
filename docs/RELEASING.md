@@ -40,6 +40,10 @@ Both land on the same GitHub release (`--merge`); each channel carries its own `
 and clients only read their own. The script fetches the previous release first so this one ships as a
 **delta** as well as a full package — that is what keeps an update a few MB instead of ~65 MB.
 
+`dist/velopack/<channel>` is wiped and repopulated from the feed on every run, deliberately: `vpk` reads
+that directory as the release history, so a package left there by an earlier local build of the same
+version makes it refuse to pack. The history has to come from what is actually published.
+
 Useful switches: `SKIP_TESTS=1` (the script runs `dotnet test` by default), `CONFIG=Debug`.
 
 ## Updating from a private repo (interim)
