@@ -73,10 +73,12 @@ public sealed partial class ShellViewModel : ObservableObject
             credentialPrompt: credentialPrompt, entraTokens: entraTokens, settings: settings);
         _ctx.Status = text => StatusText = text;
         EditorFontSize = _ctx.Settings.EditorFontSize;
+        InspectorFontSize = _ctx.Settings.InspectorFontSize;
         IsMenuVisible = _ctx.Settings.ShowMenuBar;
         _ctx.SettingsService.Changed += s =>
         {
             EditorFontSize = s.EditorFontSize;
+            InspectorFontSize = s.InspectorFontSize;
             // Pinning shows the bar at once; unpinning takes it away again rather than leaving it stranded
             // on screen with nothing left that would hide it.
             OnPropertyChanged(nameof(IsMenuPinned));
@@ -105,6 +107,9 @@ public sealed partial class ShellViewModel : ObservableObject
 
     /// <summary>Editor point size, mirrored from settings so the editor can bind it and re-size live.</summary>
     [ObservableProperty] private double _editorFontSize = 14;
+
+    /// <summary>Cell inspector point size, mirrored from settings the same way.</summary>
+    [ObservableProperty] private double _inspectorFontSize = 13;
 
     [ObservableProperty] private string _statusText = "Not connected.";
 

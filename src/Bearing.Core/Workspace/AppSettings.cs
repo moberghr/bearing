@@ -41,6 +41,10 @@ public sealed record AppSettings
     /// <summary>Rows fetched per page, both for a query's first page and for each Load more.</summary>
     public int ResultPageSize { get; init; } = 100;
 
+    /// <summary>Base point size of the cell inspector's value text. Ctrl+wheel in the inspector writes
+    /// here, so a zoom made while reading one value is the size the next one opens at.</summary>
+    public int InspectorFontSize { get; init; } = 13;
+
     /// <summary>
     /// Where "Fetch all rows" stops. It streams the result to the end, so without a ceiling a mistyped query
     /// against a billion-row table would read until the app runs out of memory — the ceiling also bounds what

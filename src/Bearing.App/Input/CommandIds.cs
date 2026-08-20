@@ -86,6 +86,7 @@ public static class CommandIds
     public const string GridSave = "grid.save";
     public const string GridDiscard = "grid.discard";
     public const string GridClearSelection = "grid.clearSelection";
+    public const string GridInspect = "grid.inspectValue";
     public const string GridFollowFk = "grid.followFk";
     public const string GridBack = "grid.back";
 }

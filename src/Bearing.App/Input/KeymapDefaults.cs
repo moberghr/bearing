@@ -89,6 +89,7 @@ public static class KeymapDefaults
         yield return R(CommandIds.GridSave, "Ctrl+S");
         yield return R(CommandIds.GridDiscard, "Ctrl+Alt+Z");
         yield return R(CommandIds.GridClearSelection, "Escape");
+        yield return R(CommandIds.GridInspect, "F7");          // peek at the active cell's full value
         yield return R(CommandIds.GridFollowFk, "Alt+Right"); // drill into the FK the active cell points to
         yield return R(CommandIds.GridBack, "Alt+Left");      // return to the pre-navigation result
     }

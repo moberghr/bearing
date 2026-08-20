@@ -102,7 +102,7 @@ public static class ResultChrome
 
     /// <summary>A borderless text/glyph button used for inspector controls (copy, close, toggles) and the
     /// stats bar's Clear.</summary>
-    public static Button IconTextButton(string content, string tip)
+    public static Button IconTextButton(string content, string tip, double? fontSize = null)
     {
         var b = new Button
         {
@@ -111,6 +111,35 @@ public static class ResultChrome
             BorderThickness = new Thickness(0),
             Padding = new Thickness(6, 2),
             Foreground = Res("Text.Dim"),
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        if (fontSize is { } size) b.FontSize = size;
+        ToolTip.SetTip(b, tip);
+        return b;
+    }
+
+    /// <summary>
+    /// A button whose icon is <i>drawn</i> rather than typed. Symbol glyphs (⧉, ✕) are not in every UI font,
+    /// and a fallback face renders them at the wrong advance width — clipped, or as tofu. A stroked path
+    /// always looks the same. Same transparent chrome as <see cref="IconTextButton"/>.
+    /// </summary>
+    public static Button GlyphIconButton(string data, string tip, double size = 13)
+    {
+        var b = new Button
+        {
+            Content = new Path
+            {
+                Data = Geometry.Parse(data),
+                Stroke = Res("Text.Dim"),
+                StrokeThickness = 1.2,
+                StrokeLineCap = PenLineCap.Round,
+                Stretch = Stretch.Uniform,
+                Width = size,
+                Height = size,
+            },
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(7, 4),
             Cursor = new Cursor(StandardCursorType.Hand),
         };
         ToolTip.SetTip(b, tip);

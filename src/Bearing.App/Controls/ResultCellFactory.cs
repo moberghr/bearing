@@ -274,6 +274,34 @@ public sealed class ResultCellFactory
         _selection.AddRestyleListener(Restyle);
         border.DetachedFromVisualTree += (_, _) => _selection.RemoveRestyleListener(Restyle);
 
+        // Our press handler marks the event handled, so the DataGrid never gets to set its own current cell
+        // from the click. Focusing a grid that has *no* current cell makes Avalonia adopt the first column
+        // and scroll it into view — which is why clicking a cell while scrolled right sometimes threw the
+        // view back to the leftmost column. Handing it the clicked cell first makes that a no-op.
+        // `CurrentItem` is internal in Avalonia 12, so the current *row* has to come from the selection; the
+        // row highlight that would otherwise paint is already suppressed (ResultGridChrome).
+        void FocusClickedCell()
+        {
+            if (index < grid.Columns.Count)
+            {
+                grid.SelectedItem = row;
+                grid.CurrentColumn = grid.Columns[index];
+            }
+            grid.Focus();
+        }
+
+        // Corrective, on top of the above: whatever moved the viewport during the click — the DataGrid
+        // adopting a current cell, or the quick-stats bar appearing and re-measuring the grid — the cell you
+        // clicked ends up visible again. A no-op when nothing moved. Done twice because the two candidate
+        // causes land in different frames: the re-measure happens in the layout pass after this returns.
+        void KeepClickedCellInView()
+        {
+            if (index >= grid.Columns.Count) return;
+            var column = grid.Columns[index];
+            grid.ScrollIntoView(row, column);
+            Dispatcher.UIThread.Post(() => grid.ScrollIntoView(row, column), DispatcherPriority.Loaded);
+        }
+
         border.AddHandler(InputElement.PointerPressedEvent, (_, e) =>
         {
             if (e.ClickCount >= 2) return; // let the grid start editing on double-click
@@ -284,18 +312,20 @@ public sealed class ResultCellFactory
                 // cell, so Copy/Copy as can't act on cells the user isn't pointing at; *inside* it leaves the
                 // selection alone (right-clicking a block to copy it must not shrink it to one cell). Never
                 // marked handled — the flyout still has to open.
-                grid.Focus();
+                FocusClickedCell();
                 if (!_selection.IsSelected(result, row, index)) _selection.SelectSingle(result, row, index);
+                KeepClickedCellInView();
                 return;
             }
             if (!point.IsLeftButtonPressed) return;
-            grid.Focus(); // route subsequent key presses to this grid's keyboard handler
+            FocusClickedCell(); // route subsequent key presses here, without a jump to column 0
 
             var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);
             var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
             if (shift && _selection.CanExtendFrom(result)) _selection.ExtendTo(result, row, index);
             else if (ctrl) _selection.ToggleCell(result, row, index);
             else _selection.SelectSingleAndBeginDrag(result, row, index, e.Pointer, grid);
+            KeepClickedCellInView();
             e.Handled = true;
         }, RoutingStrategies.Bubble, handledEventsToo: true);
         return border;

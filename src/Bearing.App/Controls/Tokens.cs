@@ -41,4 +41,9 @@ public static class Tokens
 
     /// <summary>The 1px rule used for every region / cell / header separator.</summary>
     public static IBrush SeparatorBrush => Res("Border");
+
+    /// <summary>The app's monospace stack (<c>MonoFontFamily</c> in <c>App.axaml</c>) for code-built text
+    /// visuals — SQL previews, the cell inspector's JSON.</summary>
+    public static FontFamily MonoFont
+        => Application.Current?.FindResource("MonoFontFamily") as FontFamily ?? FontFamily.Default;
 }
