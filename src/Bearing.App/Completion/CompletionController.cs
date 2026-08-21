@@ -37,6 +37,10 @@ internal sealed class CompletionController
     private int _generation;
     private bool _narrowQueued;   // coalesces the posted re-rank (see QueueNarrow)
 
+    /// <summary>Offset of the space the last accepted completion appended, or -1. Good for exactly one
+    /// keystroke — see <see cref="TrySwallowSoftSpace"/>.</summary>
+    private int _softSpace = -1;
+
     public CompletionController(TextEditor editor, ICompletionEngine engine, Func<ISchemaSnapshot?> snapshot)
     {
         _editor = editor;
@@ -79,6 +83,8 @@ internal sealed class CompletionController
         if (string.IsNullOrEmpty(e.Text)) return;
         var ch = e.Text[0];
 
+        TrySwallowSoftSpace(ch);
+
         if (ch == '.')
         {
             // Context just changed (alias-dot) — recompute immediately.
@@ -94,6 +100,21 @@ internal sealed class CompletionController
             _debounce.Stop();
             _debounce.Start();
         }
+    }
+
+    /// <summary>
+    /// Take back the space a completion appended when the very next character typed is one that reads
+    /// wrong after it — <c>select u.id , u.name</c>. Only the character sitting immediately after that
+    /// space counts, so moving the caret away and typing a comma elsewhere forfeits it; the offset is
+    /// consumed either way, making this a strictly one-keystroke window.
+    /// </summary>
+    private void TrySwallowSoftSpace(char typed)
+    {
+        // TextEntered fires after the character is in the document, so the caret already sits past both
+        // it and the space. The offset is consumed either way — one keystroke, then it is gone.
+        var offset = _softSpace;
+        _softSpace = -1;
+        CompletionInsertion.TrySwallow(_editor.Document, _editor.CaretOffset, offset, typed);
     }
 
     private async Task TriggerAsync()
@@ -229,9 +250,11 @@ internal sealed class CompletionController
     }
 
     /// <summary>Accepting a schema (<c>audit.</c>) leaves the caret where its relations belong, so reopen
-    /// the popup there instead of making the user press Ctrl+Space again.</summary>
-    private void OnInserted(Suggestion suggestion)
+    /// the popup there instead of making the user press Ctrl+Space again. Every other kind may have left
+    /// a soft space behind for the next keystroke to reclaim.</summary>
+    private void OnInserted(Suggestion suggestion, int softSpaceOffset)
     {
+        _softSpace = softSpaceOffset;
         if (suggestion.Kind != SuggestionKind.Schema) return;
         Dispatcher.UIThread.Post(TriggerExplicit);
     }

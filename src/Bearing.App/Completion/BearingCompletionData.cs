@@ -15,11 +15,13 @@ namespace Bearing.App.Completion;
 internal sealed class BearingCompletionData : ICompletionData
 {
     private readonly Suggestion _s;
-    private readonly Action<Suggestion>? _inserted;
+    private readonly Action<Suggestion, int>? _inserted;
 
-    /// <param name="inserted">Called after the text is inserted (a schema pick re-opens the popup for
-    /// the relations under it).</param>
-    public BearingCompletionData(Suggestion s, Action<Suggestion>? inserted = null)
+    /// <param name="inserted">Called after the text is inserted, with the document offset of the soft
+    /// space <see cref="CompletionInsertion"/> appended (or -1 when it appended none). A schema pick
+    /// re-opens the popup for the relations under it; the soft space is taken back again if the very
+    /// next character typed is a delimiter (#41).</param>
+    public BearingCompletionData(Suggestion s, Action<Suggestion, int>? inserted = null)
     {
         _s = s;
         _inserted = inserted;
@@ -87,7 +89,7 @@ internal sealed class BearingCompletionData : ICompletionData
 
     public void Complete(TextArea textArea, ISegment completionSegment, EventArgs insertionRequestEventArgs)
     {
-        textArea.Document.Replace(completionSegment, _s.ReplacementText);
-        _inserted?.Invoke(_s);
+        var softSpace = CompletionInsertion.Apply(textArea.Document, completionSegment, _s);
+        _inserted?.Invoke(_s, softSpace);
     }
 }
