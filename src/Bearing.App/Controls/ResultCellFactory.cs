@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
@@ -26,9 +28,13 @@ namespace Bearing.App.Controls;
 /// </summary>
 public sealed class ResultCellFactory
 {
-    // Long-text/array/json columns start capped so they show partially, but stay freely resizable
-    // (no MaxWidth) and can be double-clicked (on the header) to auto-fit.
-    private const double WideColumnInitial = 280;
+    // Non-text pixels inside a value cell: the text's margin plus the selection border's 1px reserve, both
+    // sides (see MakeSelectable).
+    private const double CellChrome = ResultGridChrome.CellTextInset * 2;
+
+    // On top of that, the width a cell reserves for an inline affordance: the 16–18px glyph with its
+    // margins, plus the DockPanel's 18px right margin keeping it clear of the scrollbar.
+    private const double AffordanceWidth = 40;
 
     private readonly GridSelectionController _selection;
     private readonly Action<ResultSetViewModel, int, object?[]> _inspect;
@@ -44,8 +50,8 @@ public sealed class ResultCellFactory
         _followForeignKey = followForeignKey;
     }
 
-    /// <summary>The column for <paramref name="index"/>, picked by column kind, with its header and (for a
-    /// wide type) a capped initial width.</summary>
+    /// <summary>The column for <paramref name="index"/>, picked by column kind, with its header and a
+    /// content-derived initial width (#30).</summary>
     public DataGridColumn BuildColumn(ResultSetViewModel result, int index, DataGrid grid)
     {
         // FK columns keep their jump-icon template; bool columns render a checkbox; everything else is a
@@ -67,7 +73,7 @@ public sealed class ResultCellFactory
             col = new DataGridTemplateColumn { CellTemplate = ValueCell(result, index, grid) };
 
         col.Header = ColumnHeader(result, index);
-        if (ColumnKinds.IsWide(result.Columns[index])) col.Width = new DataGridLength(WideColumnInitial);
+        col.Width = new DataGridLength(InitialWidth(result, index));
         return col;
     }
 
@@ -77,14 +83,36 @@ public sealed class ResultCellFactory
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         row.Children.Add(new TextBlock { Text = result.Columns[index].Name, VerticalAlignment = VerticalAlignment.Center });
-
-        if (result.PrimaryKeyColumns.Contains(index)) row.Children.Add(ResultChrome.Badge("PK", "Accent.Brand"));
-        if (result.ForeignKeyColumns.Contains(index)) row.Children.Add(ResultChrome.Badge("FK", "Syntax.Keyword"));
-
-        var type = result.Columns[index].DataTypeName;
-        if (ColumnKinds.IsJson(type)) row.Children.Add(ResultChrome.Badge(type.ToLowerInvariant(), "Syntax.Table"));
-
+        foreach (var (text, color) in Badges(result, index)) row.Children.Add(ResultChrome.Badge(text, color));
         return row;
+    }
+
+    /// <summary>The header's inline type badges. Shared with the width arithmetic below, which has to know
+    /// how many there are before the header is measured.</summary>
+    private static List<(string Text, string Color)> Badges(ResultSetViewModel result, int index)
+    {
+        var badges = new List<(string, string)>(2);
+        if (result.PrimaryKeyColumns.Contains(index)) badges.Add(("PK", "Accent.Brand"));
+        if (result.ForeignKeyColumns.Contains(index)) badges.Add(("FK", "Syntax.Keyword"));
+        var type = result.Columns[index].DataTypeName;
+        if (ColumnKinds.IsJson(type)) badges.Add((type.ToLowerInvariant(), "Syntax.Table"));
+        return badges;
+    }
+
+    /// <summary>The width the column opens at: whatever its header and its widest loaded value need, capped
+    /// (<see cref="ColumnWidths"/>). Nothing is left on the DataGrid's <c>Auto</c> sizing, which grew a
+    /// column to its longest realized value and pushed the rest off screen (#30). A foreign-key or json
+    /// column also reserves room for its always-present ↗ / ⤢ glyph, so the value isn't sized into it.</summary>
+    private static double InitialWidth(ResultSetViewModel result, int index)
+    {
+        var column = result.Columns[index];
+        var hasGlyph = result.ForeignKeyColumns.Contains(index) || ColumnKinds.IsJson(column.DataTypeName);
+        return ColumnWidths.Initial(
+            headerChars: column.Name.Length,
+            headerExtra: ResultGridChrome.HeaderChromeFor(Badges(result, index).Select(b => b.Text)),
+            valueChars: ColumnWidths.ValueChars(result.Rows, index),
+            cellExtra: CellChrome + (hasGlyph ? AffordanceWidth : 0),
+            charWidth: ResultGridChrome.CharAdvance);
     }
 
     /// <summary>A value display cell: text (dimmed italic "(null)", numeric in code color), plus an
@@ -109,7 +137,7 @@ public sealed class ResultCellFactory
         {
             Text = GridSelectionOps.CellText(row, index),
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(4, 0),
+            Margin = new Thickness(ResultGridChrome.CellTextMargin, 0),
             TextTrimming = TextTrimming.CharacterEllipsis,
             Foreground = isNull ? NullBrush : (numeric ? Res("Text.Code") : Res("Text.Primary")),
             FontStyle = isNull ? FontStyle.Italic : FontStyle.Normal,
@@ -154,7 +182,7 @@ public sealed class ResultCellFactory
             Text = GridSelectionOps.CellText(row, index),
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            Margin = new Thickness(4, 0, 4, 0),
+            Margin = new Thickness(ResultGridChrome.CellTextMargin, 0),
         };
 
         var jump = ResultChrome.JumpAffordance();
@@ -187,26 +215,23 @@ public sealed class ResultCellFactory
         => new FuncDataTemplate<object?[]>((row, _) =>
             MakeSelectable(() => BoolContent(row, index), result, row, index, grid));
 
-    /// <summary>The checkbox indicator, and — because the cell hit-tests against it — the exact area where a
-    /// click cycles the value. Zero padding is what makes those two the same thing: Fluent's CheckBox lays out
-    /// a 20px box column plus an 8px pad for content this has none of, so the pad would otherwise extend the
-    /// clickable area past the visible box.
+    /// <summary>The indicator, and — because the cell hit-tests against it — the exact area where a click
+    /// cycles the value. It is drawn (<see cref="ResultChrome.BoolIndicator"/>) rather than a Fluent
+    /// <c>CheckBox</c>: that control sizes itself as a labelled one — a 20px box plus an 8px content pad,
+    /// inside a 32px minimum — so it both overhung the visible box on three sides and, a cell being as tall
+    /// as its content, raised every row in the grid off the 26px floor.
     /// <para>
-    /// Not hit-testable and not focusable: every write goes through <c>GridSelectionController.ToggleBool</c>,
-    /// so the mouse, the double-tap and the keyboard are one code path. NULL still shows indeterminate —
-    /// Avalonia's <c>:indeterminate</c> pseudo-class keys off <c>IsChecked == null</c>, independent of
-    /// <c>IsThreeState</c> (which only ever governed the click cycle this control no longer runs).
+    /// Never hit-testable: every write goes through <c>GridSelectionController.ToggleBool</c>, so the mouse,
+    /// the double-tap and the keyboard are one code path. That is also why the cell can safely re-render on a
+    /// value change — a live CheckBox held the pointer capture between press and release, and replacing it in
+    /// between silently ate the click.
     /// </para></summary>
     private static Control BoolContent(object?[]? row, int index)
-        => new CheckBox
-        {
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-            IsChecked = BoolCellValue.Read(row, index),
-            Padding = new Thickness(0),
-            IsHitTestVisible = false, // display only (not greyed out like IsEnabled=false would be)
-            Focusable = false,
-        };
+    {
+        var indicator = ResultChrome.BoolIndicator(BoolCellValue.Read(row, index));
+        indicator.IsHitTestVisible = false; // display only (not greyed out like IsEnabled=false would be)
+        return indicator;
+    }
 
     /// <summary>The in-cell editor (a TextBox seeded with the current value) shared by editable and FK
     /// columns. A template — re-materialized per row as the grid recycles containers on scroll —

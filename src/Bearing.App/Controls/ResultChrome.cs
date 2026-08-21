@@ -156,6 +156,56 @@ public static class ResultChrome
         => GlyphButton("M1,9 L9,1 M4,1 L9,1 L9,6", LinkBrush,
             width: 16, height: 16, margin: new Thickness(2, 0, 4, 0), tip: "Open referenced row");
 
+    /// <summary>A bool cell's indicator, drawn rather than a Fluent <c>CheckBox</c>: at 14px it sits inside
+    /// the 26px row instead of forcing it to Fluent's 32px minimum. Checked fills with the accent and a white
+    /// tick, unchecked is an empty outline, NULL an outline with a dim dash — the CheckBox's own three states.
+    /// <para>
+    /// Its bounds are exactly the visible box, which is what the click-to-toggle gesture hit-tests against
+    /// (<c>GridSelectionController.TryToggleBoolAtPointer</c>) — a Fluent CheckBox reserved room for a label
+    /// this never has, so a click beside or above the box counted as a click on it.
+    /// </para></summary>
+    public static Control BoolIndicator(bool? value)
+    {
+        var box = new Border
+        {
+            Width = BoolBoxSize,
+            Height = BoolBoxSize,
+            CornerRadius = new CornerRadius(3),
+            BorderThickness = new Thickness(1),
+            BorderBrush = value == true ? AccentFill : Res("Border.Control"),
+            Background = value == true ? AccentFill : Brushes.Transparent,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        if (value == false) return box;   // an empty outline; nothing to draw inside
+        box.Child = new Path
+        {
+            // A tick on the accent fill, or the indeterminate dash a NULL shows.
+            Data = Geometry.Parse(value == true ? "M0,3 L2.8,5.8 L7.6,0.6" : "M0,0 L6,0"),
+            Stroke = value == true ? Brushes.White : Res("Text.Faint"),
+            StrokeThickness = 1.6,
+            StrokeLineCap = PenLineCap.Round,
+            StrokeJoin = PenLineJoin.Round,
+            Stretch = Stretch.None,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        return box;
+    }
+
+    /// <summary>Side of the bool indicator's box. Kept under the grid's 26px row floor on purpose.</summary>
+    private const double BoolBoxSize = 14;
+
+    /// <summary>The checked fill: the platform accent, which is what the Fluent CheckBox this replaced was
+    /// filling with. Deliberately not a Bearing token — the desktop's accent (GNOME's blue, a Windows user
+    /// accent) is what the indicator looked like before it was drawn by hand, and hardcoding one blue would
+    /// freeze whichever machine it was sampled on. Falls back to the palette's azure if the theme exposes no
+    /// platform accent, so a missing key can't render an invisible box.</summary>
+    private static IBrush AccentFill
+        => Application.Current?.FindResource("SystemAccentColor") is Color accent
+            ? new SolidColorBrush(accent)
+            : Res("Syntax.Func");
+
     /// <summary>A stroked vector glyph wrapped in a transparent Border so the whole box is the hit target.</summary>
     private static Border GlyphButton(string data, IBrush stroke, double width, double height, Thickness margin, string tip)
     {

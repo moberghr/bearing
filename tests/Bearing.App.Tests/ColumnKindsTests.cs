@@ -7,7 +7,7 @@ namespace Bearing.App.Tests;
 
 /// <summary>
 /// The column-shape predicates the results grid branches on. Each drives a visible decision — a checkbox
-/// instead of text, a capped initial width, a JSON tree instead of raw text — so getting one wrong is a
+/// instead of text, a JSON tree instead of raw text, a jump icon — so getting one wrong is a
 /// rendering bug, not a cosmetic one.
 /// </summary>
 public class ColumnKindsTests
@@ -46,21 +46,4 @@ public class ColumnKindsTests
     [InlineData("", false)]
     public void Looks_json_sniffs_the_first_non_space_character(string raw, bool expected)
         => Assert.Equal(expected, ColumnKinds.LooksJson(raw));
-
-    [Fact]
-    public void Text_arrays_json_and_tsvector_start_at_a_capped_width()
-    {
-        Assert.True(ColumnKinds.IsWide(Col("text", typeof(string))));
-        Assert.True(ColumnKinds.IsWide(Col("_int4", typeof(int[]))));
-        Assert.True(ColumnKinds.IsWide(Col("jsonb", typeof(string))));
-        Assert.True(ColumnKinds.IsWide(Col("tsvector", typeof(object))));
-    }
-
-    [Fact]
-    public void Scalars_size_themselves()
-    {
-        Assert.False(ColumnKinds.IsWide(Col("int4", typeof(int))));
-        Assert.False(ColumnKinds.IsWide(Col("timestamptz", typeof(DateTime))));
-        Assert.False(ColumnKinds.IsWide(Col("numeric", typeof(decimal?))));
-    }
 }

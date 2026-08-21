@@ -27,8 +27,9 @@ public static class ResultRowPainter
     /// so the grid's flat Bg.Editor surface shows through.</summary>
     public static IBrush RowBackground(int rowIndex) => rowIndex % 2 == 1 ? RowStripe : Brushes.Transparent;
 
-    /// <summary>Pending-edit visuals for a row: a faint tint + a 2px left status bar
-    /// (amber edited / green new / red deleted). Transparent when the row has no pending change.</summary>
+    /// <summary>Pending-edit visuals for a row: a faint tint + the colour of its left status bar
+    /// (teal edited / green new / red deleted). Transparent when the row has no pending change — the bar's
+    /// 2px lane is always reserved, so only its colour comes and goes.</summary>
     public static (IBrush Tint, IBrush Bar) RowStatus(ResultSetViewModel result, object?[]? row)
     {
         if (row is null) return (Brushes.Transparent, Brushes.Transparent);
@@ -38,14 +39,16 @@ public static class ResultRowPainter
         return (Brushes.Transparent, Brushes.Transparent);
     }
 
-    /// <summary>Apply one row's stripe-or-pending-tint and its left status bar.</summary>
+    /// <summary>Apply one row's stripe-or-pending-tint and the colour of its left status bar.</summary>
     public static void ApplyRowStatus(DataGridRow dgr, ResultSetViewModel result)
     {
         var (tint, bar) = RowStatus(result, dgr.DataContext as object?[]);
         // No pending change → the design row stripe; a pending edit/new/delete overrides with its tint.
         dgr.Background = ReferenceEquals(tint, Brushes.Transparent) ? RowBackground(dgr.Index) : tint;
+        // Colour only. The 2px lane itself is reserved on every row by the grid's DataGridRow style
+        // (ResultGridChrome.RowStatusBarWidth) — setting the thickness here made it a local value that beat
+        // the style, and reserving it per-row is what offset the body against the header row.
         dgr.BorderBrush = bar;
-        dgr.BorderThickness = new Thickness(2, 0, 0, 0);
     }
 
     /// <summary>Re-tint the currently-realized rows to reflect pending edit/new/delete state. Only realized
