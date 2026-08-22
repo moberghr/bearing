@@ -34,19 +34,52 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         _ctx.Sessions.LiveChanged += OnSessionLiveChanged;
     }
 
-    /// <summary>The session pool changed for some connection. If it is the active tab's connection, re-derive
-    /// the indicator from the real session state on the UI thread. This is what makes a query-driven connect
-    /// (or an idle eviction) update the dot without the user touching the toggle. Fires possibly off-thread.</summary>
+    /// <summary>The session pool changed for some connection. Re-derive the toolbar indicator when it is the
+    /// active tab's connection, and every tab's own chain glyph regardless — a connect on one tab's server
+    /// has to relink the other tabs pointed at it. This is what makes a query-driven connect (or an idle
+    /// eviction) update the indicators without the user touching the toggle. Fires possibly off-thread.</summary>
     private void OnSessionLiveChanged(Guid id)
-    {
-        if (Selected?.ConnectionId != id) return;
-        Dispatcher.UIThread.Post(() =>
+        => Dispatcher.UIThread.Post(() =>
         {
             var tab = Selected;
             // Don't clobber an in-flight explicit connect's Connecting state with a spurious re-derive.
             if (tab?.ConnectionId == id && State != ConnectionState.Connecting) SyncStateFromSession(tab);
+            RefreshTabConnectionLive(); // unconditional: SyncStateFromSession only fires it on a real change
+            RefreshServerNodeLive();
         });
+
+    /// <summary>Push "is this tab's connection actually open" onto every tab, so each tab header shows its
+    /// own chain glyph rather than the selected tab's. The selected tab counts as live while an explicit
+    /// connect is in flight, so its glyph links when the attempt starts rather than when it lands —
+    /// matching the toolbar, where Connecting is also a linked chain.</summary>
+    private void RefreshTabConnectionLive()
+    {
+        foreach (var t in Tabs) RefreshTabConnectionLive(t);
     }
+
+    private void RefreshTabConnectionLive(EditorTabViewModel tab)
+        => tab.ConnectionLive = IsTabSessionLive(tab)
+            || (ReferenceEquals(tab, Selected) && State == ConnectionState.Connecting);
+
+    /// <summary>Push "is this server open" onto every schema-tree server row. Coarser than the per-tab flag
+    /// on purpose: the node <i>is</i> the server, so any live session on that connection counts, whichever
+    /// database it happens to be open on — the databases are the node's own children.</summary>
+    private void RefreshServerNodeLive()
+    {
+        foreach (var node in ServerNodes)
+            node.ConnectionLive = _ctx.Sessions.TryGet(node.Connection.Id) is not null;
+    }
+
+    /// <summary>True when a live session exists for this tab's connection <i>and it is open on the database
+    /// the tab targets</i>. The database half matters because sessions are keyed by connection Id alone
+    /// (§9.4): a tab pointed at another database on the same server shares that key but has no pool of its
+    /// own, and its next query tears the session down and rebuilds it. Treating it as connected would make
+    /// the indicator claim something the pool can't honour.</summary>
+    private bool IsTabSessionLive(EditorTabViewModel tab)
+        => tab.ConnectionId is { } id
+            && _ctx.Sessions.TryGet(id) is { } session
+            && _ctx.EffectiveConnection(tab) is { } target
+            && string.Equals(session.Info.Database, target.Database, StringComparison.Ordinal);
 
     private EditorTabViewModel? Selected => _ctx.SelectedTab;
     private ObservableCollection<EditorTabViewModel> Tabs => _ctx.Tabs;
@@ -65,8 +98,8 @@ public sealed partial class ConnectionsViewModel : ObservableObject
 
     // ---- connection status (toolbar / status-bar indicator) -----------------------------------
 
-    /// <summary>Live-session state of the selected tab's connection. Semantic (green/amber/red) —
-    /// deliberately independent of the environment color; drives the status dot, label, and chain toggle.</summary>
+    /// <summary>Live-session state of the selected tab's connection. Drives the status dot, label and chain
+    /// toggle, which colour it as environment / gold / grey — never green or red (see ConnectionStatusView).</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(StatusLabel))]
     [NotifyPropertyChangedFor(nameof(IsLinked))]
@@ -96,7 +129,12 @@ public sealed partial class ConnectionsViewModel : ObservableObject
 
     /// <summary>Keep the context's (unbound, logic-facing) flag in lockstep with the observable state —
     /// one source of truth instead of the former ad-hoc <c>TryGet</c> assignments scattered per call site.</summary>
-    partial void OnStateChanged(ConnectionState value) => _ctx.IsConnected = value == ConnectionState.Connected;
+    partial void OnStateChanged(ConnectionState value)
+    {
+        _ctx.IsConnected = value == ConnectionState.Connected;
+        RefreshTabConnectionLive(); // Connecting/Cancel never touch the pool, so the glyphs need telling
+        RefreshServerNodeLive();
+    }
 
     // Per-attempt cancellation + epoch: a cancelled or superseded connect must never flip to Connected.
     private CancellationTokenSource? _connectCts;
@@ -105,7 +143,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     /// <summary>Set <see cref="State"/> from whether the tab's connection has a live session right now
     /// (called on tab/connection changes, before a fresh connect flips it to Connecting).</summary>
     private void SyncStateFromSession(EditorTabViewModel? tab)
-        => State = tab?.ConnectionId is { } id && _ctx.Sessions.TryGet(id) is not null
+        => State = tab is not null && IsTabSessionLive(tab)
             ? ConnectionState.Connected
             : ConnectionState.Disconnected;
 
@@ -151,11 +189,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     /// so the pill shows the DB actually in use even when no explicit override has been chosen.</summary>
     public string? SelectedTabDatabase
     {
-        get
-        {
-            if (Selected is not { } tab) return null;
-            return tab.DatabaseName ?? (tab.ConnectionId is { } id ? _ctx.FindConnection(id)?.Database : null);
-        }
+        get => Selected is { } tab ? _ctx.EffectiveConnection(tab)?.Database : null;
         set { if (Selected is { } tab && value is not null) SetTabDatabase(tab, value); }
     }
 
@@ -170,6 +204,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         // No eager connect on tab switch — just reflect whatever session already exists. Connecting is
         // driven by an explicit action (the Connect toggle, running a query, expanding the schema tree).
         SyncStateFromSession(tab);
+        RefreshTabConnectionLive(); // the "selected tab is connecting" arm above moved with the selection
         CrashReporter.Observe(RefreshTabDatabasesAsync(tab), "connections.refresh-databases");
     }
 
@@ -183,6 +218,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
             Connections.Add(c);
             ServerNodes.Add(new ServerNodeViewModel(c, _ctx.Schema));
         }
+        RefreshServerNodeLive(); // the nodes are new objects, so their flags start false
     }
 
     public void ApplyConnectionDisplay(EditorTabViewModel tab)
@@ -191,6 +227,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         tab.ConnectionDisplay = info?.Name;
         tab.ConnectionColor = info?.EnvironmentColor;
         tab.DatabaseName ??= info?.Database; // default the active DB to the connection's own
+        RefreshTabConnectionLive(tab);        // after the DB default: "live" is per (connection, database)
     }
 
     public void SetTabConnection(EditorTabViewModel tab, Guid? id)

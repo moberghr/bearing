@@ -38,11 +38,12 @@
   <SolidColorBrush x:Key="Syntax.Number"  Color="#E9A46B"/>  <!-- amber: numeric literals -->
   <SolidColorBrush x:Key="Syntax.Table"   Color="#6FB6AB"/>  <!-- mint, tree/table stroke weight -->
   <SolidColorBrush x:Key="Syntax.TableSel" Color="#5FC9AD"/>
-  <!-- Deliberately NOT the handoff's mint (#5FC9AD): mint sits too close to Accent.Brand, so the Run
-       glyph and the Connected dot stopped reading as their own signal against the teal chrome. This
-       colour's whole job is to say "connected / succeeded / go", which it can only do if it is
-       unmistakably distinct from brand chrome — the server's environment is already signalled
-       separately (db chip dot, tab accent, status-bar line), so status keeps its own colour here. -->
+  <!-- Ok.Green is deliberately NOT the handoff's mint (#5FC9AD): mint sits too close to Accent.Brand, so
+       the Run glyph and the Connected dot stopped reading as their own signal against the teal chrome.
+       Green still means connected; what changed in #45 is that the *environment* left the dot vocabulary
+       (it is a fill, an edge and the status-bar line now), so green and red are unambiguously status. Red
+       is out of the status vocabulary too: Disconnected is a grey hollow ring, since a connection that
+       isn't open yet is not an error. -->
   <SolidColorBrush x:Key="Ok.Green"       Color="#98BB6C"/>  <!-- connected status, run, success, save, timings -->
   <SolidColorBrush x:Key="Warn.Amber"     Color="#E3B457"/>  <!-- gold: connecting status dot/label, folder glyph -->
   <SolidColorBrush x:Key="Error.Red"      Color="#D2555A"/>  <!-- errors, delete/discard -->

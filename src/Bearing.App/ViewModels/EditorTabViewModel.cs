@@ -204,6 +204,13 @@ public sealed partial class EditorTabViewModel : ObservableObject
     /// <summary>Denormalized environment badge color for the header; null = neutral.</summary>
     [ObservableProperty] private string? _connectionColor;
 
+    /// <summary>Whether this tab's connection has a live session right now — drives the header's chain
+    /// glyph (linked vs broken). Denormalized like <see cref="ConnectionDisplay"/> because the tab strip
+    /// shows every tab's own state, not only the selected one's: a background tab on another server has to
+    /// read as disconnected while the selected one is live. Kept in sync by
+    /// <c>ConnectionsViewModel.RefreshTabConnectionLive</c>.</summary>
+    [ObservableProperty] private bool _connectionLive;
+
     /// <summary>
     /// True while this is a scratch buffer — an unnamed tab, whose file (once autosave creates one) lives
     /// in the project's scratch folder. Set by the workspace, not derived from <see cref="ScriptPath"/>:

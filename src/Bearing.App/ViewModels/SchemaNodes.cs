@@ -66,8 +66,26 @@ public abstract partial class SchemaNodeViewModel : ObservableObject
     /// <summary>True only for the root server node (drives its context-menu items + double-tap).</summary>
     public virtual bool IsServer => false;
 
-    /// <summary>Hex color for a leading badge (environment color on the server node); null = no badge.</summary>
-    public virtual string? BadgeColor => null;
+    /// <summary>Hex environment colour washed across the whole row (server nodes only); null = no wash.
+    /// It replaced a 9px leading dot, which read as a connection-state light next to the toolbar's
+    /// (issue #45) — a row fill can't.</summary>
+    public virtual string? RowAccentColor => null;
+
+    /// <summary>True for nodes that represent a connectable server, so the row carries a chain glyph for
+    /// <see cref="ConnectionLive"/>. Every other node type leaves the slot empty.</summary>
+    public virtual bool ShowsConnectionState => false;
+
+    /// <summary>Whether this node's server has a live session — linked vs broken chain on the row. Declared
+    /// on the base because the tree's single <c>TreeDataTemplate</c> binds against this type; only nodes with
+    /// <see cref="ShowsConnectionState"/> render it. Kept in sync by
+    /// <c>ConnectionsViewModel.RefreshServerNodeLive</c>.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ConnectionStateTip))]
+    private bool _connectionLive;
+
+    /// <summary>Tooltip for the row's chain glyph. A string on the VM rather than a converter: there is one
+    /// consumer and the two words are the whole logic.</summary>
+    public string ConnectionStateTip => ConnectionLive ? "Connected" : "Not connected";
 
     /// <summary>Resource key of a vector icon (Icon.*) shown instead of the text <see cref="Glyph"/>; null = use the glyph.</summary>
     public virtual string? IconKey => null;
@@ -151,7 +169,8 @@ public sealed class ServerNodeViewModel : SchemaNodeViewModel
 
     public ConnectionInfo Connection { get; }
     public override bool IsServer => true;
-    public override string? BadgeColor => Connection.EnvironmentColor;
+    public override string? RowAccentColor => Connection.EnvironmentColor;
+    public override bool ShowsConnectionState => true;
     public override string? IconKey => "Icon.Connections"; // server / postgres
     public override string IconColorHex => "#6FA6E2";
 

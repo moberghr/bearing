@@ -30,18 +30,24 @@
             <TreeView x:Name="SchemaTree" ItemsSource="{Binding Connections.ServerNodes}" Background="Transparent"
                       TextInput="OnSchemaTreeTextInput">
               <TreeView.Styles>
-                <!-- Two-way bind each item's expansion to its node so children load lazily on first expand. -->
+                <!-- Two-way bind each item's expansion to its node so children load lazily on first expand.
+                     The row's environment wash lives here rather than in the template so it covers the whole
+                     header row — expander included — instead of stopping at the content (issue #45). Only
+                     server nodes carry a RowAccentColor; everything else washes to Transparent.
+                     ReflectionBinding: a Style setter has no x:DataType and compiled bindings are on. -->
                 <Style Selector="TreeViewItem">
                   <Setter Property="IsExpanded" Value="{ReflectionBinding IsExpanded, Mode=TwoWay}"/>
+                  <Setter Property="Background"
+                          Value="{ReflectionBinding RowAccentColor, Converter={StaticResource HexBrush}, ConverterParameter=0.16}"/>
                 </Style>
               </TreeView.Styles>
               <TreeView.DataTemplates>
                 <!-- One template for every node type: matched by the base type, so subclasses share it.
                      Leaves have no children, so no expander is shown. -->
                 <TreeDataTemplate DataType="vm:SchemaNodeViewModel" ItemsSource="{Binding Children}">
-                  <StackPanel Orientation="Horizontal" Spacing="6" Background="Transparent"
-                              DoubleTapped="OnSchemaNodeDoubleTapped">
-                    <StackPanel.ContextMenu>
+                  <DockPanel LastChildFill="True" Background="Transparent"
+                             DoubleTapped="OnSchemaNodeDoubleTapped">
+                    <DockPanel.ContextMenu>
                       <ContextMenu>
                         <MenuItem Header="Use in current tab" Click="OnUseConnectionInTab" IsVisible="{Binding IsServer}"/>
                         <MenuItem Header="Refresh metadata" Click="OnRefreshServer" IsVisible="{Binding IsServer}"/>
@@ -51,16 +57,34 @@
                         <Separator IsVisible="{Binding IsServer}"/>
                         <MenuItem Header="Delete" Click="OnDeleteServer" IsVisible="{Binding IsServer}"/>
                       </ContextMenu>
-                    </StackPanel.ContextMenu>
-                    <Border Width="9" Height="9" CornerRadius="4" VerticalAlignment="Center"
-                            IsVisible="{Binding BadgeColor, Converter={x:Static ObjectConverters.IsNotNull}}"
-                            Background="{Binding BadgeColor, Converter={StaticResource HexBrush}}"/>
-                    <!-- Vector icon (server/database) when the node provides one; else the text glyph. -->
+                    </DockPanel.ContextMenu>
+                    <!-- Connection state for a server row, pinned to the panel's right edge: green linked =
+                         a live session for this connection, grey broken = none. The row's *fill* is the
+                         environment and this glyph is the state — the two never share a channel (#45).
+                         Viewbox + a 24×24 Panel pins the glyph to the grid the chain icons were drawn on. -->
+                    <Border DockPanel.Dock="Right" Background="Transparent" Margin="8,0,4,0"
+                            VerticalAlignment="Center" IsVisible="{Binding ShowsConnectionState}"
+                            ToolTip.Tip="{Binding ConnectionStateTip}">
+                      <Viewbox Width="14" Height="14">
+                        <Panel Width="24" Height="24">
+                          <Path Data="{StaticResource Icon.ChainLinked}" IsVisible="{Binding ConnectionLive}"
+                                Stroke="{DynamicResource Ok.Green}"
+                                StrokeThickness="2.2" StrokeLineCap="Round" StrokeJoin="Round"/>
+                          <Path Data="{StaticResource Icon.ChainBroken}" IsVisible="{Binding !ConnectionLive}"
+                                Stroke="{DynamicResource Text.Faint}"
+                                StrokeThickness="2.2" StrokeLineCap="Round" StrokeJoin="Round"/>
+                        </Panel>
+                      </Viewbox>
+                    </Border>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                    <!-- Vector icon (server/database) when the node provides one; else the text glyph.
+                         Nudged 2px down: Stretch="Uniform" centres the glyph in its box, but a box centred
+                         against a text line sits optically high against the letterforms. -->
                     <Path Data="{Binding IconKey, Converter={StaticResource ResourceGeometry}}"
                           IsVisible="{Binding IconKey, Converter={x:Static ObjectConverters.IsNotNull}}"
                           Stroke="{Binding IconColorHex, Converter={StaticResource HexBrush}}" StrokeThickness="1.4"
                           StrokeLineCap="Round" StrokeJoin="Round" Stretch="Uniform" Width="15" Height="15"
-                          VerticalAlignment="Center"/>
+                          VerticalAlignment="Center" Margin="0,2,0,0"/>
                     <TextBlock Text="{Binding Glyph}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Muted}"
                                IsVisible="{Binding IconKey, Converter={x:Static ObjectConverters.IsNull}}"/>
                     <!-- A match is picked out the way a selected grid cell is: translucent accent fill,
@@ -74,7 +98,8 @@
                                  Foreground="{DynamicResource Text.Primary}"/>
                     </Border>
                     <TextBlock Text="{Binding Detail}" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource Text.Dim}"/>
-                  </StackPanel>
+                    </StackPanel>
+                  </DockPanel>
                 </TreeDataTemplate>
               </TreeView.DataTemplates>
             </TreeView>

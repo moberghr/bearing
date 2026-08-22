@@ -15,6 +15,15 @@
 
 
   <Window.Styles>
+    <!-- Server dropdown rows carry their own environment fill (issue #45), so the open list reads as a
+         stack of environments rather than a column of coloured dots. ReflectionBinding because a Style
+         setter inherits the Window's x:DataType (ShellViewModel) and compiled bindings are on by default;
+         the row's DataContext is the ConnectionInfo. -->
+    <Style Selector="ComboBox#ConnectionPicker ComboBoxItem">
+      <Setter Property="Background"
+              Value="{ReflectionBinding EnvironmentColor, Converter={StaticResource HexBrush}, ConverterParameter=0.16}"/>
+    </Style>
+
     <!-- Toolbar pill selectors: compact, rounded, token-colored ComboBoxes. -->
     <Style Selector="ComboBox.pill">
       <Setter Property="Background" Value="{DynamicResource Bg.Editor}"/>
@@ -40,9 +49,10 @@
       <Setter Property="StrokeJoin" Value="Round"/>
     </Style>
 
-    <!-- Connection toggle: stroked chain glyph (scaled + centered by a Viewbox); stroke recolors with the
-         semantic connection state. StrokeThickness is in the geometry's own 24-unit space (the Viewbox
-         scales it down with everything else). -->
+    <!-- Connection toggle: stroked chain glyph (scaled + centered by a Viewbox). Stroke tracks the same
+         state colours as the status dot (design §3, "icon color = current state color"): green connected,
+         gold connecting, grey disconnected. StrokeThickness is in the geometry's own 24-unit space (the
+         Viewbox scales it down with everything else). -->
     <Style Selector="Button#ConnectionToggle Path">
       <Setter Property="Stroke" Value="{DynamicResource Ok.Green}"/>
       <Setter Property="StrokeThickness" Value="2"/>
@@ -53,7 +63,7 @@
       <Setter Property="Stroke" Value="{DynamicResource Warn.Amber}"/>
     </Style>
     <Style Selector="Button#ConnectionToggle.disconnected Path">
-      <Setter Property="Stroke" Value="{DynamicResource Error.Red}"/>
+      <Setter Property="Stroke" Value="{DynamicResource Text.Dim}"/>
     </Style>
 
     <!-- History rows: selected = steel-blue fill + 2px teal left border (design §4). -->
@@ -178,23 +188,40 @@
 
         <!-- Server (connection) -->
         <!-- Selection is driven from code-behind (SyncConnectionPicker), not bound: see MainWindow.Chrome.cs. -->
+        <!-- Environment is a *surface* here, never a dot (issue #45): a 9px coloured dot in this pill sat
+             two controls away from the connection-state dot and read as one, so a green environment meant
+             "connected" and a red one "disconnected". The whole pill is now the environment — filled with
+             the active connection's colour at 16% and outlined in it (design prototype toolbar: server
+             control, background rgba(env,.16), radius 7) — with an azure server glyph where the dot was.
+             A filled control can't be mistaken for a status light; an untagged connection fills to
+             Transparent and falls back to the bare pill. -->
         <ComboBox x:Name="ConnectionPicker" Classes="pill" Width="210"
                   ItemsSource="{Binding Connections.Connections}" SelectionChanged="OnConnectionSelected"
+                  BorderThickness="1"
+                  BorderBrush="{Binding Connections.ActiveConnectionColor, Converter={StaticResource HexBrush}}"
+                  Background="{Binding Connections.ActiveConnectionColor, Converter={StaticResource HexBrush}, ConverterParameter=0.16}"
                   PlaceholderText="— server —" ToolTip.Tip="Server / connection">
           <ComboBox.ItemTemplate>
             <DataTemplate x:DataType="data:ConnectionInfo">
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <Border Width="9" Height="9" CornerRadius="4" VerticalAlignment="Center"
-                        Background="{Binding EnvironmentColor, Converter={StaticResource HexBrush}}"/>
+              <StackPanel Orientation="Horizontal" Spacing="7" ToolTip.Tip="{Binding Host}">
+                <!-- Azure server glyph (Syntax.Func is the token, "server icon" and all). Not a status
+                     colour, and not the environment colour: it identifies the control, nothing more. -->
+                <!-- Nudged 2px down: Stretch="Uniform" centres the glyph in its box, but a box centred
+                     against a text line sits optically high against the letterforms. -->
+                <Path Data="{StaticResource Icon.Connections}" Stroke="{DynamicResource Syntax.Func}"
+                      StrokeThickness="1.6" StrokeLineCap="Round" StrokeJoin="Round"
+                      Width="13" Height="13" Stretch="Uniform" VerticalAlignment="Center" Margin="0,2,0,0"/>
+                <!-- Name only — the host is in the tooltip and the status bar; the row is the environment
+                     plus its name. Name stays in normal text colour: tinting it with an arbitrary user hex
+                     is a contrast hazard on the dark theme, and the report called it out directly. -->
                 <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
-                <TextBlock Text="{Binding Host}" VerticalAlignment="Center" FontSize="11"
-                           Foreground="{DynamicResource Text.Dim}"/>
               </StackPanel>
             </DataTemplate>
           </ComboBox.ItemTemplate>
         </ComboBox>
 
-        <!-- Connection status: semantic dot + label (green/amber/red). Never the environment color. -->
+        <!-- Connection status: dot + label. Live takes the environment colour, connecting gold,
+             disconnected a grey hollow ring — see ConnectionStatusView. -->
         <controls:ConnectionStatusView VerticalAlignment="Center"/>
 
         <!-- Connect / cancel-connecting / disconnect toggle: chain (linked) ↔ broken-chain glyph. -->
@@ -246,8 +273,9 @@
       </StackPanel>
     </Border>
 
-    <!-- Status bar: 3px ConnectionBrush (environment color) line across the top edge — deliberately the
-         one prominent db-color surface, independent of connection state — then the status dot + metadata. -->
+    <!-- Status bar: 3px ConnectionBrush (environment color) line across the top edge — the one prominent
+         db-color surface, and unconditional: unlike the status dot it stays lit while disconnected, so the
+         "what am I pointed at" answer never disappears. Then the status dot + metadata. -->
     <Border DockPanel.Dock="Bottom" Padding="8,4" Background="{DynamicResource Bg.Window}"
             BorderBrush="{DynamicResource ConnectionBrush}" BorderThickness="0,3,0,0">
       <DockPanel LastChildFill="True">
@@ -432,11 +460,31 @@
                     <TextBlock Text="●" FontSize="11" Margin="6,0,0,0" VerticalAlignment="Center"
                                Foreground="{DynamicResource Accent.Brand}" ToolTip.Tip="Unsaved changes"
                                IsVisible="{Binding IsDirty}"/>
-                    <!-- Connection name rendered in the connection color (design §5 tab strip). -->
-                    <TextBlock Text="{Binding ConnectionDisplay}" FontSize="11" Margin="8,0,0,0"
-                               VerticalAlignment="Center"
-                               Foreground="{Binding ConnectionColor, Converter={StaticResource HexBrush}}"
-                               IsVisible="{Binding ConnectionDisplay, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+                    <!-- This tab's connection, as a chip washed in its environment colour carrying the
+                         chain glyph: green linked = a live session, grey broken = none. The chip's *fill*
+                         is the environment and its *glyph* is the state — two channels, no collision.
+                         Replaces the connection *name* rendered in that colour — an arbitrary user hex must
+                         never tint text (#45), and the name is the chip's tooltip instead. State is per tab,
+                         not the toolbar's: a background tab on another server reads as disconnected while
+                         the selected one is live. -->
+                    <Border CornerRadius="5" Padding="7,2" Margin="7,0,0,0" VerticalAlignment="Center"
+                            ToolTip.Tip="{Binding ConnectionDisplay}"
+                            IsVisible="{Binding ConnectionDisplay, Converter={x:Static ObjectConverters.IsNotNull}}"
+                            Background="{Binding ConnectionColor, Converter={StaticResource HexBrush}, ConverterParameter=0.16}">
+                      <!-- Viewbox + a 24×24 Panel pins the glyph to the grid the chain icons were drawn on
+                           (same reason as the toolbar toggle): sizing to the ink instead loses the centring,
+                           and StrokeThickness stays in 24-unit space so the Viewbox scales it with the path. -->
+                      <Viewbox Width="13" Height="13">
+                        <Panel Width="24" Height="24">
+                          <Path Data="{StaticResource Icon.ChainLinked}" IsVisible="{Binding ConnectionLive}"
+                                Stroke="{DynamicResource Ok.Green}"
+                                StrokeThickness="2.2" StrokeLineCap="Round" StrokeJoin="Round"/>
+                          <Path Data="{StaticResource Icon.ChainBroken}" IsVisible="{Binding !ConnectionLive}"
+                                Stroke="{DynamicResource Text.Faint}"
+                                StrokeThickness="2.2" StrokeLineCap="Round" StrokeJoin="Round"/>
+                        </Panel>
+                      </Viewbox>
+                    </Border>
                     <Border Background="Transparent" Cursor="Hand" Width="16" Height="16"
                             Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="Close tab"
                             PointerPressed="OnCloseTabPressed">

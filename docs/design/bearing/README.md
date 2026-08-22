@@ -8,10 +8,64 @@
 >
 > | Handoff says | This repo does | Why |
 > |---|---|---|
-> | Connected status dot takes the environment colour (§CONNECTION_STATUS 1) | Dot stays semantic: **green** Connected / gold Connecting / red Disconnected | Status colour must indicate *status*. The environment is already signalled plenty of other ways (db chip dot, tab accent, status-bar line) |
-> | `Ok.Green` becomes mint `#5FC9AD` | Kept at `#98BB6C` | Mint is too close to `Accent.Brand` teal — the Run glyph and Connected dot stopped reading as their own signal against the brand chrome |
-> | Editor tab carries both an unsaved dot *and* an env dot + env name | One dot only | Two dots per tab was redundant |
+> | Connected status dot takes the environment colour (§CONNECTION_STATUS 1) | Dot stays semantic: **green** Connected / gold Connecting / grey *hollow ring* Disconnected | Status colour must indicate *status*. What #45 changed is that the environment left the dot vocabulary entirely — see below |
+> | `Ok.Green` becomes mint `#5FC9AD` | Kept at `#98BB6C` | Mint is too close to `Accent.Brand` teal — the Run glyph stopped reading as its own signal against the brand chrome |
+> | Editor tab carries both an unsaved dot *and* an env dot + env name | Teal unsaved dot + a chain-glyph chip washed in the connection colour; no env dot, no env name | Follows the prototype's tab strip (#45): the dot means unsaved, the chain means connected, and the environment is the chip's fill rather than tinted text |
 > | Environment presets rose/gold/mint (§README Connection colors) | Presets keep `#3FB950`/`#D29922`/`#E5484D` | Re-hueing them would leave saved connections on old hexes and new ones on new hexes |
+>
+> **#45 (2026-08-22) — the environment left the dot vocabulary; the dot kept green.** The deviation above
+> originally justified itself with *"the environment is already signalled plenty of other ways"*. In use
+> that didn't hold, because those other ways were **more dots**: a green env dot read as "connected" and a
+> red one as "disconnected" two rows away — the "competing green/red dots" §CONNECTION_STATUS 1 predicted.
+>
+> The spec's own answer (Connected takes the environment colour) was implemented and then **backed out**: a
+> live production session rendering as a red dot beside the word "Connected" is a worse signal than the
+> collision it solved. What fixed the collision instead was removing the *other* side of it. The environment
+> is no longer a dot anywhere in the toolbar or tab strip — it is a fill, an edge, a chip and the status-bar
+> line — so green and red in this chrome are unambiguously status.
+>
+> State therefore keeps green Connected / gold Connecting, and `Error.Red` still left the vocabulary:
+> Disconnected is a grey **hollow ring**, since a connection that simply isn't open yet is not an error, and
+> hollow-vs-filled means "not live" reads by shape as well as hue.
+>
+> The toolbar **server control** changed with it, since that is where the collision was actually seen:
+> its 9px environment dot is gone and the whole control became the environment, matching the design
+> prototype's toolbar — filled with the active connection's colour at 16%, outlined in it, with the azure
+> server glyph (`Icon.Connections` / `Syntax.Func`) where the dot used to be. Each dropdown row is filled
+> with its own environment the same way. The row is now the icon plus the connection name only — the host
+> moved to the row's tooltip — and the name stays in normal text colour. A filled control cannot be read as
+> a status light. Environment dots elsewhere (schema-tree server node, history rows) are
+> left alone: they are no longer ambiguous now that no state is a green or red dot.
+>
+> The **editor tab strip** followed: the environment-coloured connection *name* is gone, replaced by the
+> prototype's chip — the tab's environment colour at 16% carrying a chain glyph, green and linked when that
+> tab's connection has a live session, grey and broken when it does not, with the connection name as its
+> tooltip. Fill is the environment, glyph is the state: two channels, no collision. The
+> tab's other dot keeps its own job (teal = unsaved). This needed real per-tab state:
+> `EditorTabViewModel.ConnectionLive`, kept in sync by `ConnectionsViewModel.RefreshTabConnectionLive` off
+> the session pool's `LiveChanged`, because the strip shows every tab's connection and not just the
+> selected one's — two tabs on one server link and break together (sessions are keyed by connection Id,
+> §9.4), a tab on another server does not.
+>
+> The **Connections pane** matches: its server row's 9px environment dot became a wash across the whole
+> row (`SchemaNodeViewModel.RowAccentColor`, applied to the `TreeViewItem` background so it covers the
+> expander too), with a chain glyph docked right for state. That glyph is deliberately *coarser* than the
+> tab chip's — the node is the server, so any live session on that connection counts whichever database it
+> is open on, since the databases are the node's own children.
+>
+> Both server glyphs (`Icon.Connections`, in the toolbar dropdown and the pane) sit 2px lower than centre:
+> `Stretch="Uniform"` centres the ink in its box, and a box centred against a text line reads optically
+> high against the letterforms.
+>
+> One accuracy note that came out of this: the indicators are per **(connection, database)**, not per
+> connection — `ConnectionsViewModel.IsTabSessionLive` requires the live session's `Info.Database` to match
+> the tab's. Sessions are keyed by connection Id alone (§9.4), so a tab on another database of the same
+> connection genuinely has no pool and now says so, and switching database visibly disconnects. See #54 for
+> fixing the keying itself.
+>
+> **The environment presets keep `#3FB950` / `#D29922` / `#E5484D`** rather than moving to the handoff's
+> rose/gold/mint (that half of the original deviation stands — re-hueing would split saved connections
+> across two palettes). Safe to keep, now that no environment colour lands on a dot.
 >
 > On the data directories: `BearingPaths.AppDirName` is now `bearing`, so the app reads
 > `~/.config/bearing` and `~/.local/share/bearing`. **No migration code was written — a deliberate
