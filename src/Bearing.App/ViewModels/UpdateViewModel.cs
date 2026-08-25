@@ -9,16 +9,20 @@ namespace Bearing.App.ViewModels;
 /// <summary>
 /// The update strip above the status bar: silent until there is something to say, then "downloading…" and
 /// finally the restart offer. A thin mirror of <see cref="UpdateCoordinator"/> — every decision (whether to
-/// check, what a failure means, how to apply) belongs to the coordinator, so this holds display text and two
-/// commands and nothing else.
+/// check, what a failure means, how to apply) belongs to the coordinator, so this holds display text and the
+/// commands that forward to one, and nothing else. The release-notes entries sit here too because the strip
+/// and the Help menu are the surfaces that offer them, and the version to open at is the coordinator's.
 /// </summary>
 public sealed partial class UpdateViewModel : ObservableObject
 {
     private readonly UpdateCoordinator _coordinator;
+    private readonly ReleaseNotesCoordinator? _notes;
 
-    public UpdateViewModel(UpdateCoordinator coordinator)
+    public UpdateViewModel(UpdateCoordinator coordinator, ReleaseNotesCoordinator? notes = null)
     {
         _coordinator = coordinator;
+        _notes = notes;
+        CanShowNotes = notes is not null;
         // The coordinator runs its work off the UI thread, so its notifications arrive there too.
         _coordinator.Changed += () =>
         {
@@ -38,11 +42,29 @@ public sealed partial class UpdateViewModel : ObservableObject
     [ObservableProperty] private bool _canRestart;
 
     /// <summary>
+    /// Whether release notes can be reached at all — false only where no notes feed was supplied (headless
+    /// runs, tests). Fixed for the lifetime of the view-model, so the strip's link and the Help entry are
+    /// simply absent rather than present and inert.
+    /// </summary>
+    [ObservableProperty] private bool _canShowNotes;
+
+    /// <summary>
     /// Help ▸ Check for Updates. Reports its outcome to the status bar either way — unlike the startup check,
     /// the user is waiting for an answer here.
     /// </summary>
     [RelayCommand]
     private Task CheckNowAsync() => _coordinator.CheckNowAsync();
+
+    /// <summary>Help ▸ What's New. Opens the whole published history, newest first.</summary>
+    [RelayCommand]
+    private Task WhatsNewAsync() => _notes?.OpenAsync() ?? Task.CompletedTask;
+
+    /// <summary>
+    /// The strip's "what's new" link: the same window, scrolled to the version being offered — the one
+    /// question a user actually has before deciding whether to restart now or later.
+    /// </summary>
+    [RelayCommand]
+    private Task UpdateNotesAsync() => _notes?.OpenAsync(_coordinator.AvailableVersion) ?? Task.CompletedTask;
 
     /// <summary>Apply the update by closing the app normally; the updater relaunches it.</summary>
     [RelayCommand]

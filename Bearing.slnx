@@ -13,5 +13,6 @@
     <Project Path="tests/Bearing.Data.Tests/Bearing.Data.Tests.csproj" />
     <Project Path="tests/Bearing.Persistence.Tests/Bearing.Persistence.Tests.csproj" />
     <Project Path="tests/Bearing.Sql.Tests/Bearing.Sql.Tests.csproj" />
+    <Project Path="tests/Bearing.Updates.Tests/Bearing.Updates.Tests.csproj" />
   </Folder>
 </Solution>

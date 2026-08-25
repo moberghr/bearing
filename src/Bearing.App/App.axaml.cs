@@ -81,9 +81,37 @@ public partial class App : Application
                 autoUpdateEnabled: () => settings.Current.AutoUpdate,
                 requestShutdown: () => Dispatcher.UIThread.Post(() => window.Close()),
                 report: message => Dispatcher.UIThread.Post(() => vm.StatusText = message));
-            vm.Updates = new UpdateViewModel(updates);
+            // Release notes. One source — the GitHub Releases API — feeds all three surfaces: the strip's
+            // "what's new?", Help ▸ What's New, and the once-per-upgrade greeting below. Velopack carries
+            // notes of its own, but only ever for the version it is offering (see GitHubReleaseNotes), so
+            // making it a second source would mean two places to look and two ways to be out of date.
+            var releaseNotes = new ReleaseNotesCoordinator(
+                new GitHubReleaseNotes(),
+                runningVersion: AppVersion.Display,
+                lastSeenVersion: () => settings.Current.LastSeenVersion,
+                // Posted, not called inline: this runs on the thread pool (see the Opened hook below), and
+                // SettingsService.Changed drives UI-bound properties on the shell — IsMenuVisible reaches
+                // Menu.IsVisible in XAML — so a direct call would trip Avalonia's VerifyAccess on precisely
+                // the launches this feature exists for. It also keeps every settings write on one thread,
+                // so a background save can't race the window-size write on the shared .tmp path.
+                recordSeen: version => Dispatcher.UIThread.Post(
+                    () => settings.Update(s => s with { LastSeenVersion = version })),
+                // A settings file that already exists means this user has run Bearing before, even though
+                // LastSeenVersion is null — see ShowWhatsNewIfUpdatedAsync.
+                isFreshInstall: !File.Exists(settings.Location))
+            {
+                Show = (notes, focus) => Dispatcher.UIThread.Post(
+                    () => Views.ReleaseNotesDialog.Open(window, notes, focus)),
+                Report = message => Dispatcher.UIThread.Post(() => vm.StatusText = message),
+            };
+            vm.Updates = new UpdateViewModel(updates, releaseNotes);
             window.Opened += (_, _) => CrashReporter.Observe(
                 Task.Run(() => updates.StartAsync()), "update check");
+            // The first launch after an update shows that version's notes, once. Off the UI thread and
+            // silent on failure, for the same reason the update check above is: nobody opened the app to be
+            // told GitHub was unreachable.
+            window.Opened += (_, _) => CrashReporter.Observe(
+                Task.Run(() => releaseNotes.ShowWhatsNewIfUpdatedAsync()), "release notes");
             // Hand a staged update over on the way out, not when the user clicks Restart: Closed fires only
             // for a close that actually happened, and MainWindow.OnClosing cancels it while a query is
             // running. Staging any earlier would leave the updater waiting on a process that carries on

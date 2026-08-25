@@ -77,6 +77,17 @@ public sealed record AppSettings
 
     /// <summary>Last main-window height, written on close. Null until a window has been closed once.</summary>
     public double? WindowHeight { get; init; }
+
+    /// <summary>
+    /// The version whose release notes have already been shown, so "What's New" greets a user once per
+    /// upgrade rather than every launch. Null on a fresh install — which is deliberately <i>not</i> treated
+    /// as "show them everything": someone who has never run an older build has nothing to catch up on.
+    /// <para>
+    /// Only ever written after the notes were actually fetched, so an upgrade launched with no network shows
+    /// its notes on the next launch that has one instead of losing them.
+    /// </para>
+    /// </summary>
+    public string? LastSeenVersion { get; init; }
 }
 
 /// <summary>
