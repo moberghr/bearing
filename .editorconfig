@@ -10,3 +10,11 @@
 # `generated_code = true` tells the formatter and the analyzers to leave these alone.
 [vendor/**.cs]
 generated_code = true
+
+# Line endings. The repository is LF throughout; git is left to store what it is given
+# (core.autocrlf is not set). Without this, `dotnet format` — the format command in CLAUDE.md —
+# falls back to the platform default, which is CRLF on Windows, and then reports every line of
+# every file as a whitespace error. That made the command useless here: 30 errors, none of them
+# real, drowning the ones that are.
+[*]
+end_of_line = lf
