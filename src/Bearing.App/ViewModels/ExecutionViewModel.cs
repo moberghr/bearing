@@ -204,7 +204,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             if (outcome == RunOutcome.AuthFailed && canRefresh && !ct.IsCancellationRequested)
             {
                 _ctx.Credentials.Invalidate(info.Id);
-                await _ctx.Sessions.EvictAsync(info.Id);
+                await _ctx.Sessions.EvictAsync(SessionKey.For(info));
                 RunStatus(tab, "Reauthenticating…");
                 await RunFetchAsync(info, tab, sql, fetchSql, final: true, ct);
             }
@@ -498,10 +498,12 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// <summary>A lease on the already-connected session for the selected tab (paging/count/nav/save run
     /// post-execute, so the connection is live). Keeps the session from being disposed by an idle sweep /
     /// evict while the follow-up runs — dispose it when done. Null (with a status set) if the tab lost its
-    /// connection.</summary>
+    /// connection. Resolved through the tab's <i>effective</i> connection, so the lease is on the pool for the
+    /// database the tab actually targets rather than whichever one the connection record names.</summary>
     private SessionLease? ResolveLiveLease()
     {
-        if (Selected?.ConnectionId is { } id && _ctx.Sessions.TryGet(id) is { } session)
+        if (Selected is { } tab && _ctx.EffectiveConnection(tab) is { } info
+            && _ctx.Sessions.TryGet(SessionKey.For(info)) is { } session)
             return _ctx.Sessions.Lease(session);
         _ctx.SetStatus("Not connected.");
         return null;
@@ -605,12 +607,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
     {
         if (Selected is not { } tab || _ctx.EffectiveConnection(tab) is not { } info) return null;
 
-        // The live session's own snapshot counts only while that session is on *this* database: sessions are
-        // keyed by connection id alone (§9.4), so an id-only match is what would let database B serve up
-        // database A's snapshot — and this feeds editability and FK navigation, not just the popup.
-        if (_ctx.Sessions.TryGet(info.Id) is { Snapshot: { } live } session
-            && string.Equals(session.Info.Database, info.Database, StringComparison.Ordinal))
-            return live;
+        // The session key covers the database (§9.4), so this can only ever be the snapshot for *this*
+        // database — which matters because it feeds editability and FK navigation, not just the popup.
+        if (_ctx.Sessions.TryGet(SessionKey.For(info)) is { Snapshot: { } live }) return live;
 
         return _ctx.Sessions.TryGetSnapshot(info.Id, info.Database);
     }

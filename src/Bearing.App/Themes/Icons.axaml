@@ -47,12 +47,13 @@
   <!-- Database cylinder (toolbar db pill / tree) -->
   <StreamGeometry x:Key="Icon.Database">M5,6 a7,3 0 1 1 14,0 a7,3 0 1 1 -14,0 M5,6 v12 a7,3 0 0 0 14,0 v-12 M5,12 a7,3 0 0 0 14,0</StreamGeometry>
 
-  <!-- Chain, linked: two capsule links joined by an unbroken bar. Symmetric about (12,12) so it centers
-       cleanly when scaled by a Viewbox (connection status toggle). -->
-  <StreamGeometry x:Key="Icon.ChainLinked">M9,17 h-2 a5,5 0 0 1 0,-10 h2 M15,7 h2 a5,5 0 0 1 0,10 h-2 M8,12 h8</StreamGeometry>
-
-  <!-- Chain, broken: same links, gap in the middle bar (disconnected) -->
-  <StreamGeometry x:Key="Icon.ChainBroken">M9,17 h-2 a5,5 0 0 1 0,-10 h2 M15,7 h2 a5,5 0 0 1 0,10 h-2 M8,12 h2 M14,12 h2</StreamGeometry>
+  <!-- Connect / disconnect toggle: a power symbol — a vertical stem over an open arc. Deliberately the
+       *same* mark in every state (CONNECTION_STATUS rev. 2026-08-27 §5): the button is an action, and it
+       used to mirror the status glyph, which meant the chrome said the same thing twice and neither
+       instance was clearly the control. State lives in the beacon beside it; only this glyph's stroke
+       colour tracks it. Replaces Icon.ChainLinked / Icon.ChainBroken, whose two states differed by a gap
+       too small to see at 15px. -->
+  <StreamGeometry x:Key="Icon.Power">M12,3.5 v6.5 M17.7,7.2 a8,8 0 1 1 -11.4,0</StreamGeometry>
 
   <!-- ============================================================================================
        Completion-popup kind marks (SuggestionKind → glyph). Same 24×24 stroked convention; drawn at

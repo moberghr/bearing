@@ -1,65 +1,41 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Bearing.App.ViewModels"
+             xmlns:controls="using:Bearing.App.Controls"
              x:Class="Bearing.App.Controls.ConnectionStatusView"
              x:DataType="vm:ShellViewModel">
 
-  <!-- Reusable connection-status dot + label (toolbar + status bar).
-       Colour vocabulary (issue #45): green Connected / gold Connecting / grey Disconnected. Status colour
-       indicates *status* — the design's "Connected takes the environment colour" (CONNECTION_STATUS §1) was
-       tried and rejected: a live production session reading as a red "Connected" is a worse signal than the
-       collision it solved. What actually fixed the collision was taking the environment *out of the dot
-       vocabulary*: it is a fill, an edge and the status-bar line now, never a coloured dot, so nothing else
-       in this chrome speaks green/red. Red is still gone from state — Disconnected is a grey hollow ring,
-       so "not live" reads by shape as well as hue. State is driven purely by conditional classes on the
-       root, so the glow and pulse are style triggers (no per-render computation). -->
+  <!-- Reusable connection-status beacon + label (toolbar at 14px, status bar at 13px).
+       Two palettes, no overlap (CONNECTION_STATUS rev. 2026-08-27 §1): the *environment* owns surfaces —
+       tab washes, the status-bar rule, the env chip — and the *state* owns this icon and this label, and
+       neither borrows the other's hue. That split is what finally settled the older attempt at "Connected
+       takes the environment colour", which was tried and rejected here (#45): a live production session
+       reading as a red "Connected" was a worse signal than the collision it solved.
+       The beacon itself carries the state in its silhouette and colours itself from the Status.* tokens
+       (see Controls/ConnectionBeacon); all this view styles is the label beside it. -->
   <UserControl.Styles>
-    <!-- Base = Connected: filled green + a soft glow. -->
-    <Style Selector="Border#Dot">
-      <Setter Property="Background" Value="{DynamicResource Ok.Green}"/>
-      <Setter Property="BorderBrush" Value="Transparent"/>
-      <Setter Property="BoxShadow" Value="0 0 6 0 #98BB6C"/>
-    </Style>
+    <!-- Base = Connected. -->
     <Style Selector="TextBlock#Label">
-      <Setter Property="Foreground" Value="{DynamicResource Ok.Green}"/>
-    </Style>
-
-    <!-- Connecting: gold, filled, no glow, opacity pulse (1 → .3 → 1, 1s, infinite). -->
-    <Style Selector="StackPanel.connecting > Border#Dot">
-      <Setter Property="Background" Value="{DynamicResource Warn.Amber}"/>
-      <Setter Property="BoxShadow" Value="0 0 0 0 #00000000"/>
-      <Style.Animations>
-        <Animation Duration="0:0:1" IterationCount="INFINITE">
-          <KeyFrame Cue="0%"><Setter Property="Opacity" Value="1"/></KeyFrame>
-          <KeyFrame Cue="50%"><Setter Property="Opacity" Value="0.3"/></KeyFrame>
-          <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1"/></KeyFrame>
-        </Animation>
-      </Style.Animations>
+      <Setter Property="Foreground" Value="{DynamicResource Status.Connected}"/>
     </Style>
     <Style Selector="StackPanel.connecting > TextBlock#Label">
-      <Setter Property="Foreground" Value="{DynamicResource Warn.Amber}"/>
-    </Style>
-
-    <!-- Disconnected: grey hollow ring, no glow. Hollow rather than red: red belongs to errors, and a
-         connection that simply isn't open yet is not an error. -->
-    <Style Selector="StackPanel.disconnected > Border#Dot">
-      <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="BorderBrush" Value="{DynamicResource Text.Faint}"/>
-      <Setter Property="BoxShadow" Value="0 0 0 0 #00000000"/>
+      <Setter Property="Foreground" Value="{DynamicResource Status.Connecting}"/>
     </Style>
     <Style Selector="StackPanel.disconnected > TextBlock#Label">
-      <Setter Property="Foreground" Value="{DynamicResource Text.Dim}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Status.Disconnected}"/>
     </Style>
   </UserControl.Styles>
 
   <!-- MinWidth reserves room for the widest label ("Disconnected") so the adjacent connect/disconnect
-       toggle doesn't shift as the state changes (design §2). -->
+       toggle doesn't shift as the state changes (design §3). -->
   <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" MinWidth="96"
               Classes.connecting="{Binding Connections.IsConnecting}"
               Classes.disconnected="{Binding Connections.IsDisconnected}"
               ToolTip.Tip="{Binding Connections.StatusLabel}">
-    <Border x:Name="Dot" Width="8" Height="8" CornerRadius="4" BorderThickness="1.5"
-            VerticalAlignment="Center"/>
+    <controls:ConnectionBeacon VerticalAlignment="Center"
+                               Width="{Binding $parent[controls:ConnectionStatusView].BeaconSize}"
+                               Height="{Binding $parent[controls:ConnectionStatusView].BeaconSize}"
+                               State="{Binding Connections.State}"/>
     <TextBlock x:Name="Label" Text="{Binding Connections.StatusLabel}" FontSize="11" FontWeight="SemiBold"
                VerticalAlignment="Center" TextWrapping="NoWrap"/>
   </StackPanel>

@@ -11,6 +11,13 @@ public sealed class NpgsqlConnectionFactory : IDbConnectionFactory
 {
     private readonly NpgsqlDataSource _dataSource;
 
+    /// <summary>Pooled connections per (connection, database). Well under Npgsql's default of 100: this is a
+    /// desktop tool that runs one query per tab plus paging/count follow-ups, and a pool exists per database
+    /// now rather than per connection (#54), so the default would have been an N x 100 ceiling on a server the
+    /// user does not administer. Overridable through <see cref="ConnectionInfo.Options"/> ("MaxPoolSize"),
+    /// which is applied after this.</summary>
+    private const int DefaultMaxPoolSize = 10;
+
     /// <summary>Connection-string keywords <see cref="ConnectionInfo.Options"/> is not allowed to set:
     /// identity and credentials come from the connection record plus the secret store, never from an option
     /// bag that travels in the shared project.json.</summary>
@@ -31,6 +38,7 @@ public sealed class NpgsqlConnectionFactory : IDbConnectionFactory
             Username = info.User,
             Password = password,
             ApplicationName = "bearing",
+            MaxPoolSize = DefaultMaxPoolSize,
         };
 
         foreach (var (key, value) in info.Options)

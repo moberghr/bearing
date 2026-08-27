@@ -11,9 +11,9 @@ public sealed record DatabaseObjects(ISchemaSnapshot Snapshot, IReadOnlyList<Rou
 
 /// <summary>
 /// Read-only metadata access for the sidebar schema tree. Unlike <see cref="IConnectionSessionManager"/>
-/// (one session per connection id, bound to that connection's database), a browser can reach <b>any</b>
-/// database on the server by opening a per-database connection on demand — which is what "expand the
-/// server to see all its databases" requires. Kept separate so the editor's query path is untouched.
+/// (whose sessions are opened lazily, one per database a tab actually targets), a browser can reach
+/// <b>any</b> database on the server by opening a per-database connection on demand — which is what "expand
+/// the server to see all its databases" requires. Kept separate so the editor's query path is untouched.
 /// </summary>
 public interface ISchemaBrowser : IAsyncDisposable
 {

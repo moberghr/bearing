@@ -11,13 +11,13 @@ namespace Bearing.App.Connections;
 
 /// <summary>
 /// Default <see cref="IConnectionSessionManager"/>. Live sessions and in-flight connects/schema-loads
-/// are guarded by a single lock; each id is connected at most once concurrently (single-flight), and
-/// a session whose settings changed is disposed and rebuilt on next use. The secret store is read
-/// lazily (it is attached after construction), so a password is fetched fresh at connect time.
+/// are guarded by a single lock; each <see cref="SessionKey"/> is connected at most once concurrently
+/// (single-flight), and a session whose settings changed is disposed and rebuilt on next use. The secret
+/// store is read lazily (it is attached after construction), so a password is fetched fresh at connect time.
 ///
 /// Disposal is lease-aware: a running query holds a <see cref="SessionLease"/>, and a session is only
-/// torn down once it is no longer live AND has no outstanding leases — so evicting, editing, switching
-/// database on, or idle-sweeping a connection never pulls the pool out from under an in-flight query.
+/// torn down once it is no longer live AND has no outstanding leases — so evicting, editing, or
+/// idle-sweeping a connection never pulls the pool out from under an in-flight query.
 /// Sessions with no lease that have been idle past <see cref="_idleTimeout"/> are closed by a periodic
 /// sweep so connections don't stay open indefinitely.
 /// </summary>
@@ -30,29 +30,45 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     private readonly Timer? _sweepTimer;
 
     /// <inheritdoc />
-    public event Action<Guid>? LiveChanged;
+    public event Action<SessionKey>? LiveChanged;
+
+    /// <inheritdoc />
+    public event Action<Guid>? LinkChanged;
 
     // Never let a subscriber's fault escape into the connect/evict path it fired from.
-    private void RaiseLiveChanged(Guid id)
+    private void RaiseLiveChanged(SessionKey key)
     {
-        try { LiveChanged?.Invoke(id); } catch { /* indicator refresh is best-effort */ }
+        try { LiveChanged?.Invoke(key); } catch { /* indicator refresh is best-effort */ }
+    }
+
+    private void RaiseLinkChanged(Guid connectionId)
+    {
+        try { LinkChanged?.Invoke(connectionId); } catch { /* indicator refresh is best-effort */ }
     }
 
     private readonly object _gate = new();
-    private readonly Dictionary<Guid, ConnectionSession> _live = new();
-    // Value carries the target Info so a connect in flight for one database isn't reused for another
-    // (the toolbar can switch DB on the same connection id while the first connect is still running).
-    private readonly Dictionary<Guid, (ConnectionInfo Info, Task<ConnectionSession> Task)> _inflight = new();
-    // Keyed by (connection, database) — NOT by connection id alone. Sessions are per-connection by design
-    // (§9.4) and a database switch replaces the session, so an id-only key let the new session (db B) join
-    // the old session's in-flight load (db A) and adopt A's snapshot — which drives editability and FK nav.
-    private readonly Dictionary<(Guid Id, string Database), Task<ISchemaSnapshot?>> _schemaInflight = new();
+    // Every map here is keyed by (connection, database) — see SessionKey. A pool belongs to one database, so
+    // an id-only key made switching database on a tab count as "settings changed" and tore the pool down (#54).
+    private readonly Dictionary<SessionKey, ConnectionSession> _live = new();
+    // Value carries the target Info because the key does not cover host/port/user/options: a connection edited
+    // while its connect is still running must not have the in-flight (old-settings) task handed back.
+    private readonly Dictionary<SessionKey, (ConnectionInfo Info, Task<ConnectionSession> Task)> _inflight = new();
+    private readonly Dictionary<SessionKey, Task<ISchemaSnapshot?>> _schemaInflight = new();
     // Loaded snapshots, same key as the in-flight map, and deliberately OUTLIVING the sessions that read
     // them. A snapshot has no connection dependency — it's an immutable set of tables/columns/FKs — so tying
     // its lifetime to a pool meant completion died on every disconnect, credential expiry, and (worst,
     // because it is automatic and invisible) idle sweep. Only an event that makes the catalog untrue drops an
     // entry: see InvalidateSchema.
-    private readonly Dictionary<(Guid Id, string Database), ISchemaSnapshot> _schemaCache = new();
+    private readonly Dictionary<SessionKey, ISchemaSnapshot> _schemaCache = new();
+    // Server links: connections we have completed a handshake to, keyed by id alone. Deliberately COARSER
+    // than _live and deliberately outliving it. Postgres binds a connection to a database at startup, so a
+    // pool is per (connection, database) and there is nothing else it could be — but "am I connected to this
+    // server?" is a question about the server, and answering it from _live made the app contradict itself:
+    // the schema tree's server row lit while the tab next to it on another database showed a broken chain,
+    // and Connect (one database) was not the inverse of Disconnect (all of them). A link is what the user
+    // opted into; which database pools happen to be warm underneath is a cache, and the idle sweep emptying
+    // that cache must not read as "the app disconnected me while I was reading results".
+    private readonly HashSet<Guid> _links = new();
     private bool _disposed;
 
     /// <summary>Default idle timeout before an unused connection is closed.</summary>
@@ -102,20 +118,22 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_live.TryGetValue(info.Id, out var existing) && SameConnection(existing.Info, info))
+            var key = SessionKey.For(info);
+            if (_live.TryGetValue(key, out var existing) && SameConnection(existing.Info, info))
             {
                 existing.LastUsedUtc = _clock();
                 return Task.FromResult(existing);
             }
-            if (_inflight.TryGetValue(info.Id, out var pending))
+            if (_inflight.TryGetValue(key, out var pending))
             {
                 if (SameConnection(pending.Info, info)) return pending.Task;
-                // A connect is in flight for a different database on this id — wait for it to settle,
-                // then connect the requested database (BuildAsync will retire the stale session).
+                // Same connection+database, but the record was edited (host/port/user/options) while its
+                // connect was still running — wait for that one to settle, then connect with the new
+                // settings (BuildAsync will retire the stale session).
                 return WaitThenConnectAsync(pending.Task, info, ct);
             }
             var task = BuildAsync(info, ct);
-            _inflight[info.Id] = (info, task);
+            _inflight[key] = (info, task);
             return task;
         }
     }
@@ -168,9 +186,29 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         return await GetOrConnectAsync(info, ct).ConfigureAwait(false);
     }
 
-    public ConnectionSession? TryGet(Guid connectionId)
+    public ConnectionSession? TryGet(SessionKey key)
     {
-        lock (_gate) return _live.TryGetValue(connectionId, out var s) ? s : null;
+        lock (_gate) return _live.TryGetValue(key, out var s) ? s : null;
+    }
+
+    /// <inheritdoc />
+    public bool IsAnyLive(Guid connectionId)
+    {
+        lock (_gate) return _live.Keys.Any(k => k.ConnectionId == connectionId);
+    }
+
+    /// <inheritdoc />
+    public bool IsLinked(Guid connectionId)
+    {
+        lock (_gate) return _links.Contains(connectionId);
+    }
+
+    /// <summary>Drop the server link when the caller has just removed the last evidence for it. Returns
+    /// whether it changed, so the caller can raise <see cref="LinkChanged"/> outside the lock.</summary>
+    private bool UnlinkIfNothingLive(Guid connectionId)
+    {
+        lock (_gate)
+            return !_live.Keys.Any(k => k.ConnectionId == connectionId) && _links.Remove(connectionId);
     }
 
     /// <summary>The last snapshot read for this connection+database, whether or not a session is live now.
@@ -178,7 +216,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     /// the catalog it already read.</summary>
     public ISchemaSnapshot? TryGetSnapshot(Guid connectionId, string database)
     {
-        lock (_gate) return _schemaCache.TryGetValue((connectionId, database), out var s) ? s : null;
+        lock (_gate) return _schemaCache.TryGetValue(new SessionKey(connectionId, database), out var s) ? s : null;
     }
 
     /// <summary>
@@ -191,7 +229,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     {
         lock (_gate)
         {
-            foreach (var key in _schemaCache.Keys.Where(k => k.Id == connectionId).ToArray())
+            foreach (var key in _schemaCache.Keys.Where(k => k.ConnectionId == connectionId).ToArray())
                 _schemaCache.Remove(key);
         }
     }
@@ -202,10 +240,10 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         lock (_gate)
         {
             if (session.Snapshot is not null) return Task.FromResult<ISchemaSnapshot?>(session.Snapshot);
-            var key = (session.ConnectionId, session.Info.Database);
+            var key = session.Key;
             // A reconnect to a connection+database we've already read adopts the cached snapshot instead of
-            // re-reading the whole catalog. Same key as the load, so a database switch can't pick up the
-            // other database's snapshot (§9.4 — sessions are per-connection, snapshots are per-database).
+            // re-reading the whole catalog. Same key as the load, so one database can never pick up another
+            // database's snapshot — which drives editability and FK nav, not just the popup.
             if (_schemaCache.TryGetValue(key, out var cached))
             {
                 session.Snapshot = cached;
@@ -223,46 +261,77 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         }
     }
 
-    public async Task EvictAsync(Guid connectionId)
+    public async Task EvictAsync(SessionKey key)
     {
         ConnectionSession? session;
         var disposeNow = false;
         lock (_gate)
         {
-            if (_live.TryGetValue(connectionId, out session))
+            if (_live.TryGetValue(key, out session))
             {
-                _live.Remove(connectionId);
+                _live.Remove(key);
                 if (session.LeaseCount == 0) disposeNow = true; else session.Retired = true;
             }
         }
         if (session is not null && disposeNow) await SafeDisposeAsync(session);
-        if (session is not null) RaiseLiveChanged(connectionId); // left the live map
+        if (session is not null) RaiseLiveChanged(key); // left the live map
+        // Both callers of this overload are abandoning an attempt — a cancelled connect, or the evict before
+        // a credential retry — so once the last pool is gone there is nothing left standing behind the claim
+        // that we are linked to the server. The idle sweep does NOT come through here, which is exactly what
+        // lets a swept connection stay linked (see SweepIdleAsync).
+        if (UnlinkIfNothingLive(key.ConnectionId)) RaiseLinkChanged(key.ConnectionId);
+    }
+
+    /// <inheritdoc />
+    public async Task EvictConnectionAsync(Guid connectionId)
+    {
+        SessionKey[] keys;
+        bool wasLinked;
+        lock (_gate)
+        {
+            keys = _live.Keys.Where(k => k.ConnectionId == connectionId).ToArray();
+            // Unconditionally, and before the evicts: this is the server-level teardown, and after an idle
+            // sweep there can be a link with no pools left to evict — dropping it only as a side effect of
+            // removing the last session would leave Disconnect doing nothing at all in that state.
+            wasLinked = _links.Remove(connectionId);
+        }
+        foreach (var key in keys) await EvictAsync(key);
+        if (wasLinked) RaiseLinkChanged(connectionId);
     }
 
     /// <summary>Close sessions that hold no lease and have been idle past the timeout, and disconnect any
     /// session whose credential is about to expire so a stale token is never handed to a new pooled open.
     /// An expiring session still holding a lease is retired (removed from the live map, kept alive for the
-    /// running query) so the next connect rebuilds with a fresh credential. Safe to call anytime.</summary>
+    /// running query) so the next connect rebuilds with a fresh credential. Safe to call anytime.
+    ///
+    /// <b>An idle sweep does not break the server link.</b> It reclaims pools, and a pool is re-openable from
+    /// the cached credential without a prompt — whereas the user sitting reading a result set for half an hour
+    /// and watching the chain silently snap is the surprise this whole model exists to remove. Npgsql has
+    /// already pruned the idle physical connections underneath by then anyway, so the sweep is reclaiming
+    /// bookkeeping, not sockets. An <i>expiring credential</i> is the opposite case and does unlink: the thing
+    /// the link was evidence of has gone stale, and the rebuild has to re-mint or re-prompt.</summary>
     internal async Task SweepIdleAsync()
     {
         List<ConnectionSession> toDispose = new();
-        List<Guid> leftLive = new();
-        List<Guid> expired = new();
+        List<SessionKey> leftLive = new();
+        HashSet<Guid> expired = new();
         try
         {
             var now = _clock();
             var nowOffset = new DateTimeOffset(DateTime.SpecifyKind(now, DateTimeKind.Utc));
             lock (_gate)
             {
-                foreach (var (id, session) in _live.ToArray())
+                foreach (var (key, session) in _live.ToArray())
                 {
                     var expiring = CredentialResolver.IsExpiring(session.CredentialExpiresAt, nowOffset, ExpiryEvictSkew);
                     var idle = session.LeaseCount == 0 && now - session.LastUsedUtc >= _idleTimeout;
                     if (!idle && !expiring) continue;
 
-                    _live.Remove(id);
-                    leftLive.Add(id);
-                    if (expiring) expired.Add(id);
+                    _live.Remove(key);
+                    leftLive.Add(key);
+                    // A connection's credential is shared by every database it is open on, so several keys can
+                    // land here for one id — the resolver only needs invalidating once.
+                    if (expiring) expired.Add(key.ConnectionId);
                     // A leased-but-expiring session is retired, not disposed — its running query keeps the
                     // already-open connection until it releases; the next acquire rebuilds fresh.
                     if (session.LeaseCount == 0) toDispose.Add(session);
@@ -271,11 +340,20 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             }
         }
         catch { /* sweep is best-effort; never surface */ }
-        // Drop the cached token/password for expired sessions so the rebuild re-mints / re-prompts.
-        if (expired.Count > 0 && _credentials() is { } resolver)
-            foreach (var id in expired) resolver.Invalidate(id);
+        // Drop the cached token/password for expired sessions so the rebuild re-mints / re-prompts, and with
+        // it the server link — an expired credential is no longer evidence of anything.
+        if (expired.Count > 0)
+        {
+            if (_credentials() is { } resolver)
+                foreach (var id in expired) resolver.Invalidate(id);
+            List<Guid> unlinked = new();
+            lock (_gate)
+                foreach (var id in expired)
+                    if (_links.Remove(id)) unlinked.Add(id);
+            foreach (var id in unlinked) RaiseLinkChanged(id);
+        }
         foreach (var s in toDispose) await SafeDisposeAsync(s);
-        foreach (var id in leftLive) RaiseLiveChanged(id); // idle/expired connections left the live map
+        foreach (var key in leftLive) RaiseLiveChanged(key); // idle/expired sessions left the live map
     }
 
     /// <summary>Close every live/in-flight session (e.g. on a project switch) but keep the manager usable —
@@ -295,14 +373,22 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     private async Task CloseAllAsync(bool retire)
     {
         ConnectionSession[] all;
+        SessionKey[] allKeys;
+        Guid[] linked;
         List<ConnectionSession> toDispose = new();
         lock (_gate)
         {
             if (retire) _disposed = true;
             all = _live.Values.ToArray();
+            allKeys = _live.Keys.ToArray();
+            linked = _links.ToArray();
             _live.Clear();
             _inflight.Clear();
             _schemaInflight.Clear();
+            // A project switch parks tabs but genuinely closes the sessions, and shutdown ends everything —
+            // neither leaves anything the link could still be evidence of. Unlike _schemaCache (kept, below),
+            // a link is about a live conversation, not a catalog we already read.
+            _links.Clear();
             // Kept across a project switch on purpose: switching back is meant to be cheap (tabs are parked,
             // not torn down), and re-reading a catalog we already have is exactly what this cache avoids.
             // On retire the app is going away, so drop it.
@@ -317,9 +403,13 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             }
         }
         foreach (var s in toDispose) await SafeDisposeAsync(s);
-        // On a project switch the manager stays usable, so tell listeners those ids went away. On retire
+        // On a project switch the manager stays usable, so tell listeners those sessions went away. On retire
         // (shutdown) skip it — the app is tearing down and handlers may already be gone.
-        if (!retire) foreach (var s in all) RaiseLiveChanged(s.ConnectionId);
+        if (!retire)
+        {
+            foreach (var key in allKeys) RaiseLiveChanged(key);
+            foreach (var id in linked) RaiseLinkChanged(id);
+        }
     }
 
     private async Task<ConnectionSession> BuildAsync(ConnectionInfo info, CancellationToken ct)
@@ -327,19 +417,21 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         // Yield so GetOrConnectAsync registers this task in _inflight before the body can finish
         // (a synchronously-completing provider would otherwise run the finally before registration).
         await Task.Yield();
+        var key = SessionKey.For(info);
         try
         {
             // A live session may exist but be stale (settings edited) — retire it before rebuilding,
-            // deferring its disposal if a query still holds a lease on it.
+            // deferring its disposal if a query still holds a lease on it. A database switch no longer lands
+            // here: it has its own key, so the other database's pool is left alone (#54).
             ConnectionSession? stale;
             var disposeStale = false;
             lock (_gate)
             {
-                _live.TryGetValue(info.Id, out stale);
+                _live.TryGetValue(key, out stale);
                 if (stale is not null && SameConnection(stale.Info, info)) { stale.LastUsedUtc = _clock(); return stale; }
                 if (stale is not null)
                 {
-                    _live.Remove(info.Id);
+                    _live.Remove(key);
                     if (stale.LeaseCount == 0) disposeStale = true; else stale.Retired = true;
                 }
             }
@@ -366,24 +458,38 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
                 credential.ExpiresAt)
             { LastUsedUtc = _clock() };
             bool disposedDuringConnect;
+            bool newLink;
             lock (_gate)
             {
                 // The manager may have been disposed while we were awaiting the connect. Don't repopulate
                 // the cleared _live map — that would leak this session's factory (never disposed).
                 disposedDuringConnect = _disposed;
-                if (!disposedDuringConnect) _live[info.Id] = session;
+                if (!disposedDuringConnect) _live[key] = session;
+                // A completed handshake is the only thing that establishes a server link, and any one of its
+                // databases establishes it: authenticating against `app` proves we can reach the server just
+                // as well as authenticating against `reporting` would.
+                newLink = !disposedDuringConnect && _links.Add(info.Id);
             }
             if (disposedDuringConnect)
             {
                 await SafeDisposeAsync(session);
                 throw new ObjectDisposedException(nameof(ConnectionSessionManager));
             }
-            RaiseLiveChanged(info.Id); // a new session entered the live map
+            RaiseLiveChanged(key); // a new session entered the live map
+            if (newLink) RaiseLinkChanged(info.Id);
             return session;
+        }
+        catch
+        {
+            // The handshake failed. Only unlink if no other database on this connection is still pooled:
+            // a bad database name (dropped, or no CONNECT grant) must not report the *server* as down when
+            // we are demonstrably still talking to it on another one.
+            if (UnlinkIfNothingLive(info.Id)) RaiseLinkChanged(info.Id);
+            throw;
         }
         finally
         {
-            lock (_gate) _inflight.Remove(info.Id);
+            lock (_gate) _inflight.Remove(key);
         }
     }
 
@@ -393,19 +499,21 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         {
             var snapshot = await session.Metadata.LoadSnapshotAsync(session.Info.Database, ct);
             session.Snapshot = snapshot;
-            lock (_gate) _schemaCache[(session.ConnectionId, session.Info.Database)] = snapshot;
+            lock (_gate) _schemaCache[session.Key] = snapshot;
             return snapshot;
         }
         finally
         {
-            lock (_gate) _schemaInflight.Remove((session.ConnectionId, session.Info.Database));
+            lock (_gate) _schemaInflight.Remove(session.Key);
         }
     }
 
     private static string Describe(ConnectionInfo info, string detail)
         => $"Could not connect to '{info.Name}' ({info.Host}:{info.Port}/{info.Database}): {detail}";
 
-    /// <summary>Compares only the fields that define the live connection; name/environment/color are cosmetic.</summary>
+    /// <summary>Compares only the fields that define the live connection; name/environment/color are cosmetic.
+    /// Database is part of <see cref="SessionKey"/> and so always already equal at every call site — kept in
+    /// the comparison so the predicate is true to its name if it is ever reused off the keyed path.</summary>
     private static bool SameConnection(ConnectionInfo a, ConnectionInfo b)
         => a.ProviderId == b.ProviderId && a.Host == b.Host && a.Port == b.Port
            && a.Database == b.Database && a.User == b.User && SameOptions(a.Options, b.Options);

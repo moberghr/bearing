@@ -39,14 +39,28 @@
   <SolidColorBrush x:Key="Syntax.Table"   Color="#6FB6AB"/>  <!-- mint, tree/table stroke weight -->
   <SolidColorBrush x:Key="Syntax.TableSel" Color="#5FC9AD"/>
   <!-- Ok.Green is deliberately NOT the handoff's mint (#5FC9AD): mint sits too close to Accent.Brand, so
-       the Run glyph and the Connected dot stopped reading as their own signal against the teal chrome.
-       Green still means connected; what changed in #45 is that the *environment* left the dot vocabulary
-       (it is a fill, an edge and the status-bar line now), so green and red are unambiguously status. Red
-       is out of the status vocabulary too: Disconnected is a grey hollow ring, since a connection that
-       isn't open yet is not an error. -->
-  <SolidColorBrush x:Key="Ok.Green"       Color="#98BB6C"/>  <!-- connected status, run, success, save, timings -->
-  <SolidColorBrush x:Key="Warn.Amber"     Color="#E3B457"/>  <!-- gold: connecting status dot/label, folder glyph -->
+       the Run glyph stopped reading as its own signal against the teal chrome. -->
+  <SolidColorBrush x:Key="Ok.Green"       Color="#98BB6C"/>  <!-- run, success, save, timings -->
+  <SolidColorBrush x:Key="Warn.Amber"     Color="#E3B457"/>  <!-- gold: folder glyph, warnings -->
   <SolidColorBrush x:Key="Error.Red"      Color="#D2555A"/>  <!-- errors, delete/discard -->
+
+  <!-- Connection *state*, and nothing else (CONNECTION_STATUS rev. 2026-08-27 §1). This is a separate
+       palette from the per-connection environment hue on purpose: the environment answers "where am I
+       pointed" and owns surfaces (tab washes, rules, the env chip, the status-bar line), while these answer
+       "is the session up" and are allowed on icon strokes and label text only. Neither may borrow the
+       other's hue — a disconnected production session shows a red beacon on a rose wash.
+         · Connecting is blue rather than the gold it used to be because Warn.Amber is #E3B457, which is
+           byte-identical to the staging environment colour: "connecting" and "you are on staging" were
+           literally the same pixel value.
+         · Disconnected is red rather than the grey hollow ring it used to be (#45). That earlier call —
+           "red belongs to errors, and a connection that isn't open yet is not an error" — was reversed
+           deliberately in the 2026-08-27 handoff, on the grounds that the state palette can no longer be
+           confused with an environment now that the two are split. Note Error.Red is #D2555A, close to but
+           not equal to this; they are never adjacent.
+       Silhouette, not hue, is what actually carries the state — see Controls/ConnectionBeacon. -->
+  <SolidColorBrush x:Key="Status.Connected"    Color="#4FC17E"/>
+  <SolidColorBrush x:Key="Status.Connecting"   Color="#8FB8E8"/>
+  <SolidColorBrush x:Key="Status.Disconnected" Color="#E0483C"/>
 
   <!-- Geometry (design §Geometry) — unchanged: the Bearing handoff specifies the same metrics. -->
   <x:Double x:Key="Radius.Control">7</x:Double>

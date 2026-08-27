@@ -42,10 +42,10 @@ public class SchemaCacheTests
         var (mgr, info) = await Loaded(new FakeProvider());
         await using var _ = mgr;
 
-        await mgr.EvictAsync(info.Id);
+        await mgr.EvictAsync(SessionKey.For(info));
 
-        Assert.Null(mgr.TryGet(info.Id));                                  // no live session, as expected
-        Assert.NotNull(mgr.TryGetSnapshot(info.Id, info.Database));        // but the schema is still here
+        Assert.Null(mgr.TryGet(SessionKey.For(info)));               // no live session, as expected
+        Assert.NotNull(mgr.TryGetSnapshot(info.Id, info.Database));  // but the schema is still here
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class SchemaCacheTests
         now = now.AddHours(2);
         await mgr.SweepIdleAsync();
 
-        Assert.Null(mgr.TryGet(info.Id));
+        Assert.Null(mgr.TryGet(SessionKey.For(info)));
         Assert.NotNull(mgr.TryGetSnapshot(info.Id, info.Database));
     }
 
@@ -74,7 +74,7 @@ public class SchemaCacheTests
         var provider = new FakeProvider();
         var (mgr, info) = await Loaded(provider);
         await using var _ = mgr;
-        await mgr.EvictAsync(info.Id);
+        await mgr.EvictAsync(SessionKey.For(info));
 
         var again = await mgr.GetOrConnectAsync(info, CancellationToken.None);
         var snapshot = await mgr.EnsureSchemaAsync(again, CancellationToken.None);
@@ -95,7 +95,7 @@ public class SchemaCacheTests
 
         await mgr.CloseAllAsync();
 
-        Assert.Null(mgr.TryGet(info.Id));
+        Assert.Null(mgr.TryGet(SessionKey.For(info)));
         Assert.NotNull(mgr.TryGetSnapshot(info.Id, info.Database));
     }
 
@@ -123,7 +123,7 @@ public class SchemaCacheTests
         var (mgr, info) = await Loaded(provider);
         await using var _ = mgr;
         mgr.InvalidateSchema(info.Id);
-        await mgr.EvictAsync(info.Id);
+        await mgr.EvictAsync(SessionKey.For(info));
 
         var again = await mgr.GetOrConnectAsync(info, CancellationToken.None);
         await mgr.EnsureSchemaAsync(again, CancellationToken.None);
@@ -137,9 +137,9 @@ public class SchemaCacheTests
     [Fact]
     public async Task Two_databases_on_one_connection_keep_their_own_snapshots()
     {
-        // Sessions are keyed by connection id alone (§9.4) and a database switch replaces the session, so the
-        // cache must key on the database too — otherwise database B serves up database A's catalog, which
-        // drives editability and FK navigation, not just the popup.
+        // Sessions and snapshots are both keyed by connection+database (§9.4), so the two coexist rather than
+        // one overwriting the other — which matters because a snapshot drives editability and FK navigation,
+        // not just the popup.
         var provider = new FakeProvider();
         await using var mgr = new ConnectionSessionManager(provider, () => null, runSweepTimer: false);
         var id = Guid.NewGuid();

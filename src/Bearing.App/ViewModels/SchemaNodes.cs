@@ -71,21 +71,27 @@ public abstract partial class SchemaNodeViewModel : ObservableObject
     /// (issue #45) — a row fill can't.</summary>
     public virtual string? RowAccentColor => null;
 
-    /// <summary>True for nodes that represent a connectable server, so the row carries a chain glyph for
-    /// <see cref="ConnectionLive"/>. Every other node type leaves the slot empty.</summary>
+    /// <summary>True for nodes that represent a connectable server, so the row carries a beacon for
+    /// <see cref="ConnectionState"/>. Every other node type leaves the slot empty.</summary>
     public virtual bool ShowsConnectionState => false;
 
-    /// <summary>Whether this node's server has a live session — linked vs broken chain on the row. Declared
-    /// on the base because the tree's single <c>TreeDataTemplate</c> binds against this type; only nodes with
-    /// <see cref="ShowsConnectionState"/> render it. Kept in sync by
-    /// <c>ConnectionsViewModel.RefreshServerNodeLive</c>.</summary>
+    /// <summary>This node's server state — the beacon drawn on the row. Same question the tab headers and the
+    /// toolbar answer, so the tree can no longer disagree with the tab beside it about whether the user is
+    /// connected to a server. Declared on the base because the tree's single <c>TreeDataTemplate</c> binds
+    /// against this type; only nodes with <see cref="ShowsConnectionState"/> render it. Kept in sync by
+    /// <c>ConnectionsViewModel.RefreshServerNodeState</c>.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ConnectionStateTip))]
-    private bool _connectionLive;
+    private Bearing.App.Connections.ConnectionState _connectionState;
 
-    /// <summary>Tooltip for the row's chain glyph. A string on the VM rather than a converter: there is one
-    /// consumer and the two words are the whole logic.</summary>
-    public string ConnectionStateTip => ConnectionLive ? "Connected" : "Not connected";
+    /// <summary>Tooltip for the row's beacon. A string on the VM rather than a converter: there is one
+    /// consumer and the wording is the whole logic.</summary>
+    public string ConnectionStateTip => ConnectionState switch
+    {
+        Bearing.App.Connections.ConnectionState.Connected => "Connected",
+        Bearing.App.Connections.ConnectionState.Connecting => "Connecting…",
+        _ => "Not connected",
+    };
 
     /// <summary>Resource key of a vector icon (Icon.*) shown instead of the text <see cref="Glyph"/>; null = use the glyph.</summary>
     public virtual string? IconKey => null;

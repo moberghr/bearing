@@ -16,9 +16,10 @@ Raw ADO.NET — **no ORM**. Two data surfaces: Postgres (query targets) and SQLi
 - Query-log pruning uses `julianday()` (offset-safe) + FTS `'rebuild'`.
 
 ## §5.3 — Connection lifecycle
-- Live connections are pooled/reused by `ConnectionSessionManager` (keyed by connection Id) and the
-  `SchemaBrowser` (per conn+db reader cache). Long-running reads take a `SessionLease` so an idle sweep,
-  evict, or DB switch cannot dispose the pool mid-query. Respect the lease when adding new DB operations.
+- Live connections are pooled/reused by `ConnectionSessionManager` (keyed by connection Id **+ database** —
+  `SessionKey`, §9.4) and the `SchemaBrowser` (per conn+db reader cache). Long-running reads take a
+  `SessionLease` so an idle sweep or evict cannot dispose the pool mid-query. Respect the lease when adding
+  new DB operations. `MaxPoolSize` is capped at 10 per pool (`NpgsqlConnectionFactory`).
 
 ## §5.4 — Writes
 - Inline edits generate parameterized DML (`ResultEditModel`) and run as one transactional batch via

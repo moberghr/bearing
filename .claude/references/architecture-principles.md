@@ -43,7 +43,7 @@ Bearing.Desktop      thin entry point
    (`GestureParser`, `PaletteFilter`, `KeymapDiff`) are stateless and tested without a UI or live DB.
 
 6. **Raw ADO, no ORM.** Postgres access is direct Npgsql; local state is `Microsoft.Data.Sqlite`. Query
-   sessions are pooled by connection Id and protected by leases during long reads.
+   sessions are pooled by (connection Id, database) and protected by leases during long reads.
 
 7. **Skip-safe integration tests.** Postgres-backed tests use `Xunit.SkippableFact` + `BEARING_TEST_PG_*`
    and skip cleanly with no server, so `dotnet test` is green offline.

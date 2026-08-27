@@ -44,8 +44,8 @@
 > tab's other dot keeps its own job (teal = unsaved). This needed real per-tab state:
 > `EditorTabViewModel.ConnectionLive`, kept in sync by `ConnectionsViewModel.RefreshTabConnectionLive` off
 > the session pool's `LiveChanged`, because the strip shows every tab's connection and not just the
-> selected one's — two tabs on one server link and break together (sessions are keyed by connection Id,
-> §9.4), a tab on another server does not.
+> selected one's — two tabs on the same connection *and database* link and break together, a tab on another
+> server does not. (At the time of this pass one server meant one session; see the #54 note below.)
 >
 > The **Connections pane** matches: its server row's 9px environment dot became a wash across the whole
 > row (`SchemaNodeViewModel.RowAccentColor`, applied to the `TreeViewItem` background so it covers the
@@ -58,10 +58,10 @@
 > high against the letterforms.
 >
 > One accuracy note that came out of this: the indicators are per **(connection, database)**, not per
-> connection — `ConnectionsViewModel.IsTabSessionLive` requires the live session's `Info.Database` to match
-> the tab's. Sessions are keyed by connection Id alone (§9.4), so a tab on another database of the same
-> connection genuinely has no pool and now says so, and switching database visibly disconnects. See #54 for
-> fixing the keying itself.
+> connection — `ConnectionsViewModel.IsTabSessionLive` requires the live session to be open on the database
+> the tab targets. Sessions were then keyed by connection Id alone (§9.4), so a tab on another database of
+> the same connection genuinely had no pool and now said so, and switching database visibly disconnected.
+> #54 (below) fixed the keying; the indicator logic it forced is unchanged and now simply reads one key.
 >
 > **The environment presets keep `#3FB950` / `#D29922` / `#E5484D`** rather than moving to the handoff's
 > rose/gold/mint (that half of the original deviation stands — re-hueing would split saved connections
@@ -78,6 +78,23 @@
 > exists (`Results/CellStats.cs` §7, `LoadMore`/`HasMore` §9, `ResultSetViewModel.LockReason` §8,
 > `Controls/ResultView.Inspector.cs` §6) — it was re-skinned, not re-implemented. Where this file
 > prescribes sizes and orderings that differ from the current shell, those remain design targets.
+
+> **#54 (2026-08-22) — a database switch stopped disconnecting.** The visible disconnect #45 started
+> reporting honestly is gone, because the thing it was reporting is fixed. `ConnectionSessionManager` now
+> keys live sessions on `SessionKey` — connection id **and** database — so a tab pointed at another database
+> on the same server gets its own pool instead of tearing down the neighbour's, and switching back and forth
+> reuses both. Nothing about the indicators changed: `IsTabSessionLive` is now a single keyed lookup and
+> answers the same question it did before.
+>
+> The decision the re-keying forced was what eviction means. Disconnect on the toolbar chain drops **every**
+> database on the connection (`EvictConnectionAsync`), not just the selected tab's — the button says
+> "disconnect from server", and the Connections pane's server row lights for any live session on the
+> connection, so a one-database evict would have left that row linked immediately after the user pressed
+> Disconnect. Connection edited / deleted / metadata-refreshed and project close are server-level too;
+> only a cancelled connect and a credential-refresh retry evict a single database.
+>
+> Second-order: one pool per (connection, database) instead of per connection, so `NpgsqlConnectionFactory`
+> now sets `MaxPoolSize = 10` rather than inheriting Npgsql's default of 100 for each.
 
 ## Overview
 **Bearing** is the rebrand + redesign of the Squirrel desktop SQL query editor (think DataGrip / TablePlus). Two things change together:

@@ -49,21 +49,22 @@
       <Setter Property="StrokeJoin" Value="Round"/>
     </Style>
 
-    <!-- Connection toggle: stroked chain glyph (scaled + centered by a Viewbox). Stroke tracks the same
-         state colours as the status dot (design §3, "icon color = current state color"): green connected,
-         gold connecting, grey disconnected. StrokeThickness is in the geometry's own 24-unit space (the
-         Viewbox scales it down with everything else). -->
+    <!-- Connection toggle: the power symbol, identical in all three states (CONNECTION_STATUS §5). Only
+         its stroke colour tracks the state, on the Status.* palette the beacon beside it uses. The glyph
+         used to mirror the status icon, which made the toolbar say the same thing twice and left neither
+         instance clearly the *control*; the beacon reports, this acts. StrokeThickness is in the geometry's
+         own 24-unit space (the Viewbox scales it down with everything else). -->
     <Style Selector="Button#ConnectionToggle Path">
-      <Setter Property="Stroke" Value="{DynamicResource Ok.Green}"/>
-      <Setter Property="StrokeThickness" Value="2"/>
+      <Setter Property="Stroke" Value="{DynamicResource Status.Connected}"/>
+      <Setter Property="StrokeThickness" Value="2.2"/>
       <Setter Property="StrokeLineCap" Value="Round"/>
       <Setter Property="StrokeJoin" Value="Round"/>
     </Style>
     <Style Selector="Button#ConnectionToggle.connecting Path">
-      <Setter Property="Stroke" Value="{DynamicResource Warn.Amber}"/>
+      <Setter Property="Stroke" Value="{DynamicResource Status.Connecting}"/>
     </Style>
     <Style Selector="Button#ConnectionToggle.disconnected Path">
-      <Setter Property="Stroke" Value="{DynamicResource Text.Dim}"/>
+      <Setter Property="Stroke" Value="{DynamicResource Status.Disconnected}"/>
     </Style>
 
     <!-- History rows: selected = steel-blue fill + 2px teal left border (design §4). -->
@@ -220,25 +221,25 @@
           </ComboBox.ItemTemplate>
         </ComboBox>
 
-        <!-- Connection status: dot + label. Live takes the environment colour, connecting gold,
-             disconnected a grey hollow ring — see ConnectionStatusView. -->
-        <controls:ConnectionStatusView VerticalAlignment="Center"/>
+        <!-- Connection status: beacon + label, 14px here and 13px in the status bar (design §2). The
+             state palette is its own — never the environment's — see ConnectionStatusView. -->
+        <controls:ConnectionStatusView VerticalAlignment="Center" BeaconSize="14"/>
 
-        <!-- Connect / cancel-connecting / disconnect toggle: chain (linked) ↔ broken-chain glyph. -->
+        <!-- Connect / cancel-connecting / disconnect toggle. One power glyph for all three; the state is
+             read off the beacon to its left, not off this button. -->
         <Button x:Name="ConnectionToggle" Theme="{StaticResource IconToggleButton}" VerticalAlignment="Center"
                 Command="{Binding Connections.ToggleConnectionCommand}"
                 ToolTip.Tip="{Binding Connections.ToggleTip}"
                 Classes.connecting="{Binding Connections.IsConnecting}"
                 Classes.disconnected="{Binding Connections.IsDisconnected}">
           <Viewbox Width="15" Height="15" HorizontalAlignment="Center" VerticalAlignment="Center">
-            <!-- Pin the Panel to the icons' own 24×24 authoring grid. The chain ink spans x 2..22 /
-                 y 7..17 — centred on (12,12) in that grid, but with an asymmetric origin offset. Sizing
-                 the Panel to the ink instead (no explicit size) loses that centring and the glyph renders
-                 off-centre in the button. These Paths deliberately have no Stretch so StrokeThickness
-                 stays in 24-unit space and the Viewbox scales it down with the geometry. -->
+            <!-- Pin the Panel to the icons' own 24×24 authoring grid. The power glyph's ink spans
+                 x 4..20 / y 3.5..19 — centred on (12,12) in that grid, but with an asymmetric origin
+                 offset. Sizing the Panel to the ink instead (no explicit size) loses that centring and the
+                 glyph renders off-centre in the button. This Path deliberately has no Stretch so
+                 StrokeThickness stays in 24-unit space and the Viewbox scales it down with the geometry. -->
             <Panel Width="24" Height="24">
-              <Path Data="{StaticResource Icon.ChainLinked}" IsVisible="{Binding Connections.IsLinked}"/>
-              <Path Data="{StaticResource Icon.ChainBroken}" IsVisible="{Binding !Connections.IsLinked}"/>
+              <Path Data="{StaticResource Icon.Power}"/>
             </Panel>
           </Viewbox>
         </Button>
@@ -287,7 +288,7 @@
                    Foreground="{DynamicResource Text.Faint}"
                    ToolTip.Tip="{x:Static app:AppVersion.Full}"/>
         <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-          <controls:ConnectionStatusView VerticalAlignment="Center"/>
+          <controls:ConnectionStatusView VerticalAlignment="Center" BeaconSize="13"/>
           <TextBlock Text="·" Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
           <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center"
                      Foreground="{DynamicResource Text.Dim}"/>
@@ -460,31 +461,19 @@
                     <TextBlock Text="●" FontSize="11" Margin="6,0,0,0" VerticalAlignment="Center"
                                Foreground="{DynamicResource Accent.Brand}" ToolTip.Tip="Unsaved changes"
                                IsVisible="{Binding IsDirty}"/>
-                    <!-- This tab's connection, as a chip washed in its environment colour carrying the
-                         chain glyph: green linked = a live session, grey broken = none. The chip's *fill*
-                         is the environment and its *glyph* is the state — two channels, no collision.
-                         Replaces the connection *name* rendered in that colour — an arbitrary user hex must
-                         never tint text (#45), and the name is the chip's tooltip instead. State is per tab,
-                         not the toolbar's: a background tab on another server reads as disconnected while
-                         the selected one is live. -->
-                    <Border CornerRadius="5" Padding="7,2" Margin="7,0,0,0" VerticalAlignment="Center"
-                            ToolTip.Tip="{Binding ConnectionDisplay}"
-                            IsVisible="{Binding ConnectionDisplay, Converter={x:Static ObjectConverters.IsNotNull}}"
-                            Background="{Binding ConnectionColor, Converter={StaticResource HexBrush}, ConverterParameter=0.16}">
-                      <!-- Viewbox + a 24×24 Panel pins the glyph to the grid the chain icons were drawn on
-                           (same reason as the toolbar toggle): sizing to the ink instead loses the centring,
-                           and StrokeThickness stays in 24-unit space so the Viewbox scales it with the path. -->
-                      <Viewbox Width="13" Height="13">
-                        <Panel Width="24" Height="24">
-                          <Path Data="{StaticResource Icon.ChainLinked}" IsVisible="{Binding ConnectionLive}"
-                                Stroke="{DynamicResource Ok.Green}"
-                                StrokeThickness="2.2" StrokeLineCap="Round" StrokeJoin="Round"/>
-                          <Path Data="{StaticResource Icon.ChainBroken}" IsVisible="{Binding !ConnectionLive}"
-                                Stroke="{DynamicResource Text.Faint}"
-                                StrokeThickness="2.2" StrokeLineCap="Round" StrokeJoin="Round"/>
-                        </Panel>
-                      </Viewbox>
-                    </Border>
+                    <!-- This tab's connection state, as a bare 12px beacon: no chip, no background, no
+                         padding, no border (CONNECTION_STATUS §3.3). It is a live readout, not a badge —
+                         if the session drops, every open tab reports it at once. The environment-washed
+                         chip it used to sit in is gone: the state palette must never share a surface with
+                         the environment palette, and a wash right under the mark is exactly that collision.
+                         State is per tab, not the toolbar's: a background tab on another server reads as
+                         disconnected while the selected one is live. The connection name lives on as the
+                         tooltip — an arbitrary user hex must never tint text (#45). -->
+                    <controls:ConnectionBeacon Width="12" Height="12" Margin="7,0,0,0"
+                                               VerticalAlignment="Center"
+                                               State="{Binding ConnectionState}"
+                                               ToolTip.Tip="{Binding ConnectionDisplay}"
+                                               IsVisible="{Binding ConnectionDisplay, Converter={x:Static ObjectConverters.IsNotNull}}"/>
                     <Border Background="Transparent" Cursor="Hand" Width="16" Height="16"
                             Margin="8,0,0,0" VerticalAlignment="Center" ToolTip.Tip="Close tab"
                             PointerPressed="OnCloseTabPressed">

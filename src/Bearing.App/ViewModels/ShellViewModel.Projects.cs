@@ -96,8 +96,8 @@ public sealed partial class ShellViewModel
     /// the usual idle/expiry rules, and switching back unparks exactly what was left behind. Nothing here
     /// closes a connection or discards a result — only closing a tab or quitting does that.
     /// <para>
-    /// Sessions are keyed by connection id (§9.4) and ids are Guids, so two projects' pools coexist in the
-    /// one manager without collision.
+    /// Sessions are keyed by connection id + database (§9.4) and ids are Guids, so two projects' pools
+    /// coexist in the one manager without collision.
     /// </para>
     /// </summary>
     public async Task OpenProjectAsync(string projectDirectory)
@@ -277,7 +277,7 @@ public sealed partial class ShellViewModel
         {
             try
             {
-                await _sessions.EvictAsync(connection.Id);
+                await _sessions.EvictConnectionAsync(connection.Id);   // every database it was open on
                 _sessions.InvalidateSchema(connection.Id);
                 await _schemaBrowser.InvalidateAsync(connection.Id);   // its own per-conn+db reader cache (§9.4)
                 if (_secretStore is { } store) await store.DeleteAsync(connection.Id, CancellationToken.None);

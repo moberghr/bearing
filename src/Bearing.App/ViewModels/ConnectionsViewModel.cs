@@ -29,57 +29,76 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     {
         _ctx = ctx;
         _ctx.SelectedTabChanged += OnSelectedTabChanged;
-        // Reflect the real session pool: any connect (explicit, or lazily from a query / schema warm) or
-        // teardown (disconnect, idle sweep) re-derives the indicator, so it can't drift out of sync.
+        // Reflect the real session state: any connect (explicit, or lazily from a query / schema warm) or
+        // teardown (disconnect, idle sweep, expiry) re-derives the indicators, so they can't drift out of
+        // sync. Both events are wired because they answer different questions — see OnServerLinkChanged.
         _ctx.Sessions.LiveChanged += OnSessionLiveChanged;
+        _ctx.Sessions.LinkChanged += OnServerLinkChanged;
     }
 
-    /// <summary>The session pool changed for some connection. Re-derive the toolbar indicator when it is the
-    /// active tab's connection, and every tab's own chain glyph regardless — a connect on one tab's server
-    /// has to relink the other tabs pointed at it. This is what makes a query-driven connect (or an idle
-    /// eviction) update the indicators without the user touching the toggle. Fires possibly off-thread.</summary>
-    private void OnSessionLiveChanged(Guid id)
-        => Dispatcher.UIThread.Post(() =>
-        {
-            var tab = Selected;
-            // Don't clobber an in-flight explicit connect's Connecting state with a spurious re-derive.
-            if (tab?.ConnectionId == id && State != ConnectionState.Connecting) SyncStateFromSession(tab);
-            RefreshTabConnectionLive(); // unconditional: SyncStateFromSession only fires it on a real change
-            RefreshServerNodeLive();
-        });
+    /// <summary>A session pool for one connection+database changed. The indicators no longer read pools
+    /// (they read the server link — see <see cref="IsTabServerLinked"/>), so this is a cheap re-derive that
+    /// exists for the ordering: a first connect raises LiveChanged and LinkChanged, and a lazy pool open on
+    /// an already-linked server raises only this one, where nothing user-visible has moved. Fires possibly
+    /// off-thread.</summary>
+    private void OnSessionLiveChanged(SessionKey key)
+        => Dispatcher.UIThread.Post(() => RefreshIndicators(key.ConnectionId));
 
-    /// <summary>Push "is this tab's connection actually open" onto every tab, so each tab header shows its
-    /// own chain glyph rather than the selected tab's. The selected tab counts as live while an explicit
-    /// connect is in flight, so its glyph links when the attempt starts rather than when it lands —
-    /// matching the toolbar, where Connecting is also a linked chain.</summary>
-    private void RefreshTabConnectionLive()
+    /// <summary>A connection gained or lost its server link — a first handshake, an explicit Disconnect, a
+    /// connection edited/deleted, a credential expiring, a project close. This is the event the chain glyphs
+    /// and the toolbar dot actually turn on, and it is why a query-driven connect lights the toolbar without
+    /// the user touching the toggle, while an idle sweep no longer darkens it. Fires possibly off-thread.</summary>
+    private void OnServerLinkChanged(Guid connectionId)
+        => Dispatcher.UIThread.Post(() => RefreshIndicators(connectionId));
+
+    /// <summary>Re-derive everything the given connection can affect. Only the connection is tested: every
+    /// indicator is server-level now, and a tab pointed at another database of the same server is exactly a
+    /// tab that must refresh with it.</summary>
+    private void RefreshIndicators(Guid connectionId)
     {
-        foreach (var t in Tabs) RefreshTabConnectionLive(t);
+        var tab = Selected;
+        // Don't clobber an in-flight explicit connect's Connecting state with a spurious re-derive.
+        if (tab?.ConnectionId == connectionId && State != ConnectionState.Connecting) SyncStateFromLink(tab);
+        RefreshTabConnectionState(); // unconditional: SyncStateFromLink only fires it on a real change
+        RefreshServerNodeState();
     }
 
-    private void RefreshTabConnectionLive(EditorTabViewModel tab)
-        => tab.ConnectionLive = IsTabSessionLive(tab)
-            || (ReferenceEquals(tab, Selected) && State == ConnectionState.Connecting);
+    /// <summary>Push this tab's own server state onto every tab, so each tab header's beacon reports its own
+    /// connection rather than the selected tab's. The selected tab shows Connecting while an explicit connect
+    /// is in flight, so its beacon starts pulsing when the attempt starts rather than when it lands —
+    /// matching the toolbar, which is showing Connecting at the same moment.</summary>
+    private void RefreshTabConnectionState()
+    {
+        foreach (var t in Tabs) RefreshTabConnectionState(t);
+    }
 
-    /// <summary>Push "is this server open" onto every schema-tree server row. Coarser than the per-tab flag
-    /// on purpose: the node <i>is</i> the server, so any live session on that connection counts, whichever
-    /// database it happens to be open on — the databases are the node's own children.</summary>
-    private void RefreshServerNodeLive()
+    private void RefreshTabConnectionState(EditorTabViewModel tab)
+        => tab.ConnectionState = ReferenceEquals(tab, Selected) && State == ConnectionState.Connecting
+            ? ConnectionState.Connecting
+            : IsTabServerLinked(tab) ? ConnectionState.Connected : ConnectionState.Disconnected;
+
+    /// <summary>Push "is this server linked" onto every schema-tree server row. Same question as the per-tab
+    /// beacon now, and deliberately so — the node <i>is</i> the server, the databases are its children, and
+    /// having the row and the tab beside it answer differently is what made the old model read as broken.
+    /// Only ever Connected or Disconnected: Connecting belongs to an attempt, and an attempt belongs to a
+    /// tab, not to a tree row.</summary>
+    private void RefreshServerNodeState()
     {
         foreach (var node in ServerNodes)
-            node.ConnectionLive = _ctx.Sessions.TryGet(node.Connection.Id) is not null;
+            node.ConnectionState = _ctx.Sessions.IsLinked(node.Connection.Id)
+                ? ConnectionState.Connected
+                : ConnectionState.Disconnected;
     }
 
-    /// <summary>True when a live session exists for this tab's connection <i>and it is open on the database
-    /// the tab targets</i>. The database half matters because sessions are keyed by connection Id alone
-    /// (§9.4): a tab pointed at another database on the same server shares that key but has no pool of its
-    /// own, and its next query tears the session down and rebuilds it. Treating it as connected would make
-    /// the indicator claim something the pool can't honour.</summary>
-    private bool IsTabSessionLive(EditorTabViewModel tab)
-        => tab.ConnectionId is { } id
-            && _ctx.Sessions.TryGet(id) is { } session
-            && _ctx.EffectiveConnection(tab) is { } target
-            && string.Equals(session.Info.Database, target.Database, StringComparison.Ordinal);
+    /// <summary>True when this tab's <i>server</i> is linked — not when the pool for the database it happens
+    /// to point at is warm. Postgres binds a pool to one database, so the old per-(connection, database)
+    /// reading meant connecting on <c>app</c> and then picking <c>reporting</c> from the Database pill showed
+    /// the tab as disconnected from a server it was demonstrably still authenticated to, while the schema
+    /// tree's row for that same server stayed lit. The pool for the new database is opened lazily (or warmed
+    /// by <see cref="SetTabDatabase"/>) and costs a handshake, but that is a latency detail, not a change in
+    /// what the user is connected to.</summary>
+    private bool IsTabServerLinked(EditorTabViewModel tab)
+        => tab.ConnectionId is { } id && _ctx.Sessions.IsLinked(id);
 
     private EditorTabViewModel? Selected => _ctx.SelectedTab;
     private ObservableCollection<EditorTabViewModel> Tabs => _ctx.Tabs;
@@ -98,11 +117,11 @@ public sealed partial class ConnectionsViewModel : ObservableObject
 
     // ---- connection status (toolbar / status-bar indicator) -----------------------------------
 
-    /// <summary>Live-session state of the selected tab's connection. Drives the status dot, label and chain
-    /// toggle, which colour it as environment / gold / grey — never green or red (see ConnectionStatusView).</summary>
+    /// <summary>Server-link state of the selected tab's connection. Drives the toolbar and status-bar beacon,
+    /// its label, and the colour of the power toggle beside it — all on the Status.* palette, never the
+    /// connection's environment hue (see ConnectionStatusView).</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(StatusLabel))]
-    [NotifyPropertyChangedFor(nameof(IsLinked))]
     [NotifyPropertyChangedFor(nameof(IsConnecting))]
     [NotifyPropertyChangedFor(nameof(IsDisconnected))]
     [NotifyPropertyChangedFor(nameof(ToggleTip))]
@@ -115,8 +134,10 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         _ => "Disconnected",
     };
 
-    /// <summary>True unless fully disconnected — picks the linked (vs broken) chain glyph.</summary>
-    public bool IsLinked => State != ConnectionState.Disconnected;
+    // IsConnecting / IsDisconnected drive the two style classes on the status view and the toggle; the
+    // beacon reads State itself. There is deliberately no "IsLinked" any more — it existed only to pick
+    // between the linked and broken chain glyphs, and the power toggle that replaced them is one mark in
+    // every state.
     public bool IsConnecting => State == ConnectionState.Connecting;
     public bool IsDisconnected => State == ConnectionState.Disconnected;
 
@@ -132,24 +153,26 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     partial void OnStateChanged(ConnectionState value)
     {
         _ctx.IsConnected = value == ConnectionState.Connected;
-        RefreshTabConnectionLive(); // Connecting/Cancel never touch the pool, so the glyphs need telling
-        RefreshServerNodeLive();
+        RefreshTabConnectionState(); // Connecting/Cancel never touch the pool, so the glyphs need telling
+        RefreshServerNodeState();
     }
 
     // Per-attempt cancellation + epoch: a cancelled or superseded connect must never flip to Connected.
     private CancellationTokenSource? _connectCts;
     private int _connectEpoch;
 
-    /// <summary>Set <see cref="State"/> from whether the tab's connection has a live session right now
-    /// (called on tab/connection changes, before a fresh connect flips it to Connecting).</summary>
-    private void SyncStateFromSession(EditorTabViewModel? tab)
-        => State = tab is not null && IsTabSessionLive(tab)
+    /// <summary>Set <see cref="State"/> from whether the tab's <i>server</i> is linked right now (called on
+    /// tab/connection/database changes, before a fresh connect flips it to Connecting).</summary>
+    private void SyncStateFromLink(EditorTabViewModel? tab)
+        => State = tab is not null && IsTabServerLinked(tab)
             ? ConnectionState.Connected
             : ConnectionState.Disconnected;
 
     /// <summary>Toolbar chain toggle: Connect when disconnected, Cancel while connecting, Disconnect when
-    /// connected. Connect reuses <see cref="ConnectAsync"/>; disconnect evicts the shared session (every
-    /// tab on this connection shares it, so this drops the session for all of them).
+    /// connected. Connect reuses <see cref="ConnectAsync"/>; disconnect drops <i>every</i> database's session
+    /// on this connection, not just the selected tab's — the button says "disconnect from server", and the
+    /// schema tree's server row lights for any live session on the connection, so a one-database evict would
+    /// leave it linked immediately after the user pressed Disconnect (#54).
     /// <c>AllowConcurrentExecutions</c> is required: the connect keeps this command's task in flight, and
     /// without it the button would disable itself mid-connect — the user could never click it to Cancel.</summary>
     [RelayCommand(AllowConcurrentExecutions = true)]
@@ -169,7 +192,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
                 if (tab?.ConnectionId is { } id)
                 {
                     var name = _ctx.FindConnection(id)?.Name;
-                    await _ctx.Sessions.EvictAsync(id);
+                    await _ctx.Sessions.EvictConnectionAsync(id);
                     State = ConnectionState.Disconnected;
                     _ctx.SetStatus(name is null ? "Disconnected." : $"Disconnected from {name}.");
                 }
@@ -203,8 +226,8 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         var tab = Selected;
         // No eager connect on tab switch — just reflect whatever session already exists. Connecting is
         // driven by an explicit action (the Connect toggle, running a query, expanding the schema tree).
-        SyncStateFromSession(tab);
-        RefreshTabConnectionLive(); // the "selected tab is connecting" arm above moved with the selection
+        SyncStateFromLink(tab);
+        RefreshTabConnectionState(); // the "selected tab is connecting" arm above moved with the selection
         CrashReporter.Observe(RefreshTabDatabasesAsync(tab), "connections.refresh-databases");
     }
 
@@ -218,7 +241,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
             Connections.Add(c);
             ServerNodes.Add(new ServerNodeViewModel(c, _ctx.Schema));
         }
-        RefreshServerNodeLive(); // the nodes are new objects, so their flags start false
+        RefreshServerNodeState(); // the nodes are new objects, so their flags start false
     }
 
     public void ApplyConnectionDisplay(EditorTabViewModel tab)
@@ -227,7 +250,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         tab.ConnectionDisplay = info?.Name;
         tab.ConnectionColor = info?.EnvironmentColor;
         tab.DatabaseName ??= info?.Database; // default the active DB to the connection's own
-        RefreshTabConnectionLive(tab);        // after the DB default: "live" is per (connection, database)
+        RefreshTabConnectionState(tab);
     }
 
     public void SetTabConnection(EditorTabViewModel tab, Guid? id)
@@ -240,25 +263,56 @@ public sealed partial class ConnectionsViewModel : ObservableObject
             OnPropertyChanged(nameof(SelectedTabConnection));
             OnPropertyChanged(nameof(ActiveConnectionColor));
             OnPropertyChanged(nameof(SelectedTabDatabase));
-            SyncStateFromSession(tab); // reflect the existing session; do not eagerly connect
+            SyncStateFromLink(tab); // reflect the existing session; do not eagerly connect
             CrashReporter.Observe(RefreshTabDatabasesAsync(tab), "connections.refresh-databases");
         }
     }
 
-    /// <summary>Point a tab at another database on its server. Reuses the connection's credentials;
-    /// the session manager disposes the old DB's session and connects the new one on next use.</summary>
+    /// <summary>Point a tab at another database on its server. The old database's pool is left alone (§9.4);
+    /// the new one's is opened in the background when the server is already linked — see
+    /// <see cref="WarmDatabaseAsync"/> — so the tab is genuinely ready rather than merely claiming to be.</summary>
     public void SetTabDatabase(EditorTabViewModel tab, string database)
     {
         if (string.Equals(tab.DatabaseName, database, StringComparison.Ordinal)) return;
         tab.DatabaseName = database;
+        // No glyph refresh here: the chain is server-level now, and moving between databases of the same
+        // server cannot change it. That is the whole behaviour change.
         if (ReferenceEquals(tab, Selected))
         {
             OnPropertyChanged(nameof(SelectedTabDatabase));
-            // Don't eagerly reconnect on a DB switch either — the next query (or explicit Connect) rebuilds
-            // the session for the new DB. Reflect whatever session exists now.
-            SyncStateFromSession(tab);
+            SyncStateFromLink(tab);
         }
+        CrashReporter.Observe(WarmDatabaseAsync(tab), "connections.warm-database");
     }
+
+    /// <summary>Open the pool for a tab's newly-chosen database, but only when its server is already linked.
+    ///
+    /// <para>This is not the connect-on-tab-switch that was deliberately removed. The user has already opted
+    /// into this server and we hold its credential in memory, so this never prompts and never reaches a server
+    /// they didn't ask for — it is the same authenticated conversation, on a second database. What it buys is
+    /// honesty: with the indicators reading the server link, the tab claims to be connected the moment the
+    /// pill changes, and this makes that claim true instead of aspirational. A failure is left to the tab's
+    /// first query to report properly; if it was also the connection's last pool, the manager drops the link
+    /// and the chain breaks on its own.</para>
+    ///
+    /// <para>Superseded attempts are cancelled, so clicking through five databases in the pill opens the fifth
+    /// rather than racing all five.</para></summary>
+    private async Task WarmDatabaseAsync(EditorTabViewModel tab)
+    {
+        if (tab.ConnectionId is not { } id || !_ctx.Sessions.IsLinked(id)) return;
+        if (_ctx.EffectiveConnection(tab) is not { } target) return;
+        if (_ctx.Sessions.TryGet(SessionKey.For(target)) is not null) return; // already warm
+
+        var cts = new CancellationTokenSource();
+        var prior = Interlocked.Exchange(ref _warmCts, cts);
+        prior?.Cancel();
+        prior?.Dispose();
+        try { await _ctx.Sessions.GetOrConnectAsync(target, cts.Token); }
+        catch (OperationCanceledException) { /* superseded by a later switch */ }
+        catch (ConnectionFailedException) { /* the tab's first query reports this properly */ }
+    }
+
+    private CancellationTokenSource? _warmCts;
 
     /// <summary>Load the server's database list into <see cref="TabDatabases"/> for the given tab. Awaited
     /// through <see cref="CrashReporter.Observe(Task, string)"/> at every call site (it is fire-and-forget,
@@ -341,7 +395,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
 
         // A changed network target means the cached schema describes a different server, so drop it too —
         // eviction alone deliberately keeps it (that is what makes completion survive a mere disconnect).
-        if (networkChanged) { _ctx.Sessions.InvalidateSchema(conn.Id); await _ctx.Sessions.EvictAsync(conn.Id); }
+        if (networkChanged) { _ctx.Sessions.InvalidateSchema(conn.Id); await _ctx.Sessions.EvictConnectionAsync(conn.Id); }
         _ctx.DefaultConnectionId ??= conn.Id;
         RefreshConnections();
         foreach (var t in Tabs) if (t.ConnectionId == conn.Id) ApplyConnectionDisplay(t);
@@ -365,7 +419,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         catch (Exception ex) { _ctx.SetStatus($"Deleted connection but store failed: {ex.Message}"); }
 
         _ctx.Sessions.InvalidateSchema(id);   // the connection is gone; don't keep its catalog around
-        await _ctx.Sessions.EvictAsync(id);
+        await _ctx.Sessions.EvictConnectionAsync(id);   // every database on it, not just one
         foreach (var t in Tabs) if (t.ConnectionId == id) { t.ConnectionId = null; ApplyConnectionDisplay(t); }
         if (_ctx.DefaultConnectionId == id) _ctx.DefaultConnectionId = null;
         RefreshConnections();
@@ -382,7 +436,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     {
         await _ctx.Schema.InvalidateAsync(connectionId);
         _ctx.Sessions.InvalidateSchema(connectionId);   // this command's entire point is to re-read the catalog
-        await _ctx.Sessions.EvictAsync(connectionId);
+        await _ctx.Sessions.EvictConnectionAsync(connectionId);   // every database's pool re-reads on next use
 
         var node = ServerNodes.FirstOrDefault(n => n.Connection.Id == connectionId);
         if (node is not null) await node.RefreshAsync();
@@ -446,7 +500,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     {
         if (tab is null) return;
         var info = _ctx.EffectiveConnection(tab);
-        if (info is null) { SyncStateFromSession(tab); return; }
+        if (info is null) { SyncStateFromLink(tab); return; }
 
         var cts = new CancellationTokenSource();
         var prior = Interlocked.Exchange(ref _connectCts, cts);
@@ -461,8 +515,9 @@ public sealed partial class ConnectionsViewModel : ObservableObject
             if (cts.IsCancellationRequested)
             {
                 // Cancelled during the open, but the attempt still produced a live session (cancel raced
-                // the connect completing) — tear it down so "Cancel" reliably leaves nothing live pooled.
-                await _ctx.Sessions.EvictAsync(info.Id);
+                // the connect completing) — tear down the one this attempt opened, so "Cancel" leaves nothing
+                // pooled from it while any other database already connected on this server stays up.
+                await _ctx.Sessions.EvictAsync(SessionKey.For(info));
                 return;
             }
             if (!IsCurrentAttempt(epoch, tab)) return; // superseded by a newer attempt which now owns state

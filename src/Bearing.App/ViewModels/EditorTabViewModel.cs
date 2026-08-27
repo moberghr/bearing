@@ -204,12 +204,15 @@ public sealed partial class EditorTabViewModel : ObservableObject
     /// <summary>Denormalized environment badge color for the header; null = neutral.</summary>
     [ObservableProperty] private string? _connectionColor;
 
-    /// <summary>Whether this tab's connection has a live session right now — drives the header's chain
-    /// glyph (linked vs broken). Denormalized like <see cref="ConnectionDisplay"/> because the tab strip
-    /// shows every tab's own state, not only the selected one's: a background tab on another server has to
-    /// read as disconnected while the selected one is live. Kept in sync by
-    /// <c>ConnectionsViewModel.RefreshTabConnectionLive</c>.</summary>
-    [ObservableProperty] private bool _connectionLive;
+    /// <summary>This tab's <i>server</i> state right now — drives the header's beacon. Denormalized like
+    /// <see cref="ConnectionDisplay"/> because the tab strip shows every tab's own state, not only the
+    /// selected one's: a background tab on another server has to read as disconnected while the selected one
+    /// is live. Deliberately not per-database — two tabs on one server showing opposite marks because one of
+    /// them had picked a different database from the pill is the contradiction this stopped encoding. A full
+    /// tri-state rather than a bool because the beacon draws three silhouettes, so the selected tab can show
+    /// the connecting pulse instead of pretending to be connected. Kept in sync by
+    /// <c>ConnectionsViewModel.RefreshTabConnectionState</c>.</summary>
+    [ObservableProperty] private Bearing.App.Connections.ConnectionState _connectionState;
 
     /// <summary>
     /// True while this is a scratch buffer — an unnamed tab, whose file (once autosave creates one) lives

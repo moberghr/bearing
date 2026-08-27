@@ -7,8 +7,8 @@ namespace Bearing.App.Connections;
 
 /// <summary>
 /// One live connection: the factory (owns the pool), an executor and metadata reader built on it,
-/// and the lazily-loaded schema snapshot for completion. Shared by every editor tab that targets
-/// the same connection id. Disposing it tears down the underlying pool.
+/// and the lazily-loaded schema snapshot for completion. Shared by every editor tab that targets the same
+/// connection <i>and database</i> (see <see cref="Key"/>). Disposing it tears down the underlying pool.
 /// </summary>
 public sealed class ConnectionSession : IAsyncDisposable
 {
@@ -24,6 +24,10 @@ public sealed class ConnectionSession : IAsyncDisposable
     }
 
     public Guid ConnectionId { get; }
+
+    /// <summary>This session's identity in the manager's maps: connection id + the database the pool is
+    /// bound to. Two databases on one server are two sessions, not one that gets rebuilt on every switch.</summary>
+    public SessionKey Key => SessionKey.For(Info);
 
     /// <summary>The settings snapshot this session was built from; used to detect edits that require a rebuild.</summary>
     public ConnectionInfo Info { get; }

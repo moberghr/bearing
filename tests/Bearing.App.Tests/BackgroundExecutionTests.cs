@@ -148,7 +148,7 @@ public class BackgroundExecutionTests : IDisposable
 
         await mgr.CloseAllAsync();
 
-        Assert.Null(mgr.TryGet(info.Id));      // gone from the live map — nothing new attaches to it
+        Assert.Null(mgr.TryGet(SessionKey.For(info)));      // gone from the live map — nothing new attaches to it
         Assert.Equal(0, factory.DisposeCount); // but the running query's connection is still open
 
         lease.Dispose();

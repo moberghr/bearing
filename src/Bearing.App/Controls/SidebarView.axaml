@@ -58,24 +58,16 @@
                         <MenuItem Header="Delete" Click="OnDeleteServer" IsVisible="{Binding IsServer}"/>
                       </ContextMenu>
                     </DockPanel.ContextMenu>
-                    <!-- Connection state for a server row, pinned to the panel's right edge: green linked =
-                         a live session for this connection, grey broken = none. The row's *fill* is the
-                         environment and this glyph is the state — the two never share a channel (#45).
-                         Viewbox + a 24×24 Panel pins the glyph to the grid the chain icons were drawn on. -->
-                    <Border DockPanel.Dock="Right" Background="Transparent" Margin="8,0,4,0"
-                            VerticalAlignment="Center" IsVisible="{Binding ShowsConnectionState}"
-                            ToolTip.Tip="{Binding ConnectionStateTip}">
-                      <Viewbox Width="14" Height="14">
-                        <Panel Width="24" Height="24">
-                          <Path Data="{StaticResource Icon.ChainLinked}" IsVisible="{Binding ConnectionLive}"
-                                Stroke="{DynamicResource Ok.Green}"
-                                StrokeThickness="2.2" StrokeLineCap="Round" StrokeJoin="Round"/>
-                          <Path Data="{StaticResource Icon.ChainBroken}" IsVisible="{Binding !ConnectionLive}"
-                                Stroke="{DynamicResource Text.Faint}"
-                                StrokeThickness="2.2" StrokeLineCap="Round" StrokeJoin="Round"/>
-                        </Panel>
-                      </Viewbox>
-                    </Border>
+                    <!-- Connection state for a server row, pinned to the panel's right edge — the same
+                         beacon the toolbar and the tab headers use, at the prototype's 13px for a tree row.
+                         The row's *fill* is the environment and this mark is the state; the two never share
+                         a channel (#45), which is why the beacon takes its colour from Status.* and not
+                         from the connection's hue. -->
+                    <controls:ConnectionBeacon DockPanel.Dock="Right" Width="13" Height="13" Margin="8,0,4,0"
+                                               VerticalAlignment="Center"
+                                               State="{Binding ConnectionState}"
+                                               IsVisible="{Binding ShowsConnectionState}"
+                                               ToolTip.Tip="{Binding ConnectionStateTip}"/>
                     <StackPanel Orientation="Horizontal" Spacing="6">
                     <!-- Vector icon (server/database) when the node provides one; else the text glyph.
                          Nudged 2px down: Stretch="Uniform" centres the glyph in its box, but a box centred
