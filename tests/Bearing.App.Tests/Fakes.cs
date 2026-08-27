@@ -598,3 +598,33 @@ internal sealed class FakeUpdateService : IUpdateService
 
     public void ApplyAndRestart(UpdateCheck update) => AppliedImmediately = update;
 }
+
+/// <summary>
+/// A scriptable <see cref="IReleaseNotes"/>. Counts fetches, because "asked GitHub once per session" is a
+/// promise the release-notes coordinator makes against a 60/hr rate limit — a silent second fetch is the
+/// failure mode worth catching.
+/// </summary>
+internal sealed class FakeReleaseNotes : IReleaseNotes
+{
+    /// <summary>What a fetch returns. Empty models a feed with nothing published.</summary>
+    public List<ReleaseNote> Notes { get; } = new();
+
+    /// <summary>Set to model an unreachable feed, a spent rate limit, or a refused token.</summary>
+    public Exception? FetchThrows { get; set; }
+
+    public int Fetches { get; private set; }
+
+    public Task<IReadOnlyList<ReleaseNote>> FetchAsync(CancellationToken ct = default)
+    {
+        Fetches++;
+        if (FetchThrows is not null) return Task.FromException<IReadOnlyList<ReleaseNote>>(FetchThrows);
+        return Task.FromResult<IReadOnlyList<ReleaseNote>>(Notes);
+    }
+
+    /// <summary>Publish a version, so a test reads as the release history it is describing.</summary>
+    public FakeReleaseNotes Published(string version, string markdown = "notes")
+    {
+        Notes.Add(new ReleaseNote(version, $"Bearing {version}", null, markdown, $"https://x/{version}"));
+        return this;
+    }
+}

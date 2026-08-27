@@ -155,6 +155,8 @@
       </MenuItem>
       <MenuItem Header="_Help">
         <MenuItem Header="Check for Updates…" Command="{Binding Updates.CheckNowCommand}"/>
+        <MenuItem Header="What's New" Command="{Binding Updates.WhatsNewCommand}"
+                  IsVisible="{Binding Updates.CanShowNotes, FallbackValue=False}"/>
         <Separator/>
         <MenuItem Header="About Bearing" Click="OnAboutClick"/>
       </MenuItem>
@@ -308,6 +310,11 @@
             IsVisible="{Binding Updates.IsVisible, FallbackValue=False}">
       <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
         <TextBlock Text="{Binding Updates.Message}" VerticalAlignment="Center"/>
+        <!-- Asked before "restart now?" can be answered: the notes for the version on offer. -->
+        <Button Content="What's new?" Padding="8,2" Background="Transparent" BorderThickness="0"
+                Foreground="{DynamicResource Syntax.Func}"
+                Command="{Binding Updates.UpdateNotesCommand}"
+                IsVisible="{Binding Updates.CanShowNotes, FallbackValue=False}"/>
         <Button Content="Restart now" Padding="8,2"
                 Command="{Binding Updates.RestartCommand}"
                 IsVisible="{Binding Updates.CanRestart, FallbackValue=False}"/>

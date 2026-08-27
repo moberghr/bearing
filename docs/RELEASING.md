@@ -56,6 +56,16 @@ The release description comes from `docs/release-notes/<version>.md` when that f
 anything worth explaining — it is the text people see on the Releases page, and it also travels inside the
 package.
 
+**The app now reads these notes back.** Help ▸ What's New renders the release history in Bearing itself,
+the update strip links to the notes for the version it is offering, and the first launch after an update
+opens them once. So a release description is no longer only a web page someone might visit — it is a dialog
+every user is shown. Generated commit subjects are fine on the Releases page and thin inside the app; write
+`docs/release-notes/<version>.md` for anything a user would want explained.
+
+The app reads them from the GitHub Releases API, not from the package: `releases.<channel>.json` lists only
+its own version, so it can describe the update on offer and nothing else. One source for the whole history
+is why the in-app dialog and the Releases page can't disagree.
+
 Without that file the notes are generated from the commit subjects since the previous tag. Because this
 repo's subjects carry `(#nn)` refs, GitHub renders them as links to the issues the release closed, so the
 generated notes are useful on their own. Either way the notes are passed to `vpk pack --releaseNotes` and

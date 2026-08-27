@@ -24,6 +24,7 @@ public class SettingsCatalogTests
     {
         nameof(AppSettings.WindowWidth),
         nameof(AppSettings.WindowHeight),
+        nameof(AppSettings.LastSeenVersion),
     };
 
     [Fact]
