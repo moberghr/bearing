@@ -86,9 +86,12 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     /// The <c>Scratch N</c> placeholder is only minted for a tab that has no file to be named after, so the
     /// counter no longer skips numbers every time a saved script is opened.
     /// </para></summary>
-    public EditorTabViewModel NewTab(string text = "", string? scriptPath = null)
+    /// <param name="connectionId">Point the new tab at this connection instead of inheriting one (#57 —
+    /// "new script using this connection"). Inheritance is still the default: a tab opened from the editor
+    /// keeps working against whatever the last one did.</param>
+    public EditorTabViewModel NewTab(string text = "", string? scriptPath = null, Guid? connectionId = null)
     {
-        var inherit = SelectedTab?.ConnectionId ?? _ctx.DefaultConnectionId;
+        var inherit = connectionId ?? SelectedTab?.ConnectionId ?? _ctx.DefaultConnectionId;
         var isScratch = scriptPath is null || ScratchNaming.IsUnderScratch(scriptPath, _ctx.Project?.ScratchDirectory);
         var label = scriptPath is null
             ? $"Scratch {++_scratchCounter}"

@@ -25,26 +25,79 @@ public abstract partial class SchemaNodeViewModel : ObservableObject
     protected SchemaNodeViewModel(string glyph, string title, string? detail, bool hasChildren)
     {
         Glyph = glyph;
-        Title = title;
-        Detail = detail;
+        _title = title;
+        _detail = detail;
         HasChildren = hasChildren;
         if (hasChildren) Children.Add(new MessageNodeViewModel("", "Loading…"));
     }
 
     public string Glyph { get; }
-    public string Title { get; }
-    public string? Detail { get; }
+
+    /// <summary>Row label. Settable (protected) so a node can be re-labelled in place rather than replaced:
+    /// renaming a connection must not collapse the tree or throw away its loaded databases.</summary>
+    public string Title { get => _title; protected set => SetProperty(ref _title, value); }
+    private string _title;
+
+    /// <summary>Dim second line — the server's <c>host:port</c>, a column's type. Settable for the same
+    /// reason as <see cref="Title"/>.</summary>
+    public string? Detail { get => _detail; protected set => SetProperty(ref _detail, value); }
+    private string? _detail;
 
     /// <summary>Whether the node can be expanded (drives the placeholder + the expander arrow).</summary>
     public bool HasChildren { get; }
 
     public ObservableCollection<SchemaNodeViewModel> Children { get; } = new();
 
+    /// <summary>The row above this one, or null at the root. Set wherever children are attached, so a
+    /// question asked of a deep row — which connection is this column's server? (#57) — can be answered by
+    /// walking up rather than by every node type carrying its own copy of the connection.</summary>
+    public SchemaNodeViewModel? Parent { get; private set; }
+
+    /// <summary>The connection this row belongs to, found by walking up to the nearest server row. Null for
+    /// a folder, and for the tree's own roots.</summary>
+    public ConnectionInfo? OwningConnection
+    {
+        get
+        {
+            for (var n = this; n is not null; n = n.Parent)
+                if (n is ServerNodeViewModel server) return server.Connection;
+            return null;
+        }
+    }
+
+    /// <summary>Attach a child and record the link. Used by every path that populates
+    /// <see cref="Children"/>.</summary>
+    protected void AddChild(SchemaNodeViewModel child)
+    {
+        child.Parent = this;
+        Children.Add(child);
+    }
+
     [ObservableProperty] private bool _isExpanded;
     [ObservableProperty] private bool _isLoading;
 
     /// <summary>True when the node's title matches the current type-ahead search (drives the highlight).</summary>
     [ObservableProperty] private bool _isMatch;
+
+    /// <summary>True while this row is the one being dragged into a folder (#80). The row dims, so it is
+    /// visible <em>what</em> is in flight — the platform owns the pointer during a drag, so the cursor
+    /// cannot say it, and the drop highlight only says where it would land.</summary>
+    [ObservableProperty] private bool _isDragging;
+
+    /// <summary>True while this row is an editable box rather than a label. Only connection and folder rows
+    /// ever set it — schema objects are named by the server — but it lives on the base so the sidebar's one
+    /// data template can bind it without reflection, and so both row types rename the same way (#39).</summary>
+    [ObservableProperty] private bool _isRenaming;
+
+    /// <summary>The name being typed while <see cref="IsRenaming"/>.</summary>
+    [ObservableProperty] private string _renameDraft = "";
+
+    /// <summary>Start editing this row's name in place, seeded from what it is called now.</summary>
+    public void BeginRename()
+    {
+        RenameDraft = Title;
+        IsRenaming = true;
+    }
 
     /// <summary>
     /// Tests a title against the sidebar's live type-ahead query. The search pass sets it on every loaded node,
@@ -65,6 +118,10 @@ public abstract partial class SchemaNodeViewModel : ObservableObject
 
     /// <summary>True only for the root server node (drives its context-menu items + double-tap).</summary>
     public virtual bool IsServer => false;
+
+    /// <summary>True only for a connection folder (#80) — the one node type that is organisation rather
+    /// than schema. Drives its own context-menu items and makes it a drop target.</summary>
+    public virtual bool IsFolder => false;
 
     /// <summary>Hex environment colour washed across the whole row (server nodes only); null = no wash.
     /// It replaced a 9px leading dot, which read as a connection-state light next to the toolbar's
@@ -122,7 +179,7 @@ public abstract partial class SchemaNodeViewModel : ObservableObject
             foreach (var k in kids)
             {
                 k.InheritSearch(this);
-                Children.Add(k);
+                AddChild(k);
             }
         }
         catch (Exception ex)
@@ -161,19 +218,79 @@ public sealed class MessageNodeViewModel : SchemaNodeViewModel
     protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync() => Task.FromResult(None);
 }
 
+/// <summary>
+/// A connection folder (#80): organisation, not schema. Its members are handed in already built — the
+/// connections it holds are the cached <see cref="ServerNodeViewModel"/>s, so re-filing or re-filtering
+/// rebuilds the folder rows without touching what those have loaded.
+/// <para>A <see cref="SchemaNodeViewModel"/> rather than a parallel type so it inherits the sidebar's one
+/// data template, the type-ahead's flatten/highlight pass, and the expansion binding. It contributes no
+/// <see cref="RowAccentColor"/>: a folder is where you filed a connection, an environment is how dangerous
+/// it is, and giving folders a hue of their own is how those two channels would start reading as each
+/// other (#45).</para>
+/// </summary>
+public sealed partial class ConnectionFolderNodeViewModel : SchemaNodeViewModel
+{
+    public ConnectionFolderNodeViewModel(string path, int count, IReadOnlyList<SchemaNodeViewModel> members)
+        // hasChildren: false — nothing to load lazily, so no "Loading…" placeholder; the members below are
+        // what give the row its expander.
+        : base("▸", FolderPath.Name(path) ?? path, count > 0 ? count.ToString() : null, hasChildren: false)
+    {
+        Path = path;
+        Count = count;
+        foreach (var m in members) AddChild(m);
+    }
+
+    /// <summary>Full "/"-separated path, which is the folder's identity — the row's title is only its last
+    /// segment, and two folders can share that.</summary>
+    public string Path { get; }
+
+    /// <summary>Connections anywhere beneath, so a collapsed folder still says how much it is hiding.</summary>
+    public int Count { get; }
+
+    /// <summary>Whether <see cref="Count"/> is worth rendering. An empty folder hides nothing, and a bare
+    /// "0" on the row reads as a value rather than as an absence.</summary>
+    public bool HasConnections => Count > 0;
+
+    public override bool IsFolder => true;
+    public override string? IconKey => "Icon.Folder";
+    public override string IconColorHex => "#E6C384";
+
+    /// <summary>True while a dragged connection is over this folder, so the row says where the drop lands.
+    /// The move worked before the Scripts tree grew this, it just gave no sign of its target (#37).</summary>
+    [ObservableProperty] private bool _isDropTarget;
+
+    protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync() => Task.FromResult(None);
+}
+
 /// <summary>Root node: a saved connection = a server. Expands to the databases on that server.</summary>
-public sealed class ServerNodeViewModel : SchemaNodeViewModel
+public sealed partial class ServerNodeViewModel : SchemaNodeViewModel
 {
     private readonly ISchemaBrowser _browser;
 
     public ServerNodeViewModel(ConnectionInfo connection, ISchemaBrowser browser)
-        : base("⛁", connection.Name, connection.Host, hasChildren: true)
+        : base("⛁", connection.Name, ConnectionEndpoint.HostPort(connection), hasChildren: true)
     {
         Connection = connection;
         _browser = browser;
     }
 
-    public ConnectionInfo Connection { get; }
+    public ConnectionInfo Connection { get; private set; }
+
+    /// <summary>
+    /// Take on an edited <see cref="ConnectionInfo"/> that targets the same server, keeping this node — its
+    /// expansion, its loaded databases, and everything under them. A rename or a change of environment colour
+    /// describes the same server, and rebuilding the node for one collapsed the tree and re-read the catalog
+    /// for nothing. Callers decide what counts as "same server"
+    /// (<c>ConnectionsViewModel.SameNetwork</c>); this only re-labels.
+    /// </summary>
+    public void Adopt(ConnectionInfo edited)
+    {
+        Connection = edited;
+        Title = edited.Name;
+        Detail = ConnectionEndpoint.HostPort(edited);
+        OnPropertyChanged(nameof(RowAccentColor));
+    }
+
     public override bool IsServer => true;
     public override string? RowAccentColor => Connection.EnvironmentColor;
     public override bool ShowsConnectionState => true;
@@ -287,7 +404,7 @@ public sealed class SchemaGroupNodeViewModel : SchemaNodeViewModel
         : base("▸", title, members.Count.ToString(), hasChildren: false)
     {
         _iconKey = iconKey;
-        foreach (var m in members) Children.Add(m);
+        foreach (var m in members) AddChild(m);
     }
 
     public override string? IconKey => _iconKey;

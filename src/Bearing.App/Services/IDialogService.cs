@@ -116,6 +116,11 @@ public interface IDialogService
     /// <summary>Pick a destination for saving a .sql file. Returns the local path, or null if cancelled.</summary>
     Task<string?> PickSaveScriptAsync(string suggestedName, string? startDir);
 
+    /// <summary>Pick a connections file to import from — DBeaver's data-sources.json (#72). Filtered to
+    /// .json rather than to that exact name: the workspace path is user-configurable, and someone importing
+    /// a copy a colleague sent will not have kept the filename.</summary>
+    Task<string?> PickImportFileAsync(string? startDir);
+
     /// <summary>Pick a destination for an exported result set, filtered to <paramref name="format"/>'s file
     /// type. Returns the local path, or null if cancelled.</summary>
     Task<string?> PickExportFileAsync(string suggestedName, ExportFormat format);

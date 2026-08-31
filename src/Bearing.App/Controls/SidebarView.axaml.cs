@@ -1,3 +1,4 @@
+using System;
 using System.ComponentModel;
 using System.Linq;
 using System.Threading;
@@ -9,6 +10,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Bearing.App.Connections;
 using Bearing.App.Editing;
 using Bearing.App.Services;
 using Bearing.App.ViewModels;
@@ -27,7 +29,9 @@ namespace Bearing.App.Controls;
 public partial class SidebarView : UserControl
 {
     /// <summary>The ＋ button asks the shell to open the new-connection dialog (also driven by the palette).</summary>
-    public System.Action? AddConnectionRequested { get; set; }
+    /// <summary>Raised by the ＋ button and by "New connection here…" on a folder row. The argument is the
+    /// folder path to file the new connection into, or null for the top level.</summary>
+    public System.Action<string?>? AddConnectionRequested { get; set; }
 
     /// <summary>Raised after an action changed the selected tab, so the shell re-syncs the editor buffer.</summary>
     public System.Action? EditorSyncRequested { get; set; }
@@ -81,7 +85,7 @@ public partial class SidebarView : UserControl
 
     // ---- connections ----
 
-    private void OnAddConnectionClick(object? sender, RoutedEventArgs e) => AddConnectionRequested?.Invoke();
+    private void OnAddConnectionClick(object? sender, RoutedEventArgs e) => AddConnectionRequested?.Invoke(null);
 
     /// <summary>The schema-tree node the clicked menu item / tapped row belongs to (via its DataContext).</summary>
     private static SchemaNodeViewModel? NodeOf(object? sender) => (sender as Control)?.DataContext as SchemaNodeViewModel;
@@ -369,6 +373,305 @@ public partial class SidebarView : UserControl
             e.Handled = true;
             _ = OpenScript(s);
         }
+    }
+
+    /// <summary>
+    /// The connection the connections tree is pointing at, but <b>only while that tree actually holds
+    /// keyboard focus</b> — otherwise null (#57). Ctrl+N is meant to notice where you are: pressed with a
+    /// connection selected in the pane it opens a script against it, and pressed while editing it must
+    /// behave exactly as before. Reading the selection unconditionally would let a sidebar click from ten
+    /// minutes ago silently decide which server the next script talks to.
+    /// <para>Any row answers, not just a server: the connection is found by walking up
+    /// (<see cref="SchemaNodeViewModel.OwningConnection"/>), so selecting a table works too. A folder row
+    /// belongs to no connection and yields null.</para>
+    /// </summary>
+    public Guid? FocusedTreeConnectionId
+        => SchemaTree.IsKeyboardFocusWithin
+            ? (SchemaTree.SelectedItem as SchemaNodeViewModel)?.OwningConnection?.Id
+            : null;
+
+    // ---- connection management (#56, #57) --------------------------------------------------------
+
+    /// <summary>#57: open a new script already pointed at this connection, rather than at whatever the last
+    /// tab happened to use.</summary>
+    private void OnNewScriptForConnection(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is not null && NodeOf(sender) is ServerNodeViewModel server)
+            Vm.Workspace.NewTab(connectionId: server.Connection.Id);
+    }
+
+    /// <summary>Import lives here as well as in the File menu because that menu is hidden unless the user
+    /// turns it on in Settings — the connections panel is where someone looking to add connections actually
+    /// is.</summary>
+    private void OnImportConnectionsClick(object? sender, RoutedEventArgs e) => ImportConnectionsRequested?.Invoke();
+
+    /// <summary>Raised by the panel's context menu and its empty state; the shell owns the import flow.</summary>
+    public System.Action? ImportConnectionsRequested { get; set; }
+
+    private async void OnPasteConnectionAtRootClick(object? sender, RoutedEventArgs e)
+        => await PasteConnectionsAsync(null, overrideFolder: true);
+
+    private void OnRenameConnectionClick(object? sender, RoutedEventArgs e)
+        => (NodeOf(sender) as ServerNodeViewModel)?.BeginRename();
+
+    private async void OnConnectionRenameKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (Vm is null || sender is not TextBox box) return;
+        if (box.DataContext is not ServerNodeViewModel server) return;
+        if (e.Key == Key.Enter)
+        {
+            e.Handled = true;
+            server.IsRenaming = false;   // clearing it first stops LostFocus committing the same rename again
+            await Vm.Connections.RenameConnectionAsync(server.Connection.Id, server.RenameDraft);
+        }
+        else if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            server.IsRenaming = false;
+        }
+    }
+
+    private async void OnConnectionRenameLostFocus(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is null || sender is not TextBox box) return;
+        if (box.DataContext is not ServerNodeViewModel server || !server.IsRenaming) return;
+        server.IsRenaming = false;
+        await Vm.Connections.RenameConnectionAsync(server.Connection.Id, server.RenameDraft);
+    }
+
+    private async void OnDuplicateConnectionClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is not null && NodeOf(sender) is ServerNodeViewModel server)
+            await Vm.Connections.DuplicateConnectionAsync(server.Connection.Id);
+    }
+
+    private async void OnCopyConnectionClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is null || NodeOf(sender) is not ServerNodeViewModel server) return;
+        if (Vm.Connections.CopyToClipboardText(server.Connection.Id) is not { } text) return;
+        if (TopLevel.GetTopLevel(this)?.Clipboard is not { } clipboard) return;
+
+        await clipboard.SetTextAsync(text);
+        // Said out loud because the omission is the surprising part: the payload is deliberately not a
+        // complete connection, and someone pasting it will be asked for a password.
+        Vm.StatusText = $"Copied '{server.Connection.Name}' — without its password.";
+    }
+
+    private async void OnPasteConnectionIntoFolderClick(object? sender, RoutedEventArgs e)
+        => await PasteConnectionsAsync(FolderNodeOf(sender)?.Path, overrideFolder: true);
+
+    /// <summary>Ctrl+V anywhere in the connections tree pastes at the top level. Kept local rather than
+    /// registered in the keymap (§9.2): it is the tree's own clipboard verb on the tree's own selection,
+    /// like the grid's copy, not an app-wide command that would need a scope to be meaningful.</summary>
+    private async void OnConnectionTreeKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.V || !e.KeyModifiers.HasFlag(KeyModifiers.Control)) return;
+        var target = (SchemaTree.SelectedItem as ConnectionFolderNodeViewModel)?.Path;
+        if (await PasteConnectionsAsync(target, overrideFolder: target is not null)) e.Handled = true;
+    }
+
+    private async Task<bool> PasteConnectionsAsync(string? intoFolder, bool overrideFolder)
+    {
+        if (Vm is null || TopLevel.GetTopLevel(this)?.Clipboard is not { } clipboard) return false;
+
+        string? text;
+        try { text = await clipboard.TryGetTextAsync(); }
+        catch { return false; }   // clipboard reads are best-effort; another app can hold it locked
+
+        // Zero means the clipboard held something that is not one of ours. Nothing is said: a paste gesture
+        // over unrelated content should do nothing, not report a failure the user didn't attempt.
+        return await Vm.Connections.PasteFromClipboardTextAsync(text, intoFolder, overrideFolder) > 0;
+    }
+
+    // ---- connection folders (#80) --------------------------------------------------------------
+
+    private static ConnectionFolderNodeViewModel? FolderNodeOf(object? sender)
+        => (sender as Control)?.DataContext as ConnectionFolderNodeViewModel;
+
+    private async void OnNewConnectionFolderClick(object? sender, RoutedEventArgs e)
+        => await NewConnectionFolderAsync(null);
+
+    private async void OnNewConnectionSubfolderClick(object? sender, RoutedEventArgs e)
+        => await NewConnectionFolderAsync(FolderNodeOf(sender)?.Path);
+
+    private async Task NewConnectionFolderAsync(string? parentPath)
+    {
+        if (Vm is null) return;
+        var name = await _dialogs.ShowTextPromptAsync("Folder name", "");
+        if (string.IsNullOrWhiteSpace(name)) return;
+        await Vm.Connections.CreateFolderAsync(name, parentPath);
+    }
+
+    /// <summary>Add a connection already filed into the folder that was right-clicked. The folder is the
+    /// reason the user is there; making them add it at the root and then drag it in is a step that exists
+    /// only because the dialog does not know where it was opened from.</summary>
+    private void OnAddConnectionInFolderClick(object? sender, RoutedEventArgs e)
+    {
+        if (FolderNodeOf(sender) is { } folder) AddConnectionRequested?.Invoke(folder.Path);
+    }
+
+    private void OnRenameConnectionFolderClick(object? sender, RoutedEventArgs e)
+        => FolderNodeOf(sender)?.BeginRename();
+
+    private async void OnDeleteConnectionFolderClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is null || FolderNodeOf(sender) is not { } folder) return;
+        // No confirmation: the connections survive (they move up a level), so the worst case is a folder to
+        // re-create. Deleting a *connection* is the destructive one and keeps its own prompt.
+        await Vm.Connections.DeleteFolderAsync(folder.Path);
+    }
+
+    private async void OnConnectionFolderRenameKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (Vm is null || sender is not TextBox box) return;
+        if (box.DataContext is not ConnectionFolderNodeViewModel folder) return;
+        if (e.Key == Key.Enter)
+        {
+            e.Handled = true;
+            folder.IsRenaming = false;   // clearing it first stops LostFocus committing the same rename again
+            await Vm.Connections.RenameFolderAsync(folder.Path, folder.RenameDraft);
+        }
+        else if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            folder.IsRenaming = false;
+        }
+    }
+
+    private async void OnConnectionFolderRenameLostFocus(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is null || sender is not TextBox box) return;
+        if (box.DataContext is not ConnectionFolderNodeViewModel folder || !folder.IsRenaming) return;
+        folder.IsRenaming = false;
+        await Vm.Connections.RenameFolderAsync(folder.Path, folder.RenameDraft);
+    }
+
+    private async void OnMoveConnectionToRoot(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is not null && NodeOf(sender) is ServerNodeViewModel server)
+            await Vm.Connections.MoveConnectionToFolderAsync(server.Connection.Id, null);
+    }
+
+    // ---- connections drag and drop (file a connection or a folder into a folder) -----------------
+    //
+    // Mirrors the Scripts tree, including the reasons behind its two non-obvious parts: DragLeave is only
+    // honoured outside the tree's own bounds (it bubbles from every row the pointer crosses, so acting on it
+    // directly makes the highlight flicker), and the drag is awaited so both live marks are released however
+    // it ends - dropped, cancelled, or let go outside the window where no event arrives at all.
+    private static readonly DataFormat<string> ConnectionIdFormat =
+        DataFormat.CreateInProcessFormat<string>("bearing.connection-id");
+    private static readonly DataFormat<string> ConnectionFolderFormat =
+        DataFormat.CreateInProcessFormat<string>("bearing.connection-folder");
+
+    private Point _connDragStart;
+    private SchemaNodeViewModel? _connDragNode;
+    private PointerPressedEventArgs? _connDragPress;
+    private DragGhost? _connGhost;
+
+    private void OnConnectionNodePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        var node = (sender as Control)?.DataContext as SchemaNodeViewModel;
+        if (node is not (ServerNodeViewModel or ConnectionFolderNodeViewModel)) return;
+        if (!e.GetCurrentPoint(sender as Visual).Properties.IsLeftButtonPressed) return;
+        _connDragNode = node;
+        _connDragPress = e;
+        _connDragStart = e.GetPosition(null);
+    }
+
+    private async void OnConnectionNodePointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (_connDragNode is null || _connDragPress is null) return;
+        if (!e.GetCurrentPoint(sender as Visual).Properties.IsLeftButtonPressed) return;
+        var pos = e.GetPosition(null);
+        if (Math.Abs(pos.X - _connDragStart.X) <= 4 && Math.Abs(pos.Y - _connDragStart.Y) <= 4) return;
+
+        var transfer = new DataTransfer();
+        transfer.Add(_connDragNode switch
+        {
+            ServerNodeViewModel server
+                => DataTransferItem.Create(ConnectionIdFormat, server.Connection.Id.ToString()),
+            ConnectionFolderNodeViewModel folder
+                => DataTransferItem.Create(ConnectionFolderFormat, folder.Path),
+            _ => throw new InvalidOperationException("only servers and folders are draggable"),
+        });
+
+        var press = _connDragPress;
+        var dragged = _connDragNode;
+        _connDragNode = null;
+        _connDragPress = null;
+
+        // Say what is in flight two ways that do not depend on the platform: the row fades, and the status
+        // bar names it and the rule for dropping outside a folder. An app-set drag cursor is not available -
+        // the pointer is grabbed for the duration of the drag.
+        Vm?.Connections.MarkDragging(dragged);
+        if (Vm is not null)
+            Vm.StatusText = $"Moving {dragged.Title} - drop it on a folder, or anywhere else for the top level.";
+
+        _connGhost = new DragGhost(this);
+        _connGhost.Show(dragged.Title);
+
+        var outcome = DragDropEffects.None;
+        try { outcome = await DragDrop.DoDragDropAsync(press, transfer, DragDropEffects.Move); }
+        finally
+        {
+            _connGhost?.Dispose();
+            _connGhost = null;
+            Vm?.Connections.MarkDragging(null);
+            Vm?.Connections.ClearDropTarget();
+            if (outcome == DragDropEffects.None && Vm is not null) Vm.StatusText = "";
+        }
+    }
+
+    private void OnConnectionDragOver(object? sender, DragEventArgs e)
+    {
+        var carrying = e.DataTransfer.Contains(ConnectionIdFormat)
+                    || e.DataTransfer.Contains(ConnectionFolderFormat);
+        var target = carrying ? FolderNodeOf(sender) : null;
+
+        // A folder cannot be dropped into itself or one of its own descendants - that would detach the
+        // subtree from the tree. Refused here so the row never lights up as a target the drop then ignores.
+        if (target is not null && e.DataTransfer.TryGetValue(ConnectionFolderFormat) is string dragged
+            && FolderPath.IsWithin(target.Path, dragged))
+            target = null;
+
+        e.DragEffects = carrying ? DragDropEffects.Move : DragDropEffects.None;
+        Vm?.Connections.MarkDropTarget(target);
+        if (carrying) _connGhost?.FollowPointer(e);
+        e.Handled = true;
+    }
+
+    private void OnConnectionDragLeave(object? sender, DragEventArgs e)
+    {
+        var p = e.GetPosition(SchemaTree);
+        if (p.X < 0 || p.Y < 0 || p.X > SchemaTree.Bounds.Width || p.Y > SchemaTree.Bounds.Height)
+        {
+            Vm?.Connections.ClearDropTarget();
+            _connGhost?.Hide();
+        }
+    }
+
+    private async void OnConnectionDropOnFolder(object? sender, DragEventArgs e)
+    {
+        if (FolderNodeOf(sender) is not { } folder) return;
+        e.Handled = true;
+        await DropIntoAsync(e, folder.Path);
+    }
+
+    private async void OnConnectionDropOnRoot(object? sender, DragEventArgs e)
+    {
+        e.Handled = true;
+        await DropIntoAsync(e, null);
+    }
+
+    private async Task DropIntoAsync(DragEventArgs e, string? targetPath)
+    {
+        if (Vm is null) return;
+        Vm.Connections.ClearDropTarget();
+
+        if (e.DataTransfer.TryGetValue(ConnectionIdFormat) is string id && Guid.TryParse(id, out var connectionId))
+            await Vm.Connections.MoveConnectionToFolderAsync(connectionId, targetPath);
+        else if (e.DataTransfer.TryGetValue(ConnectionFolderFormat) is string path)
+            await Vm.Connections.MoveFolderAsync(path, targetPath);
     }
 
     // ---- scripts drag & drop (move a script into a folder) — Avalonia 12 typed in-process transfer ----

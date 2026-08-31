@@ -21,6 +21,7 @@
       <conv:MatchHighlightConverter x:Key="MatchHighlight"/>
       <conv:DropTargetConverter x:Key="DropTarget"/>
       <conv:PanelActiveConverter x:Key="PanelActive"/>
+      <conv:ConnectionEndpointConverter x:Key="ConnectionEndpoint"/>
       <!-- Shared monospace family for the code editor(s) and result grid. Iosevka is
            installed as the "Nerd Font Mono" build; the rest are fallbacks. -->
       <FontFamily x:Key="MonoFontFamily">Iosevka Nerd Font Mono,Iosevka,Cascadia Code,JetBrains Mono,Consolas,Menlo,monospace</FontFamily>
