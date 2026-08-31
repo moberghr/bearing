@@ -398,7 +398,14 @@
       <DockPanel LastChildFill="True">
         <Border DockPanel.Dock="Top" Padding="4,4,4,0" Background="{DynamicResource Bg.Chrome}"
                 BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
-          <StackPanel Orientation="Horizontal">
+          <!-- The strip scrolls; the + button is docked outside it so it can never be pushed off the right
+               edge with the tabs (#65). A horizontal StackPanel measured the strip at infinite width, so the
+               overflow was laid out and then clipped, with nothing to reach it by. -->
+          <DockPanel LastChildFill="True">
+            <Button DockPanel.Dock="Right" Content="+" Click="OnNewTabClick" Padding="8,2" Margin="6,0,0,0"
+                    VerticalAlignment="Center" ToolTip.Tip="New editor tab (Ctrl+T)"/>
+            <ScrollViewer x:Name="TabScroll" HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Disabled">
             <TabStrip x:Name="TabStrip" ItemsSource="{Binding Workspace.Tabs}" SelectedItem="{Binding Workspace.SelectedTab}">
               <TabStrip.Styles>
                 <!-- Compact, underline-style tabs. Retemplated so the only selected marker is a
@@ -503,9 +510,8 @@
                 </DataTemplate>
               </TabStrip.ItemTemplate>
             </TabStrip>
-            <Button Content="+" Click="OnNewTabClick" Padding="8,2" Margin="6,0,0,0"
-                    ToolTip.Tip="New editor tab (Ctrl+T)"/>
-          </StackPanel>
+            </ScrollViewer>
+          </DockPanel>
         </Border>
 
         <!-- Editor / results split. The results row + splitter start collapsed (SetResultsVisible)

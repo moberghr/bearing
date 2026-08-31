@@ -29,6 +29,7 @@ public partial class MainWindow : Window
     private readonly CommandPaletteHost _palette;           // command palette + quick-pick overlays
     private readonly TabNavigator _tabs;                    // visual / MRU / go-to-N tab switching
     private readonly ResultsPaneController _resultsPane;    // editor / results split visibility
+    private readonly TabStripScroller _tabScroll;           // overflowing tab strip: wheel + keep-selected-visible
     private readonly IReadOnlyList<string> _keymapWarnings;
     private bool _keymapWarningsShown;
     private HashSet<string> _navCommands = new();
@@ -59,6 +60,7 @@ public partial class MainWindow : Window
         _tabs = new TabNavigator(() => _dispatcher!.Keymap);
         _palette = new CommandPaletteHost(this, _commands, () => _dispatcher!.Keymap);
         _resultsPane = new ResultsPaneController(WorkspaceGrid, ResultsSplitter, ResultsView);
+        _tabScroll = new TabStripScroller(TabScroll, TabStrip);
         // The editor's FontSize is applied here rather than bound in XAML: one editor serves every tab,
         // and each tab carries its own zoom over the configured base size. The controller also owns the
         // Ctrl+wheel gesture; this window only says where the resulting size is announced.
@@ -348,6 +350,9 @@ public partial class MainWindow : Window
 
     private void LoadEditorFromSelectedTab()
     {
+        // Every route to a different tab comes through here, keyboard ones included, so this is where the
+        // strip is told to show what is now selected (#65).
+        _tabScroll.BringSelectionIntoView();
         var tab = Vm?.Workspace.SelectedTab;
         // Folds belong to the editor, not to a tab (one editor serves all of them), so they are dropped
         // before the buffer is replaced rather than carried into it — and dropped *first*, while the old
