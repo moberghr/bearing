@@ -28,7 +28,14 @@ internal static class UiTestApp
     public static AppBuilder BuildAvaloniaApp() =>
         AppBuilderFactory.Configure()
             .UseSkia()
-            .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false });
+            .UseHeadless(new AvaloniaHeadlessPlatformOptions
+            {
+                UseHeadlessDrawing = false,
+                // Render on the dispatcher thread, so a frame is on the surface by the time
+                // ForceRenderTimerTick returns and a capture is deterministic rather than a race with a
+                // render thread. Tests are single-threaded here anyway (one collection, no parallelism).
+                ShouldRenderOnUIThread = true,
+            });
 }
 
 /// <summary>

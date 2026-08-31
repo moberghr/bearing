@@ -93,6 +93,29 @@ public class EditorFoldingTests
         f.Window.Close();
     });
 
+    /// <summary>…and it puts marks on the surface, which is the actual claim in #74 and the one thing no
+    /// property could answer. Asserted on rendered pixels: the margin is not a flat block of background, and
+    /// folding changes what it draws (the marker flips, the region bracket goes). Deliberately not asserting
+    /// colours — see <see cref="FrameCapture"/>.</summary>
+    [Fact]
+    public Task The_fold_margin_draws_markers_and_redraws_them_when_folded() => _ui.Run(() =>
+    {
+        var f = Editor();
+        f.Load(TwoStatements);
+        var margin = f.Editor.TextArea.LeftMargins.OfType<FoldingMargin>().Single();
+
+        var unfolded = FrameCapture.Of(f.Window).Within(margin, f.Window);
+        Assert.True(unfolded.Distinct().Count() > 1,
+            "the fold margin rendered as one flat colour — nothing is drawn in it");
+
+        f.Folding.FoldAll();
+        f.Window.UpdateLayout();
+        var folded = FrameCapture.Of(f.Window).Within(margin, f.Window);
+
+        Assert.NotEqual(unfolded, folded);
+        f.Window.Close();
+    });
+
     /// <summary>Fold in one tab, switch to another: the new buffer must not open wearing the old one's folds,
     /// and measuring it must not throw. Measured honestly, this passes without <c>Reset</c> too — a
     /// whole-buffer replace already drops the sections — so it is a guard on the invariant, not a
