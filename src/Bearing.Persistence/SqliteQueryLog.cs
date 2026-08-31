@@ -93,12 +93,21 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
 
     public void Append(QueryLogEntry entry) => _channel.Writer.TryWrite(entry);
 
+    /// <inheritdoc />
+    public event Action<QueryLogEntry>? Appended;
+
     private async Task WriteLoopAsync()
     {
         await foreach (var entry in _channel.Reader.ReadAllAsync().ConfigureAwait(false))
         {
             try { Insert(entry); }
-            catch { /* logging must never surface an error to the app */ }
+            catch { continue; /* logging must never surface an error to the app */ }
+
+            // After the insert, never before: a subscriber's whole reason to listen is that the row is now
+            // readable. Raised on this loop's thread, and a throwing subscriber must not take the writer
+            // down with it — the log would then silently stop recording.
+            try { Appended?.Invoke(entry); }
+            catch { /* a listener's problem is not the log's */ }
         }
     }
 

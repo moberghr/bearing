@@ -34,5 +34,16 @@ public interface IQueryLog
     /// <summary>Record an execution. Never throws to the caller and never blocks the results grid.</summary>
     void Append(QueryLogEntry entry);
 
+    /// <summary>
+    /// Raised once an appended entry is actually in the log and readable by <see cref="SearchAsync"/>.
+    /// <para>
+    /// Separate from <see cref="Append"/> returning, because it does not: appending hands the entry to a
+    /// writer and returns immediately, so anything that re-reads the log on the strength of an
+    /// <c>Append</c> call races the insert and usually misses the row it refreshed for (#78). This fires on
+    /// the writer's own thread — a UI subscriber has to marshal.
+    /// </para>
+    /// </summary>
+    event Action<QueryLogEntry>? Appended;
+
     Task<IReadOnlyList<QueryLogEntry>> SearchAsync(QueryLogQuery query, CancellationToken ct);
 }

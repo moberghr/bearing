@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Bearing.App.Connections;
 using Bearing.App.Formatting;
@@ -93,6 +94,11 @@ public sealed partial class ShellViewModel : ObservableObject
         _workspace = new WorkspaceViewModel(_ctx, _scripts, _connections, dialogs);
         _execution = new ExecutionViewModel(_ctx, dialogs);
         History = new HistoryPanelViewModel(SearchHistoryAsync, ColorForConnection);
+        // Refresh from the log's own "the row is in" signal rather than from the execution path: Append
+        // hands the entry to a background writer and returns, so reloading when a run finishes would race
+        // the insert and usually miss the very row it refreshed for (#78). Posted because the writer raises
+        // this on its own thread and Regroup mutates a bound ObservableCollection.
+        _queryLog.Appended += _ => Dispatcher.UIThread.Post(RefreshHistoryIfShowing);
     }
 
     // ---- Child view-models (the shell composes them; XAML/code-behind bind Vm.<child>.X) -------
@@ -173,7 +179,26 @@ public sealed partial class ShellViewModel : ObservableObject
     partial void OnActivePanelChanged(SidePanel value)
     {
         // Reveal is *not* done here — see ShowPanel. This handler only reacts to the panel actually changing.
-        if (value == SidePanel.History) _ = History.ReloadAsync(CancellationToken.None);
+        RefreshHistoryIfShowing();
+    }
+
+    partial void OnSidePaneOpenChanged(bool value) => RefreshHistoryIfShowing();
+
+    /// <summary>
+    /// Reload the history panel when it is the one on screen. Hung off every route that can put it there —
+    /// the panel changing, the pane opening, and a query landing in the log — rather than off the panel
+    /// change alone.
+    /// <para>
+    /// The panel change alone was not enough: <c>[ObservableProperty]</c>'s setter short-circuits on an
+    /// unchanged value, so collapsing the pane from the History tile and re-opening it set <c>ActivePanel</c>
+    /// to the value it already had, the handler never ran, and the pane revealed stale history — the same
+    /// short-circuit <see cref="ShowPanel"/> exists to document.
+    /// </para>
+    /// </summary>
+    private void RefreshHistoryIfShowing()
+    {
+        if (ActivePanel == SidePanel.History && SidePaneOpen)
+            _ = History.ReloadAsync(CancellationToken.None);
     }
 
     /// <summary>Environment color of a connection by display name (for the history dot); null if unknown.</summary>
