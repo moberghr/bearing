@@ -447,7 +447,8 @@
                   <!-- Right-click: Rename / Save / Close / Reveal in Scripts / Open containing folder,
                        built in code-behind for *this* tab (OnTabContextRequested), not the selected one. -->
                   <StackPanel Orientation="Horizontal" DoubleTapped="OnTabHeaderDoubleTapped"
-                              ContextRequested="OnTabContextRequested">
+                              ContextRequested="OnTabContextRequested"
+                              PointerPressed="OnTabHeaderPressed">
                     <!-- Header is the backing file's name (scratch included); the tooltip adds its folder.
                          Renaming swaps the label for a box in place (#39): Enter commits, Esc cancels,
                          clicking away commits. Both live in the tree; only one is visible. -->

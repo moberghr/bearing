@@ -22,7 +22,24 @@ public partial class MainWindow
 
     private async void OnCloseTabPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (sender is Control { DataContext: EditorTabViewModel tab }) { e.Handled = true; await CloseTabAsync(tab); }
+        if (sender is not Control { DataContext: EditorTabViewModel tab } target) return;
+        // Left button only: a right-click here is opening the tab's context menu, and a middle-click is the
+        // header's own close gesture below — closing on either meant the ✕ acted on presses that weren't
+        // aimed at it (#66).
+        if (!TabPointerGestures.ActivatesCloseButton(e.GetCurrentPoint(target).Properties.PointerUpdateKind)) return;
+        e.Handled = true;
+        await CloseTabAsync(tab);
+    }
+
+    /// <summary>Middle-click anywhere on a tab header closes it, as every tabbed app does. Routed through the
+    /// same <see cref="CloseTabAsync"/> as the ✕ and Ctrl+F4, so the unsaved-buffer prompt and the
+    /// "last tab reopens an empty one" rule apply identically.</summary>
+    private async void OnTabHeaderPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is not Control { DataContext: EditorTabViewModel tab } target) return;
+        if (!TabPointerGestures.ClosesTab(e.GetCurrentPoint(target).Properties.PointerUpdateKind)) return;
+        e.Handled = true;
+        await CloseTabAsync(tab);
     }
 
     private void OnTabHeaderDoubleTapped(object? sender, TappedEventArgs e)
