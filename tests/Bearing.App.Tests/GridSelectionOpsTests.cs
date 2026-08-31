@@ -246,6 +246,75 @@ public class GridSelectionOpsTests
         CultureScope.In("en-US", () => Assert.Equal("3 of 1,000 rows", rs.RowCountText));
     }
 
+    // ---- field traversal (#10) -----------------------------------------------------------------
+
+    private static (int Row, int Col) Field(ResultSetViewModel rs, int row, int col, bool forward = true)
+        => GridSelectionOps.Move(
+            rs, row, col, forward ? GridMotion.NextField : GridMotion.PreviousField, toEdge: false, pageSize: 10);
+
+    [Fact]
+    public void Tab_walks_the_fields_of_a_row()
+    {
+        var rs = ThreeRows();
+        Assert.Equal((1, 1), Field(rs, 1, 0));
+        Assert.Equal((1, 2), Field(rs, 1, 1));
+        Assert.Equal((1, 3), Field(rs, 1, 2));
+    }
+
+    [Fact]
+    public void Tab_off_the_last_field_starts_the_next_row()
+        // The whole point of a field traversal rather than a Right arrow: it does not stop at the edge, it
+        // continues in reading order.
+        => Assert.Equal((2, 0), Field(ThreeRows(), 1, 3));
+
+    [Fact]
+    public void Shift_tab_off_the_first_field_ends_the_previous_row()
+        => Assert.Equal((0, 3), Field(ThreeRows(), 1, 0, forward: false));
+
+    [Fact]
+    public void Shift_tab_walks_back_along_a_row()
+        => Assert.Equal((1, 1), Field(ThreeRows(), 1, 2, forward: false));
+
+    [Fact]
+    public void Tab_stops_at_the_last_field_of_the_result()
+    {
+        // Stopping rather than cycling: past the last field is the end of the data, and wrapping to the top
+        // would throw the cursor a screen away from where the user is looking.
+        var rs = ThreeRows();
+        Assert.Equal((2, 3), Field(rs, 2, 3));
+        Assert.Equal((0, 0), Field(rs, 0, 0, forward: false));
+    }
+
+    [Fact]
+    public void A_field_traversal_covers_a_bool_column_like_any_other()
+        // Column 2 is the checkbox column; it takes the cursor exactly as the rest do (#9).
+        => Assert.Equal((0, 2), Field(ThreeRows(), 0, 1));
+
+    [Fact]
+    public void A_single_column_result_tabs_straight_down_the_rows()
+    {
+        // Every field is also the row's last, so a traversal is pure row motion — the degenerate case that
+        // would loop forever or stick if the wrap were written as "move right, then fix up".
+        var one = new QueryResult(
+            [new ColumnDescriptor("id", "int4", typeof(int))],
+            new[] { new object?[] { 1 }, new object?[] { 2 }, new object?[] { 3 } },
+            3, TimeSpan.Zero, null, null, false);
+        var single = new ResultSetViewModel(one, "select id from t", pageable: false);
+
+        Assert.Equal((1, 0), Field(single, 0, 0));
+        Assert.Equal((2, 0), Field(single, 1, 0));
+        Assert.Equal((0, 0), Field(single, 1, 0, forward: false));
+    }
+
+    [Fact]
+    public void Field_motions_are_the_ones_that_ignore_shift_as_an_extend()
+    {
+        Assert.True(GridSelectionOps.IsFieldMotion(GridMotion.NextField));
+        Assert.True(GridSelectionOps.IsFieldMotion(GridMotion.PreviousField));
+        Assert.False(GridSelectionOps.IsFieldMotion(GridMotion.Right));
+        Assert.False(GridSelectionOps.IsFieldMotion(GridMotion.Down));
+    }
+
     [Fact]
     public void A_header_click_on_an_empty_result_selects_nothing()
     {

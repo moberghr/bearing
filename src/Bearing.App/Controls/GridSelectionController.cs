@@ -330,7 +330,7 @@ public sealed class GridSelectionController
 
     // ---- keyboard ---------------------------------------------------------------------------
 
-    private static GridMotion? MotionOf(Key k) => k switch
+    private static GridMotion? MotionOf(Key k, KeyModifiers modifiers) => k switch
     {
         Key.Left => GridMotion.Left,
         Key.Right => GridMotion.Right,
@@ -340,12 +340,17 @@ public sealed class GridSelectionController
         Key.End => GridMotion.End,
         Key.PageUp => GridMotion.PageUp,
         Key.PageDown => GridMotion.PageDown,
+        // Field traversal (#10). Claimed from the framework's focus traversal, as every grid does — F6
+        // still cycles regions, and Ctrl+Tab is the tab-switching binding and never reaches here.
+        Key.Tab when !modifiers.HasFlag(KeyModifiers.Control) =>
+            modifiers.HasFlag(KeyModifiers.Shift) ? GridMotion.PreviousField : GridMotion.NextField,
         _ => null,
     };
 
-    /// <summary>Spatial cell-cursor motion: arrows / Home / End / PageUp / PageDown move the active cell,
-    /// Shift extends a rectangle from the anchor, Ctrl jumps to the row or column edge. Returns false for
-    /// any other key so it falls through to the shared command dispatcher or bubbles to the window.
+    /// <summary>Cell-cursor motion: arrows / Home / End / PageUp / PageDown move the active cell spatially,
+    /// Shift extends a rectangle from the anchor, Ctrl jumps to the row or column edge; Tab and Shift+Tab
+    /// walk fields in reading order, wrapping a row at each edge (#10). Returns false for any other key so
+    /// it falls through to the shared command dispatcher or bubbles to the window.
     /// <para>
     /// Intrinsic navigation, deliberately NOT rebindable commands — the same call the editor's caret motion
     /// gets (§9.2's stated exception).
@@ -353,7 +358,7 @@ public sealed class GridSelectionController
     /// </summary>
     public bool HandleNavigation(DataGrid grid, ResultSetViewModel result, KeyEventArgs e)
     {
-        if (MotionOf(e.Key) is not { } motion) return false;
+        if (MotionOf(e.Key, e.KeyModifiers) is not { } motion) return false;
 
         // First arrow into a grid that isn't the active one: seed the active cell at the top-left instead
         // of moving a cursor that isn't visible yet.
@@ -370,7 +375,10 @@ public sealed class GridSelectionController
         var page = Math.Max(1, VisiblePageSize(grid) - 1);
         var (nr, nc) = GridSelectionOps.Move(result, r, active.Col, motion, toEdge, page);
 
-        MoveActive(grid, result, result.Rows[nr], nc, extend: e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+        // Shift extends the rectangle for a spatial motion, but for Tab it chose the direction — a field
+        // traversal always lands on a single cell, the way tabbing through a form does.
+        var extend = e.KeyModifiers.HasFlag(KeyModifiers.Shift) && !GridSelectionOps.IsFieldMotion(motion);
+        MoveActive(grid, result, result.Rows[nr], nc, extend);
         return true;
     }
 
