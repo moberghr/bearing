@@ -70,8 +70,11 @@ public sealed partial class CompletionEngine : ICompletionEngine
             {
                 suggestions.AddRange(TableSuggestions(schema, sources));
                 suggestions.AddRange(SchemaSuggestions(schema));
-                if (sources.Count > 0)
-                    suggestions.AddRange(JoinSuggestions(schema, sources));
+                // Only where a join can actually attach, and carrying whatever keyword the caret is still
+                // missing — accepting one after a bare source used to emit `from users u orders o on …`.
+                if (sources.Count > 0
+                    && JoinKeywordPrefix(parsed.Tokens.GetTokens(), caret.TokenIndex) is { } joinPrefix)
+                    suggestions.AddRange(JoinSuggestions(schema, sources, joinPrefix));
             }
 
             if (intents.Contains(CompletionIntent.ColumnPosition))
@@ -268,7 +271,42 @@ public sealed partial class CompletionEngine : ICompletionEngine
 
     // ---- FK-driven smart joins (bidirectional) -----------------------------------------------
 
-    private static IEnumerable<Suggestion> JoinSuggestions(ISchemaSnapshot schema, IReadOnlyList<TableRef> sources)
+    /// <summary>
+    /// What an FK-join insertion has to type for the user at this caret, or null when a join suggestion does
+    /// not belong here at all. The engine offered these on any table position with a source in scope and
+    /// never inspected the token before the caret, so accepting one directly after a completed source
+    /// produced <c>from users u orders o on …</c> — no <c>join</c>, invalid SQL (#75).
+    /// <list type="bullet">
+    /// <item><c>… join |</c> → <c>""</c>: the keyword is already there.</item>
+    /// <item><c>… left |</c>, <c>… left outer |</c>, <c>inner</c>, <c>full</c>, <c>cross</c>,
+    /// <c>natural</c> → <c>"join "</c>: the qualifier is typed and only the keyword is missing.</item>
+    /// <item><c>… users u |</c> → <c>"join "</c>: a completed source, which is the reported case.</item>
+    /// <item><c>… users u, |</c> → null: a comma-separated source cannot carry an <c>on</c> clause, and the
+    /// predicate belongs in the WHERE. Offering a join here has no correct insertion.</item>
+    /// </list>
+    /// Keyed off the token before the caret rather than the parse tree, like every other caret-context check
+    /// in this file, so it survives the half-typed SQL completion actually runs against.
+    /// </summary>
+    private static string? JoinKeywordPrefix(IList<Antlr4.Runtime.IToken> toks, int caretTokenIndex)
+    {
+        var i = PrevMeaningful(toks, caretTokenIndex - 1);
+        if (i < 0) return null;
+
+        return toks[i].Type switch
+        {
+            PostgreSQLParser.JOIN => "",
+            PostgreSQLParser.LEFT or PostgreSQLParser.RIGHT or PostgreSQLParser.FULL
+                or PostgreSQLParser.INNER_P or PostgreSQLParser.CROSS or PostgreSQLParser.OUTER_P
+                or PostgreSQLParser.NATURAL => "join ",
+            PostgreSQLParser.COMMA => null,
+            _ => IsNameToken(toks[i]) ? "join " : null,
+        };
+    }
+
+    /// <param name="joinPrefix">The keyword the caret is missing — see <see cref="JoinKeywordPrefix"/>.
+    /// Empty when the user has already typed <c>join</c>.</param>
+    private static IEnumerable<Suggestion> JoinSuggestions(
+        ISchemaSnapshot schema, IReadOnlyList<TableRef> sources, string joinPrefix)
     {
         var existing = ExistingAliases(sources);
 
@@ -308,7 +346,7 @@ public sealed partial class CompletionEngine : ICompletionEngine
                     FilterText = other.Name,
                     DetailText = $"join → {SourceLabel(src)}",
                     TrailingText = predicate,
-                    ReplacementText = $"{Q(other.Name)} {alias} on {predicate}",
+                    ReplacementText = $"{joinPrefix}{Q(other.Name)} {alias} on {predicate}",
                     Kind = SuggestionKind.Join,
                     Priority = 20,
                     Description = $"FK {fk.Name}: {other.Schema}.{other.Name} ⋈ {SourceLabel(src)}",
