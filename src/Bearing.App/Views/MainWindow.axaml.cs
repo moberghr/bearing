@@ -358,7 +358,11 @@ public partial class MainWindow : Window
         // before the buffer is replaced rather than carried into it — and dropped *first*, while the old
         // document's offsets still line up with the collapsed sections on the text view's height tree. A
         // swap under live folds is how #82's "trying to build visual line from collapsed line" is reached.
-        _folding.Reset();
+        //
+        // Only when the tab really changed: this method is also the sidebar's editor-sync callback, which
+        // fires after deleting *any* script — including one that isn't open — and losing every fold in the
+        // buffer you are working in because you tidied up an unrelated file is not the swap this is for.
+        if (!ReferenceEquals(tab, _editorText.Tab)) _folding.Reset();
         _editorText.Bind(tab);   // pushes text/caret into the editor under the load guard
         _zoom.Bind(tab);         // …and that tab's own font zoom
         RebuildResults(tab);

@@ -67,6 +67,8 @@ public class AutosaveModeTests : IDisposable
             if (await TryReadAsync(path) == expected) return expected;
             await Task.Delay(50);
         }
+        // Distinguish the three ways this can end, because they point at different causes: the writer still
+        // holding the file, no file at all, or a file that simply never received the edit.
         return await TryReadAsync(path) ?? (File.Exists(path) ? "<locked>" : "<missing>");
     }
 
@@ -96,8 +98,12 @@ public class AutosaveModeTests : IDisposable
 
         tab.Text = "select 1; -- typed";
 
-        Assert.Equal("select 1; -- typed", await WaitForWrite(path, "select 1; -- typed"));
-        Assert.False(tab.IsDirty);          // the dot goes away because there's nothing unsaved
+        var written = await WaitForWrite(path, "select 1; -- typed");
+        // The state of the tab, not just the file: this one fails intermittently under a full run (#83), and
+        // the last failure showed the write never landing at all rather than the read losing a race — so the
+        // next one should say whether the tab still thinks it has something to save.
+        Assert.Equal("select 1; -- typed", written);
+        Assert.False(tab.IsDirty, $"tab still dirty; text='{tab.Text}', path={tab.ScriptPath}");
         Assert.False(tab.HasUnsavedWork);
     }
 

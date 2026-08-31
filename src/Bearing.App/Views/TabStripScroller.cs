@@ -57,7 +57,9 @@ internal sealed class TabStripScroller
     /// </summary>
     public void BringSelectionIntoView()
     {
-        if (_strip.SelectedIndex < 0) return;
+        // No guard out here on purpose: this is called from the view-model's SelectedTab change, and the
+        // strip's own SelectedItem binding has no defined ordering against it — so reading -1 now would
+        // cancel a scroll that is needed, which is the case this exists for. The posted body re-reads it.
         Dispatcher.UIThread.Post(() =>
         {
             if (_strip.SelectedIndex >= 0 && _strip.ContainerFromIndex(_strip.SelectedIndex) is { } container)

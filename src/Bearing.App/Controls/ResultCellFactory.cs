@@ -118,21 +118,22 @@ public sealed class ResultCellFactory
     private static double InitialWidth(ResultSetViewModel result, int index)
     {
         var column = result.Columns[index];
+        var sample = ColumnWidths.Sample(result.Rows, index, MaxInlineChars);
         // Every path that draws a glyph has to be reserved for, not just the always-on ones: a value past
         // MaxInlineChars, or any multiline value, grows the inspect affordance too. The multiline case is the
-        // one that broke — WidestValue stops at the first line, so a document with a short first line sized
-        // the column to Min and the glyph then took nearly all of it.
+        // one that broke — the widest value stops at the first line, so a document with a short first line
+        // sized the column to Min and the glyph then took nearly all of it.
         var hasGlyph = result.ForeignKeyColumns.Contains(index)
             || ColumnKinds.IsJson(column.DataTypeName)
-            || ColumnWidths.AnyValueInspectable(result.Rows, index, MaxInlineChars);
+            || sample.AnyInspectable;
         return ColumnWidths.Initial(
             headerTextWidth: ResultGridChrome.MeasureText(
                 column.Name, ResultGridChrome.HeaderFontSize, ResultGridChrome.HeaderFontWeight),
             headerExtra: ResultGridChrome.HeaderChromeFor(Badges(result, index).Select(b => b.Text)),
-            // The widest of the candidates, measured. Char count alone picks the wrong one when the mono
-            // stack falls back to a proportional face — "iiiiiiiiii" is longer than "WWWWWWWWW" and much
-            // narrower — which is #73's symptom again on exactly the machines least likely to be tested.
-            valueTextWidth: ColumnWidths.WidestValues(result.Rows, index)
+            // The widest of the candidates, measured. A character count alone picks the wrong one when the
+            // mono stack falls back to a proportional face — "iiiiiiiiii" is longer than "WWWWWWWWW" and
+            // much narrower — which is #73's symptom again on the machines least likely to be tested.
+            valueTextWidth: sample.Candidates
                 .Max(v => ResultGridChrome.MeasureText(v, ResultGridChrome.CellFontSize)),
             cellExtra: CellChrome + (hasGlyph ? AffordanceWidth : 0));
     }

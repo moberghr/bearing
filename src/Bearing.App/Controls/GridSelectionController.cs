@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -53,6 +54,10 @@ public sealed class GridSelectionController
     private const string CornerHeaderName = "PART_TopLeftCornerHeader";
 
     private readonly Control _owner; // used only to reach the TopLevel's clipboard
+
+    /// <summary>Each grid's corner template part, found once. Conditional so a grid that goes away takes its
+    /// entry with it.</summary>
+    private readonly ConditionalWeakTable<DataGrid, Control> _corners = new();
 
     public GridSelectionController(Control owner) => _owner = owner;
 
@@ -274,11 +279,16 @@ public sealed class GridSelectionController
     /// on the presses that matter.
     /// </para>
     /// </summary>
-    private static bool PressIsOnCorner(DataGrid grid, PointerPressedEventArgs e)
+    private bool PressIsOnCorner(DataGrid grid, PointerPressedEventArgs e)
     {
-        var corner = grid.GetVisualDescendants()
-            .OfType<Control>()
-            .FirstOrDefault(c => c.Name == CornerHeaderName);
+        // Cached per grid: this runs for every press that resolved to nothing — the scrollbar, the space
+        // below the last row, the start of a drag — and the corner is a template part that is found once and
+        // then stays put, so re-walking a few hundred realized cell visuals each time bought nothing.
+        if (!_corners.TryGetValue(grid, out var corner) || corner is { Parent: null })
+        {
+            corner = grid.GetVisualDescendants().OfType<Control>().FirstOrDefault(c => c.Name == CornerHeaderName);
+            if (corner is not null) _corners.Add(grid, corner);
+        }
         if (corner is null || !corner.IsVisible || corner.Bounds.Width <= 0) return false;
         if (corner.TranslatePoint(default, grid) is not { } origin) return false;
         return new Rect(origin, corner.Bounds.Size).Contains(e.GetPosition(grid));

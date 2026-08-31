@@ -42,66 +42,81 @@ public static class ColumnWidths
     /// <summary>How many candidate values the caller is handed to measure. One is only sound on a truly
     /// monospace face: <c>MonoFont</c> is a fallback stack, and if it lands on a proportional family the
     /// longest string is not the widest — <c>iiiiiiiiii</c> beats <c>WWWWWWWWW</c> on characters and loses
-    /// badly on pixels. A handful covers that without measuring every sampled cell.</summary>
+    /// badly on pixels.</summary>
     private const int Candidates = 4;
 
+    /// <summary>What one sampling pass over a column found: the values worth measuring, and whether any of
+    /// them will carry the inspect affordance the column has to reserve room for.</summary>
+    public readonly record struct ColumnSample(IReadOnlyList<string> Candidates, bool AnyInspectable);
+
     /// <summary>
-    /// The widest display texts this column shows over the sampled rows, longest first, for the caller to
-    /// measure and take the maximum of. Only the first line of each counts — the cell renders one trimmed
-    /// line, so a 40-line document is as wide as its first line, not its total length. Each is capped at
-    /// <see cref="ScanCap"/> characters, which is far past <see cref="Max"/>.
+    /// Walk the sampled rows once and answer both questions the caller has about a column.
     /// <para>
-    /// Never empty: an empty result yields a single empty string, so the caller can measure unconditionally.
+    /// One pass because it used to be two, each formatting every sampled cell — 200 rows x 2 x every column
+    /// at grid-build time, for answers that come off the same strings.
+    /// </para>
+    /// <para>
+    /// Candidates are ranked by an estimated width rather than by length, for the proportional-fallback case
+    /// above: picking by length alone drops a genuinely wider but shorter value as soon as enough longer ones
+    /// exist. Only the first line of each counts — the cell renders one trimmed line, so a 40-line document
+    /// is as wide as its first line — and each is capped at <see cref="ScanCap"/> characters, far past
+    /// <see cref="Max"/>. Never empty: an empty result yields one empty string, so the caller can measure
+    /// unconditionally.
     /// </para>
     /// </summary>
-    public static IReadOnlyList<string> WidestValues(
-        IReadOnlyList<object?[]> rows, int index, int sample = SampleRows)
+    /// <param name="maxInlineChars">Length past which a value grows the inspect affordance. Any newline does
+    /// too, which is the case that hurt: a document with a short first line sizes its column to
+    /// <see cref="Min"/>, and an unreserved glyph then leaves the text a few pixels.</param>
+    public static ColumnSample Sample(
+        IReadOnlyList<object?[]> rows, int index, int maxInlineChars, int sample = SampleRows)
     {
-        var seen = new List<string>();
+        var best = new List<string>();
+        var anyInspectable = false;
         var count = Math.Min(sample, rows.Count);
         for (var r = 0; r < count; r++)
         {
             var row = rows[r];
             var text = CellFormat.Display(index < row.Length ? row[index] : null);
+            anyInspectable |= text.Length > maxInlineChars || text.Contains('\n');
+
             var newline = text.IndexOf('\n');
             if (newline >= 0) text = text[..newline];
             if (text.Length > ScanCap) text = text[..ScanCap];
 
-            // Keep the longest few, longest first. Anything shorter than the shortest kept candidate cannot
-            // win on a monospace face and is a poor bet on any other, so it is dropped without measuring.
-            if (seen.Count == Candidates && text.Length <= seen[^1].Length) continue;
-            var at = seen.FindIndex(v => v.Length < text.Length);
-            seen.Insert(at < 0 ? seen.Count : at, text);
-            if (seen.Count > Candidates) seen.RemoveAt(seen.Count - 1);
+            Keep(best, text);
+            // Nothing further can change either answer: the widest candidate is already at the cap, and a
+            // value that long has already set the affordance flag.
+            if (anyInspectable && best[0].Length >= ScanCap) break;
         }
-        return seen.Count > 0 ? seen : [""];
+        return new ColumnSample(best.Count > 0 ? best : [""], anyInspectable);
     }
 
-    /// <summary>The single widest sampled value by character count — the candidate list's first entry.
-    /// Sound where the face really is monospace; prefer <see cref="WidestValues"/> where the answer is going
-    /// to be measured.</summary>
-    public static string WidestValue(IReadOnlyList<object?[]> rows, int index, int sample = SampleRows)
-        => WidestValues(rows, index, sample)[0];
-
-    /// <summary>
-    /// Whether any sampled value will render the ⤢ inspect affordance, so the column can reserve room for it
-    /// rather than letting it eat the value. The glyph appears on a value past
-    /// <paramref name="maxInlineChars"/> or containing a newline, and the newline case is the one that hurt:
-    /// <see cref="WidestValue"/> stops at the first line, so a document whose first line is short sizes the
-    /// column to <see cref="Min"/> and the unreserved glyph then leaves the text a few pixels.
-    /// </summary>
-    public static bool AnyValueInspectable(
-        IReadOnlyList<object?[]> rows, int index, int maxInlineChars, int sample = SampleRows)
+    /// <summary>Insert <paramref name="text"/> into the widest-first shortlist, keeping it at
+    /// <see cref="Candidates"/>.</summary>
+    private static void Keep(List<string> best, string text)
     {
-        var count = Math.Min(sample, rows.Count);
-        for (var r = 0; r < count; r++)
-        {
-            var row = rows[r];
-            var text = CellFormat.Display(index < row.Length ? row[index] : null);
-            if (text.Length > maxInlineChars || text.Contains('\n')) return true;
-        }
-        return false;
+        var width = EstimatedWidth(text);
+        if (best.Count == Candidates && width <= EstimatedWidth(best[^1])) return;
+
+        var at = best.FindIndex(v => EstimatedWidth(v) < width);
+        best.Insert(at < 0 ? best.Count : at, text);
+        if (best.Count > Candidates) best.RemoveAt(best.Count - 1);
     }
+
+    /// <summary>A cheap stand-in for how wide a string will draw, used only to rank candidates — the caller
+    /// measures the winners for real. Capitals and the handful of famously wide lowercase glyphs count for
+    /// more than a narrow <c>i</c>, which is the whole difference between this and a character count.</summary>
+    private static double EstimatedWidth(string text)
+    {
+        var width = 0d;
+        foreach (var c in text) width += char.IsUpper(c) || c is 'm' or 'w' or '@' or '%' ? 1.3 : 1;
+        return width;
+    }
+
+    /// <summary>The single widest sampled value, by the same estimate. Sound where the face really is
+    /// monospace; prefer <see cref="Sample"/> where the answer is going to be measured.</summary>
+    public static string WidestValue(IReadOnlyList<object?[]> rows, int index, int sample = SampleRows)
+        => Sample(rows, index, int.MaxValue, sample).Candidates[0];
 
     /// <summary>The column's starting width: whichever of the header and the widest value needs more room,
     /// clamped to <see cref="Min"/>..<see cref="Max"/>. The two <c>extra</c> figures are the non-text pixels

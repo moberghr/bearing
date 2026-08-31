@@ -31,6 +31,11 @@ public class ColumnWidthsTests
     /// under test here is the arithmetic around the measurement, not the measurement.</summary>
     private static double Measure(string text) => text.Length * Char;
 
+    /// <summary>One sampling pass over the single column these fixtures build, at the cell's 60-char
+    /// inline threshold.</summary>
+    private static ColumnWidths.ColumnSample Sample(IReadOnlyList<object?[]> rows)
+        => ColumnWidths.Sample(rows, 0, maxInlineChars: 60);
+
     private static double Width(string header, IReadOnlyList<object?[]> rows, double cellExtra = 10)
         => ColumnWidths.Initial(
             Measure(header), headerExtra: 17, Measure(ColumnWidths.WidestValue(rows, 0)), cellExtra);
@@ -40,27 +45,38 @@ public class ColumnWidthsTests
         => Assert.Equal("abcdefghij", ColumnWidths.WidestValue(Rows("ab", "abcdefghij", "abcd"), 0));
 
     [Fact]
-    public void Several_candidates_are_offered_longest_first()
+    public void Several_candidates_are_offered_widest_first()
     {
-        // The caller measures them all and takes the widest: character count only picks the widest string
+        // The caller measures them all and takes the widest: a character count only picks the widest string
         // on a truly monospace face, and MonoFont is a fallback stack that can land on a proportional one.
-        var candidates = ColumnWidths.WidestValues(Rows("a", "abcd", "ab", "abcdef", "abc"), 0);
+        var candidates = Sample(Rows("a", "abcd", "ab", "abcdef", "abc")).Candidates;
         Assert.Equal(["abcdef", "abcd", "abc", "ab"], candidates);
     }
 
     [Fact]
     public void A_narrower_but_longer_string_does_not_hide_a_wide_one()
     {
-        // The proportional-fallback case, stated concretely: 'W' is far wider than 'i', so the widest value
-        // must still be among the candidates even though two longer strings exist.
-        var candidates = ColumnWidths.WidestValues(Rows("WWWWWWWWW", "iiiiiiiiii", "iiiiiiiiiii"), 0);
-        Assert.Contains("WWWWWWWWW", candidates);
+        // The proportional-fallback case: 'W' draws far wider than 'i', so a column full of longer i-strings
+        // must not push the genuinely wide value out of the shortlist — however many of them there are.
+        var candidates = Sample(Rows(
+            "WWWWWWWWWW", "iiiiiiiiiii", "iiiiiiiiiii", "iiiiiiiiiii", "iiiiiiiiiii", "iiiiiiiiiii")).Candidates;
+        Assert.Contains("WWWWWWWWWW", candidates);
     }
 
     [Fact]
     public void There_is_always_something_to_measure()
         // The caller measures unconditionally, so an empty result cannot yield an empty list.
-        => Assert.Equal([""], ColumnWidths.WidestValues(new List<object?[]>(), 0));
+        => Assert.Equal([""], Sample(new List<object?[]>()).Candidates);
+
+    [Fact]
+    public void The_inspect_affordance_is_reported_from_the_same_pass()
+    {
+        // Both answers come off the same strings; scanning twice meant formatting every sampled cell twice
+        // for every column, at grid-build time.
+        Assert.False(Sample(Rows("short", "also short")).AnyInspectable);
+        Assert.True(Sample(Rows("short", new string('x', 80))).AnyInspectable);
+        Assert.True(Sample(Rows("first line\nand more")).AnyInspectable);
+    }
 
     [Fact]
     public void A_multiline_value_is_only_as_wide_as_its_first_line()
