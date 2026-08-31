@@ -349,6 +349,11 @@ public partial class MainWindow : Window
     private void LoadEditorFromSelectedTab()
     {
         var tab = Vm?.Workspace.SelectedTab;
+        // Folds belong to the editor, not to a tab (one editor serves all of them), so they are dropped
+        // before the buffer is replaced rather than carried into it — and dropped *first*, while the old
+        // document's offsets still line up with the collapsed sections on the text view's height tree. A
+        // swap under live folds is how #82's "trying to build visual line from collapsed line" is reached.
+        _folding.Reset();
         _editorText.Bind(tab);   // pushes text/caret into the editor under the load guard
         _zoom.Bind(tab);         // …and that tab's own font zoom
         RebuildResults(tab);
