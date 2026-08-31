@@ -52,6 +52,10 @@ public static class ResultGridChrome
     /// off screen, which is the thing #30's sizing exists to prevent.</summary>
     public const double HeaderFontSize = 12;
 
+    /// <summary>What a column header is drawn at (<see cref="StyleGridChrome"/>), and so what it must be
+    /// measured at.</summary>
+    public const FontWeight HeaderFontWeight = FontWeight.SemiBold;
+
     /// <summary>Gap between a value cell's edge and its text (the display TextBlock's margin in
     /// <see cref="ResultCellFactory"/>).</summary>
     public const double CellTextMargin = 4;
@@ -112,11 +116,14 @@ public static class ResultGridChrome
     /// </para></summary>
     /// <param name="fontSize">The size the text will be drawn at — <see cref="CellFontSize"/> for a value,
     /// <see cref="HeaderFontSize"/> for a column name. Passing the wrong one reintroduces #73.</param>
-    public static double MeasureText(string text, double fontSize)
+    /// <param name="weight">The weight it will be drawn at. Headers are <see cref="FontWeight.SemiBold"/>
+    /// (see <see cref="StyleGridChrome"/>) and a semibold mono face is a few percent wider, which on the
+    /// header side is more than the slack reserved for it.</param>
+    public static double MeasureText(string text, double fontSize, FontWeight weight = FontWeight.Normal)
     {
         if (text.Length == 0) return 0;
         var measured = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-            new Typeface(MonoFont), fontSize, Brushes.Black).Width;
+            new Typeface(MonoFont, weight: weight), fontSize, Brushes.Black).Width;
         // A family that resolved to nothing measurable would otherwise collapse every column onto
         // ColumnWidths.Min; 0.6em is the advance of a typical mono face.
         return Math.Ceiling(double.IsFinite(measured) && measured > 0 ? measured : text.Length * fontSize * 0.6);
@@ -196,7 +203,7 @@ public static class ResultGridChrome
         // (see HeaderPadding) — plus, the initial width being computed rather than measured, a value
         // ColumnWidths can rely on instead of guessing (#30).
         colHeader.Setters.Add(new Setter(TemplatedControl.PaddingProperty, new Thickness(HeaderPadding, 0)));
-        colHeader.Setters.Add(new Setter(TemplatedControl.FontWeightProperty, FontWeight.SemiBold));
+        colHeader.Setters.Add(new Setter(TemplatedControl.FontWeightProperty, HeaderFontWeight));
         colHeader.Setters.Add(new Setter(TemplatedControl.FontSizeProperty, HeaderFontSize)); // as the cells
         colHeader.Setters.Add(new Setter(DataGridColumnHeader.SeparatorBrushProperty, SeparatorBrush));
         grid.Styles.Add(colHeader);

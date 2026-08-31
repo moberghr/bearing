@@ -58,14 +58,20 @@ public class JoinCompletionTests
     [InlineData("right")]
     [InlineData("inner")]
     [InlineData("full")]
-    [InlineData("cross")]
-    [InlineData("natural")]
     public void A_typed_join_qualifier_is_completed_with_the_missing_keyword(string qualifier)
     {
         var orders = JoinsFor($"select * from users u {qualifier} ").SingleOrDefault(j => j.DisplayText == "orders");
         Assert.NotNull(orders);
         Assert.Equal("join orders o on o.user_id = u.id", orders!.ReplacementText);
     }
+
+    [Theory]
+    [InlineData("cross")]
+    [InlineData("natural")]
+    public void No_fk_join_is_offered_after_a_qualifier_that_takes_no_on_clause(string qualifier)
+        // `cross join t x on …` and `natural join t x on …` are syntax errors, not a missing keyword — an
+        // FK-equality suggestion has no valid shape here, so there is nothing correct to offer.
+        => Assert.Empty(JoinsFor($"select * from users u {qualifier} "));
 
     [Fact]
     public void A_typed_join_keyword_is_not_repeated()

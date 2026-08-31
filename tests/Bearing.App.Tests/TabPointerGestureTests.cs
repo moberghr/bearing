@@ -34,6 +34,12 @@ public class TabPointerGestureTests
         => Assert.False(TabPointerGestures.ClosesTab(kind));
 
     [Fact]
+    public void A_middle_click_is_still_a_close_gesture_in_isolation()
+        // The rename-box exclusion lives in the handler, not here: this predicate answers "is this the close
+        // gesture", and where the press landed is a separate question the handler asks.
+        => Assert.True(TabPointerGestures.ClosesTab(PointerUpdateKind.MiddleButtonPressed));
+
+    [Fact]
     public void Only_the_left_button_activates_the_close_button()
     {
         Assert.True(TabPointerGestures.ActivatesCloseButton(PointerUpdateKind.LeftButtonPressed));

@@ -278,8 +278,10 @@ public sealed partial class CompletionEngine : ICompletionEngine
     /// produced <c>from users u orders o on …</c> — no <c>join</c>, invalid SQL (#75).
     /// <list type="bullet">
     /// <item><c>… join |</c> → <c>""</c>: the keyword is already there.</item>
-    /// <item><c>… left |</c>, <c>… left outer |</c>, <c>inner</c>, <c>full</c>, <c>cross</c>,
-    /// <c>natural</c> → <c>"join "</c>: the qualifier is typed and only the keyword is missing.</item>
+    /// <item><c>… left |</c>, <c>… left outer |</c>, <c>inner</c>, <c>full</c> → <c>"join "</c>: the
+    /// qualifier is typed and only the keyword is missing.</item>
+    /// <item><c>… cross |</c>, <c>… natural |</c> → null: those joins take no <c>on</c> clause, so an
+    /// FK-equality suggestion has no valid shape to be inserted in.</item>
     /// <item><c>… users u |</c> → <c>"join "</c>: a completed source, which is the reported case.</item>
     /// <item><c>… users u, |</c> → null: a comma-separated source cannot carry an <c>on</c> clause, and the
     /// predicate belongs in the WHERE. Offering a join here has no correct insertion.</item>
@@ -296,8 +298,10 @@ public sealed partial class CompletionEngine : ICompletionEngine
         {
             PostgreSQLParser.JOIN => "",
             PostgreSQLParser.LEFT or PostgreSQLParser.RIGHT or PostgreSQLParser.FULL
-                or PostgreSQLParser.INNER_P or PostgreSQLParser.CROSS or PostgreSQLParser.OUTER_P
-                or PostgreSQLParser.NATURAL => "join ",
+                or PostgreSQLParser.INNER_P or PostgreSQLParser.OUTER_P => "join ",
+            // CROSS JOIN and NATURAL JOIN take no ON clause at all, so an FK-equality suggestion has no
+            // valid shape here — `cross join orders o on …` is a syntax error, not a missing keyword.
+            PostgreSQLParser.CROSS or PostgreSQLParser.NATURAL => null,
             PostgreSQLParser.COMMA => null,
             _ => IsNameToken(toks[i]) ? "join " : null,
         };

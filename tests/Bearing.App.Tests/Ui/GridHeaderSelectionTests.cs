@@ -69,6 +69,50 @@ public class GridHeaderSelectionTests
         window.Close();
     });
 
+    /// <summary>The corner seeds the active cell in the result it just selected. SelectAll only fills it in
+    /// when it was empty, which is right for Ctrl+A and wrong here: the corner can be clicked in one result
+    /// straight after a cell in another, leaving the cursor pointing at a row this set doesn't contain
+    /// (found in review).</summary>
+    [Fact]
+    public Task The_corner_seeds_the_active_cell_in_its_own_result() => _ui.Run(() =>
+    {
+        var (first, firstRows) = ResultsHarness.WideEditableResult(columns: 3, rows: 4);
+        var (second, _) = ResultsHarness.WideEditableResult(columns: 3, rows: 4);
+        var (window, view) = ResultsHarness.Show(first, second);
+
+        // Put the cursor in the first result, then take the corner of the second.
+        view.Selection.SelectSingle(first, firstRows[2], 1);
+        Assert.Same(first, view.Selection.Model.Result);
+
+        ClickCorner(window, view, ofResult: 1);
+
+        Assert.Same(second, view.Selection.Model.Result);
+        var active = view.Selection.Model.Active;
+        Assert.NotNull(active);
+        Assert.Contains(active!.Value.Row, second.Rows);
+        Assert.Equal(active, view.Selection.Model.Anchor);
+        window.Close();
+    });
+
+    /// <summary>A right-press over the corner opens the menu without touching the selection. The row and
+    /// column headers collapse onto the band being pointed at, but the corner's band is everything — doing
+    /// the same here would expand a deliberate selection into the whole result, and the menu's Copy and
+    /// Export would then act on every row (found in review).</summary>
+    [Fact]
+    public Task A_right_press_on_the_corner_leaves_the_selection_alone() => _ui.Run(() =>
+    {
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: 3, rows: 4);
+        var (window, view) = ResultsHarness.Show(rs);
+
+        view.Selection.SelectSingle(rs, rows[1], 1);
+        var before = view.Selection.Model.Cells.ToHashSet();
+
+        ClickCorner(window, view, button: MouseButton.Right);
+
+        Assert.Equal(before, view.Selection.Model.Cells.ToHashSet());
+        window.Close();
+    });
+
     /// <summary>The corner no longer clears, but everything else that is not a cell or a header still does —
     /// that click-away is what the None case exists for.</summary>
     [Fact]
@@ -93,16 +137,18 @@ public class GridHeaderSelectionTests
         window.Close();
     });
 
-    private static void ClickCorner(Window window, Visual view)
+    private static void ClickCorner(
+        Window window, Visual view, MouseButton button = MouseButton.Left, int ofResult = 0)
     {
         var corner = view.GetVisualDescendants()
             .OfType<Control>()
-            .First(c => c.Name == "PART_TopLeftCornerHeader");
+            .Where(c => c.Name == "PART_TopLeftCornerHeader")
+            .ElementAt(ofResult);
         var point = corner.TranslatePoint(new Point(corner.Bounds.Width / 2, corner.Bounds.Height / 2), window)
                     ?? throw new InvalidOperationException("the corner is not in the window");
         window.MouseMove(point);
-        window.MouseDown(point, MouseButton.Left);
-        window.MouseUp(point, MouseButton.Left);
+        window.MouseDown(point, button);
+        window.MouseUp(point, button);
         window.UpdateLayout();
     }
 }

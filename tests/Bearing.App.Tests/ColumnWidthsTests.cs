@@ -40,6 +40,29 @@ public class ColumnWidthsTests
         => Assert.Equal("abcdefghij", ColumnWidths.WidestValue(Rows("ab", "abcdefghij", "abcd"), 0));
 
     [Fact]
+    public void Several_candidates_are_offered_longest_first()
+    {
+        // The caller measures them all and takes the widest: character count only picks the widest string
+        // on a truly monospace face, and MonoFont is a fallback stack that can land on a proportional one.
+        var candidates = ColumnWidths.WidestValues(Rows("a", "abcd", "ab", "abcdef", "abc"), 0);
+        Assert.Equal(["abcdef", "abcd", "abc", "ab"], candidates);
+    }
+
+    [Fact]
+    public void A_narrower_but_longer_string_does_not_hide_a_wide_one()
+    {
+        // The proportional-fallback case, stated concretely: 'W' is far wider than 'i', so the widest value
+        // must still be among the candidates even though two longer strings exist.
+        var candidates = ColumnWidths.WidestValues(Rows("WWWWWWWWW", "iiiiiiiiii", "iiiiiiiiiii"), 0);
+        Assert.Contains("WWWWWWWWW", candidates);
+    }
+
+    [Fact]
+    public void There_is_always_something_to_measure()
+        // The caller measures unconditionally, so an empty result cannot yield an empty list.
+        => Assert.Equal([""], ColumnWidths.WidestValues(new List<object?[]>(), 0));
+
+    [Fact]
     public void A_multiline_value_is_only_as_wide_as_its_first_line()
         // The cell renders one trimmed line, so the rest of the document must not widen the column.
         => Assert.Equal("abc", ColumnWidths.WidestValue(Rows("abc\nabcdefghijklmnop"), 0));

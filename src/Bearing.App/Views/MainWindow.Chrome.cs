@@ -38,6 +38,10 @@ public partial class MainWindow
     {
         if (sender is not Control { DataContext: EditorTabViewModel tab } target) return;
         if (!TabPointerGestures.ClosesTab(e.GetCurrentPoint(target).Properties.PointerUpdateKind)) return;
+        // The inline rename box lives in this same panel, and on X11 a middle-click in a text box pastes the
+        // primary selection — so closing the tab on that press would take the tab away mid-rename, from a
+        // gesture that meant "paste".
+        if (tab.IsRenaming || e.Source is TextBox) return;
         e.Handled = true;
         await CloseTabAsync(tab);
     }

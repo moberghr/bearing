@@ -39,13 +39,25 @@ public static class ColumnWidths
     /// characters, offers the ⤢ inspector); the header can be double-clicked to auto-fit.</summary>
     public const double Max = 280;
 
-    /// <summary>The longest display text this column shows over the sampled rows, counting only the first
-    /// line — the cell renders one trimmed line, so a 40-line document is as wide as its first line, not its
-    /// total length. Returns the text itself, for the caller to measure; capped at <see cref="ScanCap"/>
-    /// characters, which is far past <see cref="Max"/>.</summary>
-    public static string WidestValue(IReadOnlyList<object?[]> rows, int index, int sample = SampleRows)
+    /// <summary>How many candidate values the caller is handed to measure. One is only sound on a truly
+    /// monospace face: <c>MonoFont</c> is a fallback stack, and if it lands on a proportional family the
+    /// longest string is not the widest — <c>iiiiiiiiii</c> beats <c>WWWWWWWWW</c> on characters and loses
+    /// badly on pixels. A handful covers that without measuring every sampled cell.</summary>
+    private const int Candidates = 4;
+
+    /// <summary>
+    /// The widest display texts this column shows over the sampled rows, longest first, for the caller to
+    /// measure and take the maximum of. Only the first line of each counts — the cell renders one trimmed
+    /// line, so a 40-line document is as wide as its first line, not its total length. Each is capped at
+    /// <see cref="ScanCap"/> characters, which is far past <see cref="Max"/>.
+    /// <para>
+    /// Never empty: an empty result yields a single empty string, so the caller can measure unconditionally.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<string> WidestValues(
+        IReadOnlyList<object?[]> rows, int index, int sample = SampleRows)
     {
-        var widest = "";
+        var seen = new List<string>();
         var count = Math.Min(sample, rows.Count);
         for (var r = 0; r < count; r++)
         {
@@ -53,16 +65,23 @@ public static class ColumnWidths
             var text = CellFormat.Display(index < row.Length ? row[index] : null);
             var newline = text.IndexOf('\n');
             if (newline >= 0) text = text[..newline];
-            if (text.Length <= widest.Length) continue;
+            if (text.Length > ScanCap) text = text[..ScanCap];
 
-            // Longer in characters is not always wider in pixels, but the caller measures the winner and the
-            // cap keeps the difference below Max either way — so the length is a sound way to pick a
-            // candidate without measuring every sampled cell.
-            widest = text.Length > ScanCap ? text[..ScanCap] : text;
-            if (widest.Length >= ScanCap) return widest;
+            // Keep the longest few, longest first. Anything shorter than the shortest kept candidate cannot
+            // win on a monospace face and is a poor bet on any other, so it is dropped without measuring.
+            if (seen.Count == Candidates && text.Length <= seen[^1].Length) continue;
+            var at = seen.FindIndex(v => v.Length < text.Length);
+            seen.Insert(at < 0 ? seen.Count : at, text);
+            if (seen.Count > Candidates) seen.RemoveAt(seen.Count - 1);
         }
-        return widest;
+        return seen.Count > 0 ? seen : [""];
     }
+
+    /// <summary>The single widest sampled value by character count — the candidate list's first entry.
+    /// Sound where the face really is monospace; prefer <see cref="WidestValues"/> where the answer is going
+    /// to be measured.</summary>
+    public static string WidestValue(IReadOnlyList<object?[]> rows, int index, int sample = SampleRows)
+        => WidestValues(rows, index, sample)[0];
 
     /// <summary>
     /// Whether any sampled value will render the ⤢ inspect affordance, so the column can reserve room for it

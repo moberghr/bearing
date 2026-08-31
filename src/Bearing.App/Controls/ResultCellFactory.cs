@@ -126,10 +126,14 @@ public sealed class ResultCellFactory
             || ColumnKinds.IsJson(column.DataTypeName)
             || ColumnWidths.AnyValueInspectable(result.Rows, index, MaxInlineChars);
         return ColumnWidths.Initial(
-            headerTextWidth: ResultGridChrome.MeasureText(column.Name, ResultGridChrome.HeaderFontSize),
+            headerTextWidth: ResultGridChrome.MeasureText(
+                column.Name, ResultGridChrome.HeaderFontSize, ResultGridChrome.HeaderFontWeight),
             headerExtra: ResultGridChrome.HeaderChromeFor(Badges(result, index).Select(b => b.Text)),
-            valueTextWidth: ResultGridChrome.MeasureText(
-                ColumnWidths.WidestValue(result.Rows, index), ResultGridChrome.CellFontSize),
+            // The widest of the candidates, measured. Char count alone picks the wrong one when the mono
+            // stack falls back to a proportional face — "iiiiiiiiii" is longer than "WWWWWWWWW" and much
+            // narrower — which is #73's symptom again on exactly the machines least likely to be tested.
+            valueTextWidth: ColumnWidths.WidestValues(result.Rows, index)
+                .Max(v => ResultGridChrome.MeasureText(v, ResultGridChrome.CellFontSize)),
             cellExtra: CellChrome + (hasGlyph ? AffordanceWidth : 0));
     }
 

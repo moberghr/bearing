@@ -110,6 +110,27 @@ public class ColumnWidthTests
         window.Close();
     });
 
+    /// <summary>A long column name is not trimmed either. The header side had the same class of bug as the
+    /// values: measured at Normal weight while drawn SemiBold, with only a couple of pixels of slack — a
+    /// narrower rerun of #73, and nothing asserted it (found in review).</summary>
+    [Theory]
+    [InlineData("id")]
+    [InlineData("release_year")]
+    [InlineData("original_language_id")]
+    public Task A_column_name_is_not_trimmed_by_its_own_header(string name) => _ui.Run(() =>
+    {
+        var rs = ResultsHarness.SingleColumn(name, "int4", typeof(int), primaryKey: false, 1);
+        var (window, view) = ResultsHarness.Show(rs);
+
+        var header = view.GetVisualDescendants().OfType<DataGridColumnHeader>()
+            .SelectMany(h => h.GetVisualDescendants().OfType<TextBlock>())
+            .First(t => t.Text == name);
+        Assert.False(header.TextLayout.TextLines.Any(l => l.HasCollapsed),
+            $"the header '{name}' was trimmed to fit its own column: it needs "
+            + $"{header.DesiredSize.Width:0.##}px and was arranged {header.Bounds.Width:0.##}px");
+        window.Close();
+    });
+
     /// <summary>The row-number gutter is pinned at 46px and inherits the grid-level font, so that font is not
     /// free to grow: five digits have to fit. Caught in review — bumping the shared constant to the cell size
     /// would have clipped row numbers past 9,999.</summary>

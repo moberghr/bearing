@@ -89,6 +89,13 @@ faster, parallelizable, and reads better. Reach for a UI test when the visual tr
   nothing. Mouse input works without this (`MouseDown`/`MouseUp` on a realized cell hits the app's own
   `PointerPressed`). If you need keys, assert first that the handler ran at all; do not infer from a passing
   test that the keystroke was delivered.
+- **Syntax colouring resists a deterministic assertion.** The TextMate grammar colours a line as its visual
+  line is drawn, so reading `ShapedTextRun.Properties.ForegroundBrush` back can give the plain theme
+  foreground for a line the tokenizer has not reached — and "the comment's colour does not appear below it"
+  then passes because nothing is coloured at all. Pumping to a stable signature did not close it (still ~1
+  run in 3 red over eight runs), so a colouring suite was written and then dropped rather than shipped
+  flaky. Verify highlighting by eye; #69 was investigated this way and did not reproduce (LF and CRLF,
+  wholesale load and incremental edit).
 - **Available and unused so far:** synthetic input on any `TopLevel` (`MouseDown`/`MouseMove`/`MouseUp`/
   `MouseWheel`, `KeyPress`/`KeyPressQwerty`, `KeyTextInput`, `SetRenderScaling`, and `DragDrop`, which takes
   an `IDataTransfer` and so already matches the v12 typed API, §9.3), plus real pixels via

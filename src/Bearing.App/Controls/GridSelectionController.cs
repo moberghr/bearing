@@ -219,8 +219,22 @@ public sealed class GridSelectionController
         if (corner || (rowHeader is null && columnHeader is null && PressIsOnCorner(grid, e)))
         {
             if (result.Rows.Count == 0) return GridPressTarget.None;
+            // A right-press opens the context menu over whatever is already selected and leaves it alone.
+            // The row/column headers collapse the selection onto the band being pointed at; the corner's
+            // "band" is everything, so doing the same here would *expand* a deliberate selection into the
+            // whole result — and the menu's Copy / Export would then act on every row.
+            if (point.IsRightButtonPressed && ReferenceEquals(Model.Result, result) && Model.Cells.Count > 0)
+                return GridPressTarget.Corner;
+
             grid.Focus();          // as a cell click does, so the keys that follow reach this grid
             SelectAll(result);     // the same operation Ctrl+A runs, so the two can never disagree
+            // SelectAll only seeds the active cell when there wasn't one, which is right for Ctrl+A (it
+            // keeps the cursor where the user left it) and wrong here: this can arrive from a click in a
+            // *different* result, leaving Active/Anchor pointing at a row this result doesn't contain, and
+            // the next arrow key or Shift+click would navigate from outside the set.
+            Model.Active = (result.Rows[0], GridSelectionOps.FirstColumn(result));
+            Model.Anchor = Model.Active;
+            Notify();
             return GridPressTarget.Corner;
         }
 
