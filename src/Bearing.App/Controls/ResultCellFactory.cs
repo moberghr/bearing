@@ -133,15 +133,7 @@ public sealed class ResultCellFactory
     private Control ValueContent(ResultSetViewModel result, int index, object?[]? row, bool isJsonCol, bool numeric)
     {
         var isNull = row is null || index >= row.Length || row[index] is null;
-        var text = new TextBlock
-        {
-            Text = GridSelectionOps.CellText(row, index),
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(ResultGridChrome.CellTextMargin, 0),
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            Foreground = isNull ? NullBrush : (numeric ? Res("Text.Code") : Res("Text.Primary")),
-            FontStyle = isNull ? FontStyle.Italic : FontStyle.Normal,
-        };
+        var text = ResultChrome.ValueText(GridSelectionOps.CellText(row, index), isNull, numeric);
         if (isNull) return text;
 
         var raw = GridSelectionOps.CellText(row, index);
@@ -177,13 +169,9 @@ public sealed class ResultCellFactory
     {
         var hasValue = row.Length > index && row[index] is not null;
 
-        var value = new TextBlock
-        {
-            Text = GridSelectionOps.CellText(row, index),
-            VerticalAlignment = VerticalAlignment.Center,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            Margin = new Thickness(ResultGridChrome.CellTextMargin, 0),
-        };
+        // Same text treatment as every other cell (#61) — a NULL here used to render bright and upright, the
+        // one column where "(null)" looked like a real value. numeric: false is deliberate; see ValueText.
+        var value = ResultChrome.ValueText(GridSelectionOps.CellText(row, index), isNull: !hasValue, numeric: false);
 
         var jump = ResultChrome.JumpAffordance();
         jump.IsVisible = hasValue;

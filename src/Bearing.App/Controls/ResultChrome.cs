@@ -11,10 +11,10 @@ using Path = Avalonia.Controls.Shapes.Path;
 namespace Bearing.App.Controls;
 
 /// <summary>
-/// The small, stateless visual atoms the results dock is assembled from — badges, borderless buttons, the
-/// drawn glyph affordances, the read-only lock chip, the back bar and the dock header's Stacked/Tabbed
-/// toggle (design RESULTS_GRID). Each returns a fresh control and holds no state, so the composition code in
-/// <see cref="ResultView"/> is left with layout decisions only.
+/// The small, stateless visual atoms the results dock is assembled from — a cell's value text, badges,
+/// borderless buttons, the drawn glyph affordances, the read-only lock chip, the back bar and the dock
+/// header's Stacked/Tabbed toggle (design RESULTS_GRID). Each returns a fresh control and holds no state, so
+/// the composition code in <see cref="ResultView"/> is left with layout decisions only.
 /// <para>
 /// Every icon here is a vector <see cref="Path"/> rather than a font glyph: symbol glyphs (▸ ▾ ↗ ⤢ 🔒)
 /// render clipped in the app font.
@@ -145,6 +145,32 @@ public static class ResultChrome
         ToolTip.SetTip(b, tip);
         return b;
     }
+
+    /// <summary>
+    /// The text inside a value cell, in the one place that decides how a value looks: dimmed italic for a
+    /// NULL, code colour for a number, primary text otherwise, with the grid's text inset and ellipsis
+    /// trimming.
+    /// <para>
+    /// Shared rather than per-cell-kind because it drifted the moment it was not: the foreign-key cell built
+    /// its own TextBlock and set neither <c>Foreground</c> nor <c>FontStyle</c>, so a NULL FK rendered as
+    /// bright upright text — the one column where "(null)" looked like a real value (#61) — and a live FK
+    /// value inherited the theme's plain white instead of <c>Text.Primary</c>. A third cell kind now cannot
+    /// drift the same way.
+    /// </para>
+    /// </summary>
+    /// <param name="numeric">Numbers get <c>Text.Code</c>. Foreign keys pass false even though they are
+    /// usually integers: they are identifiers, and the grid already sets them apart with the FK badge and the
+    /// jump glyph.</param>
+    public static TextBlock ValueText(string text, bool isNull, bool numeric)
+        => new()
+        {
+            Text = text,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(ResultGridChrome.CellTextMargin, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Foreground = isNull ? NullBrush : (numeric ? Res("Text.Code") : Res("Text.Primary")),
+            FontStyle = isNull ? FontStyle.Italic : FontStyle.Normal,
+        };
 
     /// <summary>A small drawn "⤢" inspect icon that opens the cell inspector.</summary>
     public static Control InspectAffordance()
