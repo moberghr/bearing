@@ -50,7 +50,10 @@ public sealed class UpdateCoordinator
 
     private UpdateCheck? _staged;
     private bool _applyOnExit;
-    private bool _autoRun;
+
+    // 0/1 rather than a bool because the check and the set have to be one operation: StartAsync is the
+    // once-per-launch guard, and a plain `if (!_autoRun) _autoRun = true` lets two callers both see false.
+    private int _autoRun;
 
     /// <param name="service">The update mechanism; <see cref="IUpdateService.IsSupported"/> gates everything.</param>
     /// <param name="autoUpdateEnabled">Reads the live setting — re-read per check, never cached, so toggling
@@ -104,8 +107,7 @@ public sealed class UpdateCoordinator
     /// </summary>
     public async Task StartAsync(CancellationToken ct = default)
     {
-        if (_autoRun) return;
-        _autoRun = true;
+        if (Interlocked.Exchange(ref _autoRun, 1) != 0) return;
         if (!_service.IsSupported || !_autoUpdateEnabled()) return;
         await RunAsync(announce: false, ct).ConfigureAwait(false);
     }
@@ -192,6 +194,11 @@ public sealed class UpdateCoordinator
 
     private async Task RunAsync(bool announce, CancellationToken ct)
     {
+        // Already staged: re-checking would find the same release and download the same package again.
+        // CheckNowAsync restates the offer before it reaches here; the startup check just stops. Without
+        // this, "two checks at once do the work once" held only while the two actually overlapped — a
+        // Check for Updates that finished first was followed by a second full check and download.
+        if (IsStaged) return;
         // Drop rather than queue: whoever holds the gate is already doing this exact work.
         if (!await _gate.WaitAsync(0, ct).ConfigureAwait(false)) return;
         try

@@ -61,10 +61,22 @@ public class AutosaveModeTests : IDisposable
     {
         for (var i = 0; i < 60; i++)
         {
-            if (File.Exists(path) && await File.ReadAllTextAsync(path) == expected) return expected;
+            if (await TryReadAsync(path) == expected) return expected;
             await Task.Delay(50);
         }
-        return File.Exists(path) ? await File.ReadAllTextAsync(path) : "<missing>";
+        return await TryReadAsync(path) ?? (File.Exists(path) ? "<locked>" : "<missing>");
+    }
+
+    /// <summary>The file's content, or null while it doesn't exist <i>or</i> can't be opened yet. Autosave is
+    /// writing the same path from a background task, and Windows enforces the share mode other platforms
+    /// don't — so landing mid-write is an ordinary outcome of polling, not a failure (#83). Retrying is the
+    /// same posture as <c>SecretRetry</c>; only the caller's timeout decides when to give up.</summary>
+    private static async Task<string?> TryReadAsync(string path)
+    {
+        if (!File.Exists(path)) return null;
+        try { return await File.ReadAllTextAsync(path); }
+        catch (IOException) { return null; }              // the writer has it open
+        catch (UnauthorizedAccessException) { return null; }
     }
 
     // ---- OnEdit (default) ----

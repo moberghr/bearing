@@ -12,8 +12,9 @@ namespace Bearing.App.Tests;
 
 /// <summary>
 /// The results grid's spreadsheet selection arithmetic — cursor motion, rectangle coverage, and the clipboard
-/// shape. Previously welded into <c>ResultView</c>'s key handler and therefore unreachable by tests (Wayland
-/// blocks headless keystrokes, §4.3); now pure over <see cref="GridSelectionOps"/>.
+/// shape. Previously welded into <c>ResultView</c>'s key handler and therefore unreachable by tests; now pure
+/// over <see cref="GridSelectionOps"/>, which is still the preferred shape even though headless UI tests
+/// exist (§4.3) — this runs in milliseconds and in parallel.
 /// <para>
 /// The bool column used to be the recurring theme here, skipped by every operation because its checkbox drew
 /// no selection ring. It now carries the same ring as any other cell (#9), so these assert the opposite: the
@@ -240,7 +241,9 @@ public class GridSelectionOpsTests
         rs.TotalCount = 1000;
 
         Assert.Equal(3, GridSelectionOps.WholeColumns(rs, 0, 0).Count);
-        Assert.Equal("3 of 1,000 rows", rs.RowCountText);
+        // The count is deliberately localized — "1.000" is right on hr-HR — so the culture is pinned rather
+        // than the separator assumed. What is under test is the phrase: the loaded count, then the total.
+        CultureScope.In("en-US", () => Assert.Equal("3 of 1,000 rows", rs.RowCountText));
     }
 
     [Fact]
