@@ -16,8 +16,10 @@ The three, and the pattern each now demonstrates:
 
 WHEN a change would add code to any of these, DO NOT append — extract:
 - Pure/stateless logic → helpers under `Results/`, `Input/`, or the `Sql` project (pattern:
-  `GridSelectionOps`, `ResultSetBuilder`, `ResultEditModel`, `PaletteFilter`). This is also the only way to
-  get the behavior under test — Wayland blocks headless GUI testing (§4.3).
+  `GridSelectionOps`, `ResultSetBuilder`, `ResultEditModel`, `PaletteFilter`). Still the first move for
+  getting behavior under test — faster to run and to read — but no longer the *only* way: headless UI tests
+  landed 2026-08-31 (#62), so a claim that only a realized visual can hold (a brush on a live cell, a scroll
+  offset after a layout pass) is testable where it lives (§4.3, §4.5).
 - Self-contained visuals/overlays → their own `Views/`/`Controls/` class.
 - Stateful coordination (connections/execution/tabs/panels) → a dedicated coordinator.
 
