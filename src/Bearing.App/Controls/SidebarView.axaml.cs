@@ -42,6 +42,10 @@ public partial class SidebarView : UserControl
     public SidebarView()
     {
         InitializeComponent();
+        // Dense rows in both navigators: Fluent's stock TreeViewItem is a touch target, and a schema row is
+        // one line of text with a 15px glyph (#71).
+        TreeChrome.Apply(SchemaTree);
+        TreeChrome.Apply(ScriptsTree);
         // Intercept Up/Down/Esc/Backspace before the TreeView's built-in node navigation, so a search
         // cycles matches instead of walking every row (same trick the shell used before extraction).
         SchemaTree.AddHandler(KeyDownEvent, OnSchemaTreeKeyDown, RoutingStrategies.Tunnel);
