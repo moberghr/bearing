@@ -134,6 +134,7 @@ public sealed partial class ResultView
                 _selection.TryToggleBoolAtPointer(grid, result, e);
                 return;
             case GridPressTarget.RowHeader:
+            case GridPressTarget.Corner:
                 return;
             case GridPressTarget.ColumnHeader:
                 if (result is { IsPageable: true, HasMore: true })

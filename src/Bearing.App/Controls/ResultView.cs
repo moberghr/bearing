@@ -43,6 +43,10 @@ public sealed partial class ResultView : UserControl
             followForeignKey: (rs, col, row) => _ = NavigateForeignKey?.Invoke(rs, col, row));
     }
 
+    /// <summary>The cell selection this dock drives. Exposed for tests to assert against — the app itself
+    /// reaches it through the pieces that were handed the controller.</summary>
+    internal GridSelectionController Selection => _selection;
+
     private IReadOnlyList<ResultSetViewModel>? _results;
 
     /// <summary>The result sets to display. Assigning replaces the rendered content.</summary>

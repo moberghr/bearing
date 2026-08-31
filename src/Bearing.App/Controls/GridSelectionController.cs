@@ -19,9 +19,13 @@ namespace Bearing.App.Controls;
 /// being partial without re-doing the hit test.</summary>
 public enum GridPressTarget
 {
-    /// <summary>Grid chrome with no meaning for the selection — the scrollbar, the corner, empty space
-    /// below the last row. The caller clears the selection on this one.</summary>
+    /// <summary>Grid chrome with no meaning for the selection — the scrollbar, empty space below the last
+    /// row. The caller clears the selection on this one.</summary>
     None,
+
+    /// <summary>The corner above the row-number gutter: the whole result is now selected, as the same
+    /// corner does in every spreadsheet.</summary>
+    Corner,
 
     /// <summary>A cell, which selects itself (see <c>ResultCellFactory.MakeSelectable</c>).</summary>
     Cell,
@@ -45,6 +49,9 @@ public enum GridPressTarget
 /// </summary>
 public sealed class GridSelectionController
 {
+    /// <summary>Name the DataGrid's template gives the corner above the row-number gutter.</summary>
+    private const string CornerHeaderName = "PART_TopLeftCornerHeader";
+
     private readonly Control _owner; // used only to reach the TopLevel's clipboard
 
     public GridSelectionController(Control owner) => _owner = owner;
@@ -192,9 +199,14 @@ public sealed class GridSelectionController
 
         DataGridRowHeader? rowHeader = null;
         DataGridColumnHeader? columnHeader = null;
+        var corner = false;
         foreach (var visual in source.GetSelfAndVisualAncestors())
         {
             if (visual is Border { Tag: ValueTuple<object?[], int> }) return GridPressTarget.Cell;
+            // Tested before the DataGridColumnHeader case below, because in the DataGrid's template the
+            // corner *is* one — it just has no column, so it fell through to "chrome" and cleared the
+            // selection instead of selecting everything (#55).
+            if (visual is Control { Name: CornerHeaderName }) { corner = true; break; }
             if (visual is DataGridRowHeader rh) { rowHeader = rh; break; }
             if (visual is DataGridColumnHeader ch) { columnHeader = ch; break; }
         }
@@ -203,6 +215,14 @@ public sealed class GridSelectionController
         if (!point.IsLeftButtonPressed && !point.IsRightButtonPressed) return GridPressTarget.None;
         var extend = e.KeyModifiers.HasFlag(KeyModifiers.Shift) && CanExtendFrom(result);
         var add = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);
+
+        if (corner || (rowHeader is null && columnHeader is null && PressIsOnCorner(grid, e)))
+        {
+            if (result.Rows.Count == 0) return GridPressTarget.None;
+            grid.Focus();          // as a cell click does, so the keys that follow reach this grid
+            SelectAll(result);     // the same operation Ctrl+A runs, so the two can never disagree
+            return GridPressTarget.Corner;
+        }
 
         if (rowHeader is not null)
         {
@@ -227,6 +247,27 @@ public sealed class GridSelectionController
         }
 
         return GridPressTarget.None;
+    }
+
+    /// <summary>
+    /// Whether a press landed on the corner above the row-number gutter, matched by position rather than by
+    /// hit test. The corner is a <c>DataGridColumnHeader</c> in the template but nothing over it is
+    /// hit-testable — a press there reports the grid's outer border, with no corner in its ancestry — so the
+    /// ancestor walk cannot see it. Same shape as the bool cell, which tests the press against its
+    /// indicator's bounds for its own reasons (see <c>ResultCellFactory.BoolContent</c>).
+    /// <para>
+    /// Only reached once a press has failed to resolve to a cell or a header, so the tree walk costs nothing
+    /// on the presses that matter.
+    /// </para>
+    /// </summary>
+    private static bool PressIsOnCorner(DataGrid grid, PointerPressedEventArgs e)
+    {
+        var corner = grid.GetVisualDescendants()
+            .OfType<Control>()
+            .FirstOrDefault(c => c.Name == CornerHeaderName);
+        if (corner is null || !corner.IsVisible || corner.Bounds.Width <= 0) return false;
+        if (corner.TranslatePoint(default, grid) is not { } origin) return false;
+        return new Rect(origin, corner.Bounds.Size).Contains(e.GetPosition(grid));
     }
 
     /// <summary>Select a whole-row / whole-column band. Returns false when there was nothing to select, or
