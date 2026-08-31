@@ -28,9 +28,21 @@ namespace Bearing.App.Controls;
 /// </summary>
 public sealed class ResultCellFactory
 {
-    // Non-text pixels inside a value cell: the text's margin plus the selection border's 1px reserve, both
-    // sides (see MakeSelectable).
-    private const double CellChrome = ResultGridChrome.CellTextInset * 2;
+    // Non-text pixels inside a value cell: the text's margin plus the selection border's 1px reserve on both
+    // sides (see MakeSelectable), then the 1px vertical grid line the column loses. HeaderChromeFor has
+    // always reserved that divider and the cell side never did, so the two sides were not measuring the same
+    // column (#73).
+    private const double CellChrome = ResultGridChrome.CellTextInset * 2 + 1 + TextSlack;
+
+    // A couple of pixels of deliberate give. A column sized to exactly its content leaves the renderer no
+    // room for its own rounding, and TextTrimming.CharacterEllipsis resolves that against the value — where
+    // one character too few costs two, since the ellipsis needs an advance of its own. Kept separate from
+    // CellTextInset, which is load-bearing for header/value left-edge alignment and must not absorb slack.
+    internal const double TextSlack = 2;
+
+    // Longest value that still renders inline. Past it (or on any newline) the cell grows a ⤲ inspect
+    // affordance, which the column has to have reserved room for — see InitialWidth.
+    private const int MaxInlineChars = 60;
 
     // On top of that, the width a cell reserves for an inline affordance: the 16–18px glyph with its
     // margins, plus the DockPanel's 18px right margin keeping it clear of the scrollbar.
@@ -106,13 +118,19 @@ public sealed class ResultCellFactory
     private static double InitialWidth(ResultSetViewModel result, int index)
     {
         var column = result.Columns[index];
-        var hasGlyph = result.ForeignKeyColumns.Contains(index) || ColumnKinds.IsJson(column.DataTypeName);
+        // Every path that draws a glyph has to be reserved for, not just the always-on ones: a value past
+        // MaxInlineChars, or any multiline value, grows the inspect affordance too. The multiline case is the
+        // one that broke — WidestValue stops at the first line, so a document with a short first line sized
+        // the column to Min and the glyph then took nearly all of it.
+        var hasGlyph = result.ForeignKeyColumns.Contains(index)
+            || ColumnKinds.IsJson(column.DataTypeName)
+            || ColumnWidths.AnyValueInspectable(result.Rows, index, MaxInlineChars);
         return ColumnWidths.Initial(
-            headerChars: column.Name.Length,
+            headerTextWidth: ResultGridChrome.MeasureText(column.Name, ResultGridChrome.HeaderFontSize),
             headerExtra: ResultGridChrome.HeaderChromeFor(Badges(result, index).Select(b => b.Text)),
-            valueChars: ColumnWidths.ValueChars(result.Rows, index),
-            cellExtra: CellChrome + (hasGlyph ? AffordanceWidth : 0),
-            charWidth: ResultGridChrome.CharAdvance);
+            valueTextWidth: ResultGridChrome.MeasureText(
+                ColumnWidths.WidestValue(result.Rows, index), ResultGridChrome.CellFontSize),
+            cellExtra: CellChrome + (hasGlyph ? AffordanceWidth : 0));
     }
 
     /// <summary>A value display cell: text (dimmed italic "(null)", numeric in code color), plus an
@@ -137,7 +155,7 @@ public sealed class ResultCellFactory
         if (isNull) return text;
 
         var raw = GridSelectionOps.CellText(row, index);
-        if (!isJsonCol && raw.Length <= 60 && !raw.Contains('\n')) return text;
+        if (!isJsonCol && raw.Length <= MaxInlineChars && !raw.Contains('\n')) return text;
 
         var expand = ResultChrome.InspectAffordance();
         // handledEventsToo: the DataGrid marks the press handled in the tunnel phase.

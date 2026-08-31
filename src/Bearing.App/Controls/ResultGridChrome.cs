@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -22,10 +23,34 @@ namespace Bearing.App.Controls;
 /// </summary>
 public static class ResultGridChrome
 {
-    /// <summary>Data font size. Monospace so columns line up; set here rather than in a global
-    /// <c>DataGrid</c> style because <see cref="ColumnWidths"/> has to measure a character at exactly this
-    /// size while the columns are being built — before the grid is attached and app styles have applied.</summary>
+    /// <summary>
+    /// Font size of the row-number gutter, and the grid-level default everything else overrides. Unchanged
+    /// at 13: <c>DataGridRowHeader</c> has no theme <c>FontSize</c> setter, so the gutter is the one part
+    /// that really does inherit this — and <see cref="GutterWidth"/> is only 46px, sized for five digits at
+    /// exactly this size.
+    /// </summary>
     public const double FontSize = 13;
+
+    /// <summary>
+    /// What a value cell renders at, pinned in <see cref="StyleGridChrome"/> and measured with in
+    /// <see cref="MeasureText"/>. Those two have to be the same number: a column sized for one size and drawn
+    /// at another is #73 — <c>grid.FontSize</c> never reached the cells, because the Fluent theme sets
+    /// <c>FontSize</c> on <c>DataGridCell</c> and a setter on the descendant outranks an inherited value, so
+    /// every column was measured at 13 and drawn at 15 and came out ~15% narrow.
+    /// <para>
+    /// 15 is what the theme has been giving the cells all along, so pinning it changes nothing on screen —
+    /// it just stops the theme deciding. Same for <see cref="HeaderFontSize"/>, which is a different number
+    /// for the same reason: the theme's, not ours.
+    /// </para>
+    /// </summary>
+    public const double CellFontSize = 15;
+
+    /// <summary>What a column header renders at, and is measured at. The Fluent theme gives headers 12 —
+    /// three points smaller than the cells beneath them, which is deliberate in that theme and is what has
+    /// been shipping. Pinned for the same reason as <see cref="CellFontSize"/>, and emphatically not unified
+    /// with it: measuring headers at 15 would widen every column with a real name and push the neighbours
+    /// off screen, which is the thing #30's sizing exists to prevent.</summary>
+    public const double HeaderFontSize = 12;
 
     /// <summary>Gap between a value cell's edge and its text (the display TextBlock's margin in
     /// <see cref="ResultCellFactory"/>).</summary>
@@ -46,8 +71,11 @@ public static class ResultGridChrome
     /// design's <c>#</c> column (RESULTS_GRID §3), and with the padding below leaves room for 5 digits.</summary>
     public const double GutterWidth = 46;
 
-    /// <summary>Non-text pixels in a column header: its padding both sides plus the 1px column divider.</summary>
-    private const double HeaderExtra = HeaderPadding * 2 + 1;
+    /// <summary>Non-text pixels in a column header: its padding both sides, the 1px column divider, and the
+    /// same deliberate slack a value cell reserves (<c>ResultCellFactory.TextSlack</c>). A header measured to
+    /// exactly its own width is arranged at exactly that width, with nothing left for a rounding difference
+    /// or a differently-resolved mono face — the same knife edge the values were on before #73.</summary>
+    private const double HeaderExtra = HeaderPadding * 2 + 1 + ResultCellFactory.TextSlack;
 
     /// <summary>Width of a row's left status bar (teal edited / green new / red deleted — see
     /// <see cref="ResultRowPainter"/>). Reserved on every row, dirty or not, as the row's
@@ -72,25 +100,27 @@ public static class ResultGridChrome
         StyleGridChrome(grid);
     }
 
-    /// <summary>Width of one character at the grid's font — the unit <see cref="ColumnWidths"/> counts in.
-    /// Measured through Avalonia's text stack (the mono stack in <c>App.axaml</c> resolves to whichever
-    /// family is actually installed, and their advances differ by ~20%), cached because the font is fixed
-    /// for the app's lifetime and every column asks.</summary>
-    public static double CharAdvance
+    /// <summary>Width of a string at the grid's font, through the same text stack that will render it (the
+    /// mono stack in <c>App.axaml</c> resolves to whichever family is actually installed, and their advances
+    /// differ by ~20%). Rounded up, because a column short by a fraction of a pixel ellipsizes exactly as
+    /// badly as one short by five.
+    /// <para>
+    /// This replaced a cached single-character advance that <see cref="ColumnWidths"/> multiplied by a
+    /// character count. Shaped text is not <c>N ×</c> the mean advance — side bearings and per-glyph widths
+    /// differ — and the reconstruction ran short, which is what clipped <c>110122</c> to <c>1101…</c> (#73).
+    /// One measurement per column, at column-build time, so nothing measures per cell.
+    /// </para></summary>
+    /// <param name="fontSize">The size the text will be drawn at — <see cref="CellFontSize"/> for a value,
+    /// <see cref="HeaderFontSize"/> for a column name. Passing the wrong one reintroduces #73.</param>
+    public static double MeasureText(string text, double fontSize)
     {
-        get
-        {
-            if (_advance is { } cached) return cached;
-            const string probe = "0000000000";
-            var text = new FormattedText(probe, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                new Typeface(MonoFont), FontSize, Brushes.Black);
-            var measured = text.Width / probe.Length;
-            // A family that resolved to nothing measurable would otherwise collapse every column onto
-            // ColumnWidths.Min; 0.6em is the advance of a typical mono face.
-            return (_advance = double.IsFinite(measured) && measured > 0 ? measured : FontSize * 0.6).Value;
-        }
+        if (text.Length == 0) return 0;
+        var measured = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+            new Typeface(MonoFont), fontSize, Brushes.Black).Width;
+        // A family that resolved to nothing measurable would otherwise collapse every column onto
+        // ColumnWidths.Min; 0.6em is the advance of a typical mono face.
+        return Math.Ceiling(double.IsFinite(measured) && measured > 0 ? measured : text.Length * fontSize * 0.6);
     }
-    private static double? _advance;
 
     /// <summary>Pixels a header costs beyond its text: our padding, the divider, and each inline type badge
     /// (9px bold text in a padded chip with a 5px gap — see <see cref="ResultChrome.Badge"/>).</summary>
@@ -151,6 +181,10 @@ public static class ResultGridChrome
         var cell = new Style(x => x.OfType<DataGridCell>());
         cell.Setters.Add(new Setter(TemplatedControl.PaddingProperty, new Thickness(0)));
         cell.Setters.Add(new Setter(Layoutable.MinHeightProperty, 26.0));
+        // Pinned, not inherited from the grid: the Fluent theme sets FontSize on DataGridCell, and that
+        // setter outranks grid.FontSize, so the cells rendered at the theme's size while ColumnWidths sized
+        // them for ours (#73). Whatever FontSize says, this is what makes it true of the pixels.
+        cell.Setters.Add(new Setter(TemplatedControl.FontSizeProperty, CellFontSize));
         grid.Styles.Add(cell);
 
         // Column headers (design §Results grid): bg.window fill, text.dim, 600 weight, border dividers —
@@ -163,6 +197,7 @@ public static class ResultGridChrome
         // ColumnWidths can rely on instead of guessing (#30).
         colHeader.Setters.Add(new Setter(TemplatedControl.PaddingProperty, new Thickness(HeaderPadding, 0)));
         colHeader.Setters.Add(new Setter(TemplatedControl.FontWeightProperty, FontWeight.SemiBold));
+        colHeader.Setters.Add(new Setter(TemplatedControl.FontSizeProperty, HeaderFontSize)); // as the cells
         colHeader.Setters.Add(new Setter(DataGridColumnHeader.SeparatorBrushProperty, SeparatorBrush));
         grid.Styles.Add(colHeader);
 

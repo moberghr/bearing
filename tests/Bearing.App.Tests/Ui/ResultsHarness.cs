@@ -73,6 +73,19 @@ internal static class ResultsHarness
     public static TextBlock CellText(Border cell)
         => cell.GetVisualDescendants().OfType<TextBlock>().First();
 
+    /// <summary>A read-only single-column result — the shape #73 reports: one narrow column, one row.</summary>
+    public static ResultSetViewModel SingleColumn(
+        string name, string dataType, Type clrType, bool primaryKey, params object?[] values)
+    {
+        var rows = values.Select(v => new[] { v }).ToList();
+        var columns = new[] { new ColumnDescriptor(name, dataType, clrType) };
+        var result = new QueryResult(columns, rows, rows.Count, TimeSpan.Zero, null, null, false);
+        return new ResultSetViewModel(result, $"select {name} from t", pageable: false)
+        {
+            PrimaryKeyColumns = primaryKey ? [0] : [],
+        };
+    }
+
     /// <summary>An editable result wide and tall enough that the grid scrolls in both directions: an
     /// <c>id</c> primary key plus <paramref name="columns"/> text columns of padded values.</summary>
     public static (ResultSetViewModel Result, ObservableCollection<object?[]> Rows) WideEditableResult(
