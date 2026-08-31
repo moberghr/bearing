@@ -509,7 +509,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     }
 
     private static string Describe(ConnectionInfo info, string detail)
-        => $"Could not connect to '{info.Name}' ({info.Host}:{info.Port}/{info.Database}): {detail}";
+        => $"Could not connect to '{info.Name}' ({ConnectionEndpoint.Address(info)}): {detail}";
 
     /// <summary>Compares only the fields that define the live connection; name/environment/color are cosmetic.
     /// Database is part of <see cref="SessionKey"/> and so always already equal at every call site — kept in

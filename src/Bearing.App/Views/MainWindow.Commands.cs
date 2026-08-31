@@ -28,7 +28,11 @@ public partial class MainWindow
         r.Register(new KeyCommand(CommandIds.FileSave, "Save", KeyScope.Global, "File", async () => await SaveAsync()));
         r.Register(new KeyCommand(CommandIds.FileSaveAs, "Save As…", KeyScope.Global, "File", async () => await SaveAsAsync()));
         r.Register(new KeyCommand(CommandIds.FileOpen, "Open…", KeyScope.Global, "File", async () => await OpenAsync()));
-        r.Register(KeyCommand.Sync(CommandIds.TabNew, "New tab", KeyScope.Global, "File", () => Vm?.Workspace.NewTab()));
+        // Context-aware (#57): with the connections tree focused, a new tab opens against the connection
+        // selected there instead of inheriting the current tab's. Null everywhere else, which is the old
+        // behaviour exactly.
+        r.Register(KeyCommand.Sync(CommandIds.TabNew, "New tab", KeyScope.Global, "File",
+            () => Vm?.Workspace.NewTab(connectionId: Sidebar.FocusedTreeConnectionId)));
         r.Register(new KeyCommand(CommandIds.TabClose, "Close tab", KeyScope.Global, "File",
             async () => { if (Vm?.Workspace.SelectedTab is { } tab) await CloseTabAsync(tab); }, canRun: () => Vm?.Workspace.SelectedTab is not null));
         r.Register(KeyCommand.Sync(CommandIds.TabRename, "Rename tab", KeyScope.Global, "File",
@@ -71,6 +75,8 @@ public partial class MainWindow
         r.Register(KeyCommand.Sync(CommandIds.PanelHistory, "Show History panel", KeyScope.Global, "View",
             () => Vm?.ShowPanel(SidePanel.History)));
         r.Register(new KeyCommand(CommandIds.ConnectionNew, "New connection…", KeyScope.Global, "Connection", async () => await AddConnectionAsync()));
+        r.Register(new KeyCommand(CommandIds.ConnectionImportDBeaver, "Import connections: from DBeaver…",
+            KeyScope.Global, "Connection", async () => await ImportFromDBeaverAsync()));
         r.Register(new KeyCommand(CommandIds.QueryRunAll, "Run entire script", KeyScope.Global, "Query", async () => await RunAllAsync()));
         r.Register(new KeyCommand(CommandIds.SettingsKeybindings, "Keyboard shortcuts…", KeyScope.Global, "View", async () => await EditKeybindingsAsync()));
         r.Register(new KeyCommand(CommandIds.SettingsOpen, "Settings…", KeyScope.Global, "View", async () => await OpenSettingsAsync()));

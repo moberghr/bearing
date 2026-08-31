@@ -513,6 +513,7 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
         return Task.FromResult<string?>(null);
     }
     public Task<string?> PickOpenScriptAsync(string? startDir) => Task.FromResult<string?>(null);
+    public Task<string?> PickImportFileAsync(string? startDir) => Task.FromResult<string?>(null);
     public void ShowSqlPreview(string sql, string title = "SQL preview — changes to save") { }
 }
 

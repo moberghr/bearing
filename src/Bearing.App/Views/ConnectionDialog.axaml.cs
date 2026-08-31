@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
@@ -20,6 +21,13 @@ public sealed record ConnectionDialogResult(ConnectionInfo Connection, string Pa
 public partial class ConnectionDialog : Window
 {
     private readonly Guid _id;
+
+    /// <summary>The connection being edited, or null for a new one. Held so <see cref="BuildConnection"/>
+    /// can carry forward the fields this dialog does not show — the folder it is filed in (#80) and the
+    /// provider options (sslmode, search_path). It builds a fresh record from the boxes, so anything not
+    /// re-stated here is silently dropped on save.</summary>
+    private readonly ConnectionInfo? _existing;
+
     private readonly Func<ConnectionInfo, string?, CancellationToken, Task<bool>> _test;
     private readonly SecretStoragePosture _storage;
 
@@ -34,6 +42,7 @@ public partial class ConnectionDialog : Window
     {
         InitializeComponent();
         _test = test;
+        _existing = existing;
         _id = existing?.Id ?? Guid.NewGuid();
         _storage = storage ?? SecretStoragePosture.Keychain;
 
@@ -114,6 +123,10 @@ public partial class ConnectionDialog : Window
         EnvironmentColor = string.IsNullOrWhiteSpace(EnvColorBox.Text) ? null : EnvColorBox.Text!.Trim(),
         RequireWriteConfirmation = ConfirmWritesBox.IsChecked == true,
         CredentialKind = SelectedCredentialKind(),
+        // Not editable here, so carried rather than rebuilt: filing lives in the tree, and Options is
+        // file-edit only. Omitting either would quietly discard it on every save.
+        Folder = _existing?.Folder,
+        Options = _existing?.Options ?? new Dictionary<string, string>(),
     };
 
     /// <summary>The password to persist: the typed value for a stored-password connection, or empty for

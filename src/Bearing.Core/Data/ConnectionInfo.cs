@@ -24,6 +24,14 @@ public sealed record ConnectionInfo
     /// deserializes to the classic stored-password behaviour.</summary>
     public CredentialKind CredentialKind { get; init; } = CredentialKind.StoredPassword;
 
+    /// <summary>
+    /// Where this connection is filed in the connections panel: a "/"-separated folder path
+    /// ("Aur/Production"), or null for the panel's root. Purely organisational — it never reaches a
+    /// connection string, and it is deliberately orthogonal to <see cref="Environment"/>: a folder is where
+    /// you filed it, an environment is how dangerous it is.
+    /// </summary>
+    public string? Folder { get; init; }
+
     /// <summary>Free-form environment label (e.g. "local", "staging", "production"); null = untagged.</summary>
     public string? Environment { get; init; }
 

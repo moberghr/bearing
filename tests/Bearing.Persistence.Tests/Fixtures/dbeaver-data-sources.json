@@ -1,0 +1,260 @@
+{
+  "folders": {
+    "Folder 1": {},
+    "Folder 2": {},
+    "Folder 3": {},
+    "Folder 4": {}
+  },
+  "connections": {
+    "postgres-jdbc-18a6aa69eb7-11a0102cebca03e1": {
+      "provider": "postgresql",
+      "driver": "postgres-jdbc",
+      "name": "Conn 1",
+      "save-password": true,
+      "configuration": {
+        "host": "localhost",
+        "port": "5433",
+        "configurationType": "MANUAL",
+        "type": "dev",
+        "closeIdleConnection": false,
+        "properties": {
+          "connectTimeout": "20",
+          "loginTimeout": "20",
+          "escapeSyntaxCallMode": "callIfNoReturn"
+        },
+        "provider-properties": {
+          "@dbeaver-show-non-default-db@": "true",
+          "@dbeaver-show-template-db@": "false",
+          "@dbeaver-show-unavailable-db@": "false",
+          "show-database-statistics": "false",
+          "@dbeaver-read-all-data-types-db@": "false",
+          "read-keys-with-columns": "false",
+          "@dbeaver-use-prepared-statements-db@": "false",
+          "postgresql.dd.plain.string": "false",
+          "postgresql.dd.tag.string": "false"
+        },
+        "auth-model": "native"
+      }
+    },
+    "postgres-jdbc-18adaa0601b-4ba44dafbfb5714a": {
+      "provider": "postgresql",
+      "driver": "postgres-jdbc",
+      "name": "Conn 2",
+      "save-password": true,
+      "folder": "Folder 1",
+      "configuration": {
+        "host": "localhost",
+        "port": "5444",
+        "database": "sampledb",
+        "configurationType": "MANUAL",
+        "type": "dev",
+        "closeIdleConnection": false,
+        "provider-properties": {
+          "@dbeaver-show-non-default-db@": "true",
+          "@dbeaver-show-template-db@": "false",
+          "@dbeaver-show-unavailable-db@": "false",
+          "show-database-statistics": "false",
+          "@dbeaver-read-all-data-types-db@": "false",
+          "read-keys-with-columns": "false",
+          "@dbeaver-use-prepared-statements-db@": "false",
+          "postgresql.dd.plain.string": "false",
+          "postgresql.dd.tag.string": "false"
+        },
+        "auth-model": "native"
+      }
+    },
+    "mysql8-18b14d48ecd-669b673684a4e850": {
+      "provider": "mysql",
+      "driver": "mysql8",
+      "name": "Conn 3",
+      "save-password": true,
+      "folder": "Folder 2",
+      "configuration": {
+        "host": "localhost",
+        "port": "3306",
+        "database": "sampledb",
+        "configurationType": "MANUAL",
+        "type": "dev",
+        "closeIdleConnection": false,
+        "auth-model": "native"
+      }
+    },
+    "postgres-jdbc-18bae6a9e11-3431d7d2c82d24b": {
+      "provider": "postgresql",
+      "driver": "postgres-jdbc",
+      "name": "Conn 4",
+      "save-password": true,
+      "folder": "Folder 2",
+      "configuration": {
+        "host": "localhost",
+        "port": "5455",
+        "database": "sampledb",
+        "configurationType": "MANUAL",
+        "type": "dev",
+        "closeIdleConnection": false,
+        "provider-properties": {
+          "@dbeaver-show-non-default-db@": "true",
+          "@dbeaver-show-template-db@": "false",
+          "@dbeaver-show-unavailable-db@": "false",
+          "show-database-statistics": "false",
+          "@dbeaver-read-all-data-types-db@": "false",
+          "read-keys-with-columns": "false",
+          "@dbeaver-use-prepared-statements-db@": "false",
+          "postgresql.dd.plain.string": "false",
+          "postgresql.dd.tag.string": "false"
+        },
+        "auth-model": "native"
+      }
+    },
+    "microsoft-18cc99cde5a-b804c08a2aeefa8": {
+      "provider": "sqlserver",
+      "driver": "microsoft",
+      "name": "Conn 5",
+      "save-password": true,
+      "folder": "Folder 1",
+      "configuration": {
+        "host": "db1.example.internal",
+        "port": "1433",
+        "database": "sampledb",
+        "configurationType": "MANUAL",
+        "type": "dev",
+        "closeIdleConnection": false,
+        "provider-properties": {
+          "@dbeaver-show-all-schemas@": "false",
+          "sslTrustServerCertificate": "true"
+        },
+        "auth-model": "sqlserver_database"
+      }
+    },
+    "microsoft-18d5fb37d29-4177800e1b129c16": {
+      "provider": "sqlserver",
+      "driver": "microsoft",
+      "name": "Conn 6",
+      "save-password": true,
+      "folder": "Folder 2",
+      "configuration": {
+        "host": "db2.example.internal",
+        "port": "1433",
+        "database": "sampledb",
+        "configurationType": "MANUAL",
+        "type": "dev",
+        "closeIdleConnection": false,
+        "provider-properties": {
+          "@dbeaver-show-all-schemas@": "false",
+          "sslTrustServerCertificate": "true"
+        },
+        "auth-model": "sqlserver_database"
+      }
+    },
+    "mysql8-18dcbefe9a2-612833dbc3002e52": {
+      "provider": "mysql",
+      "driver": "mysql8",
+      "name": "Conn 7",
+      "save-password": true,
+      "folder": "Folder 1",
+      "configuration": {
+        "host": "db3.example.internal",
+        "port": "3306",
+        "database": "sampledb",
+        "configurationType": "MANUAL",
+        "type": "dev",
+        "closeIdleConnection": false,
+        "auth-model": "native"
+      }
+    },
+    "microsoft-19469b13a32-22587ac9cd04a0b": {
+      "provider": "sqlserver",
+      "driver": "microsoft",
+      "name": "Conn 8",
+      "save-password": true,
+      "folder": "Folder 3",
+      "configuration": {
+        "host": "db4.example.internal",
+        "port": "1433",
+        "database": "sampledb",
+        "configurationType": "MANUAL",
+        "type": "prod",
+        "closeIdleConnection": true,
+        "provider-properties": {
+          "@dbeaver-show-all-schemas@": "true",
+          "sslTrustServerCertificate": "true"
+        },
+        "auth-model": "sqlserver_database"
+      }
+    },
+    "microsoft-19469b69629-336d4ba10518e15a": {
+      "provider": "sqlserver",
+      "driver": "microsoft",
+      "name": "Conn 9",
+      "save-password": true,
+      "folder": "Folder 4",
+      "configuration": {
+        "host": "db5.example.internal",
+        "database": "sampledb",
+        "configurationType": "MANUAL",
+        "type": "dev",
+        "closeIdleConnection": true,
+        "provider-properties": {
+          "@dbeaver-show-all-schemas@": "true",
+          "sslTrustServerCertificate": "true"
+        },
+        "auth-model": "sqlserver_database"
+      }
+    },
+    "postgres-jdbc-19bc76d9b0a-2bf4b94f20f0ffcd": {
+      "provider": "postgresql",
+      "driver": "postgres-jdbc",
+      "name": "Conn 10",
+      "save-password": true,
+      "configuration": {
+        "host": "db6.example.internal",
+        "port": "5432",
+        "database": "sampledb",
+        "configurationType": "MANUAL",
+        "type": "dev",
+        "closeIdleConnection": true,
+        "properties": {
+          "sslmode": "require",
+          "connectTimeout": "20",
+          "loginTimeout": "20",
+          "escapeSyntaxCallMode": "callIfNoReturn",
+          "ssl": "true"
+        },
+        "provider-properties": {
+          "@dbeaver-show-non-default-db@": "false"
+        },
+        "auth-model": "native"
+      }
+    }
+  },
+  "connection-types": {
+    "dev": {
+      "name": "Development",
+      "color": "255,255,255",
+      "description": "Regular development database",
+      "auto-commit": true,
+      "confirm-execute": false,
+      "confirm-data-change": false,
+      "smart-commit": false,
+      "smart-commit-recover": true,
+      "auto-close-transactions": true,
+      "close-transactions-period": 1800,
+      "auto-close-connections": true,
+      "close-connections-period": 14400
+    },
+    "prod": {
+      "name": "Production",
+      "color": "org.jkiss.dbeaver.color.connectionType.prod.background",
+      "description": "Production database",
+      "auto-commit": false,
+      "confirm-execute": true,
+      "confirm-data-change": true,
+      "smart-commit": false,
+      "smart-commit-recover": false,
+      "auto-close-transactions": true,
+      "close-transactions-period": 600,
+      "auto-close-connections": true,
+      "close-connections-period": 3600
+    }
+  }
+}

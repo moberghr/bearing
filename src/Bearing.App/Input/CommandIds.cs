@@ -43,6 +43,7 @@ public static class CommandIds
     public const string PanelScripts = "panel.scripts";
     public const string PanelHistory = "panel.history";
     public const string ConnectionNew = "connection.new";
+    public const string ConnectionImportDBeaver = "connection.import.dbeaver";
     public const string SettingsKeybindings = "settings.keybindings";
     public const string SettingsOpen = "settings.open";
 

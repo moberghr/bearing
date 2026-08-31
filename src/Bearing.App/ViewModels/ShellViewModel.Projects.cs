@@ -33,10 +33,14 @@ public sealed partial class ShellViewModel
             await _recentProjects.AddAsync(_project.Directory, CancellationToken.None);
             await RefreshRecentAsync();
 
+            // Loaded before the first RefreshConnections so the tree is built with the user's folders
+            // already in the state they left them, rather than flashing open and then closing.
+            var session = await _sessionStore.LoadAsync(_project.Directory, CancellationToken.None);
+            Connections.RestoreCollapsedFolders(session?.CollapsedConnectionFolders);
+
             RefreshConnections();
             RefreshScripts();
 
-            var session = await _sessionStore.LoadAsync(_project.Directory, CancellationToken.None);
             SidePaneOpen = session?.SidePaneOpen ?? true;
             SidePaneWidth = session?.SidePaneWidth ?? 260;
             ResultsViewMode = session?.ResultsViewMode ?? Bearing.Core.Workspace.ResultsViewMode.Stacked;

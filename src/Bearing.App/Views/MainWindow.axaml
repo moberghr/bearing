@@ -135,6 +135,10 @@
         <MenuItem x:Name="MenuSave" Header="Save" Click="OnSaveClick"/>
         <MenuItem x:Name="MenuSaveAs" Header="Save As…" Click="OnSaveAsClick"/>
         <Separator/>
+        <MenuItem Header="Import connections">
+          <MenuItem x:Name="MenuImportDBeaver" Header="From DBeaver…" Click="OnImportDBeaverClick"/>
+        </MenuItem>
+        <Separator/>
         <MenuItem x:Name="MenuCloseTab" Header="Close Tab" Click="OnCloseCurrentTabClick"/>
       </MenuItem>
       <MenuItem Header="_Edit">
@@ -206,7 +210,11 @@
                   PlaceholderText="— server —" ToolTip.Tip="Server / connection">
           <ComboBox.ItemTemplate>
             <DataTemplate x:DataType="data:ConnectionInfo">
-              <StackPanel Orientation="Horizontal" Spacing="7" ToolTip.Tip="{Binding Host}">
+              <!-- Tooltip is the full endpoint, user@host:port/database — the spelling the credential
+                   prompt and the connect-failure message use, so the three name a server identically
+                   (#79). Host alone made two instances on one box indistinguishable. -->
+              <StackPanel Orientation="Horizontal" Spacing="7"
+                          ToolTip.Tip="{Binding Converter={StaticResource ConnectionEndpoint}}">
                 <!-- Azure server glyph (Syntax.Func is the token, "server icon" and all). Not a status
                      colour, and not the environment colour: it identifies the control, nothing more. -->
                 <!-- Nudged 2px down: Stretch="Uniform" centres the glyph in its box, but a box centred
@@ -214,7 +222,9 @@
                 <Path Data="{StaticResource Icon.Connections}" Stroke="{DynamicResource Syntax.Func}"
                       StrokeThickness="1.6" StrokeLineCap="Round" StrokeJoin="Round"
                       Width="13" Height="13" Stretch="Uniform" VerticalAlignment="Center" Margin="0,2,0,0"/>
-                <!-- Name only — the host is in the tooltip and the status bar; the row is the environment
+                <!-- Name only — the endpoint is in the tooltip (the status bar shows connection *state*,
+                     not the host). 210px fixed: an endpoint here would truncate the names that are the
+                     control's whole point. The row is the environment
                      plus its name. Name stays in normal text colour: tinting it with an arbitrary user hex
                      is a contrast hazard on the dark theme, and the report called it out directly. -->
                 <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>

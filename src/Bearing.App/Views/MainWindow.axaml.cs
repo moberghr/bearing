@@ -131,7 +131,8 @@ public partial class MainWindow : Window
     /// interactions and hands back the three actions the shell still owns.</summary>
     private void WireSidebar()
     {
-        Sidebar.AddConnectionRequested = () => _ = AddConnectionAsync();
+        Sidebar.AddConnectionRequested = folder => _ = AddConnectionAsync(folder);
+        Sidebar.ImportConnectionsRequested = () => _ = ImportFromDBeaverAsync();
         Sidebar.EditorSyncRequested = LoadEditorFromSelectedTab;
         Sidebar.SqlPreviewRequested = _dialogs.ShowSqlPreview;
     }
