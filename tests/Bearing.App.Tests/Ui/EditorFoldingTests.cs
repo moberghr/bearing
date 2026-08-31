@@ -195,6 +195,30 @@ public class EditorFoldingTests
         f.Window.Close();
     });
 
+    /// <summary>The caret invariant holds on every edit, not only on the fold commands. UpdateFoldings keeps
+    /// an unchanged region's folded state, so an edit that did not come from typing inside the fold can slide
+    /// a still-folded section over the caret — an undo, a whole-document replace, a paste. Found in review:
+    /// only the fold commands were correcting it.</summary>
+    [Fact]
+    public Task An_edit_never_leaves_the_caret_inside_a_folded_region() => _ui.Run(() =>
+    {
+        var f = Editor();
+        f.Load(TwoStatements);
+        f.Folding.FoldAll();
+        f.Window.UpdateLayout();
+
+        // Put the caret back inside a folded region the way a programmatic edit would, then make any edit at
+        // all: the refresh that follows has to take the caret back out.
+        f.Editor.CaretOffset = InsideSecondFold;
+        f.Editor.Document.Insert(0, "-- header");
+        f.Window.UpdateLayout();
+
+        Assert.DoesNotContain(f.Folding.Sections, s =>
+            s.IsFolded && f.Editor.CaretOffset > s.StartOffset && f.Editor.CaretOffset < s.EndOffset);
+        Assert.True(f.CaretHasVisualLine);
+        f.Window.Close();
+    });
+
     /// <summary>An edit that guts a folded region leaves nothing folded over dead lines: <c>Refresh</c>
     /// unfolds the invalidated section before rebuilding rather than carrying its collapsed state onto a
     /// region that no longer matches it.</summary>

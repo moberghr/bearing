@@ -57,6 +57,12 @@ internal sealed class SqlFoldingController
         var foldings = SqlFolding.ComputeFoldRegions(_editor.Text)
             .Select(r => new NewFolding(r.Start, r.End));
         _manager.UpdateFoldings(foldings, -1);
+
+        // Invariant 2, on every edit and not only on the fold commands. UpdateFoldings deliberately keeps an
+        // unchanged region's folded state, so an edit that did not come from typing inside the fold — an
+        // undo restoring text, EditorTextCommands replacing the whole document, a paste that moves offsets —
+        // can slide a still-folded section over the caret with nothing else to correct it.
+        KeepCaretVisible();
     }
 
     /// <summary>

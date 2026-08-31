@@ -59,7 +59,10 @@ public class AutosaveModeTests : IDisposable
 
     private static async Task<string> WaitForWrite(string path, string expected)
     {
-        for (var i = 0; i < 60; i++)
+        // ~12s of budget, not 3: the write is debounced and lands on a background task, and this class only
+        // ever fails as part of a full run (#83) — under that load the wait is the variable, not the code.
+        // The budget is spent only by a genuine failure, so the cost of a generous one is zero.
+        for (var i = 0; i < 240; i++)
         {
             if (await TryReadAsync(path) == expected) return expected;
             await Task.Delay(50);
