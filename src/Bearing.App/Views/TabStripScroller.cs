@@ -83,9 +83,15 @@ internal sealed class TabStripScroller
     /// name tabs, not pixels, and a strip of unequal tab widths (one long filename beside three short ones)
     /// has no fixed pixels-per-tab to divide by. The arithmetic is <see cref="TabOverflow"/>.
     /// </para>
-    /// </summary>
-    public int HiddenCount()
-        => TabOverflow.HiddenCount(Spans(), _scroller.Offset.X, _scroller.Viewport.Width);
+    /// <para>
+    /// <paramref name="reserve"/> is width the caller intends to take away from the strip — the chevron's own
+    /// footprint. It exists because the chevron is docked beside the strip, so showing it narrows the viewport
+    /// this count is read from: the count would then change <i>because</i> the chevron appeared, re-run, and
+    /// change again. That is not hypothetical, it threw <c>Infinite layout loop detected</c> on the first
+    /// render capture. Reserving the width unconditionally makes the answer independent of its own effect.
+    /// </para>
+    public int HiddenCount(double reserve = 0)
+        => TabOverflow.HiddenCount(Spans(), _scroller.Offset.X, _scroller.Viewport.Width - reserve);
 
     /// <summary>Each realized tab's (start, width) along the strip, in the strip's own coordinates.</summary>
     private IReadOnlyList<(double Start, double Width)> Spans()

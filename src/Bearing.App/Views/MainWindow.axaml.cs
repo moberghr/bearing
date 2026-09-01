@@ -394,13 +394,36 @@ public partial class MainWindow : Window
     /// the addition.
     /// </para>
     /// </summary>
+    /// <summary>The chevron's own width, reserved from the strip whether it is showing or not. Wide enough
+    /// for a two-digit count; a strip with more than 99 hidden tabs is not one anyone is reading.</summary>
+    private const double TabChevronWidth = 40;
+
     private void SyncTabOverflow()
     {
-        var hidden = _tabScroll.HiddenCount() + _pinnedTabScroll.HiddenCount();
-        TabOverflowButton.IsVisible = hidden > 0;
+        // Reserve the chevron's width from both strips regardless of whether it is up. Otherwise showing it
+        // narrows the very viewport the count was read from, the count changes because the chevron appeared,
+        // and the answer oscillates. Not hypothetical: with this, the unconditional write below, and the
+        // button's fixed width all absent, the shell threw "Infinite layout loop detected" out of the render
+        // pass and never drew — found by a render capture, and pinned now by
+        // WiringTests.An_overflowing_strip_renders_instead_of_looping.
+        //
+        // Measured: removing any *one* of the three breaks the cycle on its own, so each is redundant with the
+        // others. All three are kept anyway — they are each independently the right thing (a count that does
+        // not depend on its own effect, no layout write from a layout callback, a chevron that does not resize
+        // as its number changes), and relying on exactly one of them would mean the next small change to any
+        // of the other two silently re-arms this.
+        var hidden = _tabScroll.HiddenCount(TabChevronWidth)
+                     + _pinnedTabScroll.HiddenCount(TabChevronWidth);
+        var visible = hidden > 0;
         // The glyph carries the number, as it does in DBeaver: "there are 4 more, and they are over here".
         // A bare chevron would say the first half only, which is what the scrollbar already failed to do.
-        TabOverflowButton.Content = $"» {hidden}";
+        var label = $"» {hidden}";
+
+        // Touch nothing unless something changed. An unconditional write from a layout callback invalidates
+        // layout on every pass, and the next pass arrives with the same numbers to write again.
+        if (TabOverflowButton.IsVisible == visible && (TabOverflowButton.Content as string) == label) return;
+        TabOverflowButton.IsVisible = visible;
+        TabOverflowButton.Content = label;
     }
 
     /// <summary>The chevron opens the same picker as tab.pick, so there is one list and one implementation.</summary>

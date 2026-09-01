@@ -300,15 +300,57 @@ public class LookProbe
             shell.Vm.Workspace.Tabs.Clear();
             foreach (var name in new[]
                      {
+                         // One deliberately absurd name: the ellipsis is the thing to look at, and a strip of
+                         // tidy short names would never show it. This is the shape that used to push every
+                         // other tab off the edge on its own.
+                         "quarterly-revenue-reconciliation-by-store-and-category-v7-FINAL",
                          "daily-revenue", "audit-trail", "store-health", "payment-recon", "customer-churn",
                          "index-bloat", "slow-queries", "scratch-1", "scratch-2", "scratch-3",
                      })
                 shell.Vm.Workspace.NewTab($"-- {name}").DisplayName = name;
-            shell.Vm.Workspace.SetPinned(shell.Vm.Workspace.Tabs[0], true);
+            shell.Vm.Workspace.SetPinned(shell.Vm.Workspace.Tabs[1], true);
             shell.Vm.Workspace.SelectedTab = shell.Vm.Workspace.Tabs[^1];
+            // Narrow enough that the chevron is certainly in the picture, since the chevron and its count are
+            // what this capture now exists to show.
+            shell.Window.Width = 900;
+            shell.Pump();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
             shell.Pump();
 
             Write(shell.Window, dir, "tab-overflow.png");
+        });
+    }
+
+    /// <summary>
+    /// The same strip with the <b>first</b> tab selected, so it is at offset 0 and the long name is on screen.
+    /// <para>
+    /// A separate capture because <see cref="TabStripOverflow"/> selects the last tab — which is the honest
+    /// thing for showing the chevron, and scrolls the long name off the left edge, so the ellipsis it exists
+    /// to demonstrate is not in the picture. Two questions, two pictures.
+    /// </para>
+    /// </summary>
+    [SkippableFact]
+    public Task TabNameEllipsis()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(async () =>
+        {
+            using var shell = await ShellHarness.ShowAsync(nameof(TabNameEllipsis));
+            shell.Vm.Workspace.Tabs.Clear();
+            foreach (var name in new[]
+                     {
+                         "quarterly-revenue-reconciliation-by-store-and-category-v7-FINAL",
+                         "daily-revenue", "audit-trail", "store-health", "payment-recon", "customer-churn",
+                         "index-bloat", "slow-queries", "scratch-1", "scratch-2", "scratch-3",
+                     })
+                shell.Vm.Workspace.NewTab($"-- {name}").DisplayName = name;
+            shell.Vm.Workspace.SelectedTab = shell.Vm.Workspace.Tabs[0];
+            shell.Window.Width = 900;
+            shell.Pump();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            shell.Pump();
+
+            Write(shell.Window, dir, "tab-name-ellipsis.png");
         });
     }
 

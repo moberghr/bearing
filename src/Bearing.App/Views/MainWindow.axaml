@@ -531,8 +531,13 @@
             <!-- The overflow chevron: hidden while everything fits, and carrying the count of tabs that do
                  not. Its content is set from code (SyncTabOverflow) because the count comes from arranged
                  bounds, which no binding can see. -->
+            <!-- Width fixed at the same 40px SyncTabOverflow reserves from the strip. The two numbers have to
+                 agree: the count is computed against a viewport already short by this much, so a chevron that
+                 measured wider would take space the count did not know about and the strip would re-flow the
+                 moment it appeared. -->
             <Button x:Name="TabOverflowButton" DockPanel.Dock="Right" Click="OnTabOverflowClick"
-                    Padding="6,2" Margin="6,0,0,0" IsVisible="False" VerticalAlignment="Center"
+                    Width="40" Padding="0" Margin="6,0,0,0" IsVisible="False"
+                    HorizontalContentAlignment="Center" VerticalAlignment="Center"
                     ToolTip.Tip="Show all tabs (Ctrl+E)"/>
             <ScrollViewer x:Name="TabScroll" HorizontalScrollBarVisibility="Hidden"
                           VerticalScrollBarVisibility="Disabled">

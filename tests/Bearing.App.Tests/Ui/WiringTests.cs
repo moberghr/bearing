@@ -3,6 +3,7 @@ using System.Linq;
 using Avalonia;
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Headless;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
@@ -213,6 +214,59 @@ public class WiringTests : IDisposable
         Dispatcher.UIThread.RunJobs();
 
         Assert.Same(wanted, workspace.SelectedTab);
+    });
+
+    /// <summary>
+    /// The shell renders with an overflowing tab strip.
+    /// <para>
+    /// The regression is real and a render capture is what found it: the chevron is docked beside the strip,
+    /// so showing it narrows the viewport its own count is read from — the count changed <i>because</i> the
+    /// chevron appeared, re-laid out, and changed back. Avalonia reports that as
+    /// <c>Infinite layout loop detected</c> from inside <c>MediaContext.Render</c>, and the window never
+    /// renders at all.
+    /// </para>
+    /// <para>
+    /// Two things this test needs, and the first two versions of it had neither, so both passed with every
+    /// safeguard removed and pinned nothing. It must <b>render</b> — the detector lives in the render pass,
+    /// not the layout pass. And it must reproduce the <b>exact</b> arrangement: the loop needs the
+    /// scroll-into-view that follows selecting the last tab, so a test that merely resizes a window with many
+    /// tabs converges happily. These are the conditions from <c>LookProbe.TabStripOverflow</c>, which is where
+    /// it actually threw.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public Task An_overflowing_strip_renders_instead_of_looping() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(An_overflowing_strip_renders_instead_of_looping));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        foreach (var name in new[]
+                 {
+                     "quarterly-revenue-reconciliation-by-store-and-category-v7-FINAL",
+                     "daily-revenue", "audit-trail", "store-health", "payment-recon", "customer-churn",
+                     "index-bloat", "slow-queries", "scratch-1", "scratch-2", "scratch-3",
+                 })
+            workspace.NewTab($"-- {name}").DisplayName = name;
+        workspace.SetPinned(workspace.Tabs[1], true);
+        // The last tab, so BringSelectionIntoView scrolls the strip — which is the ingredient that turns the
+        // chevron's self-dependence into a cycle rather than a settled disagreement.
+        workspace.SelectedTab = workspace.Tabs[^1];
+        shell.Window.Width = 900;
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        // The render is the assertion: this throws InvalidOperationException("Infinite layout loop detected")
+        // when the chevron's footprint feeds back into its own count.
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        using var frame = shell.Window.CaptureRenderedFrame();
+
+        Assert.NotNull(frame);
+        // And the chevron is up with a sane count, so a render that succeeded by not drawing it fails here.
+        var chevron = Chevron(shell);
+        Assert.True(chevron.IsVisible, "the strip overflowed but no chevron appeared");
+        var digits = new string((chevron.Content as string ?? "").Where(char.IsDigit).ToArray());
+        Assert.True(int.TryParse(digits, out var hidden) && hidden > 0, "the chevron carries no count");
     });
 
     private static Button Chevron(ShellHarness shell)
