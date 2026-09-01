@@ -178,11 +178,18 @@ public static class DBeaverImport
             // error. Prompting is both honest and what actually works until the user saves one.
             CredentialKind = CredentialKind.Prompt,
             // The imported sslmode goes into the typed field, not the options bag (#23): it is a security
-            // setting, and DBeaver's own value is the user's actual intent for this server. An unreadable
-            // value leaves the default standing rather than guessing.
-            Tls = TlsPolicy.FromOptions(options) ?? TlsPolicy.DefaultFor(Str(cfg, "host")),
-            Options = options.Where(kv => !kv.Key.Equals(TlsPolicy.LegacyOptionKey, StringComparison.OrdinalIgnoreCase))
-                .ToDictionary(kv => kv.Key, kv => kv.Value),
+            // setting, and DBeaver's own value is the user's actual intent for this server.
+            //
+            // Falling back to TlsPolicy.Default, NOT DefaultFor(host): an import migrates a configuration
+            // that already works, and DBeaver's own default is no SSL — so applying the new-connection rule
+            // would turn every remote connection imported without an sslmode into one that fails to connect,
+            // with nothing saying the importer had changed it.
+            Tls = TlsPolicy.FromOptions(options) ?? TlsPolicy.Default,
+            // The comparer travels with the dictionary: EntraTokenProvider looks its keys up
+            // case-insensitively, so a rebuilt bag that lost it would start missing them.
+            Options = options
+                .Where(kv => !kv.Key.Equals(TlsPolicy.LegacyOptionKey, StringComparison.OrdinalIgnoreCase))
+                .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase),
         });
     }
 

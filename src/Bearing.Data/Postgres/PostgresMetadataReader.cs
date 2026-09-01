@@ -228,6 +228,12 @@ public sealed class PostgresMetadataReader : IMetadataReader
     private static async Task<List<IndexInfo>> ReadIndexesAsync(
         NpgsqlConnection conn, long tableId, CancellationToken ct)
     {
+        // The pg_constraint join is narrowed three ways, and each one matters. conrelid = indrelid and
+        // contype in (p,u,x): a FOREIGN KEY also sets conindid, pointing at the *referenced* table's index —
+        // so an unrestricted join both duplicated a parent table's index once per key referencing it and
+        // marked a hand-made unique index as constraint-owned, which then vanished from generated DDL and
+        // took the FK depending on it with it.
+        //
         // indkey spans indnatts, so it includes INCLUDE (non-key) columns; only the first indnkeyatts of them
         // are the key the planner can search on. Reporting all of them made `create index … (a) include (b)`
         // read as a two-column key, which is the one thing an index row must not misstate.
@@ -247,7 +253,10 @@ public sealed class PostgresMetadataReader : IMetadataReader
                    con.oid is not null
             from pg_index i
             join pg_class c on c.oid = i.indexrelid
-            left join pg_constraint con on con.conindid = i.indexrelid
+            left join pg_constraint con
+                   on con.conindid = i.indexrelid
+                  and con.conrelid = i.indrelid
+                  and con.contype in ('p', 'u', 'x')
             where i.indrelid = $1
             order by i.indisprimary desc, c.relname
             """;

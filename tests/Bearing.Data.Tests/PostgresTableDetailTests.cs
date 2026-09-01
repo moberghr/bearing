@@ -61,6 +61,17 @@ public class PostgresTableDetailTests : IAsyncLifetime
             create index payment_partial_idx on {_schema}.payment (id) where note is not null;
             create unique index payment_note_covering_idx on {_schema}.payment (note) include (amount);
             create table {_schema}.node (id int primary key, parent_id int references {_schema}.node(id));
+            -- store.id is referenced by payment and by these two, so three foreign keys point at its
+            -- primary-key index: an unrestricted conindid join reports that index four times.
+            create table {_schema}.shift (id int primary key, store_id int references {_schema}.store(id));
+            create table {_schema}.stock (id int primary key, store_id int references {_schema}.store(id));
+            -- A hand-made unique index supporting a foreign key. Postgres only requires a unique *index*,
+            -- not a constraint, so nothing owns this one — and generated DDL must keep it, or the key that
+            -- depends on it can no longer be created.
+            create table {_schema}.till (code text, name text);
+            create unique index till_code_key on {_schema}.till (code);
+            create table {_schema}.till_use (id int primary key,
+              code text references {_schema}.till(code));
             create view {_schema}.receipt as
               select p.id as payment_id, s.name as store_name
               from {_schema}.payment p join {_schema}.store s on s.id = p.store_id;
@@ -264,6 +275,38 @@ public class PostgresTableDetailTests : IAsyncLifetime
         Assert.False(indexes.Single(i => i.Name == "payment_store_id_idx").BackedByConstraint);
         // A unique index created by hand is nobody's constraint, however unique it is.
         Assert.False(indexes.Single(i => i.Name == "payment_note_covering_idx").BackedByConstraint);
+    }
+
+    [SkippableFact]
+    public async Task An_index_is_listed_once_however_many_keys_reference_it()
+    {
+        // A FOREIGN KEY sets conindid too, pointing at the *referenced* table's index — so joining on
+        // conindid alone reported store's primary-key index once per key referencing store, inflating both
+        // the Indexes folder and its count.
+        RequireServer();
+
+        var indexes = (await DetailsOf("store")).Indexes;
+
+        Assert.Equal(indexes.Select(i => i.Name).Distinct(), indexes.Select(i => i.Name));
+        Assert.Single(indexes, i => i.Name == "store_pkey");
+    }
+
+    [SkippableFact]
+    public async Task A_hand_made_unique_index_supporting_a_key_is_not_reported_as_owned()
+    {
+        // Postgres requires only a unique index behind a foreign key, not a constraint. Marking this one as
+        // constraint-owned dropped it from generated DDL — and the key depending on it could then no longer
+        // be created, which is a broken schema rather than a cosmetic omission.
+        RequireServer();
+
+        var index = (await DetailsOf("till")).Indexes.Single(i => i.Name == "till_code_key");
+
+        Assert.False(index.BackedByConstraint);
+        Assert.True(index.IsUnique);
+
+        var table = _snapshot.ResolveTable(_schema, "till")!;
+        var ddl = Bearing.Sql.TableDdlGenerator.CreateTable(table, _snapshot, await DetailsOf("till"));
+        Assert.Contains("till_code_key", ddl);
     }
 
     // ---- the edges ------------------------------------------------------------------------------

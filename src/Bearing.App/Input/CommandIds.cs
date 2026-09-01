@@ -79,6 +79,12 @@ public static class CommandIds
     /// <summary>Export the whole result set: <c>grid.export.csv</c> / <c>grid.export.xlsx</c>.</summary>
     public static string GridExport(ExportFormat format) => "grid.export." + Lower(format.ToString());
 
+    /// <summary>
+    /// Export every result of the run as one workbook (#12). Global rather than grid-scoped: a run belongs to
+    /// the tab, not to whichever grid the caret happens to be in, and it is reachable with no grid focused.
+    /// </summary>
+    public const string QueryExportRun = "query.export.run";
+
     /// <summary>Enum name → id segment (<c>SqlInsert</c> → <c>sqlInsert</c>), so ids stay camelCase like
     /// every other one here.</summary>
     private static string Lower(string name) => char.ToLowerInvariant(name[0]) + name[1..];

@@ -31,6 +31,16 @@ public static class PostgresConnectionString
         // but through TlsPolicy.Resolve below — never applied a second time from here, which would let the bag
         // silently outrank the field the dialog wrote.
         "sslmode", "ssl mode",
+        // …and every other keyword that decides how much the transport is trusted. Reserving sslmode alone
+        // was not enough: "Trust Server Certificate=True" beside "SSL Mode=VerifyFull" turns verification off
+        // while the dialog still reads Verify Full — a shared project.json defeating the setting is exactly
+        // the threat this list exists to close.
+        "trustservercertificate", "trust server certificate",
+        "rootcertificate", "root certificate",
+        "sslcertificate", "ssl certificate",
+        "sslkey", "ssl key", "sslpassword", "ssl password",
+        "sslnegotiation", "ssl negotiation",
+        "checkcertificaterevocation", "check certificate revocation",
     };
 
     public static NpgsqlConnectionStringBuilder Build(ConnectionInfo info, string? password)

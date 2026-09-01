@@ -166,7 +166,8 @@ public partial class ConnectionDialog : Window
     private static Dictionary<string, string> CarriedOptions(ConnectionInfo? existing)
         => (existing?.Options ?? new Dictionary<string, string>())
             .Where(kv => !string.Equals(kv.Key, TlsPolicy.LegacyOptionKey, StringComparison.OrdinalIgnoreCase))
-            .ToDictionary(kv => kv.Key, kv => kv.Value);
+            // Case-insensitively, as the bag is read: the documented `entra.*` keys are looked up that way.
+            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
 
     private void OnPresetColorClick(object? sender, RoutedEventArgs e)
     {

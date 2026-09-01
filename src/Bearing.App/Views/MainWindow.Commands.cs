@@ -45,6 +45,9 @@ public partial class MainWindow
         r.Register(KeyCommand.Sync(CommandIds.ViewToggleSidePane, "Toggle side pane", KeyScope.Global, "View",
             () => { if (Vm is not null) Vm.SidePaneOpen = !Vm.SidePaneOpen; }));
         r.Register(KeyCommand.Sync(CommandIds.ViewToggleResults, "Toggle results", KeyScope.Global, "View", ToggleResultsVisible));
+        r.Register(new KeyCommand(CommandIds.QueryExportRun, "Export run to Excel workbook", KeyScope.Global, "Query",
+            async () => { if (Vm is { } vm) await vm.Execution.ExportRunAsync(); },
+            canRun: () => Vm?.Workspace.SelectedTab?.Results.Any(rs => rs.HasGrid) == true));
         r.Register(KeyCommand.Sync(CommandIds.StatementPrev, "Previous statement", KeyScope.Global, "Editor", () => _text.MoveToAdjacentStatement(-1)));
         r.Register(KeyCommand.Sync(CommandIds.StatementNext, "Next statement", KeyScope.Global, "Editor", () => _text.MoveToAdjacentStatement(+1)));
         // Escape only claims the key when there's something to dismiss; otherwise it falls through.
@@ -227,6 +230,7 @@ public partial class MainWindow
         MenuRenameTab.InputGesture = MenuGesture(CommandIds.TabRename);
         MenuToggleSidePane.InputGesture = MenuGesture(CommandIds.ViewToggleSidePane);
         MenuRun.InputGesture = MenuGesture(CommandIds.Run);
+        MenuExportRun.InputGesture = MenuGesture(CommandIds.QueryExportRun);
     }
 
     private KeyGesture? MenuGesture(string commandId)

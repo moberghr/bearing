@@ -116,6 +116,25 @@ public class TlsTests
         Assert.Equal(SslMode.Require, built.SslMode);
     }
 
+    [Theory]
+    [InlineData("Trust Server Certificate")]
+    [InlineData("TrustServerCertificate")]
+    [InlineData("Root Certificate")]
+    [InlineData("SslCertificate")]
+    [InlineData("Check Certificate Revocation")]
+    [InlineData("SslNegotiation")]
+    public void No_other_transport_keyword_can_weaken_the_field_either(string key)
+    {
+        // Reserving sslmode alone was not enough: "Trust Server Certificate=True" beside Verify Full turns
+        // verification off while the dialog still reads Verify Full. A shared project.json quietly defeating
+        // the setting is exactly what the reserved list exists to stop.
+        var built = PostgresConnectionString.Build(
+            Info(TlsMode.VerifyFull, new() { [key] = "True" }), "pw");
+
+        Assert.Equal(SslMode.VerifyFull, built.SslMode);
+        Assert.False(built.TrustServerCertificate, "the bag turned certificate validation off");
+    }
+
     [Fact]
     public void Other_options_still_reach_the_driver()
     {
@@ -138,6 +157,22 @@ public class TlsTests
         Assert.Equal("pw", built.Password);
         Assert.Equal("db.example.com", built.Host);
         Assert.Equal("u", built.Username);
+    }
+
+    [Fact]
+    public void A_connection_whose_encryption_changed_is_not_the_same_connection()
+    {
+        // Not a connection-string question but the same setting's: the session manager reuses a live pool when
+        // the record still matches, and while sslmode lived in the options bag that comparison covered it.
+        // Moving it to a field without teaching the comparison would leave a session running on the old mode
+        // while the record and the dialog reported the new one.
+        var before = Info(TlsMode.Prefer);
+        var after = before with { Tls = TlsMode.VerifyFull };
+
+        Assert.NotEqual(TlsPolicy.Resolve(before), TlsPolicy.Resolve(after));
+        Assert.NotEqual(
+            PostgresConnectionString.Build(before, "pw").SslMode,
+            PostgresConnectionString.Build(after, "pw").SslMode);
     }
 
     // ---- what a new connection starts on --------------------------------------------------------

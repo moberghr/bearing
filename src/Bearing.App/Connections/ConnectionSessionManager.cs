@@ -514,9 +514,21 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     /// <summary>Compares only the fields that define the live connection; name/environment/color are cosmetic.
     /// Database is part of <see cref="SessionKey"/> and so always already equal at every call site — kept in
     /// the comparison so the predicate is true to its name if it is ever reused off the keyed path.</summary>
+    /// <summary>
+    /// Whether a live session's settings still match the record — i.e. whether its pool can be reused rather
+    /// than rebuilt.
+    /// <para>
+    /// <c>TlsPolicy.Resolve</c> rather than the raw field, because that is the mode the pool was actually
+    /// built with: while sslmode lived in the options bag it was covered by <see cref="SameOptions"/>, and
+    /// moving it to a field would otherwise have left an existing session running on the old mode after the
+    /// dialog raised it — the record and the dialog saying Verify Full while the socket is unverified (#23).
+    /// </para>
+    /// </summary>
     private static bool SameConnection(ConnectionInfo a, ConnectionInfo b)
         => a.ProviderId == b.ProviderId && a.Host == b.Host && a.Port == b.Port
-           && a.Database == b.Database && a.User == b.User && SameOptions(a.Options, b.Options);
+           && a.Database == b.Database && a.User == b.User
+           && TlsPolicy.Resolve(a) == TlsPolicy.Resolve(b)
+           && SameOptions(a.Options, b.Options);
 
     private static bool SameOptions(IReadOnlyDictionary<string, string> a, IReadOnlyDictionary<string, string> b)
     {

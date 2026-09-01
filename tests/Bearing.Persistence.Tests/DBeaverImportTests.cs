@@ -277,19 +277,30 @@ public class DBeaverImportTests
     }
 
     [Fact]
-    public void An_import_with_no_sslmode_gets_the_default_for_its_host()
+    public void An_import_with_no_sslmode_keeps_working_rather_than_being_upgraded()
     {
-        // Nothing to import means the new-connection rule applies: a remote server requires encryption, a
-        // loopback one does not (TlsPolicy.DefaultFor).
+        // An import migrates a configuration that already works, and DBeaver's own default is no SSL. Applying
+        // the new-connection rule (Require for anything remote) would turn every imported remote connection
+        // into one that fails to connect, with nothing saying the importer had changed the setting.
         var remote = DBeaverImport.Parse("""
         {"connections":{"c1":{"name":"p","provider":"postgresql","configuration":{"host":"db.example.com"}}}}
         """).Connections.Single();
-        var local = DBeaverImport.Parse("""
-        {"connections":{"c1":{"name":"p","provider":"postgresql","configuration":{"host":"localhost"}}}}
+
+        Assert.Equal(TlsPolicy.Default, remote.Tls);
+    }
+
+    [Fact]
+    public void An_imported_options_bag_is_still_read_case_insensitively()
+    {
+        // The bag is rebuilt to drop sslmode, and the comparer has to travel with it: the documented `entra.*`
+        // keys are looked up case-insensitively, so losing it would start missing them.
+        var imported = DBeaverImport.Parse("""
+        {"connections":{"c1":{"name":"p","provider":"postgresql",
+          "configuration":{"host":"h","properties":{"search_path":"shop"}}}}}
         """).Connections.Single();
 
-        Assert.Equal(TlsMode.Require, remote.Tls);
-        Assert.Equal(TlsMode.Prefer, local.Tls);
+        Assert.True(imported.Options.TryGetValue("SEARCH_PATH", out var value));
+        Assert.Equal("shop", value);
     }
 
     [Fact]

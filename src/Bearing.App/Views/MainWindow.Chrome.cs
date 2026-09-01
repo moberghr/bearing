@@ -346,6 +346,11 @@ public partial class MainWindow
         await RunAsync();
     }
 
+    private async void OnExportRunClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is { } vm) await vm.Execution.ExportRunAsync();
+    }
+
     // The toolbar History button now reveals the inline History side-panel (design §4) instead of a window.
     private void OnHistoryClick(object? sender, RoutedEventArgs e) => Vm?.ShowPanel(SidePanel.History);
 

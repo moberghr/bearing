@@ -156,6 +156,10 @@
       </MenuItem>
       <MenuItem Header="_Query">
         <MenuItem x:Name="MenuRun" Header="Run" Click="OnRunClick"/>
+        <Separator/>
+        <!-- Per tab, not per grid: a run's sets belong to the tab, so this is the one export that is not
+             reachable from a result's own chrome (#12). -->
+        <MenuItem x:Name="MenuExportRun" Header="Export Run to Excel…" Click="OnExportRunClick"/>
       </MenuItem>
       <MenuItem Header="_Help">
         <MenuItem Header="Check for Updates…" Command="{Binding Updates.CheckNowCommand}"/>
