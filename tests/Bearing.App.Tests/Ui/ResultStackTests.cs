@@ -72,6 +72,49 @@ public class ResultStackTests
     });
 
     [Fact]
+    public Task The_divider_changes_colour_under_the_pointer_and_under_a_drag() => _ui.Run(() =>
+    {
+        // The gap this closes: the affordance was verified by looking at captures, and the suite only checked
+        // that a cursor was set. Colour is assertable after all — from the rendered pixels, which is the one
+        // way to check a Render override without re-implementing it.
+        var (window, view) = ResultsHarness.Show(Set(30), Set(30));
+        var divider = Stack(view).Dividers.Single();
+
+        var rest = SeamPixel(window, divider);
+
+        var centre = divider.TranslatePoint(
+            new Point(divider.Bounds.Width / 2, divider.Bounds.Height / 2), window)!.Value;
+        window.MouseMove(centre);
+        ResultsHarness.Pump(window);
+        var hovered = SeamPixel(window, divider);
+
+        window.MouseDown(centre, MouseButton.Left);
+        window.MouseMove(centre + new Vector(0, 4));
+        ResultsHarness.Pump(window);
+        var dragged = SeamPixel(window, divider);
+        window.MouseUp(centre + new Vector(0, 4), MouseButton.Left);
+
+        // Three distinct states, and both live ones brighter than the resting rule. Distinctness and
+        // brightness only — FrameCapture's contract is that channel order is not guaranteed, so "it is teal"
+        // is not something a test here may claim (the eye check for that is the capture in LookProbe).
+        Assert.NotEqual(rest, hovered);
+        Assert.NotEqual(hovered, dragged);
+        Assert.NotEqual(rest, dragged);
+        Assert.True(FrameCapture.Brightness(hovered) > FrameCapture.Brightness(rest),
+            "hover is not brighter than the resting seam");
+        Assert.True(FrameCapture.Brightness(dragged) > FrameCapture.Brightness(rest),
+            "the drag state is not brighter than the resting seam");
+        window.Close();
+    });
+
+    /// <summary>The pixel the divider actually paints at its own centre line, away from the grip.</summary>
+    private static uint SeamPixel(Window window, Control divider)
+    {
+        var at = divider.TranslatePoint(new Point(40, divider.Bounds.Height / 2), window)!.Value;
+        return FrameCapture.Of(window).At((int)at.X, (int)at.Y);
+    }
+
+    [Fact]
     public Task The_editor_results_seam_is_the_same_divider() => _ui.Run(async () =>
     {
         // The old comment claimed the two read as the same affordance while they were separately written and

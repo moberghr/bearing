@@ -115,6 +115,13 @@ faster, parallelizable, and reads better. Reach for a UI test when the visual tr
   unconditional static let whichever test ran first decide it for every later one — which made
   `EnvironmentWashTests`' no-Application fallback assertions pass or fail on test order. The alternative,
   `parallelizeTestCollections: false`, was tried and rejected: it hid both bugs instead of fixing them.
+- **An `async void` handler's completion is not reliably observable from a UI test.** Closing a tab through
+  synthetic input does close it, and asserting that it *has* closed passed alone and failed inside its own
+  class — the outcome depended on what an earlier test in the collection had left on the shared dispatcher,
+  and neither `Pump()` nor an unfiltered `RunJobs()` loop nor an `await Task.Yield()` made it deterministic
+  (the last made it worse). Assert the **synchronous** half instead: for a press, that the event was marked
+  handled, which is what a routing fix actually changes. A test that needs the completion belongs on the
+  view model, where the close can be awaited directly.
 - **Available and unused so far:** synthetic input on any `TopLevel` (`MouseDown`/`MouseMove`/`MouseUp`/
   `MouseWheel`, `KeyPress`/`KeyPressQwerty`, `KeyTextInput`, `SetRenderScaling`, and `DragDrop`, which takes
   an `IDataTransfer` and so already matches the v12 typed API, §9.3), plus real pixels via

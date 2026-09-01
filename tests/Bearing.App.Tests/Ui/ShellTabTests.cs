@@ -9,6 +9,7 @@ using Avalonia.Interactivity;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using AvaloniaEdit;
 using Bearing.App.ViewModels;
@@ -393,6 +394,97 @@ public class ShellTabTests
         shell.Window.MouseDown(point, MouseButton.Left);
         shell.Window.MouseUp(point, MouseButton.Left);
         shell.Pump();
+    }
+
+    /// <summary>
+    /// A middle-click on the ✕ closes the tab, like a middle-click anywhere else on it.
+    /// <para>
+    /// The gap this closes: the strip-level press handler returns early on the close affordance so a left
+    /// click does not select the tab on its way to closing it — and the ✕ itself ignores everything but the
+    /// left button (#66). Between them, a middle-click landing on the glyph did nothing while one two pixels
+    /// away worked. <c>TabPointerGestures</c> was tested in isolation and had nothing to say about the
+    /// interaction, which is where the bug was.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public Task A_middle_click_on_the_close_glyph_closes_the_tab() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(A_middle_click_on_the_close_glyph_closes_the_tab));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        var keep = workspace.NewTab("-- keep");
+        var doomed = workspace.NewTab("-- doomed");
+        shell.Pump();
+
+        var closer = Item(shell, "TabStrip", doomed)
+            .GetVisualDescendants()
+            .OfType<Border>()
+            .First(b => b.Tag as string == "close");
+
+        // Asserted on the *routing*, not on the tab having gone. The handler marks the press handled and then
+        // awaits the close, and whether that await has settled by the time the assertion runs turned out to
+        // depend on what an earlier test in this collection left on the dispatcher — the tab does close, and
+        // it closed reliably when this ran alone, but the completion is not what the fix changed. What it
+        // changed is that a middle press on the ✕ is no longer swallowed by the early return, and that is
+        // exactly what "handled" records.
+        var handled = false;
+        shell.Window.AddHandler(InputElement.PointerPressedEvent,
+            (object? _, PointerPressedEventArgs e) => handled = e.Handled,
+            RoutingStrategies.Bubble, handledEventsToo: true);
+
+        PressWith(shell, closer, new Point(8, 8), MouseButton.Middle);
+
+        Assert.True(handled, "a middle press on the ✕ was ignored — the close affordance swallowed it again");
+    });
+
+    [Fact]
+    public Task A_left_click_on_the_close_glyph_closes_it_without_selecting_it_first() => _ui.Run(async () =>
+    {
+        // The other half of the same early return: selecting the tab on the way to closing it would leave
+        // #87's neighbour rule picking from the wrong index.
+        using var shell = await ShellHarness.ShowAsync(nameof(A_left_click_on_the_close_glyph_closes_it_without_selecting_it_first));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        var first = workspace.NewTab("-- one");
+        var second = workspace.NewTab("-- two");
+        var third = workspace.NewTab("-- three");
+        workspace.SelectedTab = third;
+        shell.Pump();
+
+        var closer = Item(shell, "TabStrip", first)
+            .GetVisualDescendants()
+            .OfType<Border>()
+            .First(b => b.Tag as string == "close");
+        PressWith(shell, closer, new Point(8, 8), MouseButton.Left);
+
+        Assert.DoesNotContain(first, workspace.Tabs);
+        // The selection never moved to the tab being closed, so it stayed where the user had it.
+        Assert.Same(third, workspace.SelectedTab);
+        Assert.Contains(second, workspace.Tabs);
+    });
+
+    /// <summary>
+    /// Press a control with a given button and let the resulting work finish.
+    /// <para>
+    /// The drain is unfiltered (<c>RunJobs()</c> with no priority) and repeated, unlike
+    /// <see cref="ShellHarness.Pump"/>, which stops at <c>Loaded</c>. Closing a tab runs through an
+    /// <c>async void</c> handler whose continuations post at ordinary priority, and they can queue behind work
+    /// an earlier test in this collection left on the shared dispatcher — which is how this assertion passed
+    /// alone and failed in the class.
+    /// </para>
+    /// </summary>
+    private static void PressWith(ShellHarness shell, Control target, Point at, MouseButton button)
+    {
+        var point = target.TranslatePoint(at, shell.Window)
+                    ?? throw new InvalidOperationException("the control is not in the window");
+        shell.Window.MouseMove(point);
+        shell.Window.MouseDown(point, button);
+        shell.Window.MouseUp(point, button);
+        for (var i = 0; i < 5; i++)
+        {
+            shell.Window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+        }
     }
 
     private static Control Row(ShellHarness shell, string name)

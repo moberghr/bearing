@@ -76,6 +76,26 @@ internal sealed class FrameCapture
         return region;
     }
 
+    /// <summary>
+    /// The raw pixel at a point in the window's coordinate space. Opaque on purpose — the caller gets a
+    /// <c>uint</c>, not a colour, because the channel order is not guaranteed and this file's whole contract
+    /// is distinctness and difference rather than literal values.
+    /// </summary>
+    public uint At(int x, int y)
+    {
+        if (x < 0 || y < 0 || x >= Width || y >= Height)
+            throw new ArgumentOutOfRangeException(nameof(x), $"({x},{y}) is outside the {Width}x{Height} frame");
+        return _pixels[(y * Width) + x];
+    }
+
+    /// <summary>
+    /// How bright a pixel is, without needing to know which byte is which. The sum of all four bytes: alpha
+    /// is 255 in whichever position it sits for an opaque frame, so it contributes the same constant to every
+    /// pixel and a comparison between two of them still means what it says.
+    /// </summary>
+    public static int Brightness(uint pixel)
+        => (int)((pixel & 0xFF) + ((pixel >> 8) & 0xFF) + ((pixel >> 16) & 0xFF) + ((pixel >> 24) & 0xFF));
+
     /// <summary>Write the frame out for a human to look at. Not called by any test — this is the hook for
     /// diagnosing one that fails, since "the pixels differ" is not something you can read.</summary>
     public static void Dump(Window window, string path)
