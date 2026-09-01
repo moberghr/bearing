@@ -70,6 +70,7 @@ public partial class MainWindow : Window
         _resultsPane = new ResultsPaneController(WorkspaceGrid, ResultsSplitter, ResultsView);
         _tabScroll = new TabStripScroller(TabScroll, TabStrip);
         _pinnedTabScroll = new TabStripScroller(PinnedTabScroll, PinnedTabStrip);
+        WireTabStrips();
         // The editor's FontSize is applied here rather than bound in XAML: one editor serves every tab,
         // and each tab carries its own zoom over the configured base size. The controller also owns the
         // Ctrl+wheel gesture; this window only says where the resulting size is announced.
@@ -374,8 +375,11 @@ public partial class MainWindow : Window
         // selection has anything to do, and neither knows which that is.
         // Which row shows the selection, before asking either to scroll to it.
         SyncTabStripSelection();
-        _tabScroll.BringSelectionIntoView();
-        _pinnedTabScroll.BringSelectionIntoView();
+        // Only the row that holds the selection is scrolled to it. The other row keeps a selection of its own
+        // that it cannot be talked out of (a TabStrip is always-selected), so scrolling it would drag it
+        // sideways to a tab the user did not pick — and when nothing is pinned, that row is collapsed.
+        if (Vm?.Workspace.SelectionIsPinned == true) _pinnedTabScroll.BringSelectionIntoView();
+        else _tabScroll.BringSelectionIntoView();
         var tab = Vm?.Workspace.SelectedTab;
         // Folds belong to the editor, not to a tab (one editor serves all of them), so they are dropped
         // before the buffer is replaced rather than carried into it — and dropped *first*, while the old

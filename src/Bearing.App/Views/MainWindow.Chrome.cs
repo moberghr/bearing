@@ -3,6 +3,7 @@ using System.Collections;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
@@ -47,10 +48,59 @@ public partial class MainWindow
 
         static void Show(TabStrip strip, EditorTabViewModel tab)
         {
-            if (strip.ItemsSource is IEnumerable items && items.Cast<object?>().Any(i => ReferenceEquals(i, tab)))
-                strip.SelectedItem = tab;
+            if (Holds(strip, tab)) strip.SelectedItem = tab;
         }
     }
+
+    /// <summary>
+    /// Wire both tab strips' press handling. In code rather than XAML because it has to tunnel: a
+    /// <c>TabStripItem</c> marks a press handled as it selects itself, which stops a bubbling handler on the
+    /// strip — the strip would move its own selection and the view model would never hear about it.
+    /// </summary>
+    private void WireTabStrips()
+    {
+        foreach (var strip in new[] { PinnedTabStrip, TabStrip })
+            strip.AddHandler(InputElement.PointerPressedEvent, OnTabStripPressed, RoutingStrategies.Tunnel);
+    }
+
+    /// <summary>Whether a pressed visual is (or is inside) a tab's ✕.</summary>
+    private static bool IsCloseAffordance(object? source)
+        => source is Visual visual
+           && visual.FindAncestorOfType<Border>(includeSelf: true) is { Tag: "close" };
+
+    /// <summary>The tab a pressed visual belongs to, found by walking up to its container.</summary>
+    private static (Control Target, EditorTabViewModel Tab)? Tab(object? source)
+        => source is Visual visual
+           && visual.FindAncestorOfType<TabStripItem>(includeSelf: true) is
+           { DataContext: EditorTabViewModel tab } item
+            ? (item, tab)
+            : null;
+
+    /// <summary>
+    /// Keyboard navigation inside a focused strip, pushed to the view model.
+    /// <para>
+    /// Only from the row that <i>currently holds</i> the selection, and only when it actually moved. That is
+    /// what keeps this from being the feedback loop a plain two-way binding was: a strip re-asserts a
+    /// selection of its own whenever its items change, so pinning the selected tab made the row that lost it
+    /// claim a different tab and write that back. The row that lost the tab no longer holds it, so its
+    /// re-assertion is ignored; the row that gained it agrees with the view model already.
+    /// </para>
+    /// <para>Clicks do not come through here — they arrive at <see cref="OnTabStripPressed"/>, which can
+    /// select across rows.</para>
+    /// </summary>
+    private void OnTabStripSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (sender is not TabStrip strip || Vm?.Workspace is not { } workspace) return;
+        if (strip.SelectedItem is not EditorTabViewModel moved) return;
+        if (ReferenceEquals(moved, workspace.SelectedTab)) return;
+        if (workspace.SelectedTab is not { } held || !Holds(strip, held)) return;
+
+        workspace.SelectedTab = moved;
+    }
+
+    /// <summary>Whether a strip's items include this tab — i.e. whether it is the row showing it.</summary>
+    private static bool Holds(TabStrip strip, EditorTabViewModel tab)
+        => strip.ItemsSource is IEnumerable items && items.Cast<object?>().Any(i => ReferenceEquals(i, tab));
 
     /// <summary>Open a tab and put the caret in it (#88). Opening a tab is only ever a prelude to typing in
     /// it, and the ＋ button and the keyboard command both left focus where it was — on the button, or
@@ -82,12 +132,27 @@ public partial class MainWindow
         await CloseTabAsync(tab);
     }
 
-    /// <summary>Middle-click anywhere on a tab header closes it, as every tabbed app does. Routed through the
-    /// same <see cref="CloseTabAsync"/> as the ✕ and Ctrl+F4, so the unsaved-buffer prompt and the
-    /// "last tab reopens an empty one" rule apply identically.</summary>
-    private async void OnTabHeaderPressed(object? sender, PointerPressedEventArgs e)
+    /// <summary>
+    /// A press anywhere on a tab: left selects it, middle closes it, as every tabbed app does. Closing is
+    /// routed through the same <see cref="CloseTabAsync"/> as the ✕ and Ctrl+F4, so the unsaved-buffer prompt
+    /// and the "last tab reopens an empty one" rule apply identically.
+    /// <para>
+    /// Handled on the <b>strip</b> rather than in the item template, because a <c>TabStripItem</c> has padding
+    /// of its own: a press in that 10px margin missed a template-level handler while the strip still moved its
+    /// own <c>SelectedIndex</c>, so the header lit up in a row whose tab was never selected — the editor, the
+    /// results and the view model all stayed on the previous one, and nothing corrected it.
+    /// </para>
+    /// <para>
+    /// And on the <b>tunnel</b>, wired in <see cref="WireTabStrips"/>: a <c>TabStripItem</c> marks the press
+    /// handled when it selects itself, so a bubbling handler on the strip never ran at all.
+    /// </para>
+    /// </summary>
+    private async void OnTabStripPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (sender is not Control { DataContext: EditorTabViewModel tab } target) return;
+        // The ✕ has its own handler and closes the tab; selecting it first on the way past would leave the
+        // neighbour rule (#87) picking from the wrong index.
+        if (IsCloseAffordance(e.Source)) return;
+        if (Tab(e.Source) is not (var target, var tab)) return;
         SelectTabFromHeader(target, tab, e);
         if (!TabPointerGestures.ClosesTab(e.GetCurrentPoint(target).Properties.PointerUpdateKind)) return;
         // The inline rename box lives in this same panel, and on X11 a middle-click in a text box pastes the
@@ -116,7 +181,10 @@ public partial class MainWindow
         tab.BeginRename();
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
-            var box = TabStrip.GetVisualDescendants().OfType<TextBox>()
+            // Both strips: the box lives in whichever row the tab is in, and looking only in the unpinned
+            // one left a pinned rename with IsRenaming set and no box to clear it.
+            var box = new[] { PinnedTabStrip, TabStrip }
+                .SelectMany(strip => strip.GetVisualDescendants().OfType<TextBox>())
                 .FirstOrDefault(b => ReferenceEquals(b.DataContext, tab));
             if (box is null) return;
             box.Focus();

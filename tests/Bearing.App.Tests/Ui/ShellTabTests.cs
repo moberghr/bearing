@@ -1,11 +1,17 @@
+using System;
 using System.Linq;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
+using Shapes = Avalonia.Controls.Shapes;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
+using Avalonia.Headless;
+using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.VisualTree;
 using AvaloniaEdit;
+using Bearing.App.ViewModels;
 using Xunit;
 
 namespace Bearing.App.Tests.Ui;
@@ -221,6 +227,173 @@ public class ShellTabTests
             .Count(b => b is { Width: 16, Height: 16 });
         Assert.Equal(0, closers);
     });
+
+    /// <summary>
+    /// A press in a tab's own padding selects it, like a press on its name. A TabStripItem is padded 10x5, so
+    /// a handler in the item template missed those pixels while the strip still moved its own SelectedIndex —
+    /// the header lit up in a row whose tab was never selected, and nothing corrected it (#67 review).
+    /// </summary>
+    [Fact]
+    public Task A_press_in_a_tab_header_s_padding_still_selects_it() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(A_press_in_a_tab_header_s_padding_still_selects_it));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        var first = workspace.NewTab("-- one");
+        var second = workspace.NewTab("-- two");
+        workspace.SelectedTab = first;
+        shell.Pump();
+
+        var item = Item(shell, "TabStrip", second);
+        // Two pixels in from the item's own corner: inside its padding, outside the template's content.
+        Press(shell, item, new Point(2, 2));
+
+        Assert.Same(second, workspace.SelectedTab);
+        Assert.True(item.IsSelected);
+    });
+
+    /// <summary>The same hole in the pinned row, where the selection also has to cross rows.</summary>
+    [Fact]
+    public Task A_press_in_a_pinned_tab_s_padding_selects_across_the_rows() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(A_press_in_a_pinned_tab_s_padding_selects_across_the_rows));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        var kept = workspace.NewTab("-- kept");
+        var scratch = workspace.NewTab("-- scratch");
+        workspace.SetPinned(kept, true);
+        workspace.SelectedTab = scratch;
+        shell.Pump();
+
+        Press(shell, Item(shell, "PinnedTabStrip", kept), new Point(2, 2));
+
+        Assert.Same(kept, workspace.SelectedTab);
+        Assert.True(DrawsSelection(shell, "PinnedTabStrip"), "the pinned row should now hold the selection");
+        Assert.False(DrawsSelection(shell, "TabStrip"), "the strip should have stopped drawing one");
+    });
+
+    /// <summary>
+    /// Moving the selection with the keyboard inside a focused strip reaches the view model. The strip's own
+    /// selection changing is not enough — the editor buffer and the results pane follow the view model.
+    /// </summary>
+    [Fact]
+    public Task Moving_a_strip_s_own_selection_moves_the_workspace() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(Moving_a_strip_s_own_selection_moves_the_workspace));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        var first = workspace.NewTab("-- one");
+        var second = workspace.NewTab("-- two");
+        workspace.SelectedTab = first;
+        shell.Pump();
+
+        // What an arrow key does inside the strip that holds the selection.
+        Strip(shell, "TabStrip").SelectedItem = second;
+        shell.Pump();
+
+        Assert.Same(second, workspace.SelectedTab);
+    });
+
+    /// <summary>
+    /// …but not from the row that does not hold it. That row re-asserts a selection of its own whenever its
+    /// items change, and honouring it is how pinning the selected tab used to jump the workspace to a
+    /// different tab (#67).
+    /// </summary>
+    [Fact]
+    public Task The_dormant_row_cannot_move_the_workspace() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(The_dormant_row_cannot_move_the_workspace));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        var kept = workspace.NewTab("-- kept");
+        var scratch = workspace.NewTab("-- scratch");
+        workspace.SetPinned(kept, true);
+        workspace.SelectedTab = scratch;
+        shell.Pump();
+
+        Strip(shell, "PinnedTabStrip").SelectedItem = kept;
+        shell.Pump();
+
+        Assert.Same(scratch, workspace.SelectedTab);
+    });
+
+    /// <summary>Renaming a pinned tab has a box to type in — and one that can clear the renaming state
+    /// again. Looking for it only in the unpinned row left a pinned tab stuck mid-rename (#67 review).</summary>
+    [Fact]
+    public Task A_pinned_tab_can_be_renamed() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(A_pinned_tab_can_be_renamed));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        var kept = workspace.NewTab("-- kept");
+        workspace.SetPinned(kept, true);
+        workspace.SelectedTab = kept;
+        shell.Pump();
+
+        kept.BeginRename();
+        shell.Pump();
+
+        var box = Strip(shell, "PinnedTabStrip")
+            .GetVisualDescendants()
+            .OfType<TextBox>()
+            .FirstOrDefault(b => ReferenceEquals(b.DataContext, kept));
+        Assert.NotNull(box);
+        Assert.True(box!.IsVisible, "the rename box is in the template but never shown");
+
+        // And it can be got out of again, which is the half that was actually broken: without a box, F2 set
+        // IsRenaming and nothing was left that could clear it. Esc goes through the box's own handler.
+        box.Focus();
+        shell.Pump();
+        shell.Window.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, null);
+        shell.Pump();
+
+        Assert.False(kept.IsRenaming, "Esc in the pinned rename box did not end the rename");
+    });
+
+    /// <summary>A run in flight shows in the pinned row too. It is the row holding the scripts you keep
+    /// coming back to, so it is the likeliest to have a long query running (#67 review).</summary>
+    [Fact]
+    public Task A_running_pinned_tab_shows_it() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(A_running_pinned_tab_shows_it));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        var kept = workspace.NewTab("-- kept");
+        workspace.SetPinned(kept, true);
+        shell.Pump();
+
+        var spinner = Indicator(shell, kept);
+        Assert.False(spinner.IsVisible, "the indicator shows on an idle tab");
+
+        kept.IsRunning = true;
+        shell.Pump();
+
+        Assert.True(Indicator(shell, kept).IsVisible, "a running pinned tab looks idle");
+    });
+
+    /// <summary>The running indicator of a tab: the rotating arc in its header.</summary>
+    private static Shapes.Path Indicator(ShellHarness shell, EditorTabViewModel tab)
+        => Item(shell, tab.IsPinned ? "PinnedTabStrip" : "TabStrip", tab)
+            .GetVisualDescendants()
+            .OfType<Shapes.Path>()
+            .First(p => ToolTip.GetTip(p) as string == "Running…");
+
+    /// <summary>A tab's container in a named strip.</summary>
+    private static TabStripItem Item(ShellHarness shell, string strip, EditorTabViewModel tab)
+        => Strip(shell, strip)
+            .GetVisualDescendants()
+            .OfType<TabStripItem>()
+            .First(i => ReferenceEquals(i.DataContext, tab));
+
+    private static void Press(ShellHarness shell, Control target, Point at)
+    {
+        var point = target.TranslatePoint(at, shell.Window)
+                    ?? throw new InvalidOperationException("the control is not in the window");
+        shell.Window.MouseMove(point);
+        shell.Window.MouseDown(point, MouseButton.Left);
+        shell.Window.MouseUp(point, MouseButton.Left);
+        shell.Pump();
+    }
 
     private static Control Row(ShellHarness shell, string name)
         => shell.Window.GetVisualDescendants().OfType<Control>().First(c => c.Name == name);
