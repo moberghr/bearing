@@ -16,7 +16,7 @@
 set -euo pipefail
 
 NAME="${BEARING_TEST_PG_CONTAINER:-squirrel-pg-test}"
-PORT="${BEARING_TEST_PG_PORT:-5434}"
+PORT="${BEARING_TEST_PG_PORT:-55434}"
 USER_NAME="${BEARING_TEST_PG_USER:-postgres}"
 PASSWORD="${BEARING_TEST_PG_PASSWORD:-squirrel}"
 DB="${BEARING_TEST_PG_DB:-pagila}"
@@ -43,10 +43,11 @@ need_docker() {
 
 # Refuse to fight whatever already holds the port, and say what it is.
 #
-# Not paranoia: on the machine this script was written on, port 5434 was an AWS Session Manager tunnel, so
-# PgTestServer's documented defaults were reaching a *real remote database* and being turned away by its
-# pg_hba.conf. The suites skipped, which looked like "no server" and was actually "a server that refused
-# us" — and several of those tests create and drop schemas.
+# Not paranoia, and the reason the default port is 55434 rather than 5434: on the machine this script was
+# written on, 5434 was an AWS Session Manager tunnel, so PgTestServer's documented defaults were reaching a
+# *real remote database* and being turned away by its pg_hba.conf. The suites skipped, which looked like "no
+# server" and was actually "a server that refused us" — and several of those tests create and drop schemas.
+# Moving the default off 5434 is the cheap half of the fix; this check is what catches the next collision.
 check_port_is_free() {
   if command -v python >/dev/null 2>&1; then
     if python -c "
@@ -64,8 +65,8 @@ sys.exit(0 if s.connect_ex(('127.0.0.1', $PORT)) != 0 else 1)
     say "  Find it with:   netstat -ano | grep $PORT     (then look the PID up)"
     say "  Or run this DB elsewhere:"
     say ""
-    say "      BEARING_TEST_PG_PORT=55434 ./build/test-db.sh"
-    say "      BEARING_TEST_PG_PORT=55434 dotnet test"
+    say "      BEARING_TEST_PG_PORT=55435 ./build/test-db.sh"
+    say "      BEARING_TEST_PG_PORT=55435 dotnet test"
     say ""
     exit 1
   fi
@@ -199,7 +200,7 @@ status() {
   say "  postgres   $version"
   say "  tables     $tables in public"
   say ""
-  if [ "$PORT" = "5434" ] && [ "$DB" = "pagila" ] && [ "$USER_NAME" = "postgres" ]; then
+  if [ "$PORT" = "55434" ] && [ "$DB" = "pagila" ] && [ "$USER_NAME" = "postgres" ]; then
     say "  \`dotnet test\` needs no environment variables — these are PgTestServer's defaults."
   else
     say "  This is NOT the default endpoint, so the suites need to be told:"

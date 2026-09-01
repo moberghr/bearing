@@ -132,7 +132,30 @@ public class TlsTests
             Info(TlsMode.VerifyFull, new() { [key] = "True" }), "pw");
 
         Assert.Equal(SslMode.VerifyFull, built.SslMode);
-        Assert.False(built.TrustServerCertificate, "the bag turned certificate validation off");
+        // The key never reached the driver at all, which is the actual claim — and it survives the driver
+        // deprecating any one of these properties. Reading TrustServerCertificate back said the same thing
+        // only while Npgsql still honoured it; it is obsolete and inert in 10, so an assertion built on it
+        // would keep passing after the reserved list stopped working.
+        Assert.DoesNotContain(Squash(key), Squash(built.ConnectionString));
+    }
+
+    /// <summary>
+    /// Spaces and case removed, so one spelling of a keyword catches the other: the driver normalises
+    /// "TrustServerCertificate" to "Trust Server Certificate" on the way into the connection string, and a
+    /// test that looked for the spelling it passed in would miss the one that came out.
+    /// </summary>
+    private static string Squash(string s) => s.Replace(" ", "").ToLowerInvariant();
+
+    [Fact]
+    public void The_reserved_keyword_probe_can_actually_fail()
+    {
+        // Guards the test above from becoming a tautology. It asserts a keyword is absent from the built
+        // connection string — which would also hold if the builder never wrote *any* bag key there, and the
+        // suite would go green over a reserved list that had stopped working entirely.
+        var built = PostgresConnectionString.Build(
+            Info(TlsMode.VerifyFull, new() { ["Application Name"] = "bearing-probe" }), "pw");
+
+        Assert.Contains(Squash("Application Name"), Squash(built.ConnectionString));
     }
 
     [Fact]

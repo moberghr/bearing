@@ -18,7 +18,13 @@ namespace Bearing.Testing;
 public static class PgTestServer
 {
     /// <summary>The docker container this repo's tests expect (`squirrel-pg-test`, pagila loaded).</summary>
-    private const string DefaultPort = "5434";
+    // 55434, not 5434, and the digit matters. 5434 is inside the ephemeral/short-lived range that
+    // developer tooling hands out, and on at least one machine here it was an AWS Session Manager tunnel
+    // forwarding to a *real remote* PostgreSQL: these defaults reached it and were turned away by its
+    // pg_hba.conf, which read as "no server, skipping" and was "a server that refused us". Several tests in
+    // this suite create and drop schemas. A port well outside the range anything else claims is the cheap
+    // half of the fix; RequireWritableAsync's marker gate below is the half that does not depend on luck.
+    private const string DefaultPort = "55434";
 
     public static string Host => Env("HOST", "localhost");
     public static int Port => int.TryParse(Env("PORT", DefaultPort), out var p) ? p : int.Parse(DefaultPort);

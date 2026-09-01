@@ -249,7 +249,9 @@ public partial class App : Application
         // Opt-in convenience: seed the local pagila demo connection only when BEARING_SEED_DEMO is set.
         // By default a fresh profile starts as an empty project — no connections, no history.
         if (Environment.GetEnvironmentVariable("BEARING_SEED_DEMO") is { Length: > 0 })
-            await vm.Connections.SeedDemoConnectionAsync("localhost", 5434, "pagila", "postgres", "squirrel");
+            // 55434 to match build/test-db.sh, which is the pagila this points at. It used to say 5434,
+            // where a developer machine can have something else entirely listening (§4.2).
+            await vm.Connections.SeedDemoConnectionAsync("localhost", 55434, "pagila", "postgres", "squirrel");
         LogStartup("project ready");
     }
 

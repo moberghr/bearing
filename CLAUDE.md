@@ -27,7 +27,7 @@
 
 - **Active stack:** dotnet (.NET 10, `Nullable` enabled, `ImplicitUsings` on, central package versions)
 - **Build command:** `dotnet build`
-- **Test command:** `dotnet test` — no env vars needed; the defaults point at the `squirrel-pg-test` container on **5434** (`tests/Shared/PgTestServer.cs`). Postgres integration tests skip cleanly without a DB, and the skip message names the endpoint and the reason. Override with `BEARING_TEST_PG_{HOST,PORT,DB,USER,PASSWORD}`.
+- **Test command:** `dotnet test` — no env vars needed; the defaults point at the `squirrel-pg-test` container on **55434** (`tests/Shared/PgTestServer.cs`), which `./build/test-db.sh` creates. Postgres integration tests skip cleanly without a DB, and the skip message names the endpoint and the reason. Override with `BEARING_TEST_PG_{HOST,PORT,DB,USER,PASSWORD}`.
 - **Format:** `dotnet format --verbosity quiet`
 
 For framework-specific guidance, see `.claude/skills/tech-stack-dotnet/SKILL.md`.

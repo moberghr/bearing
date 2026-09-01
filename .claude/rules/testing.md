@@ -20,7 +20,7 @@ Supplement: `.claude/references/dotnet/testing-supplement.md`.
   `SkippableFact` + `BEARING_TEST_PG_*` pattern in `tests/Bearing.Data.Tests`.
 - To run them live: just `dotnet test`. Host/port/db/user/password come from `PgTestServer`
   (`tests/Shared/PgTestServer.cs`, linked into both test projects) and already default to the
-  `squirrel-pg-test` container on 5434; override any of them with `BEARING_TEST_PG_*`.
+  `squirrel-pg-test` container on 55434; override any of them with `BEARING_TEST_PG_*`.
 - WHEN a test needs the server, call `await PgTestServer.RequireAsync(factory)` rather than writing a
   `catch { return false; }` reachability probe. The helper reports *why* it skipped — a bare bool collapses
   "wrong port", "wrong password", "no such database" and "nothing listening" into one useless message, which

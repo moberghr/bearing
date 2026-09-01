@@ -27,7 +27,7 @@ Bearing.Desktop     thin entry point
 ## Build / test
 
 - Build: `dotnet build`
-- Test: `dotnet test` (Postgres integration tests skip cleanly with no DB; `BEARING_TEST_PG_PORT=5434 dotnet test` to run live)
+- Test: `dotnet test` (Postgres integration tests skip cleanly with no DB; `./build/test-db.sh` provisions one on 55434 and then they run live with no env vars)
 - Format: `dotnet format --verbosity quiet`
 
 ## Critical rules
