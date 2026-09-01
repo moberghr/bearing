@@ -177,7 +177,12 @@ public static class DBeaverImport
             // No password can be imported, so a stored-password connection would fail with an unhelpful
             // error. Prompting is both honest and what actually works until the user saves one.
             CredentialKind = CredentialKind.Prompt,
-            Options = options,
+            // The imported sslmode goes into the typed field, not the options bag (#23): it is a security
+            // setting, and DBeaver's own value is the user's actual intent for this server. An unreadable
+            // value leaves the default standing rather than guessing.
+            Tls = TlsPolicy.FromOptions(options) ?? TlsPolicy.DefaultFor(Str(cfg, "host")),
+            Options = options.Where(kv => !kv.Key.Equals(TlsPolicy.LegacyOptionKey, StringComparison.OrdinalIgnoreCase))
+                .ToDictionary(kv => kv.Key, kv => kv.Value),
         });
     }
 
@@ -194,10 +199,9 @@ public static class DBeaverImport
             if (text is null) continue;
             if (!PortableOptions.Contains(property.Name)) { dropped.Add(property.Name); continue; }
 
-            // JDBC spells these with hyphens (verify-ca, verify-full); Npgsql's SslMode enum does not.
-            options[property.Name] = property.Name.Equals("sslmode", StringComparison.OrdinalIgnoreCase)
-                ? text.Replace("-", "")
-                : text;
+            // Kept verbatim, hyphens included: sslmode is parsed out of here into the typed Tls field, and
+            // TlsPolicy.Parse reads JDBC's own spelling (verify-ca, verify-full) as well as Npgsql's.
+            options[property.Name] = text;
         }
         return (options, dropped);
     }

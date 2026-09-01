@@ -30,5 +30,14 @@ Shared checklist: `.claude/references/security-checklist.md`.
   assume the log is sanitized. Don't add PII beyond the SQL text itself.
 
 ## §1.4 — Connections
-- TLS is not enforced (sslmode is only set when the user adds the option). Don't hardcode credentials or
-  disable certificate validation.
+- Transport security is `ConnectionInfo.Tls` (a `TlsMode`), not an options-bag entry (#23). `sslmode` is
+  **reserved** in `PostgresConnectionString` so the bag — which travels in a shared project.json — cannot
+  outrank the field, the same rule that stops a stray `Password` key beating the secret store.
+- `TlsPolicy` is the pure policy: `Resolve` (the field, falling back to a legacy bag `sslmode` only while the
+  field is untouched, so older projects and DBeaver imports keep working), `DefaultFor` (a **new** connection
+  requires encryption unless the host is loopback), and `Advice`, which names *which* guarantee a mode is
+  missing. `TlsPolicy.Default` stays `Prefer` — it exists so a project file without the field keeps the
+  behaviour it had, and is deliberately not the default for anything new.
+- WHEN touching this, keep encryption and identity distinct: `Require` encrypts and accepts **any**
+  certificate. Do not describe it as verified, and do not collapse the modes into a bool.
+- Don't hardcode credentials or disable certificate validation.

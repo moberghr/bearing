@@ -110,10 +110,11 @@ public class DBeaverImportTests
     }
 
     [Fact]
-    public void Sslmode_survives_as_something_Npgsql_can_parse()
+    public void Sslmode_survives_as_the_typed_encryption_setting()
     {
-        var azure = Parsed().Connections.Single(c => c.Options.ContainsKey("sslmode"));
-        Assert.Equal("require", azure.Options["sslmode"]);
+        // The real workspace's Azure entry asks for require; it has to arrive as that and not as the default.
+        var azure = Parsed().Connections.Single(c => c.Tls == TlsMode.Require);
+        Assert.False(azure.Options.ContainsKey("sslmode"));
     }
 
     // ---- connection types ----------------------------------------------------------------------
@@ -260,16 +261,35 @@ public class DBeaverImportTests
     }
 
     [Fact]
-    public void A_hyphenated_sslmode_is_rewritten_for_Npgsql()
+    public void A_hyphenated_sslmode_becomes_the_typed_encryption_setting()
     {
-        // JDBC spells it verify-ca; Npgsql's SslMode enum has no hyphen, so the imported value would
-        // otherwise fail to parse at connect time.
+        // JDBC spells it verify-full. It now lands on ConnectionInfo.Tls rather than in the options bag
+        // (#23): it is a security setting, and DBeaver's value is the user's own intent for that server.
         var result = DBeaverImport.Parse("""
         {"connections":{"c1":{"name":"p","provider":"postgresql",
           "configuration":{"host":"h","properties":{"sslmode":"verify-full"}}}}}
         """);
 
-        Assert.Equal("verifyfull", result.Connections.Single().Options["sslmode"]);
+        var imported = result.Connections.Single();
+        Assert.Equal(TlsMode.VerifyFull, imported.Tls);
+        // And it is not left in the bag as a second source of truth the field would have to outrank.
+        Assert.False(imported.Options.ContainsKey("sslmode"));
+    }
+
+    [Fact]
+    public void An_import_with_no_sslmode_gets_the_default_for_its_host()
+    {
+        // Nothing to import means the new-connection rule applies: a remote server requires encryption, a
+        // loopback one does not (TlsPolicy.DefaultFor).
+        var remote = DBeaverImport.Parse("""
+        {"connections":{"c1":{"name":"p","provider":"postgresql","configuration":{"host":"db.example.com"}}}}
+        """).Connections.Single();
+        var local = DBeaverImport.Parse("""
+        {"connections":{"c1":{"name":"p","provider":"postgresql","configuration":{"host":"localhost"}}}}
+        """).Connections.Single();
+
+        Assert.Equal(TlsMode.Require, remote.Tls);
+        Assert.Equal(TlsMode.Prefer, local.Tls);
     }
 
     [Fact]
