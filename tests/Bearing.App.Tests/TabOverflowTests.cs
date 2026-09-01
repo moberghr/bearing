@@ -73,6 +73,52 @@ public class TabOverflowTests
         Assert.Equal(0, TabOverflow.HiddenCount([], offset: 0, viewport: 400));
     }
 
+    // ---- which edge dissolves --------------------------------------------------------------------
+
+    [Fact]
+    public void A_strip_that_fits_fades_neither_edge()
+    {
+        // Nothing is cut, so nothing may be dimmed. A permanent fade would shade the first and last tab of a
+        // strip that is simply short, which is a lie in the other direction from the one being fixed.
+        Assert.Equal((false, false), TabOverflow.FadeEdges(offset: 0, extent: 300, viewport: 400));
+        Assert.Equal((false, false), TabOverflow.FadeEdges(offset: 0, extent: 400, viewport: 400));
+    }
+
+    [Fact]
+    public void At_the_start_only_the_far_edge_fades()
+    {
+        // Sitting at offset 0 there is nothing behind you, so a left fade would dim the first tab for no
+        // reason — which is the case that makes this a pair of booleans rather than one.
+        Assert.Equal((false, true), TabOverflow.FadeEdges(offset: 0, extent: 900, viewport: 400));
+    }
+
+    [Fact]
+    public void At_the_end_only_the_near_edge_fades()
+    {
+        Assert.Equal((true, false), TabOverflow.FadeEdges(offset: 500, extent: 900, viewport: 400));
+    }
+
+    [Fact]
+    public void In_the_middle_both_edges_fade()
+    {
+        Assert.Equal((true, true), TabOverflow.FadeEdges(offset: 250, extent: 900, viewport: 400));
+    }
+
+    [Fact]
+    public void Sub_pixel_offsets_do_not_fade_an_edge_that_is_flush()
+    {
+        // Scroll offsets land a hair off zero constantly. A fade flickering onto the first tab every time the
+        // strip settles is worse than the hard edge this replaced.
+        Assert.Equal((false, true), TabOverflow.FadeEdges(offset: 0.0001, extent: 900, viewport: 400));
+        Assert.Equal((true, false), TabOverflow.FadeEdges(offset: 499.9999, extent: 900, viewport: 400));
+    }
+
+    [Fact]
+    public void An_unlaid_out_strip_fades_nothing()
+    {
+        Assert.Equal((false, false), TabOverflow.FadeEdges(offset: 0, extent: 900, viewport: 0));
+    }
+
     [Fact]
     public void A_strip_narrower_than_one_tab_hides_that_tab()
     {

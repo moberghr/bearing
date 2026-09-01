@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Avalonia;
+using Avalonia.Media;
+using Avalonia.Media.Immutable;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
@@ -56,8 +58,71 @@ internal sealed class TabStripScroller
         // (a tab leaves the far edge as another arrives at the near one), resizing the window, and the strip's
         // contents changing. The last is why LayoutUpdated is here rather than a collection-changed handler —
         // a new tab has no bounds until it is arranged, so the count would be one short if read any earlier.
-        _scroller.ScrollChanged += (_, _) => RaiseOverflowChanged();
-        _scroller.LayoutUpdated += (_, _) => RaiseOverflowChanged();
+        _scroller.ScrollChanged += (_, _) => { RaiseOverflowChanged(); SyncEdgeFade(); };
+        _scroller.LayoutUpdated += (_, _) => { RaiseOverflowChanged(); SyncEdgeFade(); };
+    }
+
+    /// <summary>How many pixels the cut edge fades over. Enough to read as a dissolve rather than a hard
+    /// stop, and short enough that it never eats a whole label.</summary>
+    private const double FadeWidth = 26;
+
+    /// <summary>
+    /// Fade the edge that has tabs beyond it, so a tab at the boundary dissolves instead of ending
+    /// mid-glyph (<c>store-health</c> cut to <c>store-he</c> reads as a broken label, not as a tab that
+    /// carries on off-screen).
+    /// <para>
+    /// An <c>OpacityMask</c> and not a layout change, deliberately: it is consumed in the paint, so it
+    /// measures nothing and cannot feed back into the layout that produced it — which is the trap the
+    /// chevron's own width fell into. Which edges qualify is <see cref="TabOverflow.FadeEdges"/>.
+    /// </para>
+    /// </summary>
+    private void SyncEdgeFade()
+    {
+        var (left, right) = TabOverflow.FadeEdges(
+            _scroller.Offset.X, _scroller.Extent.Width, _scroller.Viewport.Width);
+
+        // The fade is a fixed number of pixels, but gradient stops are fractions of the vector — so the
+        // fraction depends on the current width. Quantised to keep the brush cache small: a strip resizing by
+        // a pixel does not need a new brush, and the visual difference is invisible.
+        var span = Math.Max(_scroller.Viewport.Width, 1);
+        var fraction = Math.Round(Math.Min(0.4, FadeWidth / span), 3);
+
+        var mask = EdgeFade(left, right, fraction);
+        if (ReferenceEquals(_scroller.OpacityMask, mask)) return;
+        _scroller.OpacityMask = mask;
+    }
+
+    // Cached and immutable. Immutable is not tidiness: a mutable brush is an AvaloniaObject that binds to the
+    // dispatcher of whichever thread built it, so a static cache filled on a test worker thread throws
+    // VerifyAccess out of the compositor the moment a visual on the UI thread uses it (§4.5).
+    private static readonly Dictionary<(bool, bool, double), IImmutableBrush?> FadeCache = new();
+
+    private static IImmutableBrush? EdgeFade(bool left, bool right, double fraction)
+    {
+        var key = (left, right, fraction);
+        if (FadeCache.TryGetValue(key, out var cached)) return cached;
+
+        IImmutableBrush? brush = null;
+        if (left || right)
+        {
+            var stops = new GradientStops();
+            // Alpha only: the mask multiplies whatever the strip painted, so the colour is irrelevant and
+            // only the opacity ramp matters.
+            stops.Add(new GradientStop(left ? Colors.Transparent : Colors.White, 0));
+            if (left) stops.Add(new GradientStop(Colors.White, fraction));
+            if (right) stops.Add(new GradientStop(Colors.White, 1 - fraction));
+            stops.Add(new GradientStop(right ? Colors.Transparent : Colors.White, 1));
+
+            brush = new LinearGradientBrush
+            {
+                StartPoint = new RelativePoint(0, 0.5, RelativeUnit.Relative),
+                EndPoint = new RelativePoint(1, 0.5, RelativeUnit.Relative),
+                GradientStops = stops,
+            }.ToImmutable();
+        }
+
+        FadeCache[key] = brush;
+        return brush;
     }
 
     private int _lastHidden = -1;

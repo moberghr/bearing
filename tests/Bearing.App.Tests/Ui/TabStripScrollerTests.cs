@@ -6,6 +6,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Immutable;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Threading;
@@ -229,6 +230,61 @@ public class TabStripScrollerTests
         window.UpdateLayout();
         Pump(window);
         Assert.Equal(afterResize, announced);
+        window.Close();
+    });
+
+    // ---- the fade over the cut edge ---------------------------------------------------------------
+
+    /// <summary>
+    /// The strip masks the edge that has tabs beyond it, and only that edge.
+    /// <para>
+    /// What is asserted is the mask and its ramp, not the look: §4.3 forbids calling a property assertion
+    /// visual proof. The look was checked from rendered frames — <c>LookProbe.TabStripOverflow</c> and
+    /// <c>TabNameEllipsis</c>, where <c>store-health</c> cut to <c>store-he</c> now dissolves its last glyph
+    /// rather than stopping dead.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public Task An_overflowing_strip_masks_the_edge_with_tabs_beyond_it() => _ui.Run(() =>
+    {
+        var (window, scroller, _, s) = Strip(tabs: 30);
+
+        // At the start: something ahead, nothing behind, so the ramp reaches zero only at the far end.
+        var atStart = Assert.IsAssignableFrom<ILinearGradientBrush>(scroller.OpacityMask);
+        Assert.Equal(1d, atStart.GradientStops[0].Color.A / 255d, 2);
+        Assert.Equal(0d, atStart.GradientStops[^1].Color.A / 255d, 2);
+
+        // Scrolled to the far end the asymmetry flips: the near edge is now the cut one.
+        s.ScrollBy(100_000);
+        Pump(window);
+
+        var atEnd = Assert.IsAssignableFrom<ILinearGradientBrush>(scroller.OpacityMask);
+        Assert.Equal(0d, atEnd.GradientStops[0].Color.A / 255d, 2);
+        Assert.Equal(1d, atEnd.GradientStops[^1].Color.A / 255d, 2);
+        window.Close();
+    });
+
+    [Fact]
+    public Task A_strip_that_fits_is_not_masked_at_all() => _ui.Run(() =>
+    {
+        // Nothing is cut, so nothing may be dimmed — a permanent fade would shade the first and last tab of a
+        // strip that simply has room.
+        var (window, scroller, _, _) = Strip(tabs: 2, width: 2000);
+
+        Assert.Null(scroller.OpacityMask);
+        window.Close();
+    });
+
+    [Fact]
+    public Task The_mask_is_immutable_so_it_can_cross_threads() => _ui.Run(() =>
+    {
+        // Not a style point. A mutable brush is an AvaloniaObject bound to the dispatcher of whichever thread
+        // built it, and these are cached statically — so a mutable one filled on an xunit worker throws
+        // VerifyAccess out of the compositor the moment a visual on the UI thread paints with it. That bug
+        // had to be fixed before the shell harness could work at all (§4.5); this keeps it fixed.
+        var (window, scroller, _, _) = Strip(tabs: 30);
+
+        Assert.IsAssignableFrom<IImmutableBrush>(scroller.OpacityMask);
         window.Close();
     });
 

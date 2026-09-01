@@ -43,6 +43,30 @@ internal static class TabOverflow
         return count;
     }
 
+    /// <summary>
+    /// Which edges of the strip have more content beyond them, and so should be faded out.
+    /// <para>
+    /// A tab at the viewport boundary is cut mid-glyph — <c>store-health</c> ends as <c>store-he</c> — which
+    /// reads as a broken label rather than as a tab that continues off-screen. Fading the last few pixels is
+    /// the usual answer (browsers do it to overflowing text) and, unlike hiding partial tabs, it is purely a
+    /// paint: an opacity mask changes no measurement, so it cannot feed back into the layout the way the
+    /// chevron's own width did.
+    /// </para>
+    /// <para>
+    /// Only an edge with something past it fades. A permanent left fade would dim the first tab of a strip
+    /// that is simply sitting at its start, which is a lie in the other direction.
+    /// </para>
+    /// </summary>
+    /// <param name="offset">How far the strip is scrolled.</param>
+    /// <param name="extent">The strip's full width.</param>
+    /// <param name="viewport">The visible width.</param>
+    public static (bool Left, bool Right) FadeEdges(double offset, double extent, double viewport)
+    {
+        // Not laid out, or it all fits: nothing is cut, so nothing fades.
+        if (viewport <= 0 || extent <= viewport + Slack) return (false, false);
+        return (offset > Slack, offset < extent - viewport - Slack);
+    }
+
     /// <summary>Whether a chevron should be shown at all. Same rule as <see cref="HiddenCount"/> being
     /// positive, named so the call site reads as intent.</summary>
     public static bool Overflows(IReadOnlyList<(double Start, double Width)> spans, double offset, double viewport)
