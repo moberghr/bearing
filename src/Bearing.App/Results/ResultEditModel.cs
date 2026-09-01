@@ -158,7 +158,11 @@ internal static class ResultEditModel
             if (c.ResultIndex >= row.Length) continue;
             var value = row[c.ResultIndex];
             if (value is null) continue; // let serial/defaults fill it
-            list.Add(new ColumnValue(c.BaseColumn, Coerce(value, rs.Columns[c.ResultIndex].ClrType)));
+            // The third Coerce call site, and it needs the zone flag as much as the other two: without it,
+            // the same displayed wall time typed into a new row and into an existing one produced values
+            // hours apart, and a Kind=Unspecified DateTime that Npgsql will not take for a timestamptz.
+            list.Add(new ColumnValue(c.BaseColumn, Coerce(value, rs.Columns[c.ResultIndex].ClrType,
+                ColumnKinds.IsTimestampWithZone(rs.Columns[c.ResultIndex].DataTypeName))));
         }
         return list;
     }

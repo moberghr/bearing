@@ -6,6 +6,7 @@ using Bearing.App.Services;
 using Bearing.App.Settings;
 using Bearing.App.ViewModels;
 using Bearing.App.Views;
+using Bearing.Core.Data;
 using Bearing.Core.Workspace;
 using Bearing.Data;
 using Bearing.Persistence;
@@ -47,12 +48,19 @@ internal sealed class ShellHarness : IDisposable
     /// <summary>The project this harness opened, for a test that needs to reopen or re-target it.</summary>
     public string ProjectDirectory { get; private init; } = "";
 
-    /// <summary>Build the shell over a fresh temporary project and show it.</summary>
-    public static async Task<ShellHarness> ShowAsync(string name)
+    /// <summary>
+    /// Build the shell over a fresh temporary project and show it.
+    /// </summary>
+    /// <param name="providers">
+    /// The provider registry, for a test that wants a tree with something in it: the demo provider serves a
+    /// catalog with no server (§4.6). Defaults to the real Postgres registry, which is what most of these
+    /// tests want — a shell with no reachable connection.
+    /// </param>
+    public static async Task<ShellHarness> ShowAsync(string name, IProviderRegistry? providers = null)
     {
         var root = Path.Combine(Path.GetTempPath(), "bearing-shell", Guid.NewGuid().ToString("N"));
         var vm = new ShellViewModel(
-            new ProviderRegistry(),
+            providers ?? new ProviderRegistry(),
             new JsonProjectStore(),
             new JsonSessionStore(),
             new SqliteQueryLog(Path.Combine(root, "log.sqlite")),

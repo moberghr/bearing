@@ -134,8 +134,11 @@ public static class FontScale
         app.Resources[key] = value;
         lock (Gate)
         {
-            // Written through rather than invalidated wholesale: the only writer is this class, so the cache
-            // is never stale in a way a full clear would fix and a partial one would not.
+            // A different application clears first. Adopting one while keeping the previous one's entries is
+            // the staleness this cache is keyed to avoid: ApplyUi writes three keys, so Font.Grid and
+            // Height.GridRow would still hold the *old* application's values while _cachedFor said otherwise
+            // — and Get would hand them out, because the reference now matches (§4.5).
+            if (!ReferenceEquals(_cachedFor, app)) Cache.Clear();
             Cache[key] = value;
             _cachedFor = app;
         }

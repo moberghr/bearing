@@ -307,9 +307,12 @@ public sealed class SettingsWindow : Window
                     {
                         if (_syncing || text is null) return;
                         // Rejected input leaves the stored value alone rather than saving something that will
-                        // not resolve; the note says what is actually in force.
+                        // not resolve — and the box goes back to what is actually in force, because a typo
+                        // left on screen beside a different live value reads as accepted.
                         _settings.Set(str, text);
-                        note.Text = str.Describe?.Invoke(str.Get(_settings.Current)) ?? "";
+                        var current = str.Get(_settings.Current);
+                        if (current != text) combo.Text = current;
+                        note.Text = str.Describe?.Invoke(current) ?? "";
                     }
 
                     combo.SelectionChanged += (_, _) => Commit(combo.SelectedItem as string);

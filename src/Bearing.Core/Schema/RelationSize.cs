@@ -73,9 +73,11 @@ public static class ByteSize
             unit++;
         }
 
-        // Rounding can push a value back over the threshold (1023.97 kB → "1024.0 kB"), which reads as a unit
-        // the next one up should have taken.
-        if (unit < Units.Length - 1 && Math.Round(value, unit == 0 ? 0 : 1) >= 1024)
+        // Rounding can push a value back over the threshold ("1024.0 kB", "1024 kB"), which reads as a unit
+        // the next one up should have taken. Checked at the precision the formatter will *actually* use —
+        // one decimal below ten, none above — because guarding at one decimal let 1023.6 kB through to be
+        // printed as "1024 kB", which is the very case this exists for.
+        if (unit < Units.Length - 1 && Math.Round(value, Decimals(value)) >= 1024)
         {
             value /= 1024;
             unit++;
@@ -83,8 +85,12 @@ public static class ByteSize
 
         return unit == 0
             ? $"{(long)value} {Units[0]}"
-            : $"{value.ToString(value < 10 ? "0.0" : "0", System.Globalization.CultureInfo.InvariantCulture)} {Units[unit]}";
+            : $"{value.ToString(Decimals(value) == 1 ? "0.0" : "0", System.Globalization.CultureInfo.InvariantCulture)} {Units[unit]}";
     }
+
+    /// <summary>How many decimals a value is printed with: one below ten, none above — so a column of sizes
+    /// stays narrow without a 1.4 GB table reading as 1.43871 GB.</summary>
+    private static int Decimals(double value) => value < 10 ? 1 : 0;
 
     /// <summary>
     /// The row-count estimate, or null. Labelled as an estimate by the caller — a number presented as exact

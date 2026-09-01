@@ -32,13 +32,27 @@ public static class ColumnKinds
     /// </para>
     /// </summary>
     public static bool IsTimestampWithoutZone(string dataTypeName)
-        => dataTypeName.StartsWith("timestamp", StringComparison.OrdinalIgnoreCase)
-        && !dataTypeName.Contains("with time zone", StringComparison.OrdinalIgnoreCase)
-        && !dataTypeName.EndsWith("tz", StringComparison.OrdinalIgnoreCase);
+    {
+        // The array suffix comes off first: "timestamptz[]" starts with "timestamp", contains no "with time
+        // zone" and does not *end* with "tz" — it ends with "]" — so it used to be badged as having no zone,
+        // asserting the opposite of the truth.
+        var type = Element(dataTypeName);
+        return type.StartsWith("timestamp", StringComparison.OrdinalIgnoreCase)
+            && !type.Contains("with time zone", StringComparison.OrdinalIgnoreCase)
+            && !type.EndsWith("tz", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>A column's element type: its own, with any array suffix removed.</summary>
+    private static string Element(string dataTypeName)
+    {
+        var type = dataTypeName.Trim();
+        while (type.EndsWith("[]", StringComparison.Ordinal)) type = type[..^2].TrimEnd();
+        return type;
+    }
 
     /// <summary>A <c>timestamptz</c> column: its values are real instants, so the display zone applies.</summary>
     public static bool IsTimestampWithZone(string dataTypeName)
-        => dataTypeName.StartsWith("timestamp", StringComparison.OrdinalIgnoreCase)
+        => Element(dataTypeName).StartsWith("timestamp", StringComparison.OrdinalIgnoreCase)
         && !IsTimestampWithoutZone(dataTypeName);
 
     /// <summary>Whether a value's text looks like JSON, for columns not declared json/jsonb (a text column

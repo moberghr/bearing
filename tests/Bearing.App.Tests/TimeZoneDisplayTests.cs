@@ -63,6 +63,25 @@ public class TimeZoneDisplayTests
         Assert.EndsWith("+03:00", CellFormat.Display(value, Plus3));
     }
 
+    [Fact]
+    public void A_timetz_does_not_show_the_placeholder_date_the_driver_invents()
+    {
+        // A timetz carries no date, so Npgsql supplies year one. "0001-01-02 17:30:00+02:00" in a time column
+        // is worse than the missing offset this change was about — a capture of the grid caught it.
+        var timetz = new DateTimeOffset(1, 1, 2, 17, 30, 0, TimeSpan.FromHours(2));
+
+        Assert.Equal("17:30:00+02:00", CellFormat.Display(timetz, Plus3));
+    }
+
+    [Fact]
+    public void A_real_instant_keeps_its_date()
+    {
+        // The placeholder check must not eat a genuine date: only year one can be the driver's invention.
+        var real = new DateTimeOffset(2026, 8, 26, 17, 30, 0, TimeSpan.FromHours(2));
+
+        Assert.Equal("2026-08-26 17:30:00+02:00", CellFormat.Display(real, Plus3));
+    }
+
     // ---- ask (2): a display zone -----------------------------------------------------------------
 
     [Fact]
@@ -125,6 +144,32 @@ public class TimeZoneDisplayTests
             "2026-08-26 15:00:00+00:00", typeof(DateTime), out var parsed, utcColumn: true, Plus3));
 
         Assert.Equal(Utc3Pm, parsed);
+    }
+
+    [Theory]
+    [InlineData("2026-08-26 15:00:00+00:00")]   // the shape Display emits
+    [InlineData("2026-08-26T15:00:00Z")]        // pasted ISO, T separator and Z
+    [InlineData("2026-08-26 18:00:00 +03:00")]  // a space before the offset
+    [InlineData("2026-08-26 18:00+03:00")]      // no seconds
+    [InlineData("2026-08-26 12:00:00-03:00")]   // a negative offset
+    public void Text_that_states_an_offset_is_never_reinterpreted_as_a_wall_time(string typed)
+    {
+        // The branch order is the safety property, and a review's throwaway probe found it: a shape the
+        // exact-format list does not carry used to fall through to the wall-time branch and be shifted by the
+        // display zone — the silent hour this whole path exists to prevent.
+        Assert.True(CellFormat.TryParseDate(typed, typeof(DateTime), out var parsed, utcColumn: true, Plus3),
+            $"'{typed}' did not parse");
+
+        Assert.Equal(Utc3Pm, parsed);
+    }
+
+    [Fact]
+    public void Text_claiming_an_offset_nobody_can_read_is_refused_rather_than_guessed_at()
+    {
+        // The raw string then reaches the server, which rejects it visibly — the same treatment a refused
+        // number gets.
+        Assert.False(CellFormat.TryParseDate(
+            "2026-08-26 18:00:00+not-an-offset", typeof(DateTime), out _, utcColumn: true, Plus3));
     }
 
     [Fact]
@@ -230,6 +275,17 @@ public class TimeZoneDisplayTests
             Assert.Equal(!zoneLess, ColumnKinds.IsTimestampWithZone(dataType));
     }
 
+    [Theory]
+    [InlineData("timestamptz[]", false)]
+    [InlineData("timestamp without time zone[]", true)]
+    [InlineData("timestamp with time zone[]", false)]
+    public void An_array_column_is_judged_by_its_element_type(string dataType, bool zoneLess)
+    {
+        // "timestamptz[]" starts with "timestamp", contains no "with time zone" and does not *end* with "tz"
+        // — it ends with "]" — so it used to be badged as zone-less, asserting the opposite of the truth.
+        Assert.Equal(zoneLess, ColumnKinds.IsTimestampWithoutZone(dataType));
+    }
+
     // ---- the zone resolver -----------------------------------------------------------------------
 
     [Fact]
@@ -282,6 +338,24 @@ public class TimeZoneDisplayTests
 
         Assert.Equal("UTC", setting.Get(new AppSettings()));
         Assert.Contains("timezone", setting.Keywords);
+    }
+
+    [Fact]
+    public void The_picker_offers_zones_even_though_the_catalog_is_built_before_the_hook_is_set()
+    {
+        // The trap: SettingsCatalog.All comes from a static initializer, which runs *before* the app assigns
+        // the hooks — so capturing the hook's value left the picker permanently empty, and nothing noticed
+        // because the fallback is an empty list rather than an error.
+        SettingsCatalog.TimeZoneSuggestions = DisplayTimeZone.Available;
+        try
+        {
+            var setting = (StringSetting)SettingsCatalog.Find("results.displayTimeZone")!;
+            var offered = setting.Suggestions?.Invoke() ?? [];
+
+            Assert.Contains("UTC", offered);
+            Assert.Contains("system", offered);
+        }
+        finally { SettingsCatalog.TimeZoneSuggestions = null; }
     }
 
     [Fact]

@@ -38,17 +38,25 @@ internal static class SchemaObjectLabel
         => IsDefault(schema, defaultSchema) ? $"{kindLabel} · {schema}" : kindLabel;
 
     /// <summary>
-    /// A detail line with the relation's size appended (#76). Secondary text on the same line, not a second
-    /// one: #71 made these rows tighter on purpose, and a size is a field rather than a paragraph.
+    /// A detail line led by the relation's size (#76). Secondary text on the same line, not a second one:
+    /// #71 made these rows tighter on purpose, and a size is a field rather than a paragraph.
     /// <para>
-    /// Total, then the row estimate. The total is the number that answers "what is eating the disk"; the
-    /// breakdown that says whether it is heap or indexes has room in the definition view rather than here.
+    /// The size comes <b>first</b>, which a capture of the tree settled: the side panel is 262px, so the
+    /// detail is ellipsized, and a size appended at the end was being cut to "9." — a truncated number is
+    /// worse than none. Leading with it also reads better for the question it answers, since scanning a
+    /// column of sizes is the point.
+    /// </para>
+    /// <para>
+    /// The kind and schema follow. Both are recoverable elsewhere — the row's icon says which kind it is,
+    /// and the title carries a <c>schema.</c> prefix outside the default schema — so they are the half that
+    /// can afford to be clipped.
     /// </para>
     /// </summary>
     public static string WithSize(string detail, RelationSize size)
     {
-        var parts = new List<string> { detail, ByteSize.Format(size.TotalBytes) };
+        var parts = new List<string> { ByteSize.Format(size.TotalBytes) };
         if (ByteSize.FormatRows(size.EstimatedRows) is { } rows) parts.Add(rows);
+        parts.Add(detail);
         return string.Join(" · ", parts);
     }
 

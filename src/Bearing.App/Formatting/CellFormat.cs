@@ -33,6 +33,10 @@ public static class CellFormat
     /// old shared date/time pattern did — silently lost the zone on every copy.</summary>
     public const string DateTimeOffsetPattern = "yyyy-MM-dd HH:mm:ss.FFFFFFzzz";
 
+    /// <summary>A <c>timetz</c>: the time and its offset, with no date — Postgres stores none, and the one
+    /// the driver supplies is a placeholder.</summary>
+    public const string TimeOffsetPattern = "HH:mm:ss.FFFFFFzzz";
+
     /// <summary>Shown for a NULL cell, and the token a user types to set a cell to NULL. Distinct from
     /// an empty string (which renders blank and, for text columns, saves as empty).</summary>
     public const string NullToken = "(null)";
@@ -79,6 +83,12 @@ public static class CellFormat
         // representation of their own — a timestamptz, which arrives as a bare UTC DateTime. A timetz (which
         // Npgsql maps here) has chosen an offset already, and re-expressing it would both change what the
         // column appears to say and drag a date-less value across a zone boundary near DateTime.MinValue.
+        //
+        // A timetz carries no date, so Npgsql supplies a placeholder one — and "0001-01-02 17:30:00+02:00" in
+        // a time column is worse than the missing offset this change was about. The date is dropped when it
+        // is that placeholder, which is the only case it can be: a real instant is never in year one.
+        DateTimeOffset { Year: <= 1 } timeOnly
+            => timeOnly.ToString(TimeOffsetPattern, CultureInfo.InvariantCulture),
         DateTimeOffset dto => dto.ToString(DateTimeOffsetPattern, CultureInfo.InvariantCulture),
         DateOnly d => d.ToString(DatePattern, CultureInfo.InvariantCulture),
         TimeOnly t => t.ToString(TimePattern, CultureInfo.InvariantCulture),
@@ -168,15 +178,33 @@ public static class CellFormat
         {
             if (utcColumn)
             {
-                // With an offset in the text, the instant is stated outright.
-                if (DateTimeOffset.TryParseExact(s, DateTimeOffsetFormats, CultureInfo.InvariantCulture,
-                        DateTimeStyles.None, out var withOffset)
-                    && HasOffset(s))
+                // Text that states an offset is an instant, and is *never* reinterpreted as a wall time.
+                // That branch order is the whole safety property: a shape the exact-format list happens not
+                // to cover ("…T15:00:00Z", "18:00 +03:00", "18:00+03:00" with no seconds) would otherwise
+                // fall through and be shifted by the display zone — the silent hour this exists to prevent.
+                if (HasOffset(s))
                 {
-                    value = withOffset.UtcDateTime;
-                    return true;
+                    if (DateTimeOffset.TryParseExact(s, DateTimeOffsetFormats, CultureInfo.InvariantCulture,
+                            DateTimeStyles.None, out var exact))
+                    {
+                        value = exact.UtcDateTime;
+                        return true;
+                    }
+                    // A form the list does not carry, but that still states its offset. Lenient here, and
+                    // AssumeUniversal is irrelevant because the offset is present by construction.
+                    if (DateTimeOffset.TryParse(s, CultureInfo.CurrentCulture, DateTimeStyles.None,
+                            out var lenient))
+                    {
+                        value = lenient.UtcDateTime;
+                        return true;
+                    }
+                    // It claims an offset that cannot be read. Refused rather than guessed at — the raw
+                    // string then reaches the server, which rejects it visibly, exactly as a refused number
+                    // does (see the note at the top of this file).
+                    return false;
                 }
-                // Without one, it is a wall time in the zone the user is looking at.
+
+                // No offset stated: a wall time in the zone the user is looking at, which is what they typed.
                 if (DateTime.TryParseExact(s, DateTimeFormats, CultureInfo.InvariantCulture,
                         DateTimeStyles.None, out var wall)
                     || DateTime.TryParse(s, CultureInfo.CurrentCulture, DateTimeStyles.None, out wall))

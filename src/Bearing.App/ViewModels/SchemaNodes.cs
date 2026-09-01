@@ -303,11 +303,40 @@ public sealed partial class ServerNodeViewModel : SchemaNodeViewModel
     protected override async Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync()
     {
         var databases = await _browser.GetDatabasesAsync(Connection, CancellationToken.None);
-        return databases
+        var children = databases
             .Select(db => (SchemaNodeViewModel)new DatabaseNodeViewModel(
                 Connection, db, isConnected: string.Equals(db, Connection.Database, StringComparison.Ordinal), _browser))
             .ToList();
+
+        // Sizes after the tree, like the relation sizes below it (#76): pg_database_size stats a whole
+        // directory per database, and the server row must not wait for it.
+        _ = FillDatabaseSizesAsync(children);
+        return children;
     }
+
+    /// <summary>
+    /// Label each database row with its size on the server. Silent on failure and per row on unknown: a
+    /// database the user cannot connect to reports null rather than raising, and one they cannot reach must
+    /// not cost the sizes of the rest.
+    /// </summary>
+    private async Task FillDatabaseSizesAsync(IReadOnlyList<SchemaNodeViewModel> children)
+    {
+        IReadOnlyList<DatabaseSize> sizes;
+        try { sizes = await _browser.GetDatabaseSizesAsync(Connection, CancellationToken.None); }
+        catch (Exception) { return; }
+
+        var byName = new Dictionary<string, DatabaseSize>(StringComparer.Ordinal);
+        foreach (var size in sizes) byName[size.Database] = size;
+
+        foreach (var database in children.OfType<DatabaseNodeViewModel>())
+            if (byName.TryGetValue(database.Database, out var size) && size.Bytes is { } bytes)
+                database.ApplySize(bytes);
+
+        DatabaseSizesLoaded?.Invoke();
+    }
+
+    /// <summary>Raised once the database sizes have been applied. For tests; nothing in the app waits.</summary>
+    internal Action? DatabaseSizesLoaded { get; set; }
 }
 
 /// <summary>
@@ -327,10 +356,27 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
         _connection = connection;
         _database = database;
         _browser = browser;
+        _connectedLabel = isConnected ? "connected" : null;
     }
 
     public override string? IconKey => "Icon.Database";
     public override string IconColorHex => "#5FC9AD";
+
+    /// <summary>The database this row is for, so a server-level size read can match it by name.</summary>
+    internal string Database => _database;
+
+    /// <summary>
+    /// Label this row with the database's size (#76), keeping whatever else the detail said. Leading with the
+    /// size for the same reason a relation row does — the panel ellipsizes, and a truncated number is worse
+    /// than none.
+    /// </summary>
+    internal void ApplySize(long bytes)
+    {
+        var rest = string.IsNullOrEmpty(_connectedLabel) ? null : _connectedLabel;
+        Detail = rest is null ? ByteSize.Format(bytes) : $"{ByteSize.Format(bytes)} · {rest}";
+    }
+
+    private readonly string? _connectedLabel;
 
     /// <summary>Lets the tree's one context menu show the size-ordering items on a database row only — the
     /// same shape as <c>IsServer</c>, which the server-only items already bind.</summary>
@@ -362,6 +408,10 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
         if (views.Count > 0) children.Add(new SchemaGroupNodeViewModel("Views", "Icon.View", Ordered(views)));
         if (routines.Count > 0) children.Add(new SchemaGroupNodeViewModel("Functions", "Icon.Function", Ordered(routines)));
 
+        _loadOrder.Clear();
+        for (var i = 0; i < children.Count; i++)
+            if (children[i] is RelationNodeViewModel relation) _loadOrder[relation] = i;
+
         // Sizes are read *after* the tree is handed back, never before: pg_total_relation_size stats files
         // per relation, so waiting for it would make every expand as slow as the biggest database (#76). The
         // rows re-label themselves when it lands.
@@ -380,6 +430,13 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
     }
 
     private RelationOrder _order = RelationOrder.Name;
+
+    /// <summary>
+    /// Where each relation row sat when the database was expanded — the <c>Ordered()</c> ranking, which is
+    /// schema-rank then schema then kind then name. Kept so "sort by name" restores exactly that rather than
+    /// an approximation of it.
+    /// </summary>
+    private readonly Dictionary<RelationNodeViewModel, int> _loadOrder = new();
 
     /// <summary>
     /// Re-order the relation rows, in place.
@@ -406,7 +463,10 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
                 .ThenByDescending(r => r.Size?.TotalBytes ?? 0)
                 .ThenBy(r => r.Title, StringComparer.OrdinalIgnoreCase)
                 .ToList()
-            : relations.OrderBy(r => r.Title, StringComparer.OrdinalIgnoreCase).ToList();
+            // Back to the order the rows were *loaded* in, not merely alphabetical by title. Sorting on Title
+            // alone interleaved the default schema's bare names among the qualified ones and dropped the kind
+            // ranking, so the item labelled as the default sort could not actually restore it.
+            : relations.OrderBy(r => _loadOrder.GetValueOrDefault(r, int.MaxValue)).ToList();
 
         // Moved rather than removed and re-added: these nodes hold expanded children, and replacing them
         // would collapse whatever the user had open (the same reason ApplySize re-labels in place).

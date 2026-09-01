@@ -190,7 +190,11 @@ public static class SettingsCatalog
             Set = (s, v) => s with { DisplayTimeZone = v },
             // Supplied by the app layer, which owns the zone database lookup — Core stays dependency-free
             // and does not need to know what a TimeZoneInfo is (§2.1).
-            Suggestions = TimeZoneSuggestions,
+            // Lambdas over the hooks, not the hooks themselves: this list is built by a static initializer,
+            // which runs *before* the app assigns them — so `Suggestions = TimeZoneSuggestions` captured null
+            // and the picker was permanently empty. IsValid and Describe were already lambdas and were fine,
+            // which is exactly why the inconsistency was easy to miss.
+            Suggestions = () => TimeZoneSuggestions?.Invoke() ?? [],
             IsValid = id => TimeZoneValidator?.Invoke(id) ?? true,
             Describe = id => TimeZoneDescriber?.Invoke(id) ?? id,
         },

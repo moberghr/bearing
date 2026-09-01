@@ -87,10 +87,14 @@ public class ObjectSizeTests
     [Fact]
     public void A_size_lands_on_the_same_line_as_the_rest_of_the_detail()
     {
-        // #71 made these rows tighter on purpose, so a size is a field on the line rather than a new one.
+        // #71 made these rows tighter on purpose, so a size is a field on the line rather than a new one —
+        // and it leads, because the 262px panel ellipsizes the line and a size at the end was being cut to
+        // "9." (a capture of the tree caught it; the kind and schema are recoverable from the icon and the
+        // title, so they are the half that can afford to be clipped).
         var detail = SchemaObjectLabel.WithSize("table · shop", Size(total: 1_638_400, rows: 40));
 
-        Assert.Equal("table · shop · 1.6 MB · ~40 rows", detail);
+        Assert.Equal("1.6 MB · ~40 rows · table · shop", detail);
+        Assert.StartsWith("1.6 MB", detail);
         Assert.DoesNotContain('\n', detail);
     }
 
@@ -99,7 +103,7 @@ public class ObjectSizeTests
     {
         var detail = SchemaObjectLabel.WithSize("table · shop", Size(total: 24_576, rows: null));
 
-        Assert.Equal("table · shop · 24 kB", detail);
+        Assert.Equal("24 kB · table · shop", detail);
     }
 
     [Fact]
@@ -239,6 +243,53 @@ public class ObjectSizeTests
         Assert.NotNull(sizes.Single(d => d.Database == DemoCatalog.Database).Bytes);
     }
 
+    [Fact]
+    public void The_rounding_guard_catches_the_case_it_was_written_for()
+    {
+        // 1023.6 kB rounds to "1024" at zero decimals — the exact "reads as a unit the next one up should
+        // have taken" outcome, which a guard rounding at one decimal let through.
+        Assert.Equal("1.0 MB", ByteSize.Format(1_048_192));
+        Assert.DoesNotContain("1024", ByteSize.Format(1_048_192));
+
+        // And nothing legitimate was pushed up a unit with it.
+        Assert.Equal("999 kB", ByteSize.Format(1_023_000));
+    }
+
+    [Fact]
+    public async Task A_database_row_shows_its_size_on_the_server()
+    {
+        // The API existed and nothing called it: the commit said "database sizes" and no row was labelled.
+        var browser = new SizeBrowser();
+        var server = new ServerNodeViewModel(Conn(), browser);
+        var landed = new TaskCompletionSource();
+        server.DatabaseSizesLoaded = landed.SetResult;
+
+        await server.EnsureChildrenAsync();
+        await landed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var demo = server.Children.OfType<DatabaseNodeViewModel>().Single(d => d.Database == DemoCatalog.Database);
+        // 10.66 MB, which takes no decimal because it is over ten — the same as pg_size_pretty's "11 MB".
+        Assert.Contains("11 MB", demo.Detail);
+        // And it keeps saying it is the connected one.
+        Assert.Contains("connected", demo.Detail);
+    }
+
+    [Fact]
+    public async Task A_database_whose_size_is_unknown_says_nothing_rather_than_zero()
+    {
+        // pg_database_size raises for a database the user cannot connect to, so null is a normal answer.
+        var browser = new SizeBrowser();
+        var server = new ServerNodeViewModel(Conn(), browser);
+        var landed = new TaskCompletionSource();
+        server.DatabaseSizesLoaded = landed.SetResult;
+
+        await server.EnsureChildrenAsync();
+        await landed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var other = server.Children.OfType<DatabaseNodeViewModel>().SingleOrDefault(d => d.Database == "postgres");
+        if (other is not null) Assert.DoesNotContain("B", other.Detail ?? "");
+    }
+
     // ---- ordering by size -----------------------------------------------------------------------
 
     [Fact]
@@ -259,6 +310,26 @@ public class ObjectSizeTests
         Assert.Equal(
             ["document", "payment", "store", "metric"],
             database.Children.OfType<RelationNodeViewModel>().Select(r => Name(r)));
+    }
+
+    [Fact]
+    public async Task Sorting_back_by_name_restores_the_order_the_rows_loaded_in()
+    {
+        // Not merely alphabetical: the load order is schema-rank, then schema, then kind, then name. Sorting
+        // on the title alone interleaved the default schema's bare names among the qualified ones and dropped
+        // the kind ranking, so the item labelled as the default sort could not restore it.
+        var browser = new SizeBrowser();
+        var database = new DatabaseNodeViewModel(Conn(), DemoCatalog.Database, isConnected: true, browser);
+        var landed = new TaskCompletionSource();
+        await database.EnsureChildrenAsync();
+        var loaded = database.Children.OfType<RelationNodeViewModel>().ToList();
+        database.SizesLoaded = landed.SetResult;
+        await browser.Release(landed.Task);
+
+        database.SetRelationOrder(DatabaseNodeViewModel.RelationOrder.Size);
+        database.SetRelationOrder(DatabaseNodeViewModel.RelationOrder.Name);
+
+        Assert.Equal(loaded, database.Children.OfType<RelationNodeViewModel>());
     }
 
     [Fact]
@@ -350,7 +421,7 @@ public class ObjectSizeTests
         }
 
         public Task<IReadOnlyList<string>> GetDatabasesAsync(ConnectionInfo connection, CancellationToken ct)
-            => Task.FromResult<IReadOnlyList<string>>([DemoCatalog.Database]);
+            => Task.FromResult<IReadOnlyList<string>>([DemoCatalog.Database, "postgres"]);
 
         public Task<DatabaseObjects> GetObjectsAsync(ConnectionInfo connection, string database, CancellationToken ct)
             => Task.FromResult(new DatabaseObjects(DemoCatalog.Snapshot(), DemoCatalog.Routines()));
