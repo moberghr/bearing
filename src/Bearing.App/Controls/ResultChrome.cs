@@ -85,7 +85,7 @@ public static class ResultChrome
             Child = new TextBlock
             {
                 Text = text,
-                FontSize = 9,
+                FontSize = Metric("Font.Caption"),
                 FontWeight = FontWeight.Bold,
                 Foreground = Res(colorKey),
             },
@@ -98,12 +98,12 @@ public static class ResultChrome
     {
         var tokens = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
         foreach (var t in content.Split(' ', StringSplitOptions.RemoveEmptyEntries))
-            tokens.Children.Add(new TextBlock { Text = t, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+            tokens.Children.Add(new TextBlock { Text = t, FontSize = Metric("Font.Body"), VerticalAlignment = VerticalAlignment.Center });
 
         var b = new Button
         {
             Content = tokens,
-            FontSize = 12,
+            FontSize = Metric("Font.Body"),
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
             Padding = new Thickness(6, 2),
@@ -363,7 +363,7 @@ public static class ResultChrome
         var label = new TextBlock
         {
             Text = "RESULTS",
-            FontSize = 11,
+            FontSize = Metric("Font.Small"),
             FontWeight = FontWeight.Bold,
             Foreground = Res("Text.Dim"),
             VerticalAlignment = VerticalAlignment.Center,
@@ -410,7 +410,7 @@ public static class ResultChrome
         var tb = new TextBlock
         {
             Text = text,
-            FontSize = 11,
+            FontSize = Metric("Font.Small"),
             FontWeight = isActive ? FontWeight.SemiBold : FontWeight.Normal,
             Foreground = isActive ? Res("Text.Primary") : Res("Text.Dim"),
             VerticalAlignment = VerticalAlignment.Center,

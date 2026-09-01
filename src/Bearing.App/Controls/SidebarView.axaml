@@ -16,7 +16,7 @@
           <DockPanel Margin="8,8,6,6"
                      IsVisible="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=Schema}">
             <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" Margin="2,0,2,6">
-              <TextBlock Grid.Column="0" Text="CONNECTIONS" FontSize="11" FontWeight="Bold"
+              <TextBlock Grid.Column="0" Text="CONNECTIONS" FontSize="{DynamicResource Font.Small}" FontWeight="Bold"
                          Foreground="{DynamicResource Text.Dim}" VerticalAlignment="Center"/>
               <Button Grid.Column="1" Classes="rail" Theme="{StaticResource RailButton}" Width="26" Height="26"
                       Click="OnNewConnectionFolderClick" ToolTip.Tip="New folder">
@@ -46,7 +46,7 @@
             <StackPanel DockPanel.Dock="Bottom" Margin="4,10,4,2" Spacing="8"
                         IsVisible="{Binding Connections.IsEmpty}">
               <TextBlock Text="No connections yet." Foreground="{DynamicResource Text.Dim}"
-                         TextWrapping="Wrap" FontSize="12"/>
+                         TextWrapping="Wrap" FontSize="{DynamicResource Font.Body}"/>
               <Button Content="Add a connection…" HorizontalAlignment="Stretch"
                       HorizontalContentAlignment="Center" Click="OnAddConnectionClick"/>
               <!-- Drops the same source list the context menu and File carry, so all three agree and a
@@ -150,7 +150,7 @@
                       <!-- Recursive count, so a collapsed folder still says how much it is hiding. -->
                       <TextBlock Grid.Column="2" Text="{Binding Count}" VerticalAlignment="Center"
                                  IsVisible="{Binding HasConnections}"
-                                 FontSize="11" Margin="6,0,4,0" Foreground="{DynamicResource Text.Faint}"/>
+                                 FontSize="{DynamicResource Font.Small}" Margin="6,0,4,0" Foreground="{DynamicResource Text.Faint}"/>
                     </Grid>
                   </Border>
                 </TreeDataTemplate>
@@ -218,7 +218,7 @@
                     <TextBox Classes="inline" Text="{Binding RenameDraft, Mode=TwoWay}"
                              IsVisible="{Binding IsRenaming}" MinWidth="90" VerticalAlignment="Center"
                              KeyDown="OnConnectionRenameKeyDown" LostFocus="OnConnectionRenameLostFocus"/>
-                    <TextBlock Text="{Binding Detail}" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource Text.Dim}"/>
+                    <TextBlock Text="{Binding Detail}" VerticalAlignment="Center" FontSize="{DynamicResource Font.Small}" Foreground="{DynamicResource Text.Dim}"/>
                     </StackPanel>
                   </DockPanel>
                 </TreeDataTemplate>
@@ -230,7 +230,7 @@
           <DockPanel Margin="8,8,6,6"
                      IsVisible="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=Scripts}">
             <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" Margin="2,0,2,6">
-              <TextBlock Grid.Column="0" Text="SCRIPTS" FontSize="11" FontWeight="Bold"
+              <TextBlock Grid.Column="0" Text="SCRIPTS" FontSize="{DynamicResource Font.Small}" FontWeight="Bold"
                          Foreground="{DynamicResource Text.Dim}" VerticalAlignment="Center"/>
               <Button Grid.Column="1" Classes="rail" Theme="{StaticResource RailButton}" Width="26" Height="26"
                       Click="OnNewScriptFolderClick" ToolTip.Tip="New folder">
@@ -302,11 +302,11 @@
                                  Foreground="{DynamicResource Text.Primary}"/>
                       <Border IsVisible="{Binding IsScratch}" VerticalAlignment="Center"
                               Background="{DynamicResource Bg.TileActive}" CornerRadius="3" Padding="4,0">
-                        <TextBlock Text="auto" FontSize="10" Foreground="{DynamicResource Text.Dim}"/>
+                        <TextBlock Text="auto" FontSize="{DynamicResource Font.Caption}" Foreground="{DynamicResource Text.Dim}"/>
                       </Border>
                     </StackPanel>
                     <TextBlock Grid.Column="2" Text="{Binding Count}" VerticalAlignment="Center"
-                               FontSize="11" Margin="6,0,4,0" Foreground="{DynamicResource Text.Faint}"/>
+                               FontSize="{DynamicResource Font.Small}" Margin="6,0,4,0" Foreground="{DynamicResource Text.Faint}"/>
                   </Grid>
                   </Border>
                 </TreeDataTemplate>
@@ -338,7 +338,7 @@
                       <TextBox Classes="inline" Text="{Binding RenameDraft, Mode=TwoWay}"
                                IsVisible="{Binding IsRenaming}" MinWidth="90" VerticalAlignment="Center"
                                KeyDown="OnScriptRenameKeyDown" LostFocus="OnScriptRenameLostFocus"/>
-                      <TextBlock Text="●" FontSize="11" VerticalAlignment="Center"
+                      <TextBlock Text="●" FontSize="{DynamicResource Font.Small}" VerticalAlignment="Center"
                                  Foreground="{DynamicResource Accent.Brand}" ToolTip.Tip="Unsaved changes"
                                  IsVisible="{Binding IsUnsaved}"/>
                     </StackPanel>
@@ -346,7 +346,7 @@
                          Absent (and the row is a single line, as before) for a name hit. -->
                     <TextBlock Text="{Binding MatchLine}" Margin="20,0,0,2"
                                IsVisible="{Binding MatchLine, Converter={x:Static ObjectConverters.IsNotNull}}"
-                               FontFamily="{StaticResource MonoFontFamily}" FontSize="10"
+                               FontFamily="{StaticResource MonoFontFamily}" FontSize="{DynamicResource Font.Caption}"
                                Foreground="{DynamicResource Text.Faint}" TextTrimming="CharacterEllipsis"
                                ToolTip.Tip="{Binding MatchLine}"/>
                   </StackPanel>
@@ -358,7 +358,7 @@
           <!-- ===== History panel (design §4): day-grouped, filterable ===== -->
           <DockPanel Margin="8,8,6,6"
                      IsVisible="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=History}">
-            <TextBlock DockPanel.Dock="Top" Text="HISTORY" FontSize="11" FontWeight="Bold"
+            <TextBlock DockPanel.Dock="Top" Text="HISTORY" FontSize="{DynamicResource Font.Small}" FontWeight="Bold"
                        Foreground="{DynamicResource Text.Dim}" Margin="2,0,2,6"/>
             <TextBox DockPanel.Dock="Top" Text="{Binding History.SearchText, Mode=TwoWay}"
                      PlaceholderText="Search history…" KeyDown="OnHistorySearchKeyDown" Margin="0,0,0,6"/>
@@ -370,7 +370,7 @@
               <RadioButton Theme="{StaticResource PillToggle}" GroupName="histfilter" Content="✕ error"
                            IsChecked="{Binding History.Filter, Converter={StaticResource EnumToBool}, ConverterParameter=Error, Mode=TwoWay}"/>
             </StackPanel>
-            <TextBlock DockPanel.Dock="Bottom" Text="{Binding History.Status}" FontSize="11"
+            <TextBlock DockPanel.Dock="Bottom" Text="{Binding History.Status}" FontSize="{DynamicResource Font.Small}"
                        Foreground="{DynamicResource Text.Faint}" Margin="2,4,2,0"/>
             <!-- List (fills) · drag splitter · query preview (resizable, hidden until a row is selected).
                  HistoryPreviewRow is a real pixel row so the GridSplitter actually resizes the pane;
@@ -386,7 +386,7 @@
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="vm:HistoryDayGroup">
                     <StackPanel Margin="0,0,0,8">
-                      <TextBlock Text="{Binding Caption}" FontSize="10" FontWeight="Bold"
+                      <TextBlock Text="{Binding Caption}" FontSize="{DynamicResource Font.Caption}" FontWeight="Bold"
                                  Foreground="{DynamicResource Text.Faint}" Margin="2,2,2,3"/>
                       <!-- One SelectedRow, one ListBox per day: bound *one-way*, plus an explicit write from
                            the SelectionChanged handler. Two-way made the day-A list write its own
@@ -404,10 +404,10 @@
                                       VerticalAlignment="Center" Margin="0,0,6,0"
                                       Background="{Binding ConnectionColor, Converter={StaticResource HexBrush}}"/>
                               <TextBlock Grid.Column="1" Text="{Binding DisplayQuery}" TextTrimming="CharacterEllipsis"
-                                         FontFamily="{StaticResource MonoFontFamily}" FontSize="12"
+                                         FontFamily="{StaticResource MonoFontFamily}" FontSize="{DynamicResource Font.Body}"
                                          VerticalAlignment="Center"
                                          Foreground="{Binding QueryColorHex, Converter={StaticResource HexBrush}}"/>
-                              <TextBlock Grid.Column="2" Text="{Binding Time}" FontSize="11" Margin="8,0,0,0"
+                              <TextBlock Grid.Column="2" Text="{Binding Time}" FontSize="{DynamicResource Font.Small}" Margin="8,0,0,0"
                                          VerticalAlignment="Center" Foreground="{DynamicResource Text.Faint}"/>
                             </Grid>
                           </DataTemplate>
@@ -425,13 +425,13 @@
                     BorderThickness="1" CornerRadius="6"
                     IsVisible="{Binding History.SelectedRow, Converter={x:Static ObjectConverters.IsNotNull}}">
               <DockPanel Margin="6">
-                <TextBlock DockPanel.Dock="Top" Text="PREVIEW" FontSize="10" FontWeight="Bold"
+                <TextBlock DockPanel.Dock="Top" Text="PREVIEW" FontSize="{DynamicResource Font.Caption}" FontWeight="Bold"
                            Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,4"/>
                 <!-- The read-only SQL viewer (#48), not a TextBox: syntax-highlighted like every other SQL
                      surface, still selectable — the preview is the read-and-copy path for a past query.
                      Text and the (once-per-control) highlight install are driven from code-behind, where
                      the show/collapse of this row already lives. -->
-                <ae:TextEditor x:Name="HistoryPreview" FontSize="12" BorderThickness="0"/>
+                <ae:TextEditor x:Name="HistoryPreview" FontSize="{DynamicResource Font.Body}" BorderThickness="0"/>
               </DockPanel>
             </Border>
             </Grid>

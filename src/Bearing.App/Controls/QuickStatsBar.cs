@@ -92,7 +92,7 @@ public sealed class QuickStatsBar
         Text = text,
         Foreground = Res(colorKey),
         VerticalAlignment = VerticalAlignment.Center,
-        FontSize = 12,
+        FontSize = Metric("Font.Body"),
     };
 
     private static Control Sep() => new TextBlock

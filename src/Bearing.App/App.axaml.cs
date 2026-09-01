@@ -63,6 +63,9 @@ public partial class App : Application
             _demo = DemoMode.Requested(desktop.Args) ? DemoWorkspace.Create() : null;
 
             var settings = new Settings.SettingsService(new AppSettingsStore());
+            // The type scale, before any window is built: the tokens in Tokens.axaml carry defaults, and this
+            // overwrites them from settings so the first frame is already at the user's size (#52).
+            Theming.FontScale.Apply(settings.Current.UiFontSize, settings.Current.GridFontSize);
             // The demo registry holds the demo provider *instead of* Postgres, not beside it: that is what
             // makes the fake unreachable from any normal connection flow, since in an ordinary session it is
             // not in the graph at all.
@@ -91,6 +94,16 @@ public partial class App : Application
             settings.SaveFailed = message => vm.StatusText = message;
             LogStartup("vm created");
             var window = new MainWindow { DataContext = vm };
+
+            // The type scale follows the settings live (#52). XAML reads the tokens through
+            // {DynamicResource} and updates itself; the results grid is built in code and reads its sizes
+            // once, so it is told to re-render — a font setting that waited for the next query would look
+            // broken while the user was still moving the dial.
+            settings.Changed += s =>
+            {
+                Theming.FontScale.Apply(s.UiFontSize, s.GridFontSize);
+                Dispatcher.UIThread.Post(window.RefreshTypeScale);
+            };
             LogStartup("window constructed");
 
             // Self-update (#20). The coordinator owns the policy (one check per launch, honour the setting,

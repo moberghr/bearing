@@ -65,6 +65,20 @@ public sealed record AppSettings
     public int InspectorFontSize { get; init; } = 13;
 
     /// <summary>
+    /// Type size for the results grid (#52). Its own dial rather than sharing the chrome's: the grid is the
+    /// surface you stare at longest, and the row height follows this rather than being a second setting that
+    /// fights it (#30).
+    /// </summary>
+    public int GridFontSize { get; init; } = 13;
+
+    /// <summary>
+    /// Type size for the app's chrome — panels, tab strip, status bar, result meta rows (#52). One dial
+    /// covering all of it, with the smaller sizes staying proportionally smaller, so raising it keeps the
+    /// hierarchy instead of flattening it.
+    /// </summary>
+    public int UiFontSize { get; init; } = 12;
+
+    /// <summary>
     /// Where "Fetch all rows" stops. It streams the result to the end, so without a ceiling a mistyped query
     /// against a billion-row table would read until the app runs out of memory — the ceiling also bounds what
     /// the server is asked to produce. Hitting it is reported, never silent, and the rows already streamed

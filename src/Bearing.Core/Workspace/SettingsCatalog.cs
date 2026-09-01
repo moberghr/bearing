@@ -165,6 +165,34 @@ public static class SettingsCatalog
         },
         new IntSetting
         {
+            Key = "results.gridFontSize",
+            CategoryId = Results,
+            Title = "Result grid font size",
+            Description = "The size values and column headers render at. Row height follows it, so a bigger "
+                        + "font gives taller rows rather than clipped ones.",
+            Keywords = "font size grid results zoom text bigger smaller accessibility density row height",
+            Min = 9,
+            Max = 22,
+            Unit = "pt",
+            Get = s => s.GridFontSize,
+            Set = (s, v) => s with { GridFontSize = v },
+        },
+        new IntSetting
+        {
+            Key = "general.uiFontSize",
+            CategoryId = General,
+            Title = "Interface font size",
+            Description = "Panels, tab strip, status bar and result meta rows. Captions stay proportionally "
+                        + "smaller, so the hierarchy survives a bigger setting.",
+            Keywords = "font size ui chrome panels sidebar tabs status bar zoom text accessibility",
+            Min = 9,
+            Max = 22,
+            Unit = "pt",
+            Get = s => s.UiFontSize,
+            Set = (s, v) => s with { UiFontSize = v },
+        },
+        new IntSetting
+        {
             Key = "results.fetchAllMaxRows",
             CategoryId = Results,
             Title = "Stop “Fetch all rows” at",

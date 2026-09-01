@@ -127,7 +127,7 @@ public sealed partial class ResultView
             {
                 Text = ResultMetaText.Meta(label, result),
                 Foreground = Res("Text.Dim"),
-                FontSize = 12,
+                FontSize = Metric("Font.Body"),
                 VerticalAlignment = VerticalAlignment.Center,
             });
 
@@ -187,13 +187,13 @@ public sealed partial class ResultView
         {
             Text = $"{label ?? "Result"} · ",
             Foreground = Res("Text.Dim"),
-            FontSize = 12,
+            FontSize = Metric("Font.Body"),
             VerticalAlignment = VerticalAlignment.Center,
         });
         var detail = new TextBlock
         {
             Foreground = Res("Text.Dim"),
-            FontSize = 12,
+            FontSize = Metric("Font.Body"),
             VerticalAlignment = VerticalAlignment.Center,
             DataContext = result,
         };

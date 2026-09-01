@@ -29,7 +29,12 @@ public static class ResultGridChrome
     /// that really does inherit this — and <see cref="GutterWidth"/> is only 46px, sized for five digits at
     /// exactly this size.
     /// </summary>
-    public const double FontSize = 13;
+    /// <summary>
+    /// The grid's own type size, from the <c>Font.Grid</c> token so the setting reaches it (#52). A property
+    /// rather than a const because it moves at runtime; the fallback is what the const used to be, for a
+    /// caller with no application (a unit test, the designer).
+    /// </summary>
+    public static double FontSize => Theming.FontScale.Get("Font.Grid", 13);
 
     /// <summary>
     /// What a value cell renders at, pinned in <see cref="StyleGridChrome"/> and measured with in
@@ -48,19 +53,19 @@ public static class ResultGridChrome
     /// header one, and unifying them would widen every column with a real name.
     /// </para>
     /// </summary>
-    public const double CellFontSize = 13;
+    public static double CellFontSize => FontSize;
 
     /// <summary>What a column header renders at, and is measured at. The Fluent theme gives headers 12 —
     /// three points smaller than the cells beneath them, which is deliberate in that theme and is what has
     /// been shipping. Pinned for the same reason as <see cref="CellFontSize"/>, and emphatically not unified
     /// with it: measuring headers at 15 would widen every column with a real name and push the neighbours
     /// off screen, which is the thing #30's sizing exists to prevent.</summary>
-    public const double HeaderFontSize = 12;
+    public static double HeaderFontSize => Theming.FontScale.Get("Font.GridHeader", 12);
 
     /// <summary>Floor for a data row and its cells, tightening the Fluent theme's tall default. Named because
     /// the stacked layout sizes itself in rows (<see cref="Results.ResultStackWeights"/>): a set's floor is its
     /// chrome plus a couple of these, and a literal here would have made that arithmetic a guess.</summary>
-    public const double RowMinHeight = 26;
+    public static double RowMinHeight => Theming.FontScale.Get("Height.GridRow", 26);
 
     /// <summary>What a column header is drawn at (<see cref="StyleGridChrome"/>), and so what it must be
     /// measured at.</summary>

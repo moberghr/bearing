@@ -39,9 +39,13 @@ internal sealed class ResultStackView : UserControl
     /// than picked, because the number that matters is "does a small set still show any of its rows" — the
     /// first cut at 72px was under the chrome alone, so a three-row set rendered as a header and nothing else.
     /// A divider that can erase a set is also a way to lose a result you meant to keep.
+    /// <para>
+    /// Computed rather than a constant, because the row height it is built from follows the grid font size
+    /// now (#52): a floor fixed at the default would clip two rows the moment the font was raised.
+    /// </para>
     /// </summary>
-    private const double MinSetHeight =
-        MetaBarHeight + HeaderRowHeight + (2 * ResultGridChrome.RowMinHeight);
+    private static double MinSetHeight
+        => MetaBarHeight + HeaderRowHeight + (2 * ResultGridChrome.RowMinHeight);
 
     /// <summary>The meta bar as <see cref="ResultView"/> builds it: content, its 5px padding, and the rule.</summary>
     private const double MetaBarHeight = ResultChrome.MetaRowContentHeight + (2 * 5) + 1;

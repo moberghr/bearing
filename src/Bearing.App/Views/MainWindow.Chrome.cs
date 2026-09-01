@@ -346,6 +346,9 @@ public partial class MainWindow
         await RunAsync();
     }
 
+    /// <summary>Re-render the visuals that read a type-scale token once rather than binding it (#52).</summary>
+    internal void RefreshTypeScale() => ResultsView.RefreshTypeScale();
+
     private async void OnExportRunClick(object? sender, RoutedEventArgs e)
     {
         if (Vm is { } vm) await vm.Execution.ExportRunAsync();

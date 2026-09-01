@@ -69,6 +69,20 @@ public sealed partial class ResultView : UserControl
     /// <summary>Raised when the user flips the Stacked/Tabbed toggle (persist it on the VM).</summary>
     public Action<ResultsViewMode>? ViewModeChanged { get; set; }
 
+    /// <summary>
+    /// Re-render at the current type scale (#52). The grid's visuals are built in code and read their sizes
+    /// once, so unlike a <c>{DynamicResource}</c> in XAML they do not follow a token change on their own — and
+    /// a grid font setting that waits for the next query would look broken while you were dragging it.
+    /// <para>
+    /// Selection and the inspector survive deliberately: this is the same grid at a different size, not a new
+    /// result, so throwing away what the user had selected would be a surprise.
+    /// </para>
+    /// </summary>
+    public void RefreshTypeScale()
+    {
+        if (_results is not null) Rebuild();
+    }
+
     /// <summary>Invoked when the user requests the next page of a pageable result set.</summary>
     public Func<ResultSetViewModel, Task>? LoadMore { get; set; }
 
