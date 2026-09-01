@@ -59,9 +59,10 @@ public class AutosaveModeTests : IDisposable
 
     private static async Task<string> WaitForWrite(string path, string expected)
     {
-        // ~12s of budget, not 3: the write is debounced and lands on a background task, and this class only
-        // ever fails as part of a full run (#83) — under that load the wait is the variable, not the code.
-        // The budget is spent only by a genuine failure, so the cost of a generous one is zero.
+        // A generous budget (~12s) rather than 3, because the write is debounced onto a background task and
+        // the machine may be loaded. It is not what fixed #83 — the flake was this poll's own read handle
+        // blocking the writer, see TryReadAsync — but the budget costs nothing on success and a genuinely
+        // slow write should not read as a missing one.
         for (var i = 0; i < 240; i++)
         {
             if (await TryReadAsync(path) == expected) return expected;
@@ -72,16 +73,32 @@ public class AutosaveModeTests : IDisposable
         return await TryReadAsync(path) ?? (File.Exists(path) ? "<locked>" : "<missing>");
     }
 
-    /// <summary>The file's content, or null while it doesn't exist <i>or</i> can't be opened yet. Autosave is
-    /// writing the same path from a background task, and Windows enforces the share mode other platforms
-    /// don't — so landing mid-write is an ordinary outcome of polling, not a failure (#83). Retrying is the
-    /// same posture as <c>SecretRetry</c>; only the caller's timeout decides when to give up.</summary>
+    /// <summary>
+    /// The file's content, or null while it doesn't exist yet.
+    /// <para>
+    /// Opened with a sharing mode that lets the writer keep working, which is the whole fix for #83: this
+    /// polls every 50ms while autosave writes the same path from a background task, and a plain
+    /// <c>File.ReadAllTextAsync</c> takes a handle that <i>excludes</i> writers on Windows. The read was not
+    /// losing a race with the write — it was <b>causing</b> the write to fail, and autosave is best-effort
+    /// (§5.2), so it reported the failure to the status bar and gave up. The test was the aggressor.
+    /// </para>
+    /// <para>
+    /// Sharing a writer means a read can land mid-write and come back partial; the caller compares against
+    /// the expected content, so a partial read simply doesn't match and it polls again.
+    /// </para>
+    /// </summary>
     private static async Task<string?> TryReadAsync(string path)
     {
-        if (!File.Exists(path)) return null;
-        try { return await File.ReadAllTextAsync(path); }
-        catch (IOException) { return null; }              // the writer has it open
-        catch (UnauthorizedAccessException) { return null; }
+        try
+        {
+            using var stream = new FileStream(
+                path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            return await reader.ReadToEndAsync();
+        }
+        catch (FileNotFoundException) { return null; }     // not written yet
+        catch (DirectoryNotFoundException) { return null; }
+        catch (IOException) { return null; }               // a replace in flight; try again
     }
 
     // ---- OnEdit (default) ----
@@ -98,14 +115,24 @@ public class AutosaveModeTests : IDisposable
 
         tab.Text = "select 1; -- typed";
 
+        var edits = 0;
+        tab.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(EditorTabViewModel.Text)) edits++; };
+
         var written = await WaitForWrite(path, "select 1; -- typed");
-        // Everything in one message, because this fails intermittently under a full run (#83) and the file's
-        // content alone does not say why: the last failures showed the write never landing at all rather
-        // than the read losing a race, and whether the tab still believes it has something to save is what
-        // separates "the debounce never fired" from "the save ran and went somewhere else".
+        // Everything in one message: this used to fail intermittently under a full run and the file's content
+        // alone never said why (#83). It was the status line that gave it away — "could not autosave …
+        // because it is being used by another process" — which is how the poll below was found to be locking
+        // the file it was watching. Kept, because it is what makes the next failure diagnosable rather than
+        // a re-run.
+        //
+        // Worth knowing beyond the test: autosave treats a failed write as final. It reports and drops the
+        // pending write, and nothing retries until the next keystroke — so one transient lock (antivirus, a
+        // sync client, another editor) silently stops autosaving that buffer for as long as you keep typing
+        // in a different one.
         Assert.True(written == "select 1; -- typed",
             $"file={written}; tab: dirty={tab.IsDirty} unsaved={tab.HasUnsavedWork} "
-            + $"scratch={tab.IsScratch} path={tab.ScriptPath} text='{tab.Text}'");
+            + $"scratch={tab.IsScratch} path={tab.ScriptPath} text='{tab.Text}' "
+            + $"stillOpen={vm.Workspace.Tabs.Contains(tab)} laterEdits={edits} status='{vm.StatusText}'");
         Assert.False(tab.IsDirty);          // the dot goes away because there's nothing unsaved
         Assert.False(tab.HasUnsavedWork);
     }
