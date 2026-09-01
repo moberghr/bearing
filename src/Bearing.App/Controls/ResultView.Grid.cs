@@ -116,9 +116,10 @@ public sealed partial class ResultView
         grid.GotFocus += (_, _) => { if (_selection.NeedsSeed(result)) _selection.SeedActive(grid, result); };
     }
 
-    /// <summary>A press the cells didn't take: the row-number gutter selects the whole row and a column
-    /// header its whole column (#6); anything else — the scrollbar, the corner, empty space below the last
-    /// row — clears the selection, which is the click-away this handler replaced.
+    /// <summary>A press the cells didn't take: the row-number gutter selects the whole row, a column header
+    /// its whole column (#6), and the corner above the gutter the whole result (#55); anything else — the
+    /// scrollbar, empty space below the last row — clears the selection, which is the click-away this
+    /// handler replaced.
     /// <para>
     /// A cell press has already selected itself by now (this runs after the cell's own handler, being further
     /// up the tree), so the one thing left to do for it is the checkbox gesture: a click that landed on a bool
