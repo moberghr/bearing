@@ -30,6 +30,17 @@ public sealed record AppSettings
     /// <summary>Base point size of the SQL editor text.</summary>
     public int EditorFontSize { get; init; } = 14;
 
+    /// <summary>
+    /// Whether typing <c>'</c>, <c>"</c> or <c>(</c> brings its closer along, with the caret between the two
+    /// (#70). Also governs stepping over a closer you type yourself, Backspace taking a whole empty pair,
+    /// wrapping a selection, and Enter jumping past the closer.
+    /// <para>
+    /// A setting because auto-close is divisive — some people find the paired insert faster and some find it
+    /// a fight — and because the cost of offering the choice here is one flag.
+    /// </para>
+    /// </summary>
+    public bool AutoCloseBrackets { get; init; } = true;
+
     /// <summary>Whether closing a tab that holds unsaved work asks first. Off means a close discards it
     /// silently — which is why the default is on, autosave or not.</summary>
     public bool ConfirmTabClose { get; init; } = true;

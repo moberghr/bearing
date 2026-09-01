@@ -83,12 +83,13 @@ faster, parallelizable, and reads better. Reach for a UI test when the visual tr
 - **Find cells by the tag the app already sets.** `ResultCellFactory.MakeSelectable` stamps `(row, column)`
   on each cell's selection border for drag hit-testing; `ResultsHarness.Cell` reads that. Do not add
   test-only names or hooks to production visuals.
-- **Synthetic keys need a focused control in an activated window, and that does not come for free.**
-  `window.Show()` + `control.Focus()` was not enough to make `KeyPressQwerty` reach a `TextEditor`'s
-  tunnel-phase `KeyDown` handler — the handler never fired, so a keyboard-driven repro silently tested
-  nothing. Mouse input works without this (`MouseDown`/`MouseUp` on a realized cell hits the app's own
-  `PointerPressed`). If you need keys, assert first that the handler ran at all; do not infer from a passing
-  test that the keystroke was delivered.
+- **Synthetic keys and text input work — through the shell.** `window.KeyTextInput(...)`,
+  `KeyPress`/`KeyRelease` and `MouseDown`/`MouseUp` all reach the real handlers once something is genuinely
+  focused, which `ShellHarness` gives you (`editor.TextArea.Focus()` then assert `IsFocused`). That is how
+  #70's auto-close is tested end to end: typing a quote, stepping over a closer, Enter escaping the pair.
+  What does *not* work is a bare control in a plain `Window` — focus never lands, the handler never fires,
+  and a test written that way passes while testing nothing. So always assert the handler ran (or that the
+  control is focused) before asserting what it did.
 - **Syntax colouring resists a deterministic assertion.** The TextMate grammar colours a line as its visual
   line is drawn, so reading `ShapedTextRun.Properties.ForegroundBrush` back can give the plain theme
   foreground for a line the tokenizer has not reached — and "the comment's colour does not appear below it"

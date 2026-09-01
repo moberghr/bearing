@@ -21,6 +21,7 @@ public partial class MainWindow : Window
 {
     private readonly CompletionController _completion;
     private readonly SqlFoldingController _folding;
+    private readonly EditorAutoClose _autoClose;            // paired quotes/brackets (#70)
     private readonly EditorTextCommands _text;              // statement-aware editor ops + Run's SQL
     private readonly EditorTextBehavior _editorText;        // editor <-> SelectedTab buffer/caret sync
     private readonly EditorZoomController _zoom;            // per-tab transient font zoom (Ctrl+= / - / 0)
@@ -51,6 +52,12 @@ public partial class MainWindow : Window
 
         _completion = new CompletionController(Editor, new CompletionEngine(), () => Vm?.Execution.SnapshotForSelectedTab());
         _folding = new SqlFoldingController(Editor); // installs the fold margin (left of the text)
+        // Auto-close reads the setting live, and loses Enter to the completion popup — while a suggestion is
+        // selected, Enter accepts it rather than escaping a bracket (#70).
+        _autoClose = new EditorAutoClose(
+            Editor,
+            enabled: () => Vm?.SettingsService.Current.AutoCloseBrackets ?? true,
+            completionOpen: () => _completion.IsOpen);
         _text = new EditorTextCommands(Editor);      // installs the statement-highlight margin
 
         // These read the keymap lazily: the shortcuts editor can replace it at runtime, and they are built

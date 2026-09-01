@@ -120,6 +120,18 @@ public static class SettingsCatalog
             Get = s => s.ConfirmTabClose,
             Set = (s, v) => s with { ConfirmTabClose = v },
         },
+        new BoolSetting
+        {
+            Key = "editor.autoCloseBrackets",
+            CategoryId = Editor,
+            Title = "Close quotes and brackets as you type",
+            Description = "Typing ' or \" or ( inserts the closing half too and leaves the caret between "
+                        + "them. Typing the closer yourself steps over it, Backspace on an empty pair takes "
+                        + "both, and Enter jumps past the closer instead of breaking the line.",
+            Keywords = "auto close bracket paren parenthesis quote pair surround wrap insert",
+            Get = s => s.AutoCloseBrackets,
+            Set = (s, v) => s with { AutoCloseBrackets = v },
+        },
 
         // ---- Results ---------------------------------------------------------------------------
         new IntSetting
