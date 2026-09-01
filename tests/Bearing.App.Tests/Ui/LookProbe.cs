@@ -52,6 +52,20 @@ public class LookProbe
         });
     }
 
+    /// <summary>A whole demo run (#63): every result shape the view has to lay out, off the fixtures.</summary>
+    [SkippableFact]
+    public Task DemoRun()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(() =>
+        {
+            var sets = DemoRenderTests.Sets("select * from shop.store", [.. Demo.DemoData.Run()]);
+            var (window, _) = ResultsHarness.Show([.. sets]);
+            Write(window, dir, "demo-run.png");
+            window.Close();
+        });
+    }
+
     /// <summary>The pinned row, selected and not — the two-row selection look (#67).</summary>
     [SkippableFact]
     public Task PinnedTabs()

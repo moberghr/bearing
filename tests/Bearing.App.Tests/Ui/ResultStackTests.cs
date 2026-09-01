@@ -183,6 +183,42 @@ public class ResultStackTests
         window.Close();
     });
 
+    [Fact]
+    public Task A_message_takes_only_the_room_it_needs() => _ui.Run(() =>
+    {
+        // A star row would hold a share of the pane open for one line of text, and a message has nothing to
+        // scroll — so it gets an Auto row and the grids divide the rest.
+        var message = new Bearing.App.ViewModels.ResultSetViewModel(
+            new QueryResult([], [], 3, TimeSpan.Zero, "UPDATE 3", null, true), null, pageable: false);
+        var grid = Set(60);
+        var (window, view) = ResultsHarness.Show(grid, message);
+        var stack = Stack(view);
+
+        Assert.Null(stack.WeightOf(message));         // not a star row
+        Assert.NotNull(stack.WeightOf(grid));
+        var containers = SetContainers(view);
+        Assert.True(containers[1].Bounds.Height < containers[0].Bounds.Height / 3,
+            $"the message took {containers[1].Bounds.Height}px of a {stack.Bounds.Height}px pane");
+        Assert.True(containers[1].Bounds.Height > 0, "the message is not visible at all");
+        window.Close();
+    });
+
+    [Fact]
+    public Task Collapsing_a_message_and_reopening_it_leaves_it_as_it_was() => _ui.Run(() =>
+    {
+        // Reopening must not promote a message to a star row it never had.
+        var message = new Bearing.App.ViewModels.ResultSetViewModel(
+            new QueryResult([], [], 3, TimeSpan.Zero, "UPDATE 3", null, true), null, pageable: false);
+        var (window, view) = ResultsHarness.Show(Set(20), message);
+        var stack = Stack(view);
+
+        stack.SetCollapsed(message, true);
+        stack.SetCollapsed(message, false);
+
+        Assert.Null(stack.WeightOf(message));
+        window.Close();
+    });
+
     // ---- the weights, on their own --------------------------------------------------------------
 
     [Fact]

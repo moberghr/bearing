@@ -119,3 +119,24 @@ faster, parallelizable, and reads better. Reach for a UI test when the visual tr
   `MouseWheel`, `KeyPress`/`KeyPressQwerty`, `KeyTextInput`, `SetRenderScaling`, and `DragDrop`, which takes
   an `IDataTransfer` and so already matches the v12 typed API, §9.3), plus real pixels via
   `AvaloniaHeadlessPlatform.ForceRenderTimerTick(n)` + `CaptureRenderedFrame()`.
+
+## §4.6 — The demo fixtures are not where resolution is tested
+`tests/Bearing.App.Tests/Demo/` (`DemoData` + `DemoProvider`, #63) serves hand-authored result sets and a
+hand-built `SchemaSnapshot` so the UI can be driven with no Postgres at all. It works at full fidelity
+because `ColumnDescriptor.BaseTableId`/`BaseColumnOrdinal` are provider-assigned and provider-neutral (§5.1):
+a fixture declares a column's origin and gets real FK navigation, real inline editing and real PK badges out
+of `ResultSetBuilder` and the resolvers.
+
+- WHEN a UI test needs data, prefer `DemoData` over hand-rolling a `QueryResult` — and let the affordances
+  come from resolution. Setting `ForeignKeyColumns`/`PrimaryKeyColumns`/`EditTarget` on the view model
+  directly tests the view against a claim no code made.
+- **DO NOT test FK / PK / editability *resolution* here.** These fixtures encode our assumptions about what
+  Postgres reports, so asserting them back yields a green suite over a broken app. Resolution belongs in
+  `Bearing.Data.Tests` against live pagila (§4.2). What belongs here is how the UI behaves **given** a result
+  shape.
+- Deterministic on purpose — fixed ids, values, row order and durations, no clocks and no GUIDs, because
+  captures get diffed and assertions count rows. Keep it that way when adding a fixture.
+- `DemoExecutor` implements the awkward paths too, not just `ExecuteAsync`: batched streaming with the
+  `MaxRows` ceiling and the `Truncated` flag, a count that can be a number / a blank / a throw, and
+  `ExecuteWriteAsync` recording the generated DML so §5.4's parameterization is assertable without a server.
+  A page query comes back **without** column origins, as it does from the real provider.

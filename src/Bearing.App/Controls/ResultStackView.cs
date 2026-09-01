@@ -79,8 +79,13 @@ internal sealed class ResultStackView : UserControl
                 _grid.Children.Add(divider);
             }
 
+            // A set with no grid is one line of text — a statement message or an error. It takes an Auto row,
+            // because a star row would hold a share of the pane open for a single line, and a message has
+            // nothing to scroll: there is no size here for the user to want to trade for.
             var weight = ResultStackWeights.For(result);
-            var row = new RowDefinition(weight, GridUnitType.Star) { MinHeight = MinSetHeight };
+            var row = result.HasGrid
+                ? new RowDefinition(weight, GridUnitType.Star) { MinHeight = MinSetHeight }
+                : new RowDefinition(GridLength.Auto);
             _grid.RowDefinitions.Add(row);
             _rows[result] = row;
             _weights[result] = weight;
@@ -153,8 +158,12 @@ internal sealed class ResultStackView : UserControl
             return;
         }
 
-        // Left at zero for the layout pass to set: reopening changes what there is to share, and
-        // ApplyFloor is what knows the answer.
+        // A set that never had a star row does not gain one by being reopened — a message goes back to Auto,
+        // which is what it already was.
+        if (!result.HasGrid) return;
+
+        // Left at zero for the layout pass to set: reopening changes what there is to share, and ApplyFloor
+        // is what knows the answer.
         row.MinHeight = 0;
         // Back to the weight it opened at, not to whatever a drag had left it — a set coming back from
         // collapsed has no size of its own to restore, and the opening proportion is the honest default.

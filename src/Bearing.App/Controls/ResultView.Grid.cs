@@ -17,11 +17,13 @@ public sealed partial class ResultView
     private Control BuildResultSet(ResultSetViewModel result, out DataGrid? grid)
     {
         grid = null;
+        // A result with no grid is one line of text, so it is styled as text rather than left at whatever
+        // font size it inherits — it sat two sizes above the meta row naming it, unpadded against the frame.
         if (!result.Success)
-            return new TextBlock { Text = $"Error: {result.Error?.Message}", Margin = new Thickness(8), TextWrapping = TextWrapping.Wrap };
+            return ResultChrome.ResultText($"Error: {result.Error?.Message}", Res("Error.Red"), wrap: true);
 
         if (result.Columns.Count == 0)
-            return new TextBlock { Text = result.Message ?? "Statement executed.", Margin = new Thickness(8) };
+            return ResultChrome.ResultText(result.Message ?? "Statement executed.", Res("Text.Code"));
 
         grid = BuildGrid(result);
         // Any cell is selectable; the stats bar surfaces itself only when ≥2 selected cells are numeric.

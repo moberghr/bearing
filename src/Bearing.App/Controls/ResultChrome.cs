@@ -278,6 +278,21 @@ public static class ResultChrome
 
     /// <summary>An amber padlock chip for a locked (read-only) result; the reason lives in the tooltip
     /// (design RESULTS_GRID §8).</summary>
+    /// <summary>
+    /// The body of a result that has no grid — a statement message or an error. One line of text, so it takes
+    /// the data font size rather than inheriting the frame's, and it is inset to the same left edge as a
+    /// grid's first column so a run of mixed results lines up.
+    /// </summary>
+    public static Control ResultText(string text, IBrush foreground, bool wrap = false)
+        => new TextBlock
+        {
+            Text = text,
+            Foreground = foreground,
+            FontSize = ResultGridChrome.CellFontSize,
+            Margin = new Thickness(ResultGridChrome.HeaderPadding + 2, 8),
+            TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap,
+        };
+
     public static Control LockChip(string reason)
     {
         var padlock = new Path
