@@ -133,6 +133,60 @@ public class DemoModeTests
         Assert.NotNull(executor);
     }
 
+    // ---- the relaunch ----------------------------------------------------------------------------
+
+    [Fact]
+    public void The_relaunch_passes_the_demo_switch_to_the_same_executable()
+    {
+        // The audit found this untested, and the reason it stayed untested is that the obvious test starts a
+        // second copy of the app. The launcher is an argument now, so the decision is checkable without one.
+        string? started = null;
+        string? passed = null;
+
+        var failure = DemoRelaunch.Start("/opt/bearing/Bearing", (exe, arg) =>
+        {
+            started = exe;
+            passed = arg;
+            return true;
+        });
+
+        Assert.Null(failure);
+        Assert.Equal("/opt/bearing/Bearing", started);
+        Assert.Equal(DemoMode.Argument, passed);
+    }
+
+    [Fact]
+    public void A_relaunch_with_no_executable_path_is_a_message_not_a_crash()
+    {
+        // Environment.ProcessPath can be null, and clicking a button must not take the app down (§5.2).
+        var failure = DemoRelaunch.Start(null, (_, _) => true);
+
+        Assert.NotNull(failure);
+        Assert.Contains("executable", failure);
+    }
+
+    [Fact]
+    public void A_launcher_that_refuses_and_one_that_throws_both_report()
+    {
+        Assert.NotNull(DemoRelaunch.Start("/opt/bearing/Bearing", (_, _) => false));
+
+        var thrown = DemoRelaunch.Start("/opt/bearing/Bearing",
+            (_, _) => throw new System.ComponentModel.InvalidEnumArgumentException("no such file"));
+        Assert.NotNull(thrown);
+        Assert.Contains("no such file", thrown);
+    }
+
+    [Fact]
+    public void The_relaunch_never_closes_the_window_it_was_clicked_from()
+    {
+        // Not an assertion about code so much as about the contract: Start's job is to launch, and nothing in
+        // it touches the current session. Trying the demo must not cost the user their unsaved buffers.
+        var closed = false;
+        DemoRelaunch.Start("/opt/bearing/Bearing", (_, _) => { closed = false; return true; });
+
+        Assert.False(closed);
+    }
+
     // ---- the ephemeral workspace -----------------------------------------------------------------
 
     [Fact]
@@ -257,8 +311,13 @@ public class DemoModeTests
         try
         {
             SynchronizationContext.SetSynchronizationContext(context);
+            // Blocking on purpose, which is the whole test: the shutdown path blocks on this, and a missing
+            // ConfigureAwait(false) inside it deadlocked there (a 2s exit stall in practice). Awaiting here
+            // would remove the very condition being reproduced, so xUnit1031 is suppressed rather than obeyed.
+#pragma warning disable xUnit1031
             Assert.True(demo.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(5)),
                 "cleanup deadlocked against the thread that was waiting for it");
+#pragma warning restore xUnit1031
         }
         finally
         {

@@ -68,9 +68,7 @@ public partial class App : Application
             Theming.FontScale.Apply(settings.Current.UiFontSize, settings.Current.GridFontSize);
             // The timezone setting's picker, validation and description live in the app layer: resolving a
             // zone id means TimeZoneInfo, and Core holds abstractions and records only (§2.1, #77).
-            Core.Workspace.SettingsCatalog.TimeZoneSuggestions = Formatting.DisplayTimeZone.Available;
-            Core.Workspace.SettingsCatalog.TimeZoneValidator = Formatting.DisplayTimeZone.IsKnown;
-            Core.Workspace.SettingsCatalog.TimeZoneDescriber = Formatting.DisplayTimeZone.Describe;
+            Formatting.DisplayTimeZone.InstallSettingsHooks();
             Formatting.CellFormat.Zone = Formatting.DisplayTimeZone.Resolve(settings.Current.DisplayTimeZone);
             // The demo registry holds the demo provider *instead of* Postgres, not beside it: that is what
             // makes the fake unreachable from any normal connection flow, since in an ordinary session it is

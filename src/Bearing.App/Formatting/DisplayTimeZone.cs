@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
+using Bearing.Core.Workspace;
+
 namespace Bearing.App.Formatting;
 
 /// <summary>
@@ -19,6 +21,23 @@ namespace Bearing.App.Formatting;
 /// </summary>
 public static class DisplayTimeZone
 {
+    /// <summary>
+    /// Hand Core's timezone setting its three app-layer hooks: the picker's contents, the validator and the
+    /// description. Resolving a zone id means <c>TimeZoneInfo</c>, so Core cannot do it itself (§2.1, #77).
+    /// <para>
+    /// A named method rather than three lines in the composition root, and for a reason that already cost
+    /// once: those lines sat inside the desktop-lifetime guard, so nothing except a launched app installed
+    /// them — which is how the picker shipped permanently empty and was found by eye rather than by a test.
+    /// Idempotent, so a test or a second window may call it freely.
+    /// </para>
+    /// </summary>
+    public static void InstallSettingsHooks()
+    {
+        SettingsCatalog.TimeZoneSuggestions = Available;
+        SettingsCatalog.TimeZoneValidator = IsKnown;
+        SettingsCatalog.TimeZoneDescriber = Describe;
+    }
+
     /// <summary>The setting value meaning "whatever this machine is set to".</summary>
     public const string SystemId = "system";
 

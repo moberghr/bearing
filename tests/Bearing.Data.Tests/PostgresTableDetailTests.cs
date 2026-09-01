@@ -30,6 +30,7 @@ public class PostgresTableDetailTests : IAsyncLifetime
     private IQueryExecutor _exec = null!;
     private ISchemaSnapshot _snapshot = null!;
     private string? _unreachable;
+    private bool _unstamped;
 
     public async Task InitializeAsync()
     {
@@ -42,6 +43,10 @@ public class PostgresTableDetailTests : IAsyncLifetime
         // here and each test skips on it — reported, not collapsed to a bool, for the same reason §4.2 gives.
         _unreachable = await PgTestServer.UnreachableReasonAsync(_factory, CancellationToken.None);
         if (_unreachable is not null) return;
+        // This fixture builds a schema, so reachability is not enough — the server has to have identified
+        // itself as a test database (see PgTestServer.RequireWritableAsync).
+        _unstamped = !await PgTestServer.IsWritableAsync(_factory, CancellationToken.None);
+        if (_unstamped) return;
 
         await RunAsync($"""
             create schema {_schema};
@@ -88,7 +93,7 @@ public class PostgresTableDetailTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        if (_unreachable is null)
+        if (_unreachable is null && !_unstamped)
         {
             try { await RunAsync($"drop schema if exists {_schema} cascade;"); } catch { /* best-effort */ }
         }
@@ -99,10 +104,13 @@ public class PostgresTableDetailTests : IAsyncLifetime
 
     /// <summary>Skips with the reason the probe reported, the way <c>PgTestServer.RequireAsync</c> does.</summary>
     private void RequireServer()
-        => Skip.If(_unreachable is not null,
+    {
+        Skip.If(_unstamped, PgTestServer.NotStampedReason);
+        Skip.If(_unreachable is not null,
             $"No PostgreSQL reachable for integration test at {PgTestServer.Endpoint} — "
             + $"{_unreachable?.TrimEnd('.', ' ')}. "
             + "Set BEARING_TEST_PG_{HOST,PORT,DB,USER,PASSWORD} to point at your server.");
+    }
 
     private long TableId(string name) => _snapshot.ResolveTable(_schema, name)!.Id;
 

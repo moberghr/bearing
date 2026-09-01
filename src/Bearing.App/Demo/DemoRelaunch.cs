@@ -24,22 +24,40 @@ public static class DemoRelaunch
     /// Launch a demo session. Returns null on success, or a short reason to show in the status bar —
     /// failing to start a second process is a message, not a crash (§5.2).
     /// </summary>
-    public static string? Start()
+    public static string? Start() => Start(Environment.ProcessPath, Launch);
+
+    /// <summary>
+    /// The testable shape: the executable and the launcher are arguments.
+    /// <para>
+    /// Split out because the only thing worth asserting here is the decision-making — a missing executable, a
+    /// launcher that fails, the argument actually passed — and a test that verified any of it by starting a
+    /// second copy of the app would be a test that starts a second copy of the app.
+    /// </para>
+    /// </summary>
+    /// <param name="executablePath">
+    /// <c>Environment.ProcessPath</c> in the app. Not <c>Assembly.Location</c>: under a single-file or
+    /// Velopack layout that is not the executable, and it is the executable that has to be re-run.
+    /// </param>
+    /// <param name="launch">Starts the process, returning false when it could not. Throwing is allowed.</param>
+    internal static string? Start(string? executablePath, Func<string, string, bool> launch)
     {
-        // ProcessPath, not Assembly.Location: under a single-file or Velopack layout the assembly path is
-        // not the executable, and it is the executable that has to be re-run.
-        if (Environment.ProcessPath is not { Length: > 0 } exe)
+        if (executablePath is not { Length: > 0 } exe)
             return "Couldn't find the application executable to start a demo session.";
 
         try
         {
-            var start = new ProcessStartInfo(exe) { UseShellExecute = false };
-            start.ArgumentList.Add(DemoMode.Argument);
-            return Process.Start(start) is null ? "Couldn't start a demo session." : null;
+            return launch(exe, DemoMode.Argument) ? null : "Couldn't start a demo session.";
         }
         catch (Exception ex)
         {
             return $"Couldn't start a demo session: {ex.Message}";
         }
+    }
+
+    private static bool Launch(string exe, string argument)
+    {
+        var start = new ProcessStartInfo(exe) { UseShellExecute = false };
+        start.ArgumentList.Add(argument);
+        return Process.Start(start) is not null;
     }
 }

@@ -104,6 +104,8 @@ internal sealed class FrameCapture
         if (bitmap is null) return;
         using var _ = bitmap;
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        bitmap.Save(path);
+        // PNG explicitly, through the BitmapEncoderOptions overload, not Save(path): the string one is obsolete in Avalonia 12 and
+        // its deprecation warning is noise on every build of the suite.
+        bitmap.Save(path, new PngBitmapEncoderOptions());
     }
 }
