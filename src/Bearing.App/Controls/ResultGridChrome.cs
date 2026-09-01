@@ -57,6 +57,11 @@ public static class ResultGridChrome
     /// off screen, which is the thing #30's sizing exists to prevent.</summary>
     public const double HeaderFontSize = 12;
 
+    /// <summary>Floor for a data row and its cells, tightening the Fluent theme's tall default. Named because
+    /// the stacked layout sizes itself in rows (<see cref="Results.ResultStackWeights"/>): a set's floor is its
+    /// chrome plus a couple of these, and a literal here would have made that arithmetic a guess.</summary>
+    public const double RowMinHeight = 26;
+
     /// <summary>What a column header is drawn at (<see cref="StyleGridChrome"/>), and so what it must be
     /// measured at.</summary>
     public const FontWeight HeaderFontWeight = FontWeight.SemiBold;
@@ -175,7 +180,7 @@ public static class ResultGridChrome
         // Tighter data rows: lower the row floor and zero the cell's vertical padding so a single
         // line of text no longer sits in a tall box.
         var row = new Style(x => x.OfType<DataGridRow>());
-        row.Setters.Add(new Setter(Layoutable.MinHeightProperty, 26.0));
+        row.Setters.Add(new Setter(Layoutable.MinHeightProperty, RowMinHeight));
         // The status-bar lane, reserved for every row so a row doesn't shift when it goes dirty; only the
         // colour is per-row (ResultRowPainter). Matched by the corner header's margin below.
         row.Setters.Add(new Setter(TemplatedControl.BorderThicknessProperty,
@@ -192,7 +197,7 @@ public static class ResultGridChrome
 
         var cell = new Style(x => x.OfType<DataGridCell>());
         cell.Setters.Add(new Setter(TemplatedControl.PaddingProperty, new Thickness(0)));
-        cell.Setters.Add(new Setter(Layoutable.MinHeightProperty, 26.0));
+        cell.Setters.Add(new Setter(Layoutable.MinHeightProperty, RowMinHeight));
         // Pinned, not inherited from the grid: the Fluent theme sets FontSize on DataGridCell, and that
         // setter outranks grid.FontSize, so the cells rendered at the theme's size while ColumnWidths sized
         // them for ours (#73). Whatever FontSize says, this is what makes it true of the pixels.

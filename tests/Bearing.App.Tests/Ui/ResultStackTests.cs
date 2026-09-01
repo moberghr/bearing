@@ -141,32 +141,88 @@ public class ResultStackTests
         window.Close();
     });
 
+    // ---- nothing is squeezed out ----------------------------------------------------------------
+
+    [Fact]
+    public Task The_smallest_set_still_shows_its_rows() => _ui.Run(() =>
+    {
+        // The first cut sized the floor under the chrome, so a three-row set beside a big one rendered as a
+        // meta bar and a column header with none of its three rows below (#81).
+        var small = Set(3);
+        var (window, view) = ResultsHarness.Show(small, Set(240), Set(12));
+
+        var rows = VisibleRows(SetContainers(view)[0]);
+        Assert.True(rows >= 1, $"the 3-row set showed {rows} of its rows");
+        window.Close();
+    });
+
+    [Fact]
+    public Task No_set_is_pushed_off_the_bottom_of_the_pane() => _ui.Run(() =>
+    {
+        // A Grid clamps a star row to its MinHeight and then arranges the rest as if it had not, so an
+        // extreme weight ratio overflowed the pane and the last set was simply not on screen.
+        var (window, view) = ResultsHarness.Show(Set(3), Set(240), Set(12));
+        var stack = Stack(view);
+
+        AssertFits(stack, SetContainers(view));
+        window.Close();
+    });
+
+    [Fact]
+    public Task Sets_share_a_pane_too_short_for_all_their_floors() => _ui.Run(() =>
+    {
+        // Nine sets cannot all be legible in a short pane. Equally cramped and all present beats comfortable
+        // and truncated, so the floor yields rather than overflowing.
+        var sets = Enumerable.Range(0, 9).Select(_ => Set(30)).ToArray();
+        var (window, view) = ResultsHarness.Show(sets);
+        var stack = Stack(view);
+
+        var containers = SetContainers(view);
+        Assert.All(containers, c => Assert.True(c.Bounds.Height > 0, "a set was squeezed to nothing"));
+        AssertFits(stack, containers);
+        window.Close();
+    });
+
     // ---- the weights, on their own --------------------------------------------------------------
 
     [Fact]
-    public void A_tiny_set_still_gets_the_floor()
-        => Assert.Equal(ResultStackWeights.Min, ResultStackWeights.For(Set(1)));
+    public void An_empty_set_gets_the_floor()
+        => Assert.Equal(ResultStackWeights.Min, ResultStackWeights.For(Set(0)));
 
     [Fact]
-    public void A_huge_set_stops_at_the_ceiling()
-    {
-        // Past the ceiling the extra rows would only starve the neighbours: both sets scroll internally
-        // anyway, so neither becomes more readable.
-        Assert.Equal(ResultStackWeights.Max, ResultStackWeights.For(Set(5_000)));
-        Assert.Equal(ResultStackWeights.For(Set(5_000)), ResultStackWeights.For(Set(50_000)));
-    }
-
-    [Fact]
-    public void In_between_the_weight_is_the_row_count()
-        => Assert.Equal(12, ResultStackWeights.For(Set(12)));
-
-    [Fact]
-    public void A_non_grid_result_gets_the_floor()
+    public void A_result_with_no_grid_gets_the_floor()
     {
         // A statement message or an error has no rows to be proportional to.
         var message = new QueryResult([], [], 0, TimeSpan.Zero, "UPDATE 3", null, true);
         var vm = new Bearing.App.ViewModels.ResultSetViewModel(message, null, pageable: false);
         Assert.Equal(ResultStackWeights.Min, ResultStackWeights.For(vm));
+    }
+
+    [Fact]
+    public void A_huge_set_stops_at_the_ceiling()
+    {
+        Assert.Equal(ResultStackWeights.Max, ResultStackWeights.For(Set(ResultStackWeights.Cap)));
+        Assert.Equal(ResultStackWeights.Max, ResultStackWeights.For(Set(50_000)));
+    }
+
+    [Fact]
+    public void More_rows_is_always_taller()
+    {
+        var weights = new[] { 1, 5, 20, 80, 199 }.Select(rows => ResultStackWeights.For(Set(rows))).ToList();
+        Assert.Equal(weights.OrderBy(w => w), weights);
+        Assert.Equal(weights.Distinct(), weights);
+    }
+
+    [Fact]
+    public void Ten_times_the_rows_is_taller_but_nothing_like_ten_times_taller()
+    {
+        // The point of the log scale: the ordering survives, the 60:1 share that pinned a small set at its
+        // floor — and overflowed the pane — does not.
+        var few = ResultStackWeights.For(Set(3));
+        var many = ResultStackWeights.For(Set(180));
+
+        Assert.True(many > few, $"{many} !> {few}");
+        Assert.True(many / few < 3, $"the ratio is still extreme: {many}/{few}");
     }
 
     // ---- helpers --------------------------------------------------------------------------------
@@ -178,6 +234,26 @@ public class ResultStackTests
         var grid = Stack(view).GetVisualDescendants().OfType<Grid>().First();
         return grid.Children.OfType<Control>().Where(c => c is not GridSplitter).ToArray();
     }
+
+    /// <summary>
+    /// Assert the stack ends inside its pane, so no set is pushed off the bottom.
+    /// <para>
+    /// The tolerance is a pixel per set, not zero: a <see cref="Grid"/> snaps each star row up to a whole
+    /// pixel, so equal rows can add up to a pixel more than the pane per row. The bug this guards against
+    /// clipped whole sets — an extreme weight ratio clamped a row and the rest were arranged as if it had not.
+    /// </para>
+    /// </summary>
+    private static void AssertFits(Control stack, Control[] containers)
+    {
+        var last = containers[^1];
+        var bottom = last.TranslatePoint(new Point(0, last.Bounds.Height), stack)!.Value.Y;
+        Assert.True(bottom <= stack.Bounds.Height + containers.Length,
+            $"{containers.Length} sets end at {bottom} in a {stack.Bounds.Height} pane");
+    }
+
+    /// <summary>How many of a set's data rows are actually drawn inside its container.</summary>
+    private static int VisibleRows(Control container)
+        => container.GetVisualDescendants().OfType<DataGridRow>().Count(r => r.Bounds.Height > 0 && r.IsVisible);
 
     private static void ClickChevron(Window window, Visual view, int ofSet)
     {
