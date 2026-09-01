@@ -91,7 +91,12 @@ public sealed class DemoWorkspace : IAsyncDisposable
     {
         if (QueryLog is IAsyncDisposable log)
         {
-            try { await log.DisposeAsync(); } catch (Exception) { /* closing is best-effort too */ }
+            // ConfigureAwait(false) on every await here, and it is load-bearing rather than hygiene: the
+            // caller is the window's Closed handler, which blocks the UI thread waiting for this. Without it
+            // the continuation is posted back to that same thread and can never run — the wait times out and
+            // the directory survives, which is exactly the residue this class exists to remove.
+            try { await log.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception) { /* closing is best-effort too */ }
         }
 
         for (var attempt = 0; attempt < DeleteAttempts; attempt++)
@@ -102,9 +107,13 @@ public sealed class DemoWorkspace : IAsyncDisposable
                 Directory.Delete(_root, recursive: true);
                 return;
             }
-            catch (IOException) when (attempt < DeleteAttempts - 1)
+            // Both, because a still-held handle on Windows surfaces as either: IOException for a file in use,
+            // UnauthorizedAccessException for one a pooled SQLite connection has open. Catching only the
+            // first abandoned the delete on the first attempt, which defeated the retry entirely.
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                       && attempt < DeleteAttempts - 1)
             {
-                await Task.Delay(DeleteRetryDelay);
+                await Task.Delay(DeleteRetryDelay).ConfigureAwait(false);
             }
             catch (Exception)
             {

@@ -104,6 +104,19 @@ public sealed partial class ShellViewModel
     /// coexist in the one manager without collision.
     /// </para>
     /// </summary>
+    public async Task OpenProjectAsync(string projectDirectory)
+    {
+        if (_project is not null && string.Equals(Path.GetFullPath(projectDirectory), _project.Directory, StringComparison.Ordinal))
+            return;
+
+        await _workspace.FlushScratchAsync();   // land pending scratch writes before the tabs leave the strip
+        SaveWorkspace();
+        _ctx.Park(SidePaneOpen, SidePaneWidth, ResultsViewMode);
+        _ctx.DefaultConnectionId = null;
+        if (_ctx.Find(projectDirectory) is { } known) await ActivateAsync(known);
+        else await InitializeAsync(projectDirectory);
+    }
+
     /// <summary>
     /// Open a demo session: the demo project, its one connection, and a starter script (#64).
     /// <para>
@@ -131,18 +144,6 @@ public sealed partial class ShellViewModel
                    + "Press F5 to run.";
     }
 
-    public async Task OpenProjectAsync(string projectDirectory)
-    {
-        if (_project is not null && string.Equals(Path.GetFullPath(projectDirectory), _project.Directory, StringComparison.Ordinal))
-            return;
-
-        await _workspace.FlushScratchAsync();   // land pending scratch writes before the tabs leave the strip
-        SaveWorkspace();
-        _ctx.Park(SidePaneOpen, SidePaneWidth, ResultsViewMode);
-        _ctx.DefaultConnectionId = null;
-        if (_ctx.Find(projectDirectory) is { } known) await ActivateAsync(known);
-        else await InitializeAsync(projectDirectory);
-    }
 
     /// <summary>Bring an already-open project back on screen from its parked state. Deliberately does not
     /// touch <c>session.json</c>: the in-memory tabs are newer than anything on disk (unsaved buffer edits

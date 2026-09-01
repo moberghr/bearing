@@ -241,6 +241,77 @@ public class DemoModeTests
         await demo.DisposeAsync();
     }
 
+    [Fact]
+    public void Cleanup_completes_even_when_the_caller_blocks_its_context()
+    {
+        // The defect this suite could not see. Cleanup runs from the window's Closed handler, which blocks
+        // the UI thread waiting for it — so an await without ConfigureAwait(false) posts its continuation
+        // back to that thread, the wait times out, and the directory survives: precisely the residue the
+        // feature promises is gone. A single-threaded context stands in for Avalonia's dispatcher.
+        var demo = DemoWorkspace.Create();
+        var root = Path.GetDirectoryName(demo.ProjectDirectory)!;
+        demo.QueryLog.Append(Entry("select 1"));
+
+        var previous = SynchronizationContext.Current;
+        var context = new BlockingContext();
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(context);
+            Assert.True(demo.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(5)),
+                "cleanup deadlocked against the thread that was waiting for it");
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+
+        Assert.False(Directory.Exists(root), "the demo left its directory behind");
+        Assert.Equal(0, context.Posted);
+    }
+
+    [Fact]
+    public async Task Cleanup_deletes_the_directory_even_after_a_read_pooled_a_handle()
+    {
+        // The retry's reason: a read hands its connection back to Microsoft.Data.Sqlite's pool, which keeps
+        // the file open, and the delete then fails with IOException *or* UnauthorizedAccessException. Only
+        // catching the first abandoned it on the very first attempt.
+        await using var demo = DemoWorkspace.Create();
+        var root = Path.GetDirectoryName(demo.ProjectDirectory)!;
+        demo.QueryLog.Append(Entry("select 1"));
+        await Poll(demo.QueryLog);
+        await demo.QueryLog.SearchAsync(new QueryLogQuery(), CancellationToken.None);
+
+        await demo.DisposeAsync();
+
+        Assert.False(Directory.Exists(root));
+    }
+
+    /// <summary>
+    /// A context that counts what is posted to it and runs none of it — which is what a thread sitting in
+    /// <c>Wait()</c> amounts to. Anything needing it to run in order to finish will hang.
+    /// </summary>
+    private sealed class BlockingContext : SynchronizationContext
+    {
+        private int _posted;
+
+        public int Posted => Volatile.Read(ref _posted);
+
+        public override void Post(SendOrPostCallback d, object? state) => Interlocked.Increment(ref _posted);
+
+        public override void Send(SendOrPostCallback d, object? state) => Interlocked.Increment(ref _posted);
+    }
+
+    /// <summary>A log entry, so a demo's history has something in it to be deleted with.</summary>
+    private static QueryLogEntry Entry(string sql) => new()
+    {
+        ExecutedAt = DateTimeOffset.UtcNow,
+        ProviderId = DemoProvider.ProviderId,
+        ConnectionName = "Demo data",
+        Database = DemoCatalog.Database,
+        SqlText = sql,
+        Success = true,
+    };
+
     /// <summary>Wait for the log's background writer to have stored what was appended.</summary>
     private static async Task<IReadOnlyList<QueryLogEntry>> Poll(IQueryLog log)
     {

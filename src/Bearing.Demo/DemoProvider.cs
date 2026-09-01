@@ -113,12 +113,47 @@ public sealed class DemoMetadata : IMetadataReader
 public sealed class DemoExecutor : IQueryExecutor
 {
     private readonly List<(string Mentions, IReadOnlyList<QueryResult> Results)> _scripted = [];
+    private readonly Func<string, IReadOnlyList<string>>? _split;
+    private readonly object _gate = new();
+    private readonly List<string> _executed = [];
+    private readonly List<IReadOnlyList<SqlWriteCommand>> _writes = [];
 
-    /// <summary>Every SQL string this executor was asked to run, in order.</summary>
-    public List<string> Executed { get; } = [];
+    /// <param name="splitStatements">
+    /// Splits a batch into statements, so a multi-statement run returns one result set per statement as the
+    /// real provider does. Injected because splitting SQL correctly needs a lexer and that lives in
+    /// <c>Bearing.Sql</c>, which this project may not reference (§2.2) — and a naive split on ';' would cut a
+    /// string literal in half. Null runs the whole batch as one statement.
+    /// </param>
+    public DemoExecutor(Func<string, IReadOnlyList<string>>? splitStatements = null)
+        => _split = splitStatements;
+
+    /// <summary>Every SQL string this executor was asked to run, in order. A snapshot: the list is appended
+    /// on whichever thread ran the query, and one executor is shared by every tab.</summary>
+    public IReadOnlyList<string> Executed
+    {
+        get { lock (_gate) return _executed.ToList(); }
+    }
 
     /// <summary>Every write batch it was handed, in order — the generated DML, parameters included.</summary>
-    public List<IReadOnlyList<SqlWriteCommand>> Writes { get; } = [];
+    public IReadOnlyList<IReadOnlyList<SqlWriteCommand>> Writes
+    {
+        get { lock (_gate) return _writes.ToList(); }
+    }
+
+    /// <summary>
+    /// How many statements to remember. One executor serves a whole demo session, so an unbounded record of
+    /// every string ever run is a leak on a long one — and nothing needs more than the recent past.
+    /// </summary>
+    private const int RememberedStatements = 200;
+
+    private void Record(string sql)
+    {
+        lock (_gate)
+        {
+            _executed.Add(sql);
+            if (_executed.Count > RememberedStatements) _executed.RemoveAt(0);
+        }
+    }
 
     /// <summary>What an unmatched query returns. Defaults to an empty grid rather than an error, so an
     /// unscripted query in a UI test is a blank result and not a red banner.</summary>
@@ -132,15 +167,22 @@ public sealed class DemoExecutor : IQueryExecutor
     /// counted, which is a blank total rather than an error.</summary>
     public bool Uncountable { get; set; }
 
-    /// <summary>An executor that answers each of <see cref="DemoCatalog"/>'s tables by name.</summary>
-    public static DemoExecutor Default()
+    /// <summary>
+    /// An executor that answers each of <see cref="DemoCatalog"/>'s relations.
+    /// <para>
+    /// Matched on the <b>qualified</b> name, not the bare one: <c>select payment_id … from shop.receipt</c>
+    /// contains "payment", so bare patterns served the view's query a payments grid — first registration
+    /// wins, and the collision was invisible because both are plausible results.
+    /// </para>
+    /// </summary>
+    public static DemoExecutor Default(Func<string, IReadOnlyList<string>>? splitStatements = null)
     {
-        var executor = new DemoExecutor();
-        executor.Serve("payment", DemoCatalog.Payments(40));
-        executor.Serve("store", DemoCatalog.Stores());
-        executor.Serve("document", DemoCatalog.Documents());
-        executor.Serve("metric", DemoCatalog.Metrics());
-        executor.Serve("receipt", DemoCatalog.ReceiptView());
+        var executor = new DemoExecutor(splitStatements);
+        executor.Serve($"{DemoCatalog.Schema}.payment", DemoCatalog.Payments(40));
+        executor.Serve($"{DemoCatalog.Schema}.store", DemoCatalog.Stores());
+        executor.Serve($"{DemoCatalog.Schema}.document", DemoCatalog.Documents());
+        executor.Serve($"{DemoCatalog.Schema}.metric", DemoCatalog.Metrics());
+        executor.Serve($"{DemoCatalog.Schema}.receipt", DemoCatalog.ReceiptView());
         return executor;
     }
 
@@ -152,11 +194,20 @@ public sealed class DemoExecutor : IQueryExecutor
         return this;
     }
 
+    /// <summary>
+    /// Run the batch, returning one result set per statement in it — which is what the real executor does,
+    /// and what the demo's own welcome script tells the user to try.
+    /// </summary>
     public Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        Executed.Add(sql);
-        return Task.FromResult(Cap(Match(sql), options.MaxRows));
+        Record(sql);
+
+        var statements = _split?.Invoke(sql) ?? [sql];
+        var results = statements.Count <= 1
+            ? Match(sql)
+            : statements.SelectMany(Match).ToList();
+        return Task.FromResult(Cap(results, options.MaxRows));
     }
 
     /// <summary>
@@ -167,8 +218,8 @@ public sealed class DemoExecutor : IQueryExecutor
     public Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        Executed.Add(pageSql);
-        var result = Match(pageSql)[0];
+        Record(pageSql);
+        var result = First(pageSql);
         return Task.FromResult(result with
         {
             Columns = result.Columns
@@ -185,8 +236,8 @@ public sealed class DemoExecutor : IQueryExecutor
     public async IAsyncEnumerable<RowBatch> StreamRowsAsync(
         string sql, QueryOptions options, [EnumeratorCancellation] CancellationToken ct)
     {
-        Executed.Add(sql);
-        var rows = Match(sql)[0].Rows;
+        Record(sql);
+        var rows = First(sql).Rows;
         var ceiling = options.MaxRows ?? rows.Count;
         var yielded = 0;
         var batch = Math.Max(1, options.BatchRows);
@@ -206,7 +257,7 @@ public sealed class DemoExecutor : IQueryExecutor
     {
         ct.ThrowIfCancellationRequested();
         if (CountError is not null) throw CountError;
-        return Task.FromResult(Uncountable ? null : (long?)Match(sql)[0].Rows.Count);
+        return Task.FromResult(Uncountable ? null : (long?)First(sql).Rows.Count);
     }
 
     /// <summary>Runs the batch as one transaction — which here means recording it and reporting one
@@ -215,10 +266,18 @@ public sealed class DemoExecutor : IQueryExecutor
         IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        Writes.Add(commands);
+        lock (_gate) _writes.Add(commands);
         return Task.FromResult<IReadOnlyList<QueryResult>>(
             commands.Select(c => DemoCatalog.Affected(1) with { Message = Verb(c.Sql) + " 1" }).ToList());
     }
+
+    /// <summary>
+    /// The first result for a query, for the paths that can only return one (a page, a count, a stream).
+    /// Falls back to an empty grid rather than indexing into nothing: <c>Serve("x")</c> with no results
+    /// compiles, and <see cref="Fallback"/> can be set to an empty list.
+    /// </summary>
+    private QueryResult First(string sql)
+        => Match(sql) is { Count: > 0 } results ? results[0] : DemoCatalog.NoRows();
 
     private IReadOnlyList<QueryResult> Match(string sql)
     {

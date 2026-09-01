@@ -132,6 +132,92 @@ public class DemoProviderTests
     }
 
     [Fact]
+    public async Task A_multi_statement_run_returns_one_result_per_statement()
+    {
+        // The welcome script tells the user to run two statements together, and the real executor returns two
+        // result sets. Matching the whole batch as one string returned a single payments grid, so the demo's
+        // own instruction produced the wrong answer.
+        var executor = DemoExecutor.Default(Split);
+
+        var results = await executor.ExecuteAsync(
+            "select * from shop.payment; select * from shop.store;", Options, default);
+
+        Assert.Equal(2, results.Count);
+        Assert.Equal("store_id", results[0].Columns[1].Name);
+        Assert.Equal("name", results[1].Columns[1].Name);
+    }
+
+    [Fact]
+    public async Task Without_a_splitter_a_batch_is_one_statement()
+    {
+        // The default, for a caller that has no lexer to hand — Bearing.Demo may not reference Bearing.Sql.
+        var results = await DemoExecutor.Default().ExecuteAsync(
+            "select * from shop.payment; select * from shop.store;", Options, default);
+
+        Assert.Single(results);
+    }
+
+    [Fact]
+    public async Task A_query_naming_one_relation_is_not_served_another_whose_name_it_contains()
+    {
+        // `select payment_id … from shop.receipt` contains "payment", so bare patterns handed the view's
+        // query a payments grid — first registration wins, and both are plausible results, so the collision
+        // was invisible.
+        var executor = DemoExecutor.Default();
+
+        var results = await executor.ExecuteAsync(
+            "select payment_id, store_name from shop.receipt", Options, default);
+
+        Assert.Equal(["payment_id", "store_name"], results[0].Columns.Select(c => c.Name));
+    }
+
+    [Fact]
+    public async Task A_scripted_entry_with_no_results_does_not_throw_on_the_single_result_paths()
+    {
+        // Serve("x") with no results compiles, and Fallback can be set empty. ExecuteAsync tolerated it;
+        // the page, count and stream paths indexed straight into nothing.
+        var executor = new DemoExecutor();
+        executor.Serve("shop.payment");
+        executor.Fallback = [];
+
+        Assert.Empty((await executor.ExecutePageAsync("select * from shop.payment limit 1", default)).Rows);
+        Assert.Equal(0, await executor.CountAsync("select * from shop.payment", default));
+        await foreach (var _ in executor.StreamRowsAsync("select * from shop.payment", Options, default)) { }
+    }
+
+    [Fact]
+    public async Task Recording_survives_concurrent_runs()
+    {
+        // One executor is shared by every tab in a demo session, so its record is appended from whatever
+        // thread ran the query — an unguarded List can corrupt or throw.
+        var executor = DemoExecutor.Default();
+
+        await Task.WhenAll(Enumerable.Range(0, 40).Select(i => Task.Run(() =>
+            executor.ExecuteAsync($"select * from shop.store -- {i}", Options, default))));
+
+        Assert.Equal(40, executor.Executed.Count);
+    }
+
+    [Fact]
+    public async Task The_record_does_not_grow_without_bound()
+    {
+        // A long demo session would otherwise retain every string it ever ran.
+        var executor = DemoExecutor.Default();
+
+        for (var i = 0; i < 260; i++)
+            await executor.ExecuteAsync($"select {i} from shop.store", Options, default);
+
+        Assert.Equal(200, executor.Executed.Count);
+        // The recent past is what it keeps, not the distant one.
+        Assert.Contains("select 259 from shop.store", executor.Executed);
+        Assert.DoesNotContain("select 0 from shop.store", executor.Executed);
+    }
+
+    /// <summary>A stand-in for the real statement splitter, which lives in Bearing.Sql.</summary>
+    private static IReadOnlyList<string> Split(string sql)
+        => sql.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    [Fact]
     public async Task An_unscripted_query_gets_an_empty_grid_not_an_error()
     {
         // A red banner for every query a test did not think to script would make the harness fight the test.

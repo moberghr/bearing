@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
@@ -65,7 +66,13 @@ public partial class App : Application
             // The demo registry holds the demo provider *instead of* Postgres, not beside it: that is what
             // makes the fake unreachable from any normal connection flow, since in an ordinary session it is
             // not in the graph at all.
-            IProviderRegistry providers = _demo is null ? new ProviderRegistry() : new DemoProvider();
+            // The demo executor is handed the real statement splitter: it lives in Bearing.Sql, which
+            // Bearing.Demo may not reference (§2.2), and without it a multi-statement run — which the demo's
+            // own welcome script invites — would return one result set instead of two.
+            IProviderRegistry providers = _demo is null
+                ? new ProviderRegistry()
+                : new DemoProvider(DemoExecutor.Default(
+                    sql => Bearing.Sql.StatementSplitter.Split(sql).Select(span => span.Text).ToList()));
             IProjectStore projectStore = _demo?.Projects ?? new JsonProjectStore();
             ISessionStore sessionStore = _demo?.Sessions ?? new JsonSessionStore();
             IQueryLog queryLog = _demo?.QueryLog ?? new SqliteQueryLog(
@@ -135,16 +142,13 @@ public partial class App : Application
             window.Closed += (_, _) =>
             {
                 if (updates.ApplyIfPending() is { } failure) CrashLog.Note("update apply-on-exit", failure);
-                // A demo leaves nothing behind: the temp directory holding its project, session, history and
-                // recent-projects list goes with it. Blocking on purpose — this is the last thing the process
-                // does, and letting it run unobserved would race the exit and leave the directory. Capped, so
-                // a stuck delete cannot hold the window shut (§5.2 — it stays best-effort).
-                if (_demo is { } demo)
-                {
-                    try { demo.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(2)); }
-                    catch (Exception ex) { CrashLog.Note("demo cleanup", ex.Message); }
-                }
+                CleanUpDemo();
             };
+            // Every exit path, exactly once, mirroring SaveSession above: a killed process (Ctrl+C in the
+            // terminal, IDE stop) never fires Closed, and %TEMP% is not reliably swept on Windows — so
+            // without this a demo stopped from the debugger leaves its directory for good.
+            desktop.ShutdownRequested += (_, _) => CleanUpDemo();
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => CleanUpDemo();
 
             // Window size is persisted state, not a preference — the setting only decides whether it is
             // replayed. Position is deliberately left to the window manager (Wayland won't honour it
@@ -200,12 +204,13 @@ public partial class App : Application
         // it is best-effort and never blocks the app (§5.2).
         LegacySecretFiles.Purge();
 
-        var secretStore = await SecretStoreFactory.CreateAsync();
-        // The same call is handed over as the re-probe: this one runs very early, and a keyring that wasn't
-        // serving yet at this instant would otherwise pin the whole session into storing nothing.
-        vm.AttachSecretStore(secretStore, reprobe: SecretStoreFactory.CreateAsync);
         if (_demo is { } demo)
         {
+            // The demo's own store, and *before* anything probes the real one: SecretStoreFactory.CreateAsync
+            // reaches for the OS keychain, which on Linux can prompt to unlock the keyring — for a session
+            // that has no secret to keep. Attaching it here rather than after the probe is what makes the
+            // "no keychain call" claim true instead of aspirational (§1.1).
+            vm.AttachSecretStore(demo.Secrets, reprobe: _ => Task.FromResult(demo.Secrets));
             // A demo opens its own throwaway project rather than the last-used one: the user's real project
             // is neither read nor written, and there is nothing in the recent list to go back to because
             // this one is never added to it (#64).
@@ -213,6 +218,11 @@ public partial class App : Application
             LogStartup("demo ready");
             return;
         }
+
+        var secretStore = await SecretStoreFactory.CreateAsync();
+        // The same call is handed over as the re-probe: this one runs very early, and a keyring that wasn't
+        // serving yet at this instant would otherwise pin the whole session into storing nothing.
+        vm.AttachSecretStore(secretStore, reprobe: SecretStoreFactory.CreateAsync);
 
         // Reopen the last-used project; fall back to the default project on first run (or if it's gone).
         await vm.ResumeLastProjectAsync(DefaultProjectDirectory());
@@ -225,6 +235,30 @@ public partial class App : Application
 
     /// <summary>The demo session's throwaway workspace, or null in an ordinary session (#64).</summary>
     private static Demo.DemoWorkspace? _demo;
+
+    private static int _demoCleaned;
+
+    /// <summary>
+    /// Delete the demo's temp directory, once, from whichever exit path gets there first.
+    /// <para>
+    /// The wait happens on a pool thread, not the caller's: this runs from the UI thread on a window close,
+    /// and blocking that thread on work whose continuations want it is a deadlock — the wait would time out
+    /// and leave the directory behind. Capped so a stuck delete cannot hold the exit, and swallowed at the
+    /// end because a demo that cannot tidy up must not become a crash on the way out (§5.2).
+    /// </para>
+    /// </summary>
+    private static void CleanUpDemo()
+    {
+        if (_demo is not { } demo) return;
+        if (Interlocked.Exchange(ref _demoCleaned, 1) != 0) return;
+
+        try
+        {
+            if (!Task.Run(() => demo.DisposeAsync().AsTask()).Wait(TimeSpan.FromSeconds(2)))
+                CrashLog.Note("demo cleanup", "timed out; the temp directory was left for the OS to collect");
+        }
+        catch (Exception ex) { CrashLog.Note("demo cleanup", ex.Message); }
+    }
 
     /// <summary>Write a startup milestone (ms since process start) when BEARING_STARTUP_TIMING is set.</summary>
     internal static void LogStartup(string milestone)
