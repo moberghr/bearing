@@ -599,8 +599,10 @@
                          ShowLineNumbers="True"
                          FontFamily="{StaticResource MonoFontFamily}"
                          Margin="4"/>
-          <GridSplitter x:Name="ResultsSplitter" Grid.Row="1" Height="4" ResizeDirection="Rows"
-                        Background="{DynamicResource Border}"/>
+          <!-- The same PaneDivider as the seams between stacked results: a resize cursor, a grabbable hit
+               area, and a grip under the pointer. A GridSplitter resolves the rows it resizes from its own
+               Grid.Row and its parent, so it has to be a direct child of this grid. -->
+          <controls:PaneDivider x:Name="ResultsSplitter" Grid.Row="1"/>
           <controls:ResultView x:Name="ResultsView" Grid.Row="2" Margin="4"/>
         </Grid>
       </DockPanel>

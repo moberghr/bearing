@@ -4,7 +4,9 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Bearing.App.ViewModels;
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Headless;
 using Avalonia.VisualTree;
 using Bearing.App.Theming;
 using Bearing.Core.Data;
@@ -53,6 +55,34 @@ public class LookProbe
         {
             var (window, _) = ResultsHarness.Show(Set("stores", 3), Set("payments", 240), Set("audit", 12));
             Write(window, dir, "stacked-results.png");
+            window.Close();
+        });
+    }
+
+    /// <summary>The divider between two result sets, at rest and under the pointer.</summary>
+    [SkippableFact]
+    public Task ResultDivider()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(() =>
+        {
+            var (window, view) = ResultsHarness.Show(Set("payments", 30), Set("stores", 30));
+            Write(window, dir, "divider-rest.png");
+
+            // Onto the seam, so the highlight and the grip are in the frame.
+            var divider = view.GetVisualDescendants().OfType<Bearing.App.Controls.PaneDivider>().First();
+            var at = divider.TranslatePoint(
+                new Point(divider.Bounds.Width / 2, divider.Bounds.Height / 2), window);
+            window.MouseMove(at!.Value);
+            ResultsHarness.Pump(window);
+            Write(window, dir, "divider-hover.png");
+
+            // And mid-drag, where the accent is reserved for.
+            window.MouseDown(at.Value, Avalonia.Input.MouseButton.Left);
+            window.MouseMove(at.Value + new Vector(0, 30));
+            ResultsHarness.Pump(window);
+            Write(window, dir, "divider-drag.png");
+            window.MouseUp(at.Value + new Vector(0, 30), Avalonia.Input.MouseButton.Left);
             window.Close();
         });
     }

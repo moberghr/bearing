@@ -30,9 +30,10 @@ namespace Bearing.App.Controls;
 /// </summary>
 internal sealed class ResultStackView : UserControl
 {
-    /// <summary>Thickness of the divider, matching the editor/results splitter in the shell so the two read
-    /// as the same affordance.</summary>
-    private const double DividerThickness = 4;
+    /// <summary>What a divider row occupies — the seam plus the pixels that make it grabbable. Shared with
+    /// the editor/results splitter (<see cref="PaneDivider"/>) so the two really do read as the same
+    /// affordance, which the old comment here claimed while they drifted.</summary>
+    private const double DividerThickness = PaneDivider.GrabThickness;
 
     /// <summary>
     /// Smallest a set is allowed to be: its meta bar, its column headers, and two rows of data. Derived rather
@@ -72,13 +73,7 @@ internal sealed class ResultStackView : UserControl
             if (i > 0)
             {
                 _grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
-                var divider = new GridSplitter
-                {
-                    ResizeDirection = GridResizeDirection.Rows,
-                    Height = DividerThickness,
-                    Background = SeparatorBrush,
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                };
+                var divider = new PaneDivider();
                 Grid.SetRow(divider, _grid.RowDefinitions.Count - 1);
                 _grid.Children.Add(divider);
             }

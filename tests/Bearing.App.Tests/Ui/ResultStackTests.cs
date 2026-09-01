@@ -49,6 +49,41 @@ public class ResultStackTests
     });
 
     [Fact]
+    public Task A_divider_says_it_can_be_dragged() => _ui.Run(() =>
+    {
+        // The mechanism worked from the start; what it lacked was any sign of it. Avalonia's GridSplitter
+        // sets no resize cursor of its own, and a 4px bar in the same brush as every static rule in the app
+        // is indistinguishable from a decoration.
+        var (window, view) = ResultsHarness.Show(Set(20), Set(20));
+
+        var divider = Stack(view).Dividers.Single();
+        Assert.IsType<PaneDivider>(divider);
+        // A plain GridSplitter leaves Cursor null — Avalonia's control sets none — so this is the assertion
+        // that fails if the line setting it is ever removed. Avalonia's Cursor exposes no way to read the
+        // StandardCursorType back, so "it sets one at all" is what can be checked here.
+        Assert.NotNull(divider.Cursor);
+        // …and the base control genuinely provides none, which is what made the seam read as decoration.
+        Assert.Null(new GridSplitter { ResizeDirection = GridResizeDirection.Rows }.Cursor);
+        // Grabbable: the row it occupies is taller than the seam it draws, and it is hit-testable.
+        Assert.True(divider.Bounds.Height >= PaneDivider.GrabThickness,
+            $"the divider is only {divider.Bounds.Height}px tall");
+        Assert.NotNull(divider.Background);
+        window.Close();
+    });
+
+    [Fact]
+    public Task The_editor_results_seam_is_the_same_divider() => _ui.Run(async () =>
+    {
+        // The old comment claimed the two read as the same affordance while they were separately written and
+        // had drifted. Now they are the same class.
+        using var shell = await ShellHarness.ShowAsync(nameof(The_editor_results_seam_is_the_same_divider));
+
+        var seams = shell.Window.GetVisualDescendants().OfType<PaneDivider>().ToList();
+        Assert.NotEmpty(seams);
+        Assert.All(seams, s => Assert.Equal(GridResizeDirection.Rows, s.ResizeDirection));
+    });
+
+    [Fact]
     public Task A_single_set_has_no_divider_and_no_stack() => _ui.Run(() =>
     {
         // One result takes the uncapped path; there is nothing to trade space with.
