@@ -210,6 +210,10 @@ public class SchemaNodeTests
             return Task.FromResult(new DatabaseObjects(snapshot, routines));
         }
 
+        public Task<TableDetails> GetTableDetailsAsync(
+            ConnectionInfo connection, string database, long tableId, CancellationToken ct)
+            => Task.FromResult(TableDetails.Empty);
+
         public Task<string> GetViewDefinitionAsync(ConnectionInfo connection, string database, long tableId, CancellationToken ct)
             => Task.FromResult("select 1");
 
@@ -252,6 +256,10 @@ public class SchemaNodeTests
             var routines = new[] { new RoutineInfo(10, "public", "calc", RoutineKind.Function, "a integer", "integer") };
             return Task.FromResult(new DatabaseObjects(snapshot, routines));
         }
+
+        public Task<TableDetails> GetTableDetailsAsync(
+            ConnectionInfo connection, string database, long tableId, CancellationToken ct)
+            => Task.FromResult(TableDetails.Empty);
 
         public Task<string> GetViewDefinitionAsync(ConnectionInfo connection, string database, long tableId, CancellationToken ct)
             => Task.FromResult("select 1");

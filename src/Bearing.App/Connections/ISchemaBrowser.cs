@@ -24,6 +24,14 @@ public interface ISchemaBrowser : IAsyncDisposable
     Task<DatabaseObjects> GetObjectsAsync(ConnectionInfo connection, string database, CancellationToken ct);
 
     Task<string> GetViewDefinitionAsync(ConnectionInfo connection, string database, long tableId, CancellationToken ct);
+
+    /// <summary>
+    /// Constraints, indexes and triggers of one relation, read when the user expands it (#46). Per-table and
+    /// on demand, following <see cref="GetViewDefinitionAsync"/>, because this is metadata the completion
+    /// snapshot deliberately does not carry — see <see cref="TableDetails"/>.
+    /// </summary>
+    Task<TableDetails> GetTableDetailsAsync(ConnectionInfo connection, string database, long tableId, CancellationToken ct);
+
     Task<string> GetRoutineDefinitionAsync(ConnectionInfo connection, string database, long routineId, CancellationToken ct);
 
     /// <summary>Drop all cached per-database readers for a connection so the next read re-fetches fresh metadata.</summary>

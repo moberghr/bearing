@@ -79,6 +79,9 @@ internal sealed class DemoMetadata : IMetadataReader
         => Task.FromResult("select p.id as payment_id, s.name as store_name\n"
                            + "from shop.payment p join shop.store s on s.id = p.store_id");
 
+    public Task<TableDetails> GetTableDetailsAsync(long tableId, CancellationToken ct)
+        => Task.FromResult(DemoData.DetailsOf(tableId));
+
     public Task<string> GetRoutineDefinitionAsync(long routineId, CancellationToken ct)
         => Task.FromResult("create function shop.gross_revenue(from_date date) returns numeric\n"
                            + "language sql as $$ select sum(amount) from shop.payment $$;");

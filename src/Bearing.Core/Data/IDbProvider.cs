@@ -39,6 +39,13 @@ public interface IMetadataReader
     /// <summary>Rendered SQL of a view / materialized view, by its table id (<see cref="TableInfo.Id"/>).</summary>
     Task<string> GetViewDefinitionAsync(long tableId, CancellationToken ct);
 
+    /// <summary>
+    /// Constraints, indexes and triggers of one relation, read on demand (§4.6 of the tree: a table is
+    /// expanded far less often than a keystroke happens). Deliberately not part of
+    /// <see cref="ISchemaSnapshot"/> — see <see cref="TableDetails"/>.
+    /// </summary>
+    Task<TableDetails> GetTableDetailsAsync(long tableId, CancellationToken ct);
+
     /// <summary>Rendered <c>CREATE … FUNCTION/PROCEDURE</c> source, by routine id (<see cref="RoutineInfo.Id"/>).</summary>
     Task<string> GetRoutineDefinitionAsync(long routineId, CancellationToken ct);
 }

@@ -34,6 +34,73 @@ public sealed record ForeignKeyInfo(
     long ReferencedTableId,
     IReadOnlyList<int> ReferencedOrdinals);
 
+/// <summary>Constraint kind, from <c>pg_constraint.contype</c>.</summary>
+public enum ConstraintKind
+{
+    PrimaryKey,
+    Unique,
+    Check,
+    ForeignKey,
+    Exclusion,
+    Other,
+}
+
+/// <summary>
+/// A table constraint. <see cref="Definition"/> is the server's own rendering
+/// (<c>pg_get_constraintdef</c>) rather than something reassembled from parts — a CHECK body cannot be
+/// rebuilt from catalog columns, and for the kinds that could be, the server's text is the one that matches
+/// what the table actually has.
+/// </summary>
+public sealed record ConstraintInfo(
+    long Id,
+    string Name,
+    ConstraintKind Kind,
+    IReadOnlyList<int> Ordinals,
+    string Definition);
+
+/// <summary>
+/// An index on a relation. <see cref="Definition"/> is <c>pg_get_indexdef</c> — a complete
+/// <c>CREATE INDEX</c>, which is what makes an expression or partial index legible at all.
+/// <para>
+/// <see cref="IsPrimary"/> and <see cref="IsUnique"/> are separate because a unique index is not always a
+/// constraint and a primary key is always both; <see cref="IsValid"/> is false for an index left behind by a
+/// failed <c>CREATE INDEX CONCURRENTLY</c>, which the planner ignores — exactly the thing you are looking for
+/// when a query is unexpectedly slow.
+/// </para>
+/// </summary>
+public sealed record IndexInfo(
+    long Id,
+    string Name,
+    bool IsUnique,
+    bool IsPrimary,
+    bool IsValid,
+    IReadOnlyList<int> Ordinals,
+    string Definition);
+
+/// <summary>A trigger on a relation. <see cref="Definition"/> is <c>pg_get_triggerdef</c>.</summary>
+public sealed record TriggerInfo(
+    long Id,
+    string Name,
+    bool Enabled,
+    string Definition);
+
+/// <summary>
+/// The per-table metadata that is deliberately <b>not</b> in <see cref="ISchemaSnapshot"/>: constraints,
+/// indexes and triggers, read on demand when a table is expanded.
+/// <para>
+/// The snapshot is on the completion hot path — handed to the engine on every keystroke, treated as a pure
+/// value, loaded in bulk per connection. Every index and constraint of every table would inflate a structure
+/// whose whole point is being cheap, to answer questions only a table the user actually opened can ask.
+/// </para>
+/// </summary>
+public sealed record TableDetails(
+    IReadOnlyList<ConstraintInfo> Constraints,
+    IReadOnlyList<IndexInfo> Indexes,
+    IReadOnlyList<TriggerInfo> Triggers)
+{
+    public static TableDetails Empty { get; } = new([], [], []);
+}
+
 /// <summary>Callable-routine kind (the ones we surface).</summary>
 public enum RoutineKind
 {

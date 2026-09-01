@@ -4,14 +4,26 @@ using Bearing.Core.Schema;
 namespace Bearing.Sql;
 
 /// <summary>
-/// Renders a readable <c>CREATE TABLE</c> for a relation from catalog data already in the schema
-/// snapshot — columns (type + NOT NULL), the primary key, and outgoing foreign keys. Postgres has no
-/// built-in "give me this table's DDL" function, so we compose it. Identifiers are double-quoted;
-/// this is for display/copy, not guaranteed round-trippable (indexes, defaults, checks are omitted).
+/// Renders a readable <c>CREATE TABLE</c> for a relation. Postgres has no built-in "give me this table's
+/// DDL" function, so we compose it: columns (type + NOT NULL), the primary key and outgoing foreign keys
+/// from the schema snapshot, plus — when a <see cref="TableDetails"/> read is supplied — the table's
+/// check/unique/exclusion constraints and a <c>CREATE INDEX</c> per index (#46).
+/// <para>
+/// Identifiers are always double-quoted. Still for display and copy rather than guaranteed
+/// round-trippable: column defaults, identity/generated columns, storage parameters, partitioning and
+/// inheritance are not read, and a constraint or index comes out in the server's own rendering rather than
+/// one this generator controls.
+/// </para>
 /// </summary>
 public static class TableDdlGenerator
 {
-    public static string CreateTable(TableInfo table, ISchemaSnapshot snapshot)
+    /// <param name="details">
+    /// Constraints, indexes and triggers as read on demand, or null when they were not read (a caller with no
+    /// server, or a read that failed). Null yields the columns-and-keys DDL this used to produce, which is
+    /// worth showing on its own — an empty <see cref="TableDetails"/> means "read, and there are none", and
+    /// the two must not be conflated.
+    /// </param>
+    public static string CreateTable(TableInfo table, ISchemaSnapshot snapshot, TableDetails? details = null)
     {
         var columns = snapshot.ColumnsOf(table.Id);
         var sb = new StringBuilder();
@@ -37,9 +49,42 @@ public static class TableDdlGenerator
                       $"references {Qualify(referenced.Schema, referenced.Name)} ({string.Join(", ", refCols)})");
         }
 
+        // Check / unique / exclusion constraints, in the server's own words: a CHECK body cannot be rebuilt
+        // from catalog columns, so this is the only rendering that is actually the table's.
+        foreach (var constraint in Inline(details))
+            lines.Add($"    constraint {Ident(constraint.Name)} {constraint.Definition}");
+
         sb.Append(string.Join(",\n", lines)).Append("\n);\n");
+
+        // Indexes follow the table rather than sitting inside it, because that is where they go in SQL — and
+        // the ones backing a primary key or a unique constraint are left out: the constraint above already
+        // creates them, and re-issuing them would fail.
+        foreach (var index in details?.Indexes ?? [])
+        {
+            if (index.IsPrimary || index.Definition.Length == 0) continue;
+            if (index.IsUnique && HasUniqueConstraintOn(details, index)) continue;
+            sb.Append(index.Definition.TrimEnd().TrimEnd(';')).Append(";\n");
+        }
+
         return sb.ToString();
     }
+
+    /// <summary>The constraints that belong inside the <c>CREATE TABLE</c> body: everything except the primary
+    /// key and the foreign keys, which are already rendered from the snapshot above.</summary>
+    private static IEnumerable<ConstraintInfo> Inline(TableDetails? details)
+        => (details?.Constraints ?? [])
+            .Where(c => c.Kind is ConstraintKind.Unique or ConstraintKind.Check or ConstraintKind.Exclusion)
+            .Where(c => c.Definition.Length > 0);
+
+    /// <summary>
+    /// Whether a unique constraint on the same columns has already been emitted, in which case its index is
+    /// implied. Matched on the column set rather than on names: an index and the constraint that owns it are
+    /// separate catalog objects with different names.
+    /// </summary>
+    private static bool HasUniqueConstraintOn(TableDetails? details, IndexInfo index)
+        => Inline(details)
+            .Where(c => c.Kind == ConstraintKind.Unique)
+            .Any(c => c.Ordinals.Count == index.Ordinals.Count && !c.Ordinals.Except(index.Ordinals).Any());
 
     private static List<string> NamesByOrdinal(IReadOnlyList<ColumnInfo> columns, IReadOnlyList<int> ordinals)
     {

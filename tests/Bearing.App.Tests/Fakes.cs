@@ -100,6 +100,9 @@ internal sealed class FakeMetadata : IMetadataReader
 
     public Task<string> GetRoutineDefinitionAsync(long routineId, CancellationToken ct)
         => Task.FromResult("");
+
+    public Task<TableDetails> GetTableDetailsAsync(long tableId, CancellationToken ct)
+        => Task.FromResult(TableDetails.Empty);
 }
 
 internal sealed class FakeExecutor : IQueryExecutor

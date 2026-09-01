@@ -1,0 +1,266 @@
+using Bearing.Core.Data;
+using Bearing.Core.Schema;
+using Bearing.Data;
+using Bearing.Data.Postgres;
+using Bearing.Testing;
+using Xunit;
+
+namespace Bearing.Data.Tests;
+
+/// <summary>
+/// The per-table catalog reads behind the schema tree's folders (#46): constraints from <c>pg_constraint</c>,
+/// indexes from <c>pg_index</c>, triggers from <c>pg_trigger</c>.
+/// <para>
+/// Against a live server on purpose. This is the layer §4.6 says must <b>not</b> be checked against the demo
+/// fixtures: those encode what we believe Postgres reports, and that belief is what is under test here.
+/// Skips cleanly with no server (§4.2).
+/// </para>
+/// <para>
+/// The fixture builds its own schema rather than leaning on pagila, following <c>PostgresWriteTests</c>. An
+/// expression index, a partial index, a disabled trigger, a self-referencing key and a view are each a branch
+/// of these queries, and each is something a real database may or may not happen to contain — so the fixture
+/// creates one of each instead of hoping.
+/// </para>
+/// </summary>
+public class PostgresTableDetailTests : IAsyncLifetime
+{
+    private readonly string _schema = "bearing_detail_" + Guid.NewGuid().ToString("N")[..8];
+    private IDbConnectionFactory _factory = null!;
+    private IMetadataReader _reader = null!;
+    private IQueryExecutor _exec = null!;
+    private ISchemaSnapshot _snapshot = null!;
+    private string? _unreachable;
+
+    public async Task InitializeAsync()
+    {
+        var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
+        _factory = provider.CreateConnectionFactory(PgTestServer.Info(), PgTestServer.Password);
+        _reader = provider.CreateMetadataReader(_factory);
+        _exec = provider.CreateQueryExecutor(_factory);
+
+        // Skipping from InitializeAsync fails the test rather than skipping it, so the reason is recorded
+        // here and each test skips on it — reported, not collapsed to a bool, for the same reason §4.2 gives.
+        _unreachable = await PgTestServer.UnreachableReasonAsync(_factory, CancellationToken.None);
+        if (_unreachable is not null) return;
+
+        await RunAsync($"""
+            create schema {_schema};
+            create table {_schema}.store (
+              id int primary key,
+              name text not null unique,
+              constraint store_name_not_blank check (btrim(name) <> '')
+            );
+            create table {_schema}.payment (
+              id int primary key,
+              store_id int references {_schema}.store(id),
+              amount numeric not null constraint payment_amount_positive check (amount > 0),
+              note text
+            );
+            create index payment_store_id_idx on {_schema}.payment (store_id);
+            create index payment_note_lower_idx on {_schema}.payment (lower(note));
+            create index payment_partial_idx on {_schema}.payment (id) where note is not null;
+            create table {_schema}.node (id int primary key, parent_id int references {_schema}.node(id));
+            create view {_schema}.receipt as
+              select p.id as payment_id, s.name as store_name
+              from {_schema}.payment p join {_schema}.store s on s.id = p.store_id;
+            create function {_schema}.touch() returns trigger language plpgsql as $$ begin return new; end $$;
+            create trigger payment_touch before update on {_schema}.payment
+              for each row execute function {_schema}.touch();
+            create trigger payment_audit after insert or update of note on {_schema}.payment
+              for each row execute function {_schema}.touch();
+            alter table {_schema}.payment disable trigger payment_audit;
+            """);
+
+        _snapshot = await _reader.LoadSnapshotAsync(PgTestServer.Database, CancellationToken.None);
+    }
+
+    public async Task DisposeAsync()
+    {
+        if (_unreachable is null)
+        {
+            try { await RunAsync($"drop schema if exists {_schema} cascade;"); } catch { /* best-effort */ }
+        }
+        await _factory.DisposeAsync();
+    }
+
+    private Task RunAsync(string sql) => _exec.ExecuteAsync(sql, new QueryOptions(), CancellationToken.None);
+
+    /// <summary>Skips with the reason the probe reported, the way <c>PgTestServer.RequireAsync</c> does.</summary>
+    private void RequireServer()
+        => Skip.If(_unreachable is not null,
+            $"No PostgreSQL reachable for integration test at {PgTestServer.Endpoint} — "
+            + $"{_unreachable?.TrimEnd('.', ' ')}. "
+            + "Set BEARING_TEST_PG_{HOST,PORT,DB,USER,PASSWORD} to point at your server.");
+
+    private long TableId(string name) => _snapshot.ResolveTable(_schema, name)!.Id;
+
+    private Task<TableDetails> DetailsOf(string name)
+        => _reader.GetTableDetailsAsync(TableId(name), CancellationToken.None);
+
+    private string ColumnsOf(string table, IReadOnlyList<int> ordinals)
+        => string.Join(", ", _snapshot.ColumnsOf(TableId(table))
+            .Where(c => ordinals.Contains(c.Ordinal))
+            .OrderBy(c => ordinals.ToList().IndexOf(c.Ordinal))
+            .Select(c => c.Name));
+
+    // ---- constraints ----------------------------------------------------------------------------
+
+    [SkippableFact]
+    public async Task Reads_every_kind_of_constraint_with_the_servers_own_definition()
+    {
+        RequireServer();
+
+        var payment = await DetailsOf("payment");
+
+        var pk = Assert.Single(payment.Constraints, c => c.Kind == ConstraintKind.PrimaryKey);
+        Assert.Equal("PRIMARY KEY (id)", pk.Definition);
+        var fk = Assert.Single(payment.Constraints, c => c.Kind == ConstraintKind.ForeignKey);
+        Assert.Contains("REFERENCES", fk.Definition);
+        var check = Assert.Single(payment.Constraints, c => c.Kind == ConstraintKind.Check);
+        Assert.Equal("payment_amount_positive", check.Name);
+        Assert.Contains("amount > 0", check.Definition);
+
+        var store = await DetailsOf("store");
+        Assert.Single(store.Constraints, c => c.Kind == ConstraintKind.Unique);
+    }
+
+    [SkippableFact]
+    public async Task Constraint_ordinals_name_the_columns_the_snapshot_knows()
+    {
+        // The two sides of this mapping — conkey and the snapshot's column ordinals — are only both real
+        // against a server. Get it wrong and every label in the tree names the wrong column.
+        RequireServer();
+
+        var payment = await DetailsOf("payment");
+
+        Assert.Equal("id", ColumnsOf("payment", Single(payment, ConstraintKind.PrimaryKey).Ordinals));
+        Assert.Equal("store_id", ColumnsOf("payment", Single(payment, ConstraintKind.ForeignKey).Ordinals));
+        Assert.Equal("amount", ColumnsOf("payment", Single(payment, ConstraintKind.Check).Ordinals));
+
+        static ConstraintInfo Single(TableDetails details, ConstraintKind kind)
+            => details.Constraints.Single(c => c.Kind == kind);
+    }
+
+    // ---- indexes --------------------------------------------------------------------------------
+
+    [SkippableFact]
+    public async Task Reads_indexes_with_their_flags_and_definitions()
+    {
+        RequireServer();
+
+        var indexes = (await DetailsOf("payment")).Indexes;
+
+        var primary = Assert.Single(indexes, i => i.IsPrimary);
+        Assert.True(primary.IsUnique, "the index behind a primary key is unique");
+        Assert.True(primary.IsValid);
+        Assert.StartsWith("CREATE UNIQUE INDEX", primary.Definition);
+        // The primary key comes first, so a tree does not open onto three lookup indexes above the key.
+        Assert.Same(primary, indexes[0]);
+
+        var partial = indexes.Single(i => i.Name == "payment_partial_idx");
+        Assert.Contains("WHERE", partial.Definition);
+        Assert.Equal("id", ColumnsOf("payment", partial.Ordinals));
+    }
+
+    [SkippableFact]
+    public async Task Index_ordinals_come_back_as_a_one_based_array()
+    {
+        // The trap this test exists for: indkey is an int2vector, and casting one to an array keeps its
+        // ZERO-based bounds — `[0:0]={1}` — which a client cannot read as an int[] at all. The query rebuilds
+        // it with array_agg. A silent regression here would resolve every index to the wrong column.
+        RequireServer();
+
+        var index = (await DetailsOf("payment")).Indexes.Single(i => i.Name == "payment_store_id_idx");
+
+        Assert.Equal([2], index.Ordinals);
+        Assert.Equal("store_id", ColumnsOf("payment", index.Ordinals));
+    }
+
+    [SkippableFact]
+    public async Task An_expression_index_reports_no_ordinals_at_all()
+    {
+        // indkey holds a 0 per expression key. Keeping it would point at no column and resolve to the wrong
+        // name, so those are dropped — leaving the definition as the only thing that says what it covers.
+        RequireServer();
+
+        var index = (await DetailsOf("payment")).Indexes.Single(i => i.Name == "payment_note_lower_idx");
+
+        Assert.Empty(index.Ordinals);
+        Assert.Contains("lower(note)", index.Definition);
+    }
+
+    // ---- triggers -------------------------------------------------------------------------------
+
+    [SkippableFact]
+    public async Task Reads_triggers_and_whether_each_is_enabled()
+    {
+        RequireServer();
+
+        var triggers = (await DetailsOf("payment")).Triggers;
+
+        Assert.Equal(["payment_audit", "payment_touch"], triggers.Select(t => t.Name));
+        // A disabled trigger is indistinguishable from an enabled one everywhere else in the catalog.
+        Assert.False(triggers.Single(t => t.Name == "payment_audit").Enabled);
+        Assert.True(triggers.Single(t => t.Name == "payment_touch").Enabled);
+        Assert.Contains("BEFORE UPDATE", triggers.Single(t => t.Name == "payment_touch").Definition);
+    }
+
+    [SkippableFact]
+    public async Task The_triggers_enforcing_foreign_keys_are_left_out()
+    {
+        // Postgres implements every foreign key as internal triggers, three per key. Listing them buries the
+        // user's own triggers under machinery they did not write and cannot edit — node has a self-referencing
+        // key and no triggers of its own, so it must report none.
+        RequireServer();
+
+        var node = await DetailsOf("node");
+
+        Assert.Empty(node.Triggers);
+        Assert.Single(node.Constraints, c => c.Kind == ConstraintKind.ForeignKey);
+    }
+
+    // ---- the edges ------------------------------------------------------------------------------
+
+    [SkippableFact]
+    public async Task A_view_has_no_constraints_indexes_or_triggers_of_its_own()
+    {
+        RequireServer();
+
+        var receipt = await DetailsOf("receipt");
+
+        Assert.Empty(receipt.Constraints);
+        Assert.Empty(receipt.Indexes);
+        Assert.Empty(receipt.Triggers);
+    }
+
+    [SkippableFact]
+    public async Task An_unknown_relation_reads_as_empty_rather_than_throwing()
+    {
+        // A tree outlives what it shows: expanding a table another session has just dropped must put empty
+        // folders there, not an exception.
+        RequireServer();
+
+        var details = await _reader.GetTableDetailsAsync(999_999_999, CancellationToken.None);
+
+        Assert.Empty(details.Constraints);
+        Assert.Empty(details.Indexes);
+        Assert.Empty(details.Triggers);
+    }
+
+    [SkippableFact]
+    public async Task The_generated_ddl_carries_the_constraints_and_indexes_it_used_to_omit()
+    {
+        // The generator's own note admitted the hole: "indexes, defaults, checks are omitted" (#46).
+        RequireServer();
+        var table = _snapshot.ResolveTable(_schema, "payment")!;
+
+        var ddl = Bearing.Sql.TableDdlGenerator.CreateTable(table, _snapshot, await DetailsOf("payment"));
+
+        Assert.Contains("primary key", ddl);
+        Assert.Contains("payment_amount_positive", ddl);
+        Assert.Contains("CREATE INDEX payment_store_id_idx", ddl);
+        Assert.Contains("CREATE INDEX payment_note_lower_idx", ddl);
+        // The index a primary key implies is not re-issued — running that DDL would fail on it.
+        Assert.DoesNotContain("CREATE UNIQUE INDEX payment_pkey", ddl);
+    }
+}

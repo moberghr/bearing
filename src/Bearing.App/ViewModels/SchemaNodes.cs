@@ -440,15 +440,87 @@ public sealed class RelationNodeViewModel : SchemaNodeViewModel
 
     public override bool CanShowDefinition => true;
 
-    // Columns are already in the loaded snapshot — no round-trip.
-    protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync()
-        => Task.FromResult<IReadOnlyList<SchemaNodeViewModel>>(
-            _snapshot.ColumnsOf(_table.Id).Select(c => (SchemaNodeViewModel)new ColumnNodeViewModel(c)).ToList());
+    /// <summary>
+    /// Columns inline, then a folder per other kind of thing a table has (#46).
+    /// <para>
+    /// Columns stay inline rather than going behind a <c>Columns</c> folder: they are what nearly every
+    /// expand is for, and a folder in front of them would add a click to the common case to tidy the rare
+    /// one. Constraints, keys, references, indexes and triggers are folders, and an empty one is left out — a
+    /// table with no triggers should not have to say so.
+    /// </para>
+    /// <para>
+    /// The two foreign-key directions get separate folders, which is the part worth having: outgoing answers
+    /// "what does this row point at?", incoming answers "what breaks if I delete it?". Both come out of the
+    /// snapshot, so they cost nothing; only constraints, indexes and triggers need the round trip, and if it
+    /// fails the columns and the key folders are still there with the reason beside them.
+    /// </para>
+    /// </summary>
+    protected override async Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync()
+    {
+        var children = new List<SchemaNodeViewModel>();
+        foreach (var column in _snapshot.ColumnsOf(_table.Id))
+            children.Add(new ColumnNodeViewModel(column));
 
+        var (outgoing, incoming) = RelationDetailText.SplitByDirection(_snapshot, _table.Id);
+
+        TableDetails details;
+        SchemaNodeViewModel? failure = null;
+        try
+        {
+            details = await _browser.GetTableDetailsAsync(_connection, _database, _table.Id, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            details = TableDetails.Empty;
+            failure = new MessageNodeViewModel("⚠", $"Couldn't read indexes and constraints: {ex.Message}");
+        }
+
+        // Constraints minus the foreign keys: those are the Foreign Keys folder, and listing a key twice
+        // under one table makes both counts lie.
+        var constraints = details.Constraints.Where(c => c.Kind != ConstraintKind.ForeignKey).ToList();
+
+        Folder("Constraints", "Icon.Constraint", constraints
+            .Select(c => (SchemaNodeViewModel)new ConstraintNodeViewModel(_snapshot, _table.Id, c)));
+        Folder("Foreign Keys", "Icon.ForeignKey", outgoing
+            .Select(fk => (SchemaNodeViewModel)new ForeignKeyNodeViewModel(_snapshot, fk, incoming: false)));
+        Folder("References", "Icon.Reference", incoming
+            .Select(fk => (SchemaNodeViewModel)new ForeignKeyNodeViewModel(_snapshot, fk, incoming: true)));
+        Folder("Indexes", "Icon.Index", details.Indexes
+            .Select(i => (SchemaNodeViewModel)new IndexNodeViewModel(_snapshot, _table.Id, i)));
+        Folder("Triggers", "Icon.Trigger", details.Triggers
+            .Select(t => (SchemaNodeViewModel)new TriggerNodeViewModel(t)));
+
+        if (failure is not null) children.Add(failure);
+        return children;
+
+        void Folder(string title, string icon, IEnumerable<SchemaNodeViewModel> members)
+        {
+            var list = members.ToList();
+            if (list.Count > 0) children.Add(new SchemaGroupNodeViewModel(title, icon, list));
+        }
+    }
+
+    /// <summary>
+    /// A view's SQL, or a table's DDL — which now carries its constraints and indexes, the hole the
+    /// generator's own note admitted to (#46). The read can fail (no server, no permission); the columns are
+    /// still worth showing, so the DDL comes out either way.
+    /// </summary>
     public override async Task<string> LoadDefinitionAsync(CancellationToken ct)
-        => IsViewLike
-            ? await _browser.GetViewDefinitionAsync(_connection, _database, _table.Id, ct)
-            : TableDdlGenerator.CreateTable(_table, _snapshot);
+    {
+        if (IsViewLike)
+            return await _browser.GetViewDefinitionAsync(_connection, _database, _table.Id, ct);
+
+        TableDetails details;
+        try
+        {
+            details = await _browser.GetTableDetailsAsync(_connection, _database, _table.Id, ct);
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            details = TableDetails.Empty;
+        }
+        return TableDdlGenerator.CreateTable(_table, _snapshot, details);
+    }
 
     private static string KindLabel(RelationKind kind) => kind switch
     {
@@ -523,4 +595,79 @@ public sealed class ColumnNodeViewModel : SchemaNodeViewModel
         if (c.IsPrimaryKey) s += " · PK";
         return s;
     }
+}
+
+/// <summary>A constraint of a relation. Leaf; shows the server's own definition on request (#46).</summary>
+public sealed class ConstraintNodeViewModel : SchemaNodeViewModel
+{
+    private readonly ConstraintInfo _constraint;
+
+    public ConstraintNodeViewModel(ISchemaSnapshot snapshot, long tableId, ConstraintInfo constraint)
+        : base(RelationDetailText.ConstraintGlyph(constraint.Kind),
+            constraint.Name,
+            RelationDetailText.Constraint(snapshot, tableId, constraint),
+            hasChildren: false)
+        => _constraint = constraint;
+
+    /// <summary>Already fetched with the table's details, so showing it costs no round trip.</summary>
+    public override bool CanShowDefinition => _constraint.Definition.Length > 0;
+
+    public override Task<string> LoadDefinitionAsync(CancellationToken ct) => Task.FromResult(_constraint.Definition);
+
+    protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync() => Task.FromResult(None);
+}
+
+/// <summary>An index of a relation. Leaf; shows its <c>CREATE INDEX</c> on request (#46).</summary>
+public sealed class IndexNodeViewModel : SchemaNodeViewModel
+{
+    private readonly IndexInfo _index;
+
+    public IndexNodeViewModel(ISchemaSnapshot snapshot, long tableId, IndexInfo index)
+        : base(RelationDetailText.IndexGlyph(index),
+            index.Name,
+            RelationDetailText.Index(snapshot, tableId, index),
+            hasChildren: false)
+        => _index = index;
+
+    public override bool CanShowDefinition => _index.Definition.Length > 0;
+
+    public override Task<string> LoadDefinitionAsync(CancellationToken ct) => Task.FromResult(_index.Definition);
+
+    protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync() => Task.FromResult(None);
+}
+
+/// <summary>A trigger of a relation. Leaf; shows its <c>CREATE TRIGGER</c> on request (#46).</summary>
+public sealed class TriggerNodeViewModel : SchemaNodeViewModel
+{
+    private readonly TriggerInfo _trigger;
+
+    public TriggerNodeViewModel(TriggerInfo trigger)
+        : base(RelationDetailText.TriggerGlyph(trigger),
+            trigger.Name,
+            RelationDetailText.Trigger(trigger),
+            hasChildren: false)
+        => _trigger = trigger;
+
+    public override bool CanShowDefinition => _trigger.Definition.Length > 0;
+
+    public override Task<string> LoadDefinitionAsync(CancellationToken ct) => Task.FromResult(_trigger.Definition);
+
+    protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync() => Task.FromResult(None);
+}
+
+/// <summary>
+/// One foreign key, read from whichever end the user is looking at (#46). The same constraint appears under
+/// its declaring table as an outgoing key and under the referenced table as an incoming reference, and the
+/// two rows say different things — so the direction is a parameter, not two node types.
+/// </summary>
+public sealed class ForeignKeyNodeViewModel : SchemaNodeViewModel
+{
+    public ForeignKeyNodeViewModel(ISchemaSnapshot snapshot, ForeignKeyInfo fk, bool incoming)
+        : base(incoming ? "←" : "→",
+            fk.Name,
+            incoming ? RelationDetailText.Incoming(snapshot, fk) : RelationDetailText.Outgoing(snapshot, fk),
+            hasChildren: false)
+    { }
+
+    protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync() => Task.FromResult(None);
 }

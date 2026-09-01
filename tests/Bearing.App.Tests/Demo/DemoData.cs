@@ -89,6 +89,72 @@ internal static class DemoData
         ],
         searchPath: [Schema]);
 
+    /// <summary>
+    /// One table's constraints, indexes and triggers (#46). Declared per table, as the catalog reports them
+    /// per table, so the schema tree's folders have something to hold and the counts are real.
+    /// </summary>
+    public static TableDetails DetailsOf(long tableId) => tableId switch
+    {
+        StoreId => new TableDetails(
+            [
+                new ConstraintInfo(4001, "store_pkey", ConstraintKind.PrimaryKey, [1], "PRIMARY KEY (id)"),
+                new ConstraintInfo(4002, "store_name_key", ConstraintKind.Unique, [2], "UNIQUE (name)"),
+                new ConstraintInfo(4003, "store_name_not_blank", ConstraintKind.Check, [2],
+                    "CHECK ((btrim(name) <> ''::text))"),
+            ],
+            [
+                new IndexInfo(5001, "store_pkey", IsUnique: true, IsPrimary: true, IsValid: true, [1],
+                    "CREATE UNIQUE INDEX store_pkey ON shop.store USING btree (id)"),
+                new IndexInfo(5002, "store_name_key", IsUnique: true, IsPrimary: false, IsValid: true, [2],
+                    "CREATE UNIQUE INDEX store_name_key ON shop.store USING btree (name)"),
+            ],
+            [
+                new TriggerInfo(6001, "store_audit", Enabled: true,
+                    "CREATE TRIGGER store_audit AFTER INSERT OR UPDATE ON shop.store "
+                    + "FOR EACH ROW EXECUTE FUNCTION shop.write_audit()"),
+            ]),
+
+        PaymentId => new TableDetails(
+            [
+                new ConstraintInfo(4010, "payment_pkey", ConstraintKind.PrimaryKey, [1], "PRIMARY KEY (id)"),
+                new ConstraintInfo(4011, "payment_store_id_fkey", ConstraintKind.ForeignKey, [2],
+                    "FOREIGN KEY (store_id) REFERENCES shop.store(id)"),
+                new ConstraintInfo(4012, "payment_amount_positive", ConstraintKind.Check, [3],
+                    "CHECK ((amount > (0)::numeric))"),
+            ],
+            [
+                new IndexInfo(5010, "payment_pkey", IsUnique: true, IsPrimary: true, IsValid: true, [1],
+                    "CREATE UNIQUE INDEX payment_pkey ON shop.payment USING btree (id)"),
+                new IndexInfo(5011, "payment_store_id_idx", IsUnique: false, IsPrimary: false, IsValid: true, [2],
+                    "CREATE INDEX payment_store_id_idx ON shop.payment USING btree (store_id)"),
+                // An index the planner will not use: what a failed CREATE INDEX CONCURRENTLY leaves behind,
+                // and the thing you are hunting when a query is slow despite "having an index".
+                new IndexInfo(5012, "payment_note_idx", IsUnique: false, IsPrimary: false, IsValid: false, [4],
+                    "CREATE INDEX payment_note_idx ON shop.payment USING btree (note)"),
+            ],
+            []),
+
+        DocumentId => new TableDetails(
+            [new ConstraintInfo(4020, "document_pkey", ConstraintKind.PrimaryKey, [1], "PRIMARY KEY (id)")],
+            [
+                new IndexInfo(5020, "document_pkey", IsUnique: true, IsPrimary: true, IsValid: true, [1],
+                    "CREATE UNIQUE INDEX document_pkey ON shop.document USING btree (id)"),
+                // An expression index: no resolvable column ordinals at all, so the row has to fall back to
+                // the definition to say anything useful.
+                new IndexInfo(5021, "document_channel_idx", IsUnique: false, IsPrimary: false, IsValid: true, [],
+                    "CREATE INDEX document_channel_idx ON shop.document USING btree (((body ->> 'channel'::text)))"),
+            ],
+            [
+                new TriggerInfo(6020, "document_touch", Enabled: false,
+                    "CREATE TRIGGER document_touch BEFORE UPDATE ON shop.document "
+                    + "FOR EACH ROW EXECUTE FUNCTION shop.touch()"),
+            ]),
+
+        // A view has no constraints, indexes or triggers of its own — and "none" is an answer the tree has to
+        // render as no folders rather than as empty ones.
+        _ => TableDetails.Empty,
+    };
+
     public static IReadOnlyList<RoutineInfo> Routines() =>
     [
         new RoutineInfo(3001, Schema, "gross_revenue", RoutineKind.Function, "(from_date date)", "numeric"),
