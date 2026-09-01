@@ -46,6 +46,9 @@ public abstract partial class SchemaNodeViewModel : ObservableObject
     /// <summary>Whether the node can be expanded (drives the placeholder + the expander arrow).</summary>
     public bool HasChildren { get; }
 
+    /// <summary>Whether this row is a database — for the context menu's size-ordering items (#76).</summary>
+    public virtual bool IsDatabase => false;
+
     public ObservableCollection<SchemaNodeViewModel> Children { get; } = new();
 
     /// <summary>The row above this one, or null at the root. Set wherever children are attached, so a
@@ -329,6 +332,10 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
     public override string? IconKey => "Icon.Database";
     public override string IconColorHex => "#5FC9AD";
 
+    /// <summary>Lets the tree's one context menu show the size-ordering items on a database row only — the
+    /// same shape as <c>IsServer</c>, which the server-only items already bind.</summary>
+    public override bool IsDatabase => true;
+
     protected override async Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync()
     {
         var objects = await _browser.GetObjectsAsync(_connection, _database, CancellationToken.None);
@@ -354,8 +361,91 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
         var children = Ordered(tables);
         if (views.Count > 0) children.Add(new SchemaGroupNodeViewModel("Views", "Icon.View", Ordered(views)));
         if (routines.Count > 0) children.Add(new SchemaGroupNodeViewModel("Functions", "Icon.Function", Ordered(routines)));
+
+        // Sizes are read *after* the tree is handed back, never before: pg_total_relation_size stats files
+        // per relation, so waiting for it would make every expand as slow as the biggest database (#76). The
+        // rows re-label themselves when it lands.
+        _ = FillSizesAsync(children);
         return children;
     }
+
+    /// <summary>
+    /// How this database's relations are ordered (#76). Name is the default; size answers the question a
+    /// tree sorted by name cannot — "which table is eating the disk".
+    /// </summary>
+    public enum RelationOrder
+    {
+        Name,
+        Size,
+    }
+
+    private RelationOrder _order = RelationOrder.Name;
+
+    /// <summary>
+    /// Re-order the relation rows, in place.
+    /// <para>
+    /// By size means <b>total</b> size, descending, biggest first: the question is always "what is largest",
+    /// never "what is smallest". Relations whose size has not arrived — or that have none, like a view — sort
+    /// last rather than as zero, so a pending read does not look like an empty table.
+    /// </para>
+    /// <para>
+    /// Only the rows directly under the database move. The Views and Functions buckets keep their own order:
+    /// they are collapsed by default, and reordering inside a bucket the user has not opened is motion
+    /// nobody asked for.
+    /// </para>
+    /// </summary>
+    public void SetRelationOrder(RelationOrder order)
+    {
+        _order = order;
+        var relations = Children.OfType<RelationNodeViewModel>().ToList();
+        if (relations.Count == 0) return;
+
+        var sorted = order == RelationOrder.Size
+            ? relations
+                .OrderByDescending(r => r.Size is not null)
+                .ThenByDescending(r => r.Size?.TotalBytes ?? 0)
+                .ThenBy(r => r.Title, StringComparer.OrdinalIgnoreCase)
+                .ToList()
+            : relations.OrderBy(r => r.Title, StringComparer.OrdinalIgnoreCase).ToList();
+
+        // Moved rather than removed and re-added: these nodes hold expanded children, and replacing them
+        // would collapse whatever the user had open (the same reason ApplySize re-labels in place).
+        for (var target = 0; target < sorted.Count; target++)
+        {
+            var current = Children.IndexOf(sorted[target]);
+            if (current != target) Children.Move(current, target);
+        }
+    }
+
+    /// <summary>
+    /// Read every relation's size and label the rows with it. Deliberately fire-and-forget and silent on
+    /// failure: sizes are a nicety, and a permission error or a slow catalog must not turn an expanded tree
+    /// into an error message.
+    /// </summary>
+    private async Task FillSizesAsync(IReadOnlyList<SchemaNodeViewModel> children)
+    {
+        IReadOnlyList<RelationSize> sizes;
+        try { sizes = await _browser.GetRelationSizesAsync(_connection, _database, CancellationToken.None); }
+        catch (Exception) { return; }
+
+        var byTable = sizes.ToDictionary(s => s.TableId);
+        foreach (var relation in Relations(children))
+            if (byTable.TryGetValue(relation.TableId, out var size)) relation.ApplySize(size);
+
+        // If the user asked for size order before the sizes existed, this is when it can be honoured.
+        if (_order == RelationOrder.Size) SetRelationOrder(RelationOrder.Size);
+        SizesLoaded?.Invoke();
+    }
+
+    /// <summary>Raised once the size read has re-labelled the rows. For tests — nothing in the app waits on
+    /// it, which is the point of loading them late.</summary>
+    internal Action? SizesLoaded { get; set; }
+
+    /// <summary>Every relation row under this database, the ones inside the Views bucket included.</summary>
+    private static IEnumerable<RelationNodeViewModel> Relations(IReadOnlyList<SchemaNodeViewModel> children)
+        => children
+            .SelectMany(c => c is SchemaGroupNodeViewModel group ? group.Children : [c])
+            .OfType<RelationNodeViewModel>();
 
     private Sortable Entry(string schema, string name, int rank, string defaultSchema, SchemaNodeViewModel node)
         => new(SchemaObjectLabel.SchemaRank(schema, defaultSchema), schema, rank, name, node);
@@ -434,11 +524,37 @@ public sealed class RelationNodeViewModel : SchemaNodeViewModel
         _table = table;
         _snapshot = snapshot;
         _browser = browser;
+        _defaultSchema = defaultSchema;
     }
+
+    private readonly string _defaultSchema;
 
     private bool IsViewLike => _table.Kind is RelationKind.View or RelationKind.MaterializedView;
 
     public override bool CanShowDefinition => true;
+
+    /// <summary>This relation's id, so a size read can find the row it belongs to.</summary>
+    internal long TableId => _table.Id;
+
+    /// <summary>What this relation costs on disk, once a size read has answered. Null until then, and for a
+    /// view, which has no storage of its own.</summary>
+    internal RelationSize? Size { get; private set; }
+
+    /// <summary>
+    /// Attach a size, re-labelling the row in place (#76).
+    /// <para>
+    /// In place rather than by rebuilding: the sizes arrive after the tree is on screen, and replacing nodes
+    /// would collapse whatever the user had expanded while they were waiting. <c>Detail</c> is settable for
+    /// exactly this reason.
+    /// </para>
+    /// </summary>
+    internal void ApplySize(RelationSize size)
+    {
+        Size = size;
+        Detail = SchemaObjectLabel.WithSize(
+            SchemaObjectLabel.Detail(KindLabel(_table.Kind), _table.Schema, _defaultSchema),
+            size);
+    }
 
     /// <summary>
     /// Columns inline, then a folder per other kind of thing a table has (#46).
@@ -490,7 +606,7 @@ public sealed class RelationNodeViewModel : SchemaNodeViewModel
         Folder("References", "Icon.Reference", incoming
             .Select(fk => (SchemaNodeViewModel)new ForeignKeyNodeViewModel(_snapshot, fk, incoming: true)));
         Folder("Indexes", "Icon.Index", details.Indexes
-            .Select(i => (SchemaNodeViewModel)new IndexNodeViewModel(_snapshot, _table.Id, i)));
+            .Select(i => (SchemaNodeViewModel)new IndexNodeViewModel(_snapshot, _table.Id, i, i.SizeBytes)));
         Folder("Triggers", "Icon.Trigger", details.Triggers
             .Select(t => (SchemaNodeViewModel)new TriggerNodeViewModel(t)));
 
@@ -523,7 +639,10 @@ public sealed class RelationNodeViewModel : SchemaNodeViewModel
         {
             details = TableDetails.Empty;
         }
-        return TableDdlGenerator.CreateTable(_table, _snapshot, details);
+        var ddl = TableDdlGenerator.CreateTable(_table, _snapshot, details);
+        // The fuller breakdown goes here rather than on the row: heap / indexes / toast / rows has room in a
+        // definition view and would not fit on one tight tree line (#71, #76).
+        return Size is { } size ? ddl + "\n" + SchemaObjectLabel.SizeBreakdown(size) : ddl;
     }
 
     private static string KindLabel(RelationKind kind) => kind switch
@@ -626,10 +745,14 @@ public sealed class IndexNodeViewModel : SchemaNodeViewModel
 {
     private readonly IndexInfo _index;
 
-    public IndexNodeViewModel(ISchemaSnapshot snapshot, long tableId, IndexInfo index)
+    public IndexNodeViewModel(ISchemaSnapshot snapshot, long tableId, IndexInfo index, long? sizeBytes = null)
         : base(RelationDetailText.IndexGlyph(index),
             index.Name,
-            RelationDetailText.Index(snapshot, tableId, index),
+            // The size is what makes "is this index worth its cost" answerable — an index row without it
+            // answers only half the question (#76).
+            sizeBytes is { } bytes
+                ? $"{RelationDetailText.Index(snapshot, tableId, index)} · {ByteSize.Format(bytes)}"
+                : RelationDetailText.Index(snapshot, tableId, index),
             hasChildren: false)
         => _index = index;
 

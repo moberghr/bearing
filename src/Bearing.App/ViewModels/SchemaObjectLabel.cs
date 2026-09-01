@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Bearing.Core.Schema;
 
 namespace Bearing.App.ViewModels;
 
@@ -35,4 +36,40 @@ internal static class SchemaObjectLabel
     /// </summary>
     public static string Detail(string kindLabel, string schema, string defaultSchema)
         => IsDefault(schema, defaultSchema) ? $"{kindLabel} · {schema}" : kindLabel;
+
+    /// <summary>
+    /// A detail line with the relation's size appended (#76). Secondary text on the same line, not a second
+    /// one: #71 made these rows tighter on purpose, and a size is a field rather than a paragraph.
+    /// <para>
+    /// Total, then the row estimate. The total is the number that answers "what is eating the disk"; the
+    /// breakdown that says whether it is heap or indexes has room in the definition view rather than here.
+    /// </para>
+    /// </summary>
+    public static string WithSize(string detail, RelationSize size)
+    {
+        var parts = new List<string> { detail, ByteSize.Format(size.TotalBytes) };
+        if (ByteSize.FormatRows(size.EstimatedRows) is { } rows) parts.Add(rows);
+        return string.Join(" · ", parts);
+    }
+
+    /// <summary>
+    /// The full breakdown, for the definition view: total, heap, indexes, toast, rows.
+    /// <para>
+    /// The split is the point. A 2 GB table that is 400 MB of heap and 1.6 GB of indexes is a different
+    /// problem from the reverse, and one "size" number hides which one you have.
+    /// </para>
+    /// </summary>
+    public static string SizeBreakdown(RelationSize size)
+    {
+        var lines = new List<string>
+        {
+            $"-- total    {ByteSize.Format(size.TotalBytes)}",
+            $"-- heap     {ByteSize.Format(size.TableBytes)}",
+            $"-- indexes  {ByteSize.Format(size.IndexBytes)}",
+        };
+        // Only when there is any: every table would otherwise carry a "toast 0 B" line saying nothing.
+        if (size.ToastBytes > 0) lines.Add($"-- toast    {ByteSize.Format(size.ToastBytes)}");
+        lines.Add($"-- rows     {ByteSize.FormatRows(size.EstimatedRows) ?? "unknown (never analysed)"}");
+        return string.Join("\n", lines) + "\n";
+    }
 }

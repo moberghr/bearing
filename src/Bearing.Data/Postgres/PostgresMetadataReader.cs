@@ -191,6 +191,76 @@ public sealed class PostgresMetadataReader : IMetadataReader
         return new TableDetails(constraints, indexes, triggers);
     }
 
+    /// <summary>
+    /// Every relation's size in this database (#76), in one pass. The three size functions are separate calls
+    /// per relation but a single query overall — Postgres has no bulk form, and a round trip per table would
+    /// be far worse than a wider one.
+    /// </summary>
+    public async Task<IReadOnlyList<RelationSize>> GetRelationSizesAsync(CancellationToken ct)
+    {
+        // pg_total_relation_size stats files per relation, so this is the expensive read in the app. Only
+        // the relation kinds that have storage: a view has none, and asking costs the same as asking for a
+        // table. reltuples is -1 on a never-analysed table, which the mapping turns into null rather than
+        // letting a negative row count reach a label.
+        const string sql = """
+            select c.oid::bigint,
+                   pg_total_relation_size(c.oid)::bigint,
+                   pg_table_size(c.oid)::bigint,
+                   pg_indexes_size(c.oid)::bigint,
+                   coalesce(pg_total_relation_size(c.reltoastrelid), 0)::bigint,
+                   c.reltuples::bigint
+            from pg_class c
+            join pg_namespace n on n.oid = c.relnamespace
+            where c.relkind in ('r','m','f','p','t')
+              and n.nspname not in ('pg_catalog','information_schema')
+              and n.nspname not like 'pg\_temp%' and n.nspname not like 'pg\_toast%'
+            """;
+        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+        var list = new List<RelationSize>();
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+        {
+            var rows = r.GetInt64(5);
+            list.Add(new RelationSize(
+                TableId: r.GetInt64(0),
+                TotalBytes: r.GetInt64(1),
+                TableBytes: r.GetInt64(2),
+                IndexBytes: r.GetInt64(3),
+                ToastBytes: r.GetInt64(4),
+                // -1 means "never analysed". A row count of minus one is not a row count.
+                EstimatedRows: rows < 0 ? null : rows));
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// Every database's size (#76). Guarded per row: <c>pg_database_size</c> raises for a database the caller
+    /// cannot connect to, so it is only called where <c>has_database_privilege</c> says it will work — one
+    /// inaccessible database must not cost the sizes of the rest, and an exception per row would.
+    /// </summary>
+    public async Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(CancellationToken ct)
+    {
+        const string sql = """
+            select d.datname,
+                   case when has_database_privilege(d.datname, 'CONNECT')
+                        then pg_database_size(d.datname)::bigint
+                   end
+            from pg_database d
+            where d.datistemplate = false
+            order by d.datname
+            """;
+        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+        var list = new List<DatabaseSize>();
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+            list.Add(new DatabaseSize(r.GetString(0), r.IsDBNull(1) ? null : r.GetInt64(1)));
+        return list;
+    }
+
     private static async Task<List<ConstraintInfo>> ReadConstraintsAsync(
         NpgsqlConnection conn, long tableId, CancellationToken ct)
     {
@@ -250,7 +320,8 @@ public sealed class PostgresMetadataReader : IMetadataReader
                              from unnest(i.indkey::int2[]) with ordinality as u(k, ord)
                              where k > 0 and ord <= i.indnkeyatts), '{}')::int[],
                    pg_get_indexdef(i.indexrelid, 0, true),
-                   con.oid is not null
+                   con.oid is not null,
+                   pg_relation_size(i.indexrelid)::bigint
             from pg_index i
             join pg_class c on c.oid = i.indexrelid
             left join pg_constraint con
@@ -275,7 +346,10 @@ public sealed class PostgresMetadataReader : IMetadataReader
                 IsValid: r.GetBoolean(4),
                 Ordinals: r.GetFieldValue<int[]>(5),
                 Definition: r.IsDBNull(6) ? "" : r.GetString(6),
-                BackedByConstraint: r.GetBoolean(7)));
+                BackedByConstraint: r.GetBoolean(7),
+                // Read here rather than in the bulk relation-size pass: an index's size is only wanted once
+                // its table is expanded, and it comes free from a query already keyed on indexrelid (#76).
+                SizeBytes: r.GetInt64(8)));
         }
         return list;
     }

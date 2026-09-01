@@ -309,6 +309,84 @@ public class PostgresTableDetailTests : IAsyncLifetime
         Assert.Contains("till_code_key", ddl);
     }
 
+    // ---- sizes (#76) ----------------------------------------------------------------------------
+
+    [SkippableFact]
+    public async Task Reads_every_relations_size_in_one_pass()
+    {
+        // One query for the whole database, not one per table: pg_total_relation_size stats files, so a round
+        // trip per relation would be strictly worse — and the tree wants them all at once to sort by.
+        RequireServer();
+
+        var sizes = await _reader.GetRelationSizesAsync(CancellationToken.None);
+
+        var payment = sizes.Single(x => x.TableId == TableId("payment"));
+        Assert.True(payment.TotalBytes > 0, "an existing table reported no size at all");
+        // The split has to add up the way Postgres defines it: total is heap+toast+indexes, and table is
+        // heap+toast, so indexes is the difference.
+        Assert.Equal(payment.TotalBytes, payment.TableBytes + payment.IndexBytes);
+        Assert.True(payment.IndexBytes > 0, "payment has four indexes and reported none");
+    }
+
+    [SkippableFact]
+    public async Task A_view_has_no_size_of_its_own()
+    {
+        // Views have no storage, so they are simply absent from the read rather than reported as zero.
+        RequireServer();
+
+        var sizes = await _reader.GetRelationSizesAsync(CancellationToken.None);
+
+        Assert.DoesNotContain(TableId("receipt"), sizes.Select(x => x.TableId));
+    }
+
+    [SkippableFact]
+    public async Task A_never_analysed_table_reports_no_row_count()
+    {
+        // reltuples is -1 until ANALYZE runs. Minus one is not a row count, and must not reach a label as
+        // one — the fixture's tables have just been created and never analysed.
+        RequireServer();
+
+        var sizes = await _reader.GetRelationSizesAsync(CancellationToken.None);
+
+        var payment = sizes.Single(x => x.TableId == TableId("payment"));
+        Assert.Null(payment.EstimatedRows);
+
+        await RunAsync($"analyze {_schema}.payment;");
+        var analysed = (await _reader.GetRelationSizesAsync(CancellationToken.None))
+            .Single(x => x.TableId == TableId("payment"));
+        Assert.NotNull(analysed.EstimatedRows);
+        Assert.True(analysed.EstimatedRows >= 0);
+    }
+
+    [SkippableFact]
+    public async Task An_index_carries_its_own_size()
+    {
+        // The other half of "is this index worth keeping".
+        RequireServer();
+
+        var index = (await DetailsOf("payment")).Indexes.Single(i => i.Name == "payment_store_id_idx");
+
+        Assert.NotNull(index.SizeBytes);
+        Assert.True(index.SizeBytes >= 0);
+    }
+
+    [SkippableFact]
+    public async Task Database_sizes_come_back_for_the_ones_the_user_can_reach()
+    {
+        // pg_database_size raises for a database the caller cannot connect to, so it is only called where
+        // has_database_privilege says it will work — an unreadable size is null, and one inaccessible
+        // database must not cost the sizes of the rest.
+        RequireServer();
+
+        var sizes = await _reader.GetDatabaseSizesAsync(CancellationToken.None);
+
+        Assert.NotEmpty(sizes);
+        var own = sizes.Single(d => d.Database == PgTestServer.Database);
+        Assert.NotNull(own.Bytes);
+        Assert.True(own.Bytes > 0);
+        Assert.All(sizes, d => Assert.False(d.Bytes < 0));
+    }
+
     // ---- the edges ------------------------------------------------------------------------------
 
     [SkippableFact]

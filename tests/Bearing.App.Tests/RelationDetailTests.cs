@@ -415,6 +415,13 @@ public class RelationDetailTests
             return Task.FromResult(DemoCatalog.DetailsOf(tableId));
         }
 
+        public virtual Task<IReadOnlyList<RelationSize>> GetRelationSizesAsync(
+            ConnectionInfo connection, string database, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<RelationSize>>([]);
+
+        public Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(ConnectionInfo connection, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<DatabaseSize>>([]);
+
         public Task<string> GetRoutineDefinitionAsync(ConnectionInfo connection, string database, long routineId, CancellationToken ct)
             => Task.FromResult("create function …");
 

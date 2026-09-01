@@ -160,6 +160,32 @@ public static class DemoCatalog
         _ => TableDetails.Empty,
     };
 
+    /// <summary>
+    /// What each relation "costs on disk" (#76). Hand-authored like everything else here, and chosen so the
+    /// interesting shapes are visible: payment is mostly indexes, document is mostly toast, metric has never
+    /// been analysed, and the view has no storage at all.
+    /// </summary>
+    public static IReadOnlyList<RelationSize> Sizes() =>
+    [
+        new RelationSize(StoreId, TotalBytes: 81_920, TableBytes: 40_960, IndexBytes: 40_960,
+            ToastBytes: 0, EstimatedRows: 4),
+        // Three indexes on forty rows: the shape that makes the total-versus-heap split worth showing.
+        new RelationSize(PaymentId, TotalBytes: 1_638_400, TableBytes: 327_680, IndexBytes: 1_310_720,
+            ToastBytes: 0, EstimatedRows: 40),
+        new RelationSize(DocumentId, TotalBytes: 9_437_184, TableBytes: 1_048_576, IndexBytes: 32_768,
+            ToastBytes: 8_388_608, EstimatedRows: 3),
+        // Never analysed, so its row count is unknown rather than zero.
+        new RelationSize(MetricId, TotalBytes: 24_576, TableBytes: 16_384, IndexBytes: 8_192,
+            ToastBytes: 0, EstimatedRows: null),
+    ];
+
+    public static IReadOnlyList<DatabaseSize> DatabaseSizes() =>
+    [
+        new DatabaseSize(Database, 11_182_080),
+        // A database the demo user cannot connect to: its size is unknown, not zero (#76).
+        new DatabaseSize("postgres", null),
+    ];
+
     public static IReadOnlyList<RoutineInfo> Routines() =>
     [
         new RoutineInfo(3001, Schema, "gross_revenue", RoutineKind.Function, "(from_date date)", "numeric"),

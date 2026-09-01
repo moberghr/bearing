@@ -34,6 +34,15 @@ public interface ISchemaBrowser : IAsyncDisposable
 
     Task<string> GetRoutineDefinitionAsync(ConnectionInfo connection, string database, long routineId, CancellationToken ct);
 
+    /// <summary>
+    /// Every relation's size in one database (#76), and every database's size on the server. Separate from
+    /// <see cref="GetObjectsAsync"/> because these are the expensive reads —
+    /// <c>pg_total_relation_size</c> stats files — and the tree must render before them, not after.
+    /// </summary>
+    Task<IReadOnlyList<RelationSize>> GetRelationSizesAsync(ConnectionInfo connection, string database, CancellationToken ct);
+
+    Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(ConnectionInfo connection, CancellationToken ct);
+
     /// <summary>Drop all cached per-database readers for a connection so the next read re-fetches fresh metadata.</summary>
     Task InvalidateAsync(Guid connectionId);
 }

@@ -73,6 +73,11 @@ public sealed record ConstraintInfo(
 /// on. An index on expressions alone reports none, and its <paramref name="Definition"/> is then the only
 /// thing that says what it covers.
 /// </param>
+/// <param name="SizeBytes">
+/// What the index costs on disk, or null when it was not read. Carried here rather than fetched separately
+/// because it is the other half of "is this index worth keeping" (#76) and comes from the same per-table
+/// read.
+/// </param>
 /// <param name="BackedByConstraint">
 /// True when a constraint owns this index — a primary key, a unique constraint, an exclusion constraint.
 /// Such an index is created by its constraint and cannot be issued separately, so generated DDL must not
@@ -86,7 +91,8 @@ public sealed record IndexInfo(
     bool IsValid,
     IReadOnlyList<int> Ordinals,
     string Definition,
-    bool BackedByConstraint = false);
+    bool BackedByConstraint = false,
+    long? SizeBytes = null);
 
 /// <summary>A trigger on a relation. <see cref="Definition"/> is <c>pg_get_triggerdef</c>.</summary>
 public sealed record TriggerInfo(

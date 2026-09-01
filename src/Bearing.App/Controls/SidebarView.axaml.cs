@@ -224,6 +224,18 @@ public partial class SidebarView : UserControl
         else await Vm.Connections.AddOrUpdateConnectionAsync(result.Connection, result.Password);
     }
 
+    private void OnSortRelationsBySize(object? sender, RoutedEventArgs e)
+        => Order(sender, DatabaseNodeViewModel.RelationOrder.Size);
+
+    private void OnSortRelationsByName(object? sender, RoutedEventArgs e)
+        => Order(sender, DatabaseNodeViewModel.RelationOrder.Name);
+
+    /// <summary>Re-order a database's relation rows (#76).</summary>
+    private static void Order(object? sender, DatabaseNodeViewModel.RelationOrder order)
+    {
+        if (NodeOf(sender) is DatabaseNodeViewModel database) database.SetRelationOrder(order);
+    }
+
     private void OnUseConnectionInTab(object? sender, RoutedEventArgs e) => AssignConnectionToTab(NodeOf(sender));
 
     private void OnSchemaNodeDoubleTapped(object? sender, TappedEventArgs e) => AssignConnectionToTab(NodeOf(sender));

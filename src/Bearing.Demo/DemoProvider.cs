@@ -97,6 +97,12 @@ public sealed class DemoMetadata : IMetadataReader
     public Task<TableDetails> GetTableDetailsAsync(long tableId, CancellationToken ct)
         => Task.FromResult(DemoCatalog.DetailsOf(tableId));
 
+    public Task<IReadOnlyList<RelationSize>> GetRelationSizesAsync(CancellationToken ct)
+        => Task.FromResult(DemoCatalog.Sizes());
+
+    public Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(CancellationToken ct)
+        => Task.FromResult(DemoCatalog.DatabaseSizes());
+
     public Task<string> GetRoutineDefinitionAsync(long routineId, CancellationToken ct)
         => Task.FromResult("create function shop.gross_revenue(from_date date) returns numeric\n"
                            + "language sql as $$ select sum(amount) from shop.payment $$;");

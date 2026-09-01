@@ -177,6 +177,13 @@ public class SchemaTreeSearchTests
         public Task<string> GetViewDefinitionAsync(ConnectionInfo connection, string database, long tableId, CancellationToken ct)
             => Task.FromResult("select 1");
 
+        public Task<IReadOnlyList<RelationSize>> GetRelationSizesAsync(
+            ConnectionInfo connection, string database, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<RelationSize>>([]);
+
+        public Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(ConnectionInfo connection, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<DatabaseSize>>([]);
+
         public Task<string> GetRoutineDefinitionAsync(ConnectionInfo connection, string database, long routineId, CancellationToken ct)
             => Task.FromResult("");
 
