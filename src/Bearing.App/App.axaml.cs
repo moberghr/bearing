@@ -66,6 +66,12 @@ public partial class App : Application
             // The type scale, before any window is built: the tokens in Tokens.axaml carry defaults, and this
             // overwrites them from settings so the first frame is already at the user's size (#52).
             Theming.FontScale.Apply(settings.Current.UiFontSize, settings.Current.GridFontSize);
+            // The timezone setting's picker, validation and description live in the app layer: resolving a
+            // zone id means TimeZoneInfo, and Core holds abstractions and records only (§2.1, #77).
+            Core.Workspace.SettingsCatalog.TimeZoneSuggestions = Formatting.DisplayTimeZone.Available;
+            Core.Workspace.SettingsCatalog.TimeZoneValidator = Formatting.DisplayTimeZone.IsKnown;
+            Core.Workspace.SettingsCatalog.TimeZoneDescriber = Formatting.DisplayTimeZone.Describe;
+            Formatting.CellFormat.Zone = Formatting.DisplayTimeZone.Resolve(settings.Current.DisplayTimeZone);
             // The demo registry holds the demo provider *instead of* Postgres, not beside it: that is what
             // makes the fake unreachable from any normal connection flow, since in an ordinary session it is
             // not in the graph at all.
@@ -102,6 +108,9 @@ public partial class App : Application
             settings.Changed += s =>
             {
                 Theming.FontScale.Apply(s.UiFontSize, s.GridFontSize);
+                // The zone reaches the grid the same way a font size does — the cell text is built in code,
+                // so the results have to be re-rendered rather than left to a binding (#77).
+                Formatting.CellFormat.Zone = Formatting.DisplayTimeZone.Resolve(s.DisplayTimeZone);
                 Dispatcher.UIThread.Post(window.RefreshTypeScale);
             };
             LogStartup("window constructed");

@@ -79,6 +79,13 @@ public sealed record AppSettings
     public int UiFontSize { get; init; } = 12;
 
     /// <summary>
+    /// The zone <c>timestamptz</c> values are displayed in (#77). <c>UTC</c> by default, which keeps every
+    /// existing display identical — the same instant, now with its offset shown — and <c>system</c> for the
+    /// machine's own zone. An id the machine cannot resolve falls back to UTC rather than to a guess.
+    /// </summary>
+    public string DisplayTimeZone { get; init; } = "UTC";
+
+    /// <summary>
     /// Where "Fetch all rows" stops. It streams the result to the end, so without a ceiling a mistyped query
     /// against a billion-row table would read until the app runs out of memory — the ceiling also bounds what
     /// the server is asked to produce. Hitting it is reported, never silent, and the rows already streamed

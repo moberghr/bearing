@@ -141,6 +141,13 @@ public static class XlsxWriter
             case byte or sbyte or short or ushort or int or uint or long or ulong or decimal or float or double:
                 w.Write($"""<c r="{reference}"><v>{Number(value)}</v></c>""");
                 return;
+            // A timestamptz arrives as Kind=Utc. Excel has no offset type at all, so the zone cannot survive
+            // as a date either way — but the *number* can at least be the one the user was looking at, so it
+            // is converted to the display zone first (#77). Exporting 15:00 UTC while the grid said 18:00
+            // would make the file disagree with the app that produced it.
+            case DateTime { Kind: DateTimeKind.Utc } utc when Serial(InDisplayZone(utc)) is { } utcSerial:
+                w.Write($"""<c r="{reference}" s="{StyleDateTime}"><v>{Text(utcSerial)}</v></c>""");
+                return;
             case DateTime dt when Serial(dt) is { } serial:
                 var style = dt.TimeOfDay == TimeSpan.Zero ? StyleDate : StyleDateTime;
                 w.Write($"""<c r="{reference}" s="{style}"><v>{Text(serial)}</v></c>""");
@@ -158,6 +165,14 @@ public static class XlsxWriter
                 return;
         }
     }
+
+    /// <summary>
+    /// An instant as a wall time in the display zone. Excel stores no offset, so a zone-aware value has to
+    /// become <i>some</i> wall time; the one the user saw in the grid is the only defensible choice.
+    /// </summary>
+    private static DateTime InDisplayZone(DateTime utc)
+        => DateTime.SpecifyKind(
+            TimeZoneInfo.ConvertTimeFromUtc(utc, Formatting.CellFormat.Zone), DateTimeKind.Unspecified);
 
     /// <summary>Days since Excel's epoch, or null for a date outside what Excel can represent (its serial
     /// numbering starts at 1900 and has no room for anything earlier).</summary>

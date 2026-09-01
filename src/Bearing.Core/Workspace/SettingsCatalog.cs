@@ -177,6 +177,23 @@ public static class SettingsCatalog
             Get = s => s.GridFontSize,
             Set = (s, v) => s with { GridFontSize = v },
         },
+        new StringSetting
+        {
+            Key = "results.displayTimeZone",
+            CategoryId = Results,
+            Title = "Show timestamps in",
+            Description = "Applies to timestamptz values, which are stored as instants — the offset is shown "
+                        + "so the value is unambiguous. A timestamp without time zone has none to convert "
+                        + "from and is left alone, with its column badged accordingly.",
+            Keywords = "timezone time zone tz utc offset timestamp timestamptz local display convert",
+            Get = s => s.DisplayTimeZone,
+            Set = (s, v) => s with { DisplayTimeZone = v },
+            // Supplied by the app layer, which owns the zone database lookup — Core stays dependency-free
+            // and does not need to know what a TimeZoneInfo is (§2.1).
+            Suggestions = TimeZoneSuggestions,
+            IsValid = id => TimeZoneValidator?.Invoke(id) ?? true,
+            Describe = id => TimeZoneDescriber?.Invoke(id) ?? id,
+        },
         new IntSetting
         {
             Key = "general.uiFontSize",
@@ -252,6 +269,18 @@ public static class SettingsCatalog
             Set = (s, v) => s with { QueryLogRedactLiterals = v },
         },
     ];
+
+    /// <summary>
+    /// The zone list, validator and describer for <c>results.displayTimeZone</c>, injected by the app layer
+    /// at startup. Hooks rather than a dependency: resolving a zone id means <c>TimeZoneInfo</c>, and
+    /// <c>Core</c> holds abstractions and records only (§2.1) — while the descriptor still has to live here
+    /// with every other setting, since that is the whole contract the settings window renders from.
+    /// </summary>
+    public static Func<IReadOnlyList<string>>? TimeZoneSuggestions { get; set; }
+
+    public static Func<string, bool>? TimeZoneValidator { get; set; }
+
+    public static Func<string, string>? TimeZoneDescriber { get; set; }
 
     /// <summary>The descriptors in a section, in declaration order.</summary>
     public static IReadOnlyList<SettingDescriptor> InCategory(string categoryId)

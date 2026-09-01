@@ -108,6 +108,13 @@ public sealed class ResultCellFactory
         if (result.ForeignKeyColumns.Contains(index)) badges.Add(("FK", "Syntax.Keyword"));
         var type = result.Columns[index].DataTypeName;
         if (ColumnKinds.IsJson(type)) badges.Add((type.ToLowerInvariant(), "Syntax.Table"));
+        // A timestamp *without* zone, said as the consequence rather than as the type name (#77). "timestamp"
+        // would be consistent with the json badge, but json's badge exists to separate json from jsonb, where
+        // the type name *is* the distinction. Here the reader's question is "can I trust this instant", and
+        // "timestamp" does not answer it for anyone who does not already know Postgres draws the line there.
+        // On the header, never in the cell: anything appended inside CellFormat.Display travels into the
+        // clipboard, the exports and the edit round-trip.
+        if (ColumnKinds.IsTimestampWithoutZone(type)) badges.Add(("no tz", "Warn.Amber"));
         return badges;
     }
 
