@@ -49,27 +49,26 @@ need_docker() {
 # server" and was actually "a server that refused us" — and several of those tests create and drop schemas.
 # Moving the default off 5434 is the cheap half of the fix; this check is what catches the next collision.
 check_port_is_free() {
-  if command -v python >/dev/null 2>&1; then
-    if python -c "
-import socket, sys
-s = socket.socket()
-s.settimeout(2)
-sys.exit(0 if s.connect_ex(('127.0.0.1', $PORT)) != 0 else 1)
-" 2>/dev/null; then
-      return 0
-    fi
-    say ""
-    say "  Something is already listening on 127.0.0.1:$PORT, and it is not this container."
-    say "  That is the port PgTestServer defaults to, so \`dotnet test\` would talk to it."
-    say ""
-    say "  Find it with:   netstat -ano | grep $PORT     (then look the PID up)"
-    say "  Or run this DB elsewhere:"
-    say ""
-    say "      BEARING_TEST_PG_PORT=55435 ./build/test-db.sh"
-    say "      BEARING_TEST_PG_PORT=55435 dotnet test"
-    say ""
-    exit 1
+  # bash's own /dev/tcp, so the check does not depend on an interpreter being installed. It used to be a
+  # `python -c` guarded by `command -v python` with no else — and bash's `if` with a false condition and no
+  # else returns 0, so on any image shipping only `python3` the function returned success, printed nothing,
+  # and the safety feature this script is justified by was silently absent. The connect runs in a subshell so
+  # the descriptor it opens is closed for us whether it succeeded or not.
+  if ! (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
+    return 0
   fi
+
+  say ""
+  say "  Something is already listening on 127.0.0.1:$PORT, and it is not this container."
+  say "  That is the port PgTestServer defaults to, so \`dotnet test\` would talk to it."
+  say ""
+  say "  Find it with:   netstat -ano | grep $PORT     (then look the PID up)"
+  say "  Or run this DB elsewhere:"
+  say ""
+  say "      BEARING_TEST_PG_PORT=55435 ./build/test-db.sh"
+  say "      BEARING_TEST_PG_PORT=55435 dotnet test"
+  say ""
+  exit 1
 }
 
 running() { [ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null || echo false)" = "true" ]; }
@@ -155,11 +154,17 @@ load_pagila() {
   local tmp
   tmp="$(mktemp -d)"
 
+  # Cleanup is a function rather than a line at the end, because the end is only the success path: the curl
+  # failure returns and the schema failure exits, and both used to leave the download behind — on exactly the
+  # paths a flaky network hits over and over.
+  cleanup_tmp() { [ -n "${tmp:-}" ] && rm -rf "$tmp"; }
+
   say "Fetching pagila…"
   for part in pagila-schema.sql pagila-data.sql; do
     curl -fsSL "$PAGILA_BASE/$part" -o "$tmp/$part" || {
       say "Could not download $part. The suites will still run the tests that build their own schema;"
       say "the ones that query pagila by name will skip."
+      cleanup_tmp
       return
     }
   done
@@ -170,6 +175,7 @@ load_pagila() {
     say "  The schema load failed, so the database is half-built — which would make the suites fail rather"
     say "  than skip, and for a reason that has nothing to do with the code. Removing it."
     docker rm -f "$NAME" >/dev/null 2>&1 || true
+    cleanup_tmp
     exit 1
   fi
   say "Loading the data (this is the slow part)…"
@@ -180,7 +186,7 @@ load_pagila() {
   say "Analysing, so table sizes and row estimates have something to report…"
   psql_in -d "$DB" -q -c "analyze"
 
-  rm -rf "$tmp"
+  cleanup_tmp
 }
 
 status() {

@@ -177,14 +177,31 @@ public class DemoModeTests
     }
 
     [Fact]
-    public void The_relaunch_never_closes_the_window_it_was_clicked_from()
+    public void The_relaunch_launches_exactly_once_and_reports_nothing_else()
     {
-        // Not an assertion about code so much as about the contract: Start's job is to launch, and nothing in
-        // it touches the current session. Trying the demo must not cost the user their unsaved buffers.
-        var closed = false;
-        DemoRelaunch.Start("/opt/bearing/Bearing", (_, _) => { closed = false; return true; });
+        // Replaces a test that asserted a local it had just set to false was still false — green whatever
+        // Start did, which is worse than no test. What is actually checkable about "it does not disturb the
+        // current session" is the launch count: a retry loop, or a second attempt on a non-null return, is how
+        // a click on "Explore demo data" would turn into two windows.
+        var launches = 0;
 
-        Assert.False(closed);
+        var failure = DemoRelaunch.Start("/opt/bearing/Bearing", (_, _) => { launches++; return true; });
+
+        Assert.Null(failure);
+        Assert.Equal(1, launches);
+    }
+
+    [Fact]
+    public void A_failed_relaunch_is_not_retried()
+    {
+        // The other half: a launcher that refuses is reported, not attempted again. Two processes from one
+        // click is the failure a retry would produce if the first attempt had in fact started.
+        var launches = 0;
+
+        var failure = DemoRelaunch.Start("/opt/bearing/Bearing", (_, _) => { launches++; return false; });
+
+        Assert.NotNull(failure);
+        Assert.Equal(1, launches);
     }
 
     // ---- the ephemeral workspace -----------------------------------------------------------------

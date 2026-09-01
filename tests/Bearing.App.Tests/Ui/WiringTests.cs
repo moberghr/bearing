@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using Avalonia;
 using System.Threading.Tasks;
@@ -28,11 +29,27 @@ namespace Bearing.App.Tests.Ui;
 /// </para>
 /// </summary>
 [Collection(UiTestCollection.Name)]
-public class WiringTests
+public class WiringTests : IDisposable
 {
     private readonly UiTestSession _ui;
 
     public WiringTests(UiTestSession ui) => _ui = ui;
+
+    /// <summary>
+    /// Put Core's timezone hooks back the way the process found them.
+    /// <para>
+    /// They are process-wide mutable statics, and <c>AvaloniaTestIsolationLevel.PerTest</c> resets the
+    /// <c>Application</c>, not those. Left installed, every later settings test in the run would pass on this
+    /// class's setup instead of its own — the shape §4.5 records having already been bitten by, where an
+    /// unconditional static let whichever test ran first decide it for all the rest.
+    /// </para>
+    /// </summary>
+    public void Dispose()
+    {
+        SettingsCatalog.TimeZoneSuggestions = null;
+        SettingsCatalog.TimeZoneValidator = null;
+        SettingsCatalog.TimeZoneDescriber = null;
+    }
 
     // ---- #76: the sort menu items ----------------------------------------------------------------
 
@@ -50,12 +67,15 @@ public class WiringTests
         await server.EnsureChildrenAsync();
         var database = (DatabaseNodeViewModel)server.Children.First();
         await database.EnsureChildrenAsync();
-        // Sizes arrive after the tree, so give the read a chance to land before ordering by it.
-        for (var i = 0; i < 20 && database.Children.OfType<RelationNodeViewModel>().All(r => r.Size is null); i++)
+        // Sizes arrive after the tree, so wait for them before ordering by them. Any(size is null), not
+        // All(size is null): the loop has to keep going while *some* are still missing, and the All form
+        // stopped the moment the first one landed — which is how ordering by size becomes order-dependent.
+        for (var i = 0; i < 40 && database.Children.OfType<RelationNodeViewModel>().Any(r => r.Size is null); i++)
         {
             shell.Pump();
             Dispatcher.UIThread.RunJobs();
         }
+        Assert.All(database.Children.OfType<RelationNodeViewModel>(), r => Assert.NotNull(r.Size));
 
         var sidebar = shell.Window.GetVisualDescendants().OfType<Bearing.App.Controls.SidebarView>().First();
         var bySize = MenuItemNamed(sidebar, "Sort tables by size");

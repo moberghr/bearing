@@ -170,23 +170,41 @@ public class WorkbookExcelReadbackTests : IDisposable
         var produced = Directory.GetFiles(outDir, "*.csv");
         // A conversion that produces nothing is the failure this test exists to catch: LibreOffice could not
         // open the workbook. Its own output is the only diagnostic there is, so carry it into the message.
-        Skip.If(produced.Length == 0 && LooksLikeAnEnvironmentProblem(await stderr),
-            "soffice is installed but could not run headlessly here (it reported a startup problem, not a "
-            + "problem with the workbook).");
+        var stderrText = await stderr;
+        Skip.If(produced.Length == 0 && LooksLikeAnEnvironmentProblem(stderrText),
+            "soffice is installed but could not start headlessly here — it reported a startup problem before "
+            + $"reaching the file, so this says nothing about the workbook. It said: {Head(stderrText)}");
         Assert.True(produced.Length > 0,
             $"LibreOffice produced no CSV from the workbook — it could not open it.\n"
-            + $"stdout: {await stdout}\nstderr: {await stderr}");
+            + $"stdout: {await stdout}\nstderr: {stderrText}");
 
         return await File.ReadAllTextAsync(produced[0]);
     }
 
-    /// <summary>Tell "the workbook is bad" apart from "this machine cannot run soffice". Only the first is a
-    /// failure; the second is the same skip as a missing binary, one step later.</summary>
+    /// <summary>The first few lines of soffice's stderr, so a skip message says what it decided on without
+    /// pasting a screenful of LibreOffice startup chatter into the test output.</summary>
+    private static string Head(string text)
+    {
+        var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries).Take(3).Select(l => l.Trim());
+        return string.Join(" / ", lines) is { Length: > 0 } joined ? joined : "(nothing on stderr)";
+    }
+
+    /// <summary>
+    /// Tell "this machine cannot run soffice at all" apart from "soffice ran and could not open our
+    /// workbook". Only the second is a failure — but it is <b>the</b> failure this test exists to catch, so
+    /// the bar for calling something an environment problem is deliberately high.
+    /// <para>
+    /// Notably absent: <c>javaldx: Could not find a Java Runtime Environment</c>. LibreOffice prints that on
+    /// essentially every headless invocation on a machine with no JRE — which describes any minimal CI image
+    /// for a .NET project — and it says nothing about whether Calc could read the file. Matching it would
+    /// have turned a corrupt workbook into a silent skip on exactly the machines most likely to run this.
+    /// </para>
+    /// </summary>
     private static bool LooksLikeAnEnvironmentProblem(string stderr)
-        => stderr.Contains("javaldx", StringComparison.OrdinalIgnoreCase)
-           || stderr.Contains("cannot open display", StringComparison.OrdinalIgnoreCase)
-           || stderr.Contains("Application Error", StringComparison.OrdinalIgnoreCase)
-           || stderr.Contains("UserInstallation", StringComparison.OrdinalIgnoreCase);
+        // A display it cannot open, or a profile it cannot create: soffice never got as far as the file.
+        => stderr.Contains("cannot open display", StringComparison.OrdinalIgnoreCase)
+           || stderr.Contains("failed to create the user profile", StringComparison.OrdinalIgnoreCase)
+           || stderr.Contains("could not create the user installation", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>One sheet of the workbook, built the way the export path builds them
     /// (<c>TableBlock.ForResult</c>) rather than assembled here — the point is to exercise the real writer.</summary>

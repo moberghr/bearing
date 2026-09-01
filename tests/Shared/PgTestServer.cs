@@ -83,6 +83,12 @@ public static class PgTestServer
     /// <summary>The table <c>build/test-db.sh</c> stamps a provisioned database with.</summary>
     private const string MarkerTable = "public.bearing_test_marker";
 
+    /// <summary>What <c>build/test-db.sh</c>'s stamp row says. Matched as a prefix, so the gate turns on the
+    /// row's <em>content</em> and not merely on a table of that name existing — a half-applied stamp (the
+    /// CREATE succeeded, the INSERT did not) and a same-named table belonging to something else both have to
+    /// read as unstamped, or the gate is decoration.</summary>
+    private const string MarkerNotePrefix = "provisioned by build/test-db.sh";
+
     /// <summary>Opt out of the stamp check for a hand-built server: <c>BEARING_TEST_PG_ALLOW_DDL=1</c>.</summary>
     private const string AllowDdlVariable = "ALLOW_DDL";
 
@@ -105,7 +111,7 @@ public static class PgTestServer
     public static async Task RequireWritableAsync(IDbConnectionFactory factory, CancellationToken ct = default)
     {
         await RequireAsync(factory, ct).ConfigureAwait(false);
-        if (Env(AllowDdlVariable, "") is { Length: > 0 } allow && allow != "0") return;
+        if (DdlExplicitlyAllowed) return;
 
         var stamped = await IsStampedAsync(factory, ct).ConfigureAwait(false);
         Skip.IfNot(stamped,
@@ -123,8 +129,19 @@ public static class PgTestServer
     /// <summary>Whether this server may be written to — stamped, or explicitly allowed. For a fixture that
     /// has to decide in <c>InitializeAsync</c>, where skipping would fail the test instead.</summary>
     public static async Task<bool> IsWritableAsync(IDbConnectionFactory factory, CancellationToken ct = default)
-        => (Env(AllowDdlVariable, "") is { Length: > 0 } allow && allow != "0")
-           || await IsStampedAsync(factory, ct).ConfigureAwait(false);
+        => DdlExplicitlyAllowed || await IsStampedAsync(factory, ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Whether the operator has asserted this server is disposable. Only <c>1</c>, <c>true</c> and <c>yes</c>
+    /// count, case-insensitively.
+    /// <para>
+    /// Deliberately strict, because the old reading was "anything but 0" — under which
+    /// <c>BEARING_TEST_PG_ALLOW_DDL=false</c> turned DDL <b>on</b>. For a gate whose failure mode is dropping
+    /// schemas on a server nobody meant to point at, an unrecognised value has to mean off.
+    /// </para>
+    /// </summary>
+    private static bool DdlExplicitlyAllowed => Env(AllowDdlVariable, "").Trim().ToLowerInvariant()
+        is "1" or "true" or "yes";
 
     private static async Task<bool> IsStampedAsync(IDbConnectionFactory factory, CancellationToken ct)
     {
@@ -132,9 +149,17 @@ public static class PgTestServer
         {
             var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
             var results = await provider.CreateQueryExecutor(factory)
-                .ExecuteAsync($"select count(*) from {MarkerTable}", new QueryOptions(), ct)
+                .ExecuteAsync(
+                    $"select count(*) from {MarkerTable} where note like '{MarkerNotePrefix}%'",
+                    new QueryOptions(), ct)
                 .ConfigureAwait(false);
-            return results.Count > 0 && results[0].Success && results[0].Rows.Count > 0;
+
+            if (results.Count == 0 || !results[0].Success || results[0].Rows.Count == 0) return false;
+
+            // The *value*, not the row count. `select count(*)` returns one row whether the table holds a
+            // stamp or nothing at all, so `Rows.Count > 0` was true for any table of that name — which is
+            // precisely the "reachable, therefore ours" inference this gate exists to refuse.
+            return results[0].Rows[0] is [{ } scalar, ..] && Convert.ToInt64(scalar) > 0;
         }
         catch (Exception)
         {
