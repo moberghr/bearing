@@ -131,6 +131,24 @@ public class RelationDetailTests
     }
 
     [Fact]
+    public async Task A_failed_read_never_quotes_the_connection_string()
+    {
+        // The details read opens a connection, and an Npgsql connect failure quotes the whole connection
+        // string — password included. That text goes straight into a tree row, so it has to be scrubbed
+        // (§1.1) the way every other failure on this path already is.
+        var node = Node(DemoData.PaymentId, new LeakyDetailBrowser());
+
+        await node.EnsureChildrenAsync();
+
+        var message = Assert.Single(node.Children.OfType<MessageNodeViewModel>());
+        Assert.DoesNotContain("hunter2", message.Title);
+        Assert.Contains("Password=***", message.Title);
+        // The host stays: SafeErrorText keeps the endpoint on purpose, since that is the useful half of every
+        // network, TLS and DNS error and it is the server the user configured themselves.
+        Assert.Contains("db.example.com", message.Title);
+    }
+
+    [Fact]
     public async Task A_failed_read_still_leaves_the_columns_and_the_keys()
     {
         // The details need a round trip; the columns and both key directions come from the snapshot. Losing
@@ -303,6 +321,35 @@ public class RelationDetailTests
     // ---- generated DDL --------------------------------------------------------------------------
 
     [Fact]
+    public void An_index_a_constraint_owns_is_not_re_issued_by_the_ddl()
+    {
+        // Skipped by ownership rather than by shape. Comparing column sets dropped genuinely separate indexes
+        // that happened to cover the same columns, and kept the index behind an exclusion constraint — which
+        // is neither primary nor unique, so every other test let it through and the DDL then failed on a
+        // duplicate name.
+        var snapshot = DemoData.Snapshot();
+        var table = snapshot.Tables.Single(t => t.Id == DemoData.StoreId);
+        var details = new TableDetails(
+            [new ConstraintInfo(1, "store_room_excl", ConstraintKind.Exclusion, [2, 3],
+                "EXCLUDE USING gist (name WITH =, active WITH =)")],
+            [
+                new IndexInfo(2, "store_room_excl", IsUnique: false, IsPrimary: false, IsValid: true, [2, 3],
+                    "CREATE INDEX store_room_excl ON shop.store USING gist (name, active)",
+                    BackedByConstraint: true),
+                // Same columns as the constraint, but its own index — it must survive.
+                new IndexInfo(3, "store_lookup_idx", IsUnique: false, IsPrimary: false, IsValid: true, [2, 3],
+                    "CREATE INDEX store_lookup_idx ON shop.store USING btree (name, active)"),
+            ],
+            []);
+
+        var ddl = Bearing.Sql.TableDdlGenerator.CreateTable(table, snapshot, details);
+
+        Assert.Contains("constraint \"store_room_excl\" EXCLUDE USING gist", ddl);
+        Assert.DoesNotContain("CREATE INDEX store_room_excl", ddl);
+        Assert.Contains("CREATE INDEX store_lookup_idx", ddl);
+    }
+
+    [Fact]
     public void The_generated_ddl_now_carries_constraints_and_indexes()
     {
         // The generator's own note admitted this hole: "indexes, defaults, checks are omitted".
@@ -374,6 +421,15 @@ public class RelationDetailTests
         public Task InvalidateAsync(Guid connectionId) => Task.CompletedTask;
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    /// <summary>A browser whose failure carries a credential, as a real driver's does.</summary>
+    private sealed class LeakyDetailBrowser : DetailBrowser
+    {
+        public override Task<TableDetails> GetTableDetailsAsync(
+            ConnectionInfo connection, string database, long tableId, CancellationToken ct)
+            => throw new InvalidOperationException(
+                "Failed to connect: Host=db.example.com;Username=u;Password=hunter2;Database=app");
     }
 
     private sealed class ThrowingDetailBrowser : DetailBrowser

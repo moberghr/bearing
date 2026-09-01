@@ -61,8 +61,12 @@ public static class TableDdlGenerator
         // creates them, and re-issuing them would fail.
         foreach (var index in details?.Indexes ?? [])
         {
-            if (index.IsPrimary || index.Definition.Length == 0) continue;
-            if (index.IsUnique && HasUniqueConstraintOn(details, index)) continue;
+            // Skipped by *ownership*, not by shape: an index a constraint created is issued by that
+            // constraint, so emitting it again fails on the name. Comparing column sets instead dropped
+            // genuinely separate indexes that happened to cover the same columns — a reordered unique index,
+            // or one differing only in its INCLUDE payload — and kept the index backing an exclusion
+            // constraint, which is neither primary nor unique and so slipped past every other test.
+            if (index.BackedByConstraint || index.IsPrimary || index.Definition.Length == 0) continue;
             sb.Append(index.Definition.TrimEnd().TrimEnd(';')).Append(";\n");
         }
 
@@ -76,15 +80,6 @@ public static class TableDdlGenerator
             .Where(c => c.Kind is ConstraintKind.Unique or ConstraintKind.Check or ConstraintKind.Exclusion)
             .Where(c => c.Definition.Length > 0);
 
-    /// <summary>
-    /// Whether a unique constraint on the same columns has already been emitted, in which case its index is
-    /// implied. Matched on the column set rather than on names: an index and the constraint that owns it are
-    /// separate catalog objects with different names.
-    /// </summary>
-    private static bool HasUniqueConstraintOn(TableDetails? details, IndexInfo index)
-        => Inline(details)
-            .Where(c => c.Kind == ConstraintKind.Unique)
-            .Any(c => c.Ordinals.Count == index.Ordinals.Count && !c.Ordinals.Except(index.Ordinals).Any());
 
     private static List<string> NamesByOrdinal(IReadOnlyList<ColumnInfo> columns, IReadOnlyList<int> ordinals)
     {

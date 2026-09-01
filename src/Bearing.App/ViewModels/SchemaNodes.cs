@@ -472,7 +472,11 @@ public sealed class RelationNodeViewModel : SchemaNodeViewModel
         catch (Exception ex)
         {
             details = TableDetails.Empty;
-            failure = new MessageNodeViewModel("⚠", $"Couldn't read indexes and constraints: {ex.Message}");
+            // SafeErrorText, not ex.Message: this read opens a connection, and a connect- or parse-time
+            // Npgsql failure quotes the whole connection string — password included — into whatever shows it
+            // (§1.1). The same reason EnsureChildrenAsync scrubs its own failures.
+            failure = new MessageNodeViewModel(
+                "⚠", $"Couldn't read indexes and constraints: {SafeErrorText.Of(ex)}");
         }
 
         // Constraints minus the foreign keys: those are the Foreign Keys folder, and listing a key twice

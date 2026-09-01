@@ -59,6 +59,7 @@ public class PostgresTableDetailTests : IAsyncLifetime
             create index payment_store_id_idx on {_schema}.payment (store_id);
             create index payment_note_lower_idx on {_schema}.payment (lower(note));
             create index payment_partial_idx on {_schema}.payment (id) where note is not null;
+            create unique index payment_note_covering_idx on {_schema}.payment (note) include (amount);
             create table {_schema}.node (id int primary key, parent_id int references {_schema}.node(id));
             create view {_schema}.receipt as
               select p.id as payment_id, s.name as store_name
@@ -219,6 +220,52 @@ public class PostgresTableDetailTests : IAsyncLifetime
         Assert.Single(node.Constraints, c => c.Kind == ConstraintKind.ForeignKey);
     }
 
+    [SkippableFact]
+    public async Task A_not_null_column_does_not_arrive_as_a_constraint()
+    {
+        // PostgreSQL 18 stores every NOT NULL as a real pg_constraint row (contype 'n'). Left in, a
+        // four-column table reports four of them — one node per column, saying what the column row already says, and
+        // inflating the folder's count with information already on screen.
+        RequireServer();
+
+        var payment = await DetailsOf("payment");
+
+        Assert.All(payment.Constraints, c => Assert.DoesNotContain("not_null", c.Name));
+        Assert.All(payment.Constraints, c =>
+            Assert.True(c.Kind is not ConstraintKind.Other, $"{c.Name} came through as an unmapped kind"));
+        // payment declares exactly three: its key, its foreign key and its check.
+        Assert.Equal(3, payment.Constraints.Count);
+    }
+
+    [SkippableFact]
+    public async Task An_index_reports_its_key_columns_and_not_its_include_payload()
+    {
+        // indkey spans indnatts, so it carries INCLUDE columns too — but the planner cannot search on those.
+        // A row that lists them reads as a two-column key, which is the one thing an index row must not
+        // misstate, since it exists to answer "will this serve my predicate".
+        RequireServer();
+
+        var index = (await DetailsOf("payment")).Indexes.Single(i => i.Name == "payment_note_covering_idx");
+
+        Assert.Equal("note", ColumnsOf("payment", index.Ordinals));
+        Assert.Contains("INCLUDE", index.Definition);
+    }
+
+    [SkippableFact]
+    public async Task An_index_says_whether_a_constraint_owns_it()
+    {
+        // What generated DDL has to skip: an index its constraint creates cannot be issued separately, and
+        // the name is already taken by then.
+        RequireServer();
+
+        var indexes = (await DetailsOf("payment")).Indexes;
+
+        Assert.True(indexes.Single(i => i.Name == "payment_pkey").BackedByConstraint);
+        Assert.False(indexes.Single(i => i.Name == "payment_store_id_idx").BackedByConstraint);
+        // A unique index created by hand is nobody's constraint, however unique it is.
+        Assert.False(indexes.Single(i => i.Name == "payment_note_covering_idx").BackedByConstraint);
+    }
+
     // ---- the edges ------------------------------------------------------------------------------
 
     [SkippableFact]
@@ -260,7 +307,9 @@ public class PostgresTableDetailTests : IAsyncLifetime
         Assert.Contains("payment_amount_positive", ddl);
         Assert.Contains("CREATE INDEX payment_store_id_idx", ddl);
         Assert.Contains("CREATE INDEX payment_note_lower_idx", ddl);
-        // The index a primary key implies is not re-issued — running that DDL would fail on it.
-        Assert.DoesNotContain("CREATE UNIQUE INDEX payment_pkey", ddl);
+        // An index a constraint owns is not re-issued — running that DDL would fail on the name.
+        Assert.DoesNotContain("INDEX payment_pkey", ddl);
+        // …but a hand-made unique index is not owned by anything, and dropping it would lose a real index.
+        Assert.Contains("payment_note_covering_idx", ddl);
     }
 }

@@ -68,6 +68,16 @@ public sealed record ConstraintInfo(
 /// when a query is unexpectedly slow.
 /// </para>
 /// </summary>
+/// <param name="Ordinals">
+/// The <b>key</b> columns, in index order — not the <c>INCLUDE</c> payload, which the planner cannot search
+/// on. An index on expressions alone reports none, and its <paramref name="Definition"/> is then the only
+/// thing that says what it covers.
+/// </param>
+/// <param name="BackedByConstraint">
+/// True when a constraint owns this index — a primary key, a unique constraint, an exclusion constraint.
+/// Such an index is created by its constraint and cannot be issued separately, so generated DDL must not
+/// emit it: the name is already taken by then.
+/// </param>
 public sealed record IndexInfo(
     long Id,
     string Name,
@@ -75,7 +85,8 @@ public sealed record IndexInfo(
     bool IsPrimary,
     bool IsValid,
     IReadOnlyList<int> Ordinals,
-    string Definition);
+    string Definition,
+    bool BackedByConstraint = false);
 
 /// <summary>A trigger on a relation. <see cref="Definition"/> is <c>pg_get_triggerdef</c>.</summary>
 public sealed record TriggerInfo(

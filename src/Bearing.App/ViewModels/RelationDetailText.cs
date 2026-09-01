@@ -72,9 +72,14 @@ internal static class RelationDetailText
     // ---- indexes --------------------------------------------------------------------------------
 
     /// <summary>
-    /// An index's detail line: what it enforces, its columns, and — loudly — whether the planner will use it
-    /// at all. An invalid index is what a failed <c>CREATE INDEX CONCURRENTLY</c> leaves behind, and it is
-    /// exactly what you are hunting when a query is slow despite "having an index".
+    /// An index's detail line: what it enforces, its <b>key</b> columns, and — loudly — whether the planner
+    /// will use it at all. An invalid index is what a failed <c>CREATE INDEX CONCURRENTLY</c> leaves behind,
+    /// and it is exactly what you are hunting when a query is slow despite "having an index".
+    /// <para>
+    /// Key columns only: the row exists to answer "will this serve my predicate", so an <c>INCLUDE</c> payload
+    /// listed beside them would be the one detail it must not misstate — those columns are carried, not
+    /// searchable.
+    /// </para>
     /// </summary>
     public static string Index(ISchemaSnapshot snapshot, long tableId, IndexInfo index)
     {

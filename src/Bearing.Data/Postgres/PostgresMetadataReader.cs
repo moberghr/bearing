@@ -196,11 +196,15 @@ public sealed class PostgresMetadataReader : IMetadataReader
     {
         // pg_get_constraintdef rather than a reassembly from catalog columns: a CHECK body cannot be rebuilt
         // from them at all, and where it could be, the server's own text is the one that matches the table.
+        // contype 'n' is excluded: PostgreSQL 18 stores every NOT NULL as a real pg_constraint row, so a
+        // three-column table reports three of them (verified on 18.3; 17.10 reports none). The column rows already say "not null", and listing them
+        // here would bury the table's actual constraints under one node per column and inflate the folder's
+        // count with information already on screen.
         const string sql = """
             select con.oid::bigint, con.conname, con.contype::text,
                    coalesce(con.conkey, '{}')::int[], pg_get_constraintdef(con.oid, true)
             from pg_constraint con
-            where con.conrelid = $1
+            where con.conrelid = $1 and con.contype <> 'n'
             order by case con.contype when 'p' then 0 when 'u' then 1 when 'f' then 2 when 'c' then 3 else 4 end,
                      con.conname
             """;
@@ -224,6 +228,10 @@ public sealed class PostgresMetadataReader : IMetadataReader
     private static async Task<List<IndexInfo>> ReadIndexesAsync(
         NpgsqlConnection conn, long tableId, CancellationToken ct)
     {
+        // indkey spans indnatts, so it includes INCLUDE (non-key) columns; only the first indnkeyatts of them
+        // are the key the planner can search on. Reporting all of them made `create index … (a) include (b)`
+        // read as a two-column key, which is the one thing an index row must not misstate.
+        //
         // indkey is an int2vector, and casting one to an array keeps its **zero**-based bounds — `[0:0]={1}`,
         // which is not an int[] as far as a client is concerned. Rebuilding it with array_agg over unnest
         // gives an ordinary 1-based array, and drops the 0 entries while it is there: a 0 in indkey marks an
@@ -234,10 +242,12 @@ public sealed class PostgresMetadataReader : IMetadataReader
             select i.indexrelid::bigint, c.relname, i.indisunique, i.indisprimary, i.indisvalid,
                    coalesce((select array_agg(k order by ord)
                              from unnest(i.indkey::int2[]) with ordinality as u(k, ord)
-                             where k > 0), '{}')::int[],
-                   pg_get_indexdef(i.indexrelid, 0, true)
+                             where k > 0 and ord <= i.indnkeyatts), '{}')::int[],
+                   pg_get_indexdef(i.indexrelid, 0, true),
+                   con.oid is not null
             from pg_index i
             join pg_class c on c.oid = i.indexrelid
+            left join pg_constraint con on con.conindid = i.indexrelid
             where i.indrelid = $1
             order by i.indisprimary desc, c.relname
             """;
@@ -255,7 +265,8 @@ public sealed class PostgresMetadataReader : IMetadataReader
                 IsPrimary: r.GetBoolean(3),
                 IsValid: r.GetBoolean(4),
                 Ordinals: r.GetFieldValue<int[]>(5),
-                Definition: r.IsDBNull(6) ? "" : r.GetString(6)));
+                Definition: r.IsDBNull(6) ? "" : r.GetString(6),
+                BackedByConstraint: r.GetBoolean(7)));
         }
         return list;
     }

@@ -28,10 +28,12 @@ public partial class MainWindow
     /// <para>
     /// Selection flows one way — the view model decides, the strips display (#67). Two strips cannot share a
     /// two-way <c>SelectedTab</c>: the row without the tab writes its own null back and unselects the other
-    /// row. Listening to <c>SelectionChanged</c> is no better — a strip auto-selects an item of its own when
-    /// its items change, so pinning the selected tab made the row that lost it claim a different tab and push
-    /// that into the view model. What the user clicked arrives through the header's own
-    /// <see cref="OnTabHeaderPressed"/> instead, which is unambiguous.
+    /// row. Nor can a strip's <c>SelectionChanged</c> simply be honoured — a strip auto-selects an item of its
+    /// own when its items change, so pinning the selected tab made the row that lost it claim a different tab
+    /// and push that into the view model. What the user clicked arrives through
+    /// <see cref="OnTabStripPressed"/>, which is unambiguous; keyboard movement arrives through
+    /// <see cref="OnTabStripSelectionChanged"/>, which is honoured only from the row that already holds the
+    /// selection — the guard that keeps the auto-selection out.
     /// </para>
     /// <para>
     /// The other row is not cleared, because it cannot be: a <c>TabStrip</c> is always-selected and will
@@ -62,6 +64,10 @@ public partial class MainWindow
         foreach (var strip in new[] { PinnedTabStrip, TabStrip })
             strip.AddHandler(InputElement.PointerPressedEvent, OnTabStripPressed, RoutingStrategies.Tunnel);
     }
+
+    /// <summary>Which button a press was, read from the window so it does not depend on a hit target.</summary>
+    private static PointerUpdateKind PressKind(PointerPressedEventArgs e)
+        => e.GetCurrentPoint(null).Properties.PointerUpdateKind;
 
     /// <summary>Whether a pressed visual is (or is inside) a tab's ✕.</summary>
     private static bool IsCloseAffordance(object? source)
@@ -149,9 +155,12 @@ public partial class MainWindow
     /// </summary>
     private async void OnTabStripPressed(object? sender, PointerPressedEventArgs e)
     {
-        // The ✕ has its own handler and closes the tab; selecting it first on the way past would leave the
-        // neighbour rule (#87) picking from the wrong index.
-        if (IsCloseAffordance(e.Source)) return;
+        // A left press on the ✕ is its own handler's: selecting the tab on the way past would leave the
+        // neighbour rule (#87) picking from the wrong index. A *middle* press is not — the ✕ ignores
+        // everything but the left button (#66), so returning here made the close gesture do nothing on the
+        // one target it most obviously aims at, while working two pixels away.
+        if (IsCloseAffordance(e.Source)
+            && TabPointerGestures.ActivatesCloseButton(PressKind(e))) return;
         if (Tab(e.Source) is not (var target, var tab)) return;
         SelectTabFromHeader(target, tab, e);
         if (!TabPointerGestures.ClosesTab(e.GetCurrentPoint(target).Properties.PointerUpdateKind)) return;

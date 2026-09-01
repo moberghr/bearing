@@ -104,9 +104,12 @@ internal static class DemoData
             ],
             [
                 new IndexInfo(5001, "store_pkey", IsUnique: true, IsPrimary: true, IsValid: true, [1],
-                    "CREATE UNIQUE INDEX store_pkey ON shop.store USING btree (id)"),
+                    "CREATE UNIQUE INDEX store_pkey ON shop.store USING btree (id)",
+                    BackedByConstraint: true),
                 new IndexInfo(5002, "store_name_key", IsUnique: true, IsPrimary: false, IsValid: true, [2],
-                    "CREATE UNIQUE INDEX store_name_key ON shop.store USING btree (name)"),
+                    "CREATE UNIQUE INDEX store_name_key ON shop.store USING btree (name)",
+                    // Owned by store_name_key the constraint, so generated DDL must not re-issue it.
+                    BackedByConstraint: true),
             ],
             [
                 new TriggerInfo(6001, "store_audit", Enabled: true,
@@ -124,7 +127,8 @@ internal static class DemoData
             ],
             [
                 new IndexInfo(5010, "payment_pkey", IsUnique: true, IsPrimary: true, IsValid: true, [1],
-                    "CREATE UNIQUE INDEX payment_pkey ON shop.payment USING btree (id)"),
+                    "CREATE UNIQUE INDEX payment_pkey ON shop.payment USING btree (id)",
+                    BackedByConstraint: true),
                 new IndexInfo(5011, "payment_store_id_idx", IsUnique: false, IsPrimary: false, IsValid: true, [2],
                     "CREATE INDEX payment_store_id_idx ON shop.payment USING btree (store_id)"),
                 // An index the planner will not use: what a failed CREATE INDEX CONCURRENTLY leaves behind,
@@ -138,7 +142,8 @@ internal static class DemoData
             [new ConstraintInfo(4020, "document_pkey", ConstraintKind.PrimaryKey, [1], "PRIMARY KEY (id)")],
             [
                 new IndexInfo(5020, "document_pkey", IsUnique: true, IsPrimary: true, IsValid: true, [1],
-                    "CREATE UNIQUE INDEX document_pkey ON shop.document USING btree (id)"),
+                    "CREATE UNIQUE INDEX document_pkey ON shop.document USING btree (id)",
+                    BackedByConstraint: true),
                 // An expression index: no resolvable column ordinals at all, so the row has to fall back to
                 // the definition to say anything useful.
                 new IndexInfo(5021, "document_channel_idx", IsUnique: false, IsPrimary: false, IsValid: true, [],
