@@ -57,7 +57,12 @@ public partial class App : Application
             IProjectStore projectStore = new JsonProjectStore();
             ISessionStore sessionStore = new JsonSessionStore();
             var settings = new Settings.SettingsService(new AppSettingsStore());
-            IQueryLog queryLog = new SqliteQueryLog(retentionDays: settings.Current.QueryLogRetentionDays);
+            IQueryLog queryLog = new SqliteQueryLog(
+                retentionDays: settings.Current.QueryLogRetentionDays,
+                // The dialect's own lexer decides what a literal is; the store only knows it was handed a
+                // string (§2.2). Read once at startup, so a mid-session flip cannot leave half the log
+                // redacted and half not.
+                redactSql: settings.Current.QueryLogRedactLiterals ? Bearing.Sql.SqlRedactor.Redact : null);
             IRecentProjects recentProjects = new FileRecentProjects();
 
             var vm = new ShellViewModel(providers, projectStore, sessionStore, queryLog, recentProjects,

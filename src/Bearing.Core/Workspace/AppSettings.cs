@@ -24,6 +24,14 @@ public sealed record AppSettings
     /// </summary>
     public int QueryLogRetentionDays { get; init; } = 180;
 
+    /// <summary>
+    /// Replace literal values in logged SQL with placeholders (#22). Off by default: a redacted statement
+    /// cannot be re-run from the history panel, and silently rewriting the user's own record of what they did
+    /// is not a decision to make on their behalf. On, the log becomes a record of what you ran rather than of
+    /// the data you ran it against.
+    /// </summary>
+    public bool QueryLogRedactLiterals { get; init; }
+
     /// <summary>When editor buffers are written to disk without an explicit Save. See <see cref="Workspace.AutosaveMode"/>.</summary>
     public AutosaveMode AutosaveMode { get; init; } = AutosaveMode.OnEdit;
 

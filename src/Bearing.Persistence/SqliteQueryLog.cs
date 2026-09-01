@@ -15,16 +15,27 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
     private readonly Channel<QueryLogEntry> _channel;
     private readonly SqliteConnection _writeConnection;
     private readonly Task _writerLoop;
+    private readonly Func<string, string>? _redact;
 
-    public SqliteQueryLog(string? dbPath = null, int retentionDays = 0)
+    /// <param name="redactSql">
+    /// Applied to every entry's SQL before it is written (#22), or null to store it verbatim. A delegate
+    /// rather than a call into the redactor, because that lives in <c>Bearing.Sql</c> and this project depends
+    /// on <c>Core</c> alone (§2.2) — and because what counts as a literal is a dialect question, not a storage
+    /// one.
+    /// </param>
+    public SqliteQueryLog(string? dbPath = null, int retentionDays = 0, Func<string, string>? redactSql = null)
     {
         dbPath ??= Path.Combine(BearingPaths.DataDir, "query-log.sqlite");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
         _connectionString = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+        _redact = redactSql;
 
         _writeConnection = Open();
         Migrate(_writeConnection);
         Prune(_writeConnection, retentionDays);
+        // After the schema exists, so there is a file (and a -wal) to narrow. Best-effort: a filesystem that
+        // cannot express the mode must not stop the app from starting (§5.2).
+        Hardening = LocalFilePermissions.HardenDatabase(dbPath);
 
         _channel = Channel.CreateUnbounded<QueryLogEntry>(new UnboundedChannelOptions { SingleReader = true });
         _writerLoop = Task.Run(WriteLoopAsync);
@@ -91,7 +102,31 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         cmd.ExecuteNonQuery();
     }
 
-    public void Append(QueryLogEntry entry) => _channel.Writer.TryWrite(entry);
+    /// <summary>What the log's own files ended up permitted to (#22). Reported rather than assumed, so the
+    /// posture can be surfaced instead of claimed.</summary>
+    public FileHardening Hardening { get; }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Redaction happens here, at the boundary, rather than in the insert: the entry that reaches the
+    /// database, the <see cref="Appended"/> subscribers and the history panel is then one consistent record.
+    /// A panel showing the verbatim SQL of a row stored redacted would be the more misleading of the two.
+    /// </remarks>
+    public void Append(QueryLogEntry entry)
+        => _channel.Writer.TryWrite(_redact is null ? entry : Redacted(entry));
+
+    /// <summary>
+    /// The entry with its SQL redacted. The error message is left alone: a driver quotes the offending
+    /// <i>value</i> in some messages, but it also carries the SQLSTATE and position that make a logged failure
+    /// worth keeping, and it has already been through <c>SafeErrorText</c> for credentials (§1.1).
+    /// </summary>
+    private QueryLogEntry Redacted(QueryLogEntry entry)
+    {
+        try { return entry with { SqlText = _redact!(entry.SqlText) }; }
+        // A redactor that throws must not put the verbatim SQL in the log instead — that is the one outcome
+        // this feature exists to prevent. Store the shape of the statement and nothing else.
+        catch (Exception) { return entry with { SqlText = "(redaction failed)" }; }
+    }
 
     /// <inheritdoc />
     public event Action<QueryLogEntry>? Appended;

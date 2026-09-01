@@ -26,8 +26,23 @@ Shared checklist: `.claude/references/security-checklist.md`.
 
 ## §1.3 — Query log
 - Executed SQL is logged to a local SQLite store (`SqliteQueryLog`) with retention pruning
-  (`QueryLogRetentionDays`, default 180; ≤0 = keep forever). There is **no** literal/PII stripping — do not
-  assume the log is sanitized. Don't add PII beyond the SQL text itself.
+  (`QueryLogRetentionDays`, default 180; ≤0 = keep forever). Don't add PII beyond the SQL text itself.
+- Literal stripping is **opt-in** (`QueryLogRedactLiterals`, default off): on, `Bearing.Sql.SqlRedactor`
+  replaces string/number/dollar-quoted literals with placeholders before the entry is written. Default off
+  because a redacted statement can't be re-run from the history panel, and silently rewriting the user's own
+  record of what they did isn't ours to decide. **Do not assume a log is sanitized** — check the setting.
+  - Redaction happens in `Append`, at the boundary: the database row, the `Appended` event and the history
+    panel then agree. A redactor that throws stores `(redaction failed)` — never the verbatim SQL, which is
+    the one outcome the feature exists to prevent.
+  - The redactor is lexer-based (`PgParsing`), like `WriteGuard`: a regex can't tell a quote inside a
+    dollar-quoted body from one that ends a string. It is **not** anonymisation — identifiers are untouched.
+  - It reaches the store as a `Func<string,string>` because `Persistence` may not reference `Sql` (§2.2).
+- The log's files are narrowed to their owner on start (`LocalFilePermissions.HardenDatabase`), sidecars
+  included — the `-wal` holds un-checkpointed entries, so hardening the `.sqlite` alone leaves the newest ones
+  readable. A no-op on Windows (`%LOCALAPPDATA%` is already ACL'd), reported as `PlatformDefault` rather than
+  as success. Best-effort: a filesystem that can't express the mode must not stop startup (§5.2).
+- **Encryption at rest is deliberately not implemented.** It needs a key the user supplies, which §1.1 already
+  rules is a new design rather than a flag — and a key held next to the file it encrypts protects nobody.
 
 ## §1.4 — Connections
 - Transport security is `ConnectionInfo.Tls` (a `TlsMode`), not an options-bag entry (#23). `sslmode` is

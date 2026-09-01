@@ -210,6 +210,19 @@ public static class SettingsCatalog
             Get = s => s.QueryLogRetentionDays,
             Set = (s, v) => s with { QueryLogRetentionDays = v },
         },
+        new BoolSetting
+        {
+            Key = "history.redactLiterals",
+            CategoryId = History,
+            Title = "Replace values in logged SQL with placeholders",
+            Description = "The history file otherwise holds every value you typed into a WHERE clause — "
+                        + "emails, ids, names — in plain text until retention prunes it. Redacted entries "
+                        + "record the statement's shape but cannot be re-run from the history panel.",
+            Keywords = "query log privacy redact strip literals pii gdpr anonymise",
+            AppliesNote = "Applies to queries run after the next restart; entries already logged are unchanged.",
+            Get = s => s.QueryLogRedactLiterals,
+            Set = (s, v) => s with { QueryLogRedactLiterals = v },
+        },
     ];
 
     /// <summary>The descriptors in a section, in declaration order.</summary>
