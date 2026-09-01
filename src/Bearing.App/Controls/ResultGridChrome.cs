@@ -38,12 +38,17 @@ public static class ResultGridChrome
     /// <c>FontSize</c> on <c>DataGridCell</c> and a setter on the descendant outranks an inherited value, so
     /// every column was measured at 13 and drawn at 15 and came out ~15% narrow.
     /// <para>
-    /// 15 is what the theme has been giving the cells all along, so pinning it changes nothing on screen —
-    /// it just stops the theme deciding. Same for <see cref="HeaderFontSize"/>, which is a different number
-    /// for the same reason: the theme's, not ours.
+    /// 13 is the size this file has asked for since #30 and never got: the theme was handing the cells 15,
+    /// so the grid rendered a size larger than the design's while every column was measured for the smaller
+    /// one. Pinning it makes the intent effective. Row height is unaffected — the 26px floor is well clear
+    /// of either size — and the widths follow automatically, since this is the number they are measured with.
+    /// </para>
+    /// <para>
+    /// <see cref="HeaderFontSize"/> is left at the theme's own 12. The design named a data font size, not a
+    /// header one, and unifying them would widen every column with a real name.
     /// </para>
     /// </summary>
-    public const double CellFontSize = 15;
+    public const double CellFontSize = 13;
 
     /// <summary>What a column header renders at, and is measured at. The Fluent theme gives headers 12 —
     /// three points smaller than the cells beneath them, which is deliberate in that theme and is what has

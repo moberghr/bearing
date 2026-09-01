@@ -112,14 +112,18 @@ public class ColumnWidthTests
     });
 
     /// <summary>
-    /// The premise those constants rest on: they are the sizes the Fluent theme has been giving cells and
-    /// headers all along, so pinning them changed nothing on screen and only stopped the theme deciding.
-    /// Measured on a grid the app's chrome has <i>not</i> touched — asserting a styled cell against the
-    /// constant is true of any constant, and if the premise were wrong every cell's text would have jumped
-    /// 13 → 15px inside an unchanged 26px row.
+    /// What the theme would give if we did not pin, measured on a grid the app's chrome has <b>not</b>
+    /// touched. Cells come out at 15 and headers at 12 — which is the whole reason both are pinned: the grid
+    /// was rendering cells a size larger than the 13 this file has asked for since #30, while measuring every
+    /// column for the smaller one (#73).
+    /// <para>
+    /// Asserting the styled cell against the constant instead would be true of any constant. This pins the
+    /// number we are diverging <i>from</i>, so a theme change is a visible failure rather than a silent
+    /// resize.
+    /// </para>
     /// </summary>
     [Fact]
-    public Task The_pinned_sizes_are_the_themes_own() => _ui.Run(() =>
+    public Task The_theme_would_size_cells_and_headers_differently() => _ui.Run(() =>
     {
         var grid = new DataGrid
         {
@@ -139,7 +143,11 @@ public class ColumnWidthTests
         var header = grid.GetVisualDescendants().OfType<DataGridColumnHeader>()
             .First(h => h.Content as string == "id");
 
-        Assert.Equal(ResultGridChrome.CellFontSize, cell.FontSize);
+        // The theme's own numbers, stated literally: 15 for a cell, 12 for a header.
+        Assert.Equal(15d, cell.FontSize);
+        Assert.Equal(12d, header.FontSize);
+        // …and the cell size is the one we deliberately override; the header size we adopt.
+        Assert.NotEqual(ResultGridChrome.CellFontSize, cell.FontSize);
         Assert.Equal(ResultGridChrome.HeaderFontSize, header.FontSize);
         window.Close();
     });

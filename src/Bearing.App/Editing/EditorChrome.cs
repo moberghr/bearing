@@ -22,7 +22,8 @@ public static class EditorChrome
     /// it — the opaque default paints solid over the coloured text. Shared with the read-only viewers: a
     /// selection in the history preview is how a past query gets to the clipboard, so it has to be visible
     /// there for the same reason.</summary>
-    public static IBrush SelectionBrush { get; } = new SolidColorBrush(Color.FromArgb(0x66, 0x2B, 0x44, 0x55));
+    public static IBrush SelectionBrush { get; } =
+        new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.FromArgb(0x66, 0x2B, 0x44, 0x55));
 
     /// <summary>Graphite surface (#1A2027), current-line highlight (#232B36), faint line numbers (#4E5865),
     /// and the translucent <see cref="SelectionBrush"/>.</summary>

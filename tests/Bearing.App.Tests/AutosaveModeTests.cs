@@ -137,6 +137,68 @@ public class AutosaveModeTests : IDisposable
         Assert.False(tab.HasUnsavedWork);
     }
 
+    [Fact]
+    public async Task A_locked_file_is_retried_rather_than_abandoned()
+    {
+        // Autosave used to treat a failed write as final: it reported and dropped the pending write, and
+        // nothing wrote again until the next keystroke — so one transient lock from antivirus, a sync client
+        // or another editor silently stopped autosaving that buffer while the user carried on typing
+        // elsewhere. Found while diagnosing #83, where the lock was this suite's own polling read.
+        var vm = await Project(AutosaveMode.OnEdit);
+        var (tab, path) = await NamedScript(vm);
+        await vm.Workspace.FlushScratchAsync();     // settle the setup write
+
+        // Released on the retry notice rather than after a delay, so the retry path is proven to have run
+        // instead of being raced past by a slow debounce.
+        var retried = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ShellViewModel.StatusText)
+                && vm.StatusText.StartsWith("Retrying autosave", StringComparison.Ordinal))
+                retried.TrySetResult();
+        };
+
+        var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        try
+        {
+            tab.Text = "select 1; -- typed while locked";
+            await retried.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            stream.Dispose();                        // the lock lets go; the next attempt should land
+        }
+
+        Assert.Equal("select 1; -- typed while locked",
+            await WaitForWrite(path, "select 1; -- typed while locked"));
+        Assert.False(tab.IsDirty);
+    }
+
+    [Fact]
+    public async Task A_write_that_never_succeeds_gives_up_and_says_so()
+    {
+        // The other end of the retry: a path that stays unwritable must reach the status bar promptly rather
+        // than retrying forever, and the tab must stay dirty so the close prompt is still the backstop.
+        var vm = await Project(AutosaveMode.OnEdit);
+        var (tab, path) = await NamedScript(vm);
+        await vm.Workspace.FlushScratchAsync();
+
+        var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ShellViewModel.StatusText)
+                && vm.StatusText.StartsWith("Could not autosave", StringComparison.Ordinal))
+                failed.TrySetResult();
+        };
+
+        using var held = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        tab.Text = "select 1; -- never lands";
+
+        await failed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(tab.IsDirty);
+        Assert.True(tab.HasUnsavedWork);
+    }
+
     // ---- OnExecute ----
 
     [Fact]

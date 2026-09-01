@@ -197,6 +197,13 @@ public sealed class TabAutosave : IDisposable
         lock (_gate) return _watched.ToList();
     }
 
+    /// <summary>How many times a failed write is retried, and how long between attempts. A lock is usually
+    /// somebody else's momentary business — antivirus reading the file, a sync client replacing it, another
+    /// editor holding it open — and it is gone within a second. Bounded and short so a genuinely
+    /// unwritable path still reaches the status bar promptly rather than retrying forever.</summary>
+    private const int WriteAttempts = 4;
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(150);
+
     private async Task SaveAsync(EditorTabViewModel tab)
     {
         if (tab.Text.Trim().Length == 0 && tab.ScriptPath is null) return;   // nothing worth a file yet
@@ -207,24 +214,39 @@ public sealed class TabAutosave : IDisposable
         var owner = _ctx.ProjectOf(tab) ?? _ctx.Project;
         if (tab.IsScratch && owner is null) return;                          // nowhere to put a scratch file
 
-        try
+        var path = tab.ScriptPath ?? CreatePath(tab, owner!);
+        var isNew = tab.ScriptPath is null;
+
+        for (var attempt = 1; ; attempt++)
         {
-            var path = tab.ScriptPath ?? CreatePath(tab, owner!);
-            await _ctx.ScriptStore.WriteTextAsync(path, tab.Text, CancellationToken.None);
-            var isNew = tab.ScriptPath is null;
-            tab.ScriptPath = path;
-            // Creating the file settles what the tab is: a user-named buffer lands outside the scratch
-            // folder, which promotes it. Anything that repoints ScriptPath has to re-derive this.
-            if (isNew) tab.IsScratch = ScratchNaming.IsUnderScratch(path, owner!.ScratchDirectory);
-            tab.MarkSaved(tab.Text);
-            if (isNew) FileCreated?.Invoke();      // a new file changes the tree; an update doesn't
-        }
-        catch (Exception ex)
-        {
-            // Best-effort (§5.2): never take the buffer down with the write. For scratch, HasUnsavedWork
-            // still reports true while ScriptPath is null; for a named script IsDirty stays true. Either
-            // way the close prompt remains the backstop.
-            _ctx.SetStatus($"Could not autosave {tab.Header}: {ex.Message}");
+            try
+            {
+                await _ctx.ScriptStore.WriteTextAsync(path, tab.Text, CancellationToken.None);
+                tab.ScriptPath = path;
+                // Creating the file settles what the tab is: a user-named buffer lands outside the scratch
+                // folder, which promotes it. Anything that repoints ScriptPath has to re-derive this.
+                if (isNew) tab.IsScratch = ScratchNaming.IsUnderScratch(path, owner!.ScratchDirectory);
+                tab.MarkSaved(tab.Text);
+                if (isNew) FileCreated?.Invoke();  // a new file changes the tree; an update doesn't
+                return;
+            }
+            catch (IOException ex) when (attempt < WriteAttempts)
+            {
+                // Somebody else has the file for a moment. Retrying is the difference between a hiccup and
+                // autosave silently stopping for this buffer: the debounce is already spent by the time we
+                // get here, so giving up meant nothing wrote it again until the next keystroke — and if the
+                // user then moved to another tab, never (#83).
+                _ctx.SetStatus($"Retrying autosave of {tab.Header}… ({ex.Message})");
+                await Task.Delay(RetryDelay).ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                // Best-effort (§5.2): never take the buffer down with the write. For scratch, HasUnsavedWork
+                // still reports true while ScriptPath is null; for a named script IsDirty stays true. Either
+                // way the close prompt remains the backstop.
+                _ctx.SetStatus($"Could not autosave {tab.Header}: {ex.Message}");
+                return;
+            }
         }
     }
 

@@ -100,17 +100,20 @@ faster, parallelizable, and reads better. Reach for a UI test when the visual tr
   containing `/*`, an apostrophe or a quoted word). The **one** shape that colours the rest of the buffer
   green is an unterminated `/*`, which is correct — Postgres comments to end of file too — and is invisible
   to execution, because Bearing runs the statement under the caret rather than the file.
-- **`MainWindow` builds headlessly, but the whole shell is not testable yet.** `new MainWindow { DataContext = vm }`
-  after `ShellViewModel.InitializeAsync` constructs, shows and lays out — which makes focus, the tab strip's
-  two-way selection binding and the key routing all reachable, and it was tried (#87/#88). It was backed out
-  rather than shipped, for two reasons worth knowing before trying again: the shell leaves
-  `Application.Current` set, and tests that assert the *no-Application* fallback path
-  (`EnvironmentWashTests.Badge_mode_falls_back_to_a_translucent_neutral`) then fail; and avoiding the reverse
-  contamination — a shared brush built on an xunit worker thread and then used in the shell's visual tree,
-  which throws `VerifyAccess` from the compositor — needed `parallelizeTestCollections: false`, taking the
-  suite from 35s to 88s. Enabling it means first making the Application-dependent tests explicit about
-  whether one exists. Until then, shell-level wiring is eyeball QA (§4.3) and the behaviour underneath it is
-  tested at the view-model level, where the bug usually is anyway.
+- **The whole shell is testable** — `ShellHarness` builds `MainWindow` over a real `ShellViewModel` and
+  shows it, so keyboard focus, the tab strip's two-way selection binding and the key routing are all
+  assertable (that is how #87 and #88 are covered). It is the heaviest harness here: a query log and a
+  project directory per instance, so reach for `ResultsHarness` or a plain unit test where the window is not
+  the point.
+- **Two real bugs had to be fixed before the shell harness could work, and both are worth not
+  re-introducing.** Shared brushes must be **immutable**: a mutable `SolidColorBrush` is an `AvaloniaObject`
+  and takes the dispatcher of whichever thread constructed it, so a static cache filled on an xunit worker
+  thread threw `VerifyAccess` out of the compositor the moment a visual on the dispatcher thread used it
+  (`ThemeBrush.AtAlpha` returns `IImmutableBrush` for exactly this reason). And a token cache must be keyed
+  per `Application` (`ThemeBrush.AtAlphaCached`): the value depends on whether one exists, so an
+  unconditional static let whichever test ran first decide it for every later one — which made
+  `EnvironmentWashTests`' no-Application fallback assertions pass or fail on test order. The alternative,
+  `parallelizeTestCollections: false`, was tried and rejected: it hid both bugs instead of fixing them.
 - **Available and unused so far:** synthetic input on any `TopLevel` (`MouseDown`/`MouseMove`/`MouseUp`/
   `MouseWheel`, `KeyPress`/`KeyPressQwerty`, `KeyTextInput`, `SetRenderScaling`, and `DragDrop`, which takes
   an `IDataTransfer` and so already matches the v12 typed API, §9.3), plus real pixels via

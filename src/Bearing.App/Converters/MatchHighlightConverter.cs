@@ -18,14 +18,14 @@ public sealed class MatchHighlightConverter : IValueConverter
     // Resolved from the theme token, falling back to the token's literal value.
     private static readonly Color Fallback = Color.FromRgb(0x35, 0xD0, 0xBE);
 
-    private static IBrush? _fill;
-    private static IBrush? _edge;
+    private static (Avalonia.Application? Owner, Avalonia.Media.IImmutableBrush Brush)? _fill;
+    private static (Avalonia.Application? Owner, Avalonia.Media.IImmutableBrush Brush)? _edge;
 
     /// <summary>The same 0x2A wash the grid's selection ring fills with, so a match reads as "picked out",
     /// not as a second selection colour.</summary>
-    private static IBrush Fill => _fill ??= ThemeBrush.AtAlpha("Accent.Brand", 0x2A, Fallback);
+    private static IBrush Fill => ThemeBrush.AtAlphaCached(ref _fill, "Accent.Brand", 0x2A, Fallback);
 
-    private static IBrush Edge => _edge ??= ThemeBrush.AtAlpha("Accent.Brand", 0xFF, Fallback);
+    private static IBrush Edge => ThemeBrush.AtAlphaCached(ref _edge, "Accent.Brand", 0xFF, Fallback);
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
         => value is not true
