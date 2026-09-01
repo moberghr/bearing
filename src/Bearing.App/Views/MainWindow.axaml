@@ -460,9 +460,12 @@
                   <Setter Property="Opacity" Value="0.8"/>
                 </Style>
             </DockPanel.Styles>
+            <!-- Scrollbars Hidden, not Auto: the strip still scrolls (wheel, and keyboard switching brings
+                 the selection into view), but on a row this short the bar was a thin target that said "there
+                 is more" without saying more of *what*. The chevron says which tabs, and is the affordance. -->
             <ScrollViewer x:Name="PinnedTabScroll" DockPanel.Dock="Top"
                           IsVisible="{Binding Workspace.HasPinnedTabs}"
-                          HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                          HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
                           Margin="0,0,0,2">
               <!-- Selection is pushed from code-behind (SyncTabStripSelection) rather than bound: two strips
                    over one SelectedTab cannot both bind it. Two-way, the row without the selected tab writes
@@ -479,8 +482,12 @@
                          the right-click menu or Alt+P, then close. -->
                     <StackPanel Orientation="Horizontal" DoubleTapped="OnTabHeaderDoubleTapped"
                                 ContextRequested="OnTabContextRequested">
+                      <!-- Capped and ellipsized: a tab took its natural text width, so one long filename ate
+                           the strip and pushed the others off the edge. The tooltip carries the full name
+                           and its folder, so nothing is lost to the trim. -->
                       <TextBlock Text="{Binding Header}" VerticalAlignment="Center"
-                                 ToolTip.Tip="{Binding HeaderTooltip}"
+                                 ToolTip.Tip="{Binding HeaderTooltip}" MaxWidth="160"
+                                 TextTrimming="CharacterEllipsis"
                                  IsVisible="{Binding !IsRenaming}"/>
                       <!-- The rename box, as in the unpinned template: a pinned tab is the one most worth
                            naming, and without a box here F2 set IsRenaming with nothing to clear it (#67). -->
@@ -521,7 +528,13 @@
             </ScrollViewer>
             <Button DockPanel.Dock="Right" Content="+" Click="OnNewTabClick" Padding="8,2" Margin="6,0,0,0"
                     VerticalAlignment="Center" ToolTip.Tip="New editor tab (Ctrl+T)"/>
-            <ScrollViewer x:Name="TabScroll" HorizontalScrollBarVisibility="Auto"
+            <!-- The overflow chevron: hidden while everything fits, and carrying the count of tabs that do
+                 not. Its content is set from code (SyncTabOverflow) because the count comes from arranged
+                 bounds, which no binding can see. -->
+            <Button x:Name="TabOverflowButton" DockPanel.Dock="Right" Click="OnTabOverflowClick"
+                    Padding="6,2" Margin="6,0,0,0" IsVisible="False" VerticalAlignment="Center"
+                    ToolTip.Tip="Show all tabs (Ctrl+E)"/>
+            <ScrollViewer x:Name="TabScroll" HorizontalScrollBarVisibility="Hidden"
                           VerticalScrollBarVisibility="Disabled">
             <TabStrip x:Name="TabStrip" ItemsSource="{Binding Workspace.UnpinnedTabs}"
                       Classes.dormant="{Binding Workspace.SelectionIsPinned}"
@@ -535,8 +548,12 @@
                     <!-- Header is the backing file's name (scratch included); the tooltip adds its folder.
                          Renaming swaps the label for a box in place (#39): Enter commits, Esc cancels,
                          clicking away commits. Both live in the tree; only one is visible. -->
+                    <!-- Capped and ellipsized: a tab took its natural text width, so one long filename ate
+                         the strip and pushed the others off the edge. The tooltip carries the full name
+                         and its folder, so nothing is lost to the trim. -->
                     <TextBlock Text="{Binding Header}" VerticalAlignment="Center"
-                               ToolTip.Tip="{Binding HeaderTooltip}"
+                               ToolTip.Tip="{Binding HeaderTooltip}" MaxWidth="160"
+                               TextTrimming="CharacterEllipsis"
                                IsVisible="{Binding !IsRenaming}"/>
                     <TextBox Classes="inline" Text="{Binding RenameDraft, Mode=TwoWay}"
                              IsVisible="{Binding IsRenaming}" MinWidth="90" VerticalAlignment="Center"

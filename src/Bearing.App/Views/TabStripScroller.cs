@@ -1,9 +1,14 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
+using Bearing.App.Input;
 
 namespace Bearing.App.Views;
 
@@ -21,8 +26,15 @@ namespace Bearing.App.Views;
 /// wheel over a horizontal strip should still move it;</item>
 /// <item>the selected tab is scrolled into view, so keyboard switching (Ctrl+PageUp/Down, Ctrl+Tab's MRU
 /// cycle, goto-N) cannot land on a tab that is off screen — the tabs were never lost to the keyboard, only
-/// to the eye, and this is what closes that gap.</item>
+/// to the eye, and this is what closes that gap;</item>
+/// <item>it counts how many tabs are off the edge, which is what the strip's chevron shows.</item>
 /// </list>
+/// <para>
+/// The scrollbar itself is deliberately <b>not</b> the affordance: it was the first fix for #65 and the wrong
+/// one. On a strip this short it is a thin target, and it answers "there is more" without answering "more of
+/// what" — so finding a particular tab still meant cycling blind. The chevron and its list answer the second
+/// question, which is the one the user actually has.
+/// </para>
 /// </summary>
 internal sealed class TabStripScroller
 {
@@ -39,6 +51,55 @@ internal sealed class TabStripScroller
         _strip = strip;
         // Tunnel: the strip's items would otherwise take the wheel first and the gesture would do nothing.
         _scroller.AddHandler(InputElement.PointerWheelChangedEvent, OnWheel, RoutingStrategies.Tunnel);
+
+        // Three things move the count, and all three have to be watched or the chevron goes stale: scrolling
+        // (a tab leaves the far edge as another arrives at the near one), resizing the window, and the strip's
+        // contents changing. The last is why LayoutUpdated is here rather than a collection-changed handler —
+        // a new tab has no bounds until it is arranged, so the count would be one short if read any earlier.
+        _scroller.ScrollChanged += (_, _) => RaiseOverflowChanged();
+        _scroller.LayoutUpdated += (_, _) => RaiseOverflowChanged();
+    }
+
+    private int _lastHidden = -1;
+
+    /// <summary>Announce a change only when the number actually changed. LayoutUpdated fires constantly, and
+    /// re-running the chevron's binding on every frame is how a strip with many tabs starts to feel heavy.</summary>
+    private void RaiseOverflowChanged()
+    {
+        var hidden = HiddenCount();
+        if (hidden == _lastHidden) return;
+        _lastHidden = hidden;
+        OverflowChanged?.Invoke();
+    }
+
+    /// <summary>Raised when the number of tabs off the edge may have changed — a scroll, a resize, a tab
+    /// opening or closing. The chevron listens.</summary>
+    public event Action? OverflowChanged;
+
+    /// <summary>
+    /// How many tabs are not <b>fully</b> visible, and so belong in the chevron's list.
+    /// <para>
+    /// Read from the realized containers rather than estimated from <c>Extent - Viewport</c>: the count has to
+    /// name tabs, not pixels, and a strip of unequal tab widths (one long filename beside three short ones)
+    /// has no fixed pixels-per-tab to divide by. The arithmetic is <see cref="TabOverflow"/>.
+    /// </para>
+    /// </summary>
+    public int HiddenCount()
+        => TabOverflow.HiddenCount(Spans(), _scroller.Offset.X, _scroller.Viewport.Width);
+
+    /// <summary>Each realized tab's (start, width) along the strip, in the strip's own coordinates.</summary>
+    private IReadOnlyList<(double Start, double Width)> Spans()
+    {
+        var spans = new List<(double, double)>();
+        for (var i = 0; i < _strip.ItemCount; i++)
+        {
+            // An unrealized container has no bounds to judge, and the DataGrid-style virtualization that
+            // would produce one does not apply to a TabStrip of this size — but a container is also null
+            // during the first pass, before anything is arranged, so this is not a theoretical branch.
+            if (_strip.ContainerFromIndex(i) is not { Bounds.Width: > 0 } container) continue;
+            spans.Add((container.Bounds.X, container.Bounds.Width));
+        }
+        return spans;
     }
 
     /// <summary>Scroll the strip by <paramref name="delta"/> horizontal pixels, clamped to what exists.

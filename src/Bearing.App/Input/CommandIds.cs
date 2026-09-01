@@ -29,6 +29,7 @@ public static class CommandIds
     public const string TabPrev = "tab.prev";
     public const string TabMruNext = "tab.mruNext";    // most-recently-used order (Ctrl+Tab)
     public const string TabMruPrev = "tab.mruPrev";
+    public const string TabPick = "tab.pick";          // the strip's chevron: pick from a list of all tabs
     public const string FocusCycle = "focus.cycle";
     public const string FocusEditor = "focus.editor";
     public const string FocusResults = "focus.results";

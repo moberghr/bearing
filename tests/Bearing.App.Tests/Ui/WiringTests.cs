@@ -3,6 +3,7 @@ using System.Linq;
 using Avalonia;
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -113,6 +114,125 @@ public class WiringTests : IDisposable
             .Select(c => c.ContextMenu)
             .Where(m => m is not null)
             .SelectMany(m => m!.Items.OfType<MenuItem>());
+
+    // ---- #65: the tab strip's overflow chevron ----------------------------------------------------
+
+    [Fact]
+    public Task The_chevron_stays_hidden_while_every_tab_fits() => _ui.Run(async () =>
+    {
+        // The chevron is the only overflow affordance now, so it appearing when nothing has overflowed would
+        // be a standing lie — and the reason the scrollbar was replaced was that it said "there is more"
+        // without saying more of what.
+        using var shell = await ShellHarness.ShowAsync(nameof(The_chevron_stays_hidden_while_every_tab_fits));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        workspace.NewTab("-- one");
+        workspace.NewTab("-- two");
+        shell.Pump();
+
+        Assert.False(Chevron(shell).IsVisible);
+    });
+
+    [Fact]
+    public Task Enough_tabs_light_the_chevron_and_it_carries_the_count() => _ui.Run(async () =>
+    {
+        // "» 4" — the count is the message. A bare chevron would say only the half the scrollbar already said.
+        using var shell = await ShellHarness.ShowAsync(nameof(Enough_tabs_light_the_chevron_and_it_carries_the_count));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        for (var i = 1; i <= 40; i++) workspace.NewTab($"-- tab {i}");
+        shell.Window.Width = 700;
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        var chevron = Chevron(shell);
+        Assert.True(chevron.IsVisible, "40 tabs in a 700px window did not overflow");
+
+        var label = chevron.Content as string ?? "";
+        Assert.Contains("»", label);
+        // The number has to be a real count, not the tab total and not zero.
+        var digits = new string(label.Where(char.IsDigit).ToArray());
+        Assert.True(int.TryParse(digits, out var hidden), $"no count on the chevron: {label}");
+        Assert.InRange(hidden, 1, workspace.Tabs.Count - 1);
+    });
+
+    [Fact]
+    public Task The_chevron_opens_a_list_of_every_tab_not_just_the_hidden_ones() => _ui.Run(async () =>
+    {
+        // Every tab on purpose: a picker whose contents change as you resize the window is one you cannot
+        // learn. The chevron's count says how many are hidden; the list is the whole set.
+        using var shell = await ShellHarness.ShowAsync(nameof(The_chevron_opens_a_list_of_every_tab_not_just_the_hidden_ones));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        for (var i = 1; i <= 12; i++) workspace.NewTab($"-- tab {i}");
+        shell.Window.Width = 600;
+        shell.Pump();
+
+        ClickChevron(shell);
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        // The overlay lives in the window's OverlayLayer, and its search box carries the placeholder.
+        var search = shell.Window.GetVisualDescendants().OfType<TextBox>()
+            .FirstOrDefault(t => t.PlaceholderText == "Go to tab…");
+        Assert.NotNull(search);
+
+        var rows = shell.Window.GetVisualDescendants().OfType<ListBox>()
+            .FirstOrDefault(l => l.ItemCount > 0);
+        Assert.NotNull(rows);
+        Assert.Equal(workspace.Tabs.Count, rows!.ItemCount);
+    });
+
+    [Fact]
+    public Task Picking_a_tab_from_the_list_selects_it() => _ui.Run(async () =>
+    {
+        // The point of the whole feature: you looked at a list and picked, instead of cycling blind.
+        using var shell = await ShellHarness.ShowAsync(nameof(Picking_a_tab_from_the_list_selects_it));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        for (var i = 1; i <= 12; i++) workspace.NewTab($"-- tab {i}");
+        var wanted = workspace.Tabs[9];
+        workspace.SelectedTab = workspace.Tabs[0];
+        shell.Window.Width = 600;
+        shell.Pump();
+
+        ClickChevron(shell);
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        var rows = shell.Window.GetVisualDescendants().OfType<ListBox>().First(l => l.ItemCount > 0);
+        // Prove this is the picker and not some other list in the shell, or index 9 below means nothing.
+        Assert.Equal(workspace.Tabs.Count, rows.ItemCount);
+        rows.SelectedIndex = 9;
+        // Enter is what commits a pick in FilterableListOverlay.
+        rows.RaiseEvent(new KeyEventArgs { Key = Key.Enter, RoutedEvent = InputElement.KeyDownEvent });
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Same(wanted, workspace.SelectedTab);
+    });
+
+    private static Button Chevron(ShellHarness shell)
+        => shell.Window.GetVisualDescendants().OfType<Button>().First(b => b.Name == "TabOverflowButton");
+
+    /// <summary>
+    /// Click the chevron, having first checked it is actually on screen.
+    /// <para>
+    /// The precondition is the point, and it was missing: <c>RaiseEvent(Button.ClickEvent)</c> runs the
+    /// handler whether the button is visible or not, so a sabotage test that forced the chevron permanently
+    /// hidden still saw both picker tests pass. They were testing the picker while claiming to test the
+    /// affordance that reaches it.
+    /// </para>
+    /// </summary>
+    private static void ClickChevron(ShellHarness shell)
+    {
+        var chevron = Chevron(shell);
+        Assert.True(chevron.IsVisible, "the chevron is not visible, so a user could not have clicked it");
+        chevron.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+    }
 
     // ---- #23: the connection dialog's encryption default -----------------------------------------
 

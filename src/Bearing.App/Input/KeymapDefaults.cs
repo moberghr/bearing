@@ -32,6 +32,11 @@ public static class KeymapDefaults
         yield return G(CommandIds.StatementNext, "Alt+Down");
         yield return G(CommandIds.AppEscape, "Escape");
         yield return G(CommandIds.PaletteOpen, "Ctrl+Shift+P");
+        // Ctrl+E, which is Eclipse's "quick switch editor" — the same chevron-and-list affordance, so DBeaver
+        // users already have the reflex. Explicitly NOT Ctrl+Shift+Tab: that is the backwards MRU cycle below,
+        // and taking it would have replaced a working gesture with a similar-looking one. The binding tests
+        // caught the collision, which is what they are for.
+        yield return G(CommandIds.TabPick, "Ctrl+E");
         yield return G(CommandIds.TabNext, "Ctrl+PageDown");     // visual order (tab strip)
         yield return G(CommandIds.TabPrev, "Ctrl+PageUp");
         yield return G(CommandIds.TabMruNext, "Ctrl+Tab");       // most-recently-used order

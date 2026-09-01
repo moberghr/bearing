@@ -70,6 +70,10 @@ public partial class MainWindow : Window
         _resultsPane = new ResultsPaneController(WorkspaceGrid, ResultsSplitter, ResultsView);
         _tabScroll = new TabStripScroller(TabScroll, TabStrip);
         _pinnedTabScroll = new TabStripScroller(PinnedTabScroll, PinnedTabStrip);
+        // One chevron for both rows: it is the answer to "where is my tab", and that question is not asked
+        // per row. Either row overflowing lights it, and its list holds every tab regardless.
+        _tabScroll.OverflowChanged += SyncTabOverflow;
+        _pinnedTabScroll.OverflowChanged += SyncTabOverflow;
         WireTabStrips();
         // The editor's FontSize is applied here rather than bound in XAML: one editor serves every tab,
         // and each tab carries its own zoom over the configured base size. The controller also owns the
@@ -375,6 +379,32 @@ public partial class MainWindow : Window
 
     private void OnTabRowsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
         => SyncTabStripSelection();
+
+    /// <summary>
+    /// Show or hide the overflow chevron, and put the count of hidden tabs on it (#65).
+    /// <para>
+    /// Set from code rather than bound because the count comes from arranged bounds — which tabs actually
+    /// ended up outside the viewport — and no binding can see those. Driven by
+    /// <c>TabStripScroller.OverflowChanged</c>, which only fires when the number changes, so this is not
+    /// per-frame work.
+    /// </para>
+    /// <para>
+    /// The two rows are summed rather than shown separately: one chevron answering "where is my tab" matches
+    /// the question, and a pinned row and an unpinned row each with their own count would make the user do
+    /// the addition.
+    /// </para>
+    /// </summary>
+    private void SyncTabOverflow()
+    {
+        var hidden = _tabScroll.HiddenCount() + _pinnedTabScroll.HiddenCount();
+        TabOverflowButton.IsVisible = hidden > 0;
+        // The glyph carries the number, as it does in DBeaver: "there are 4 more, and they are over here".
+        // A bare chevron would say the first half only, which is what the scrollbar already failed to do.
+        TabOverflowButton.Content = $"» {hidden}";
+    }
+
+    /// <summary>The chevron opens the same picker as tab.pick, so there is one list and one implementation.</summary>
+    private void OnTabOverflowClick(object? sender, RoutedEventArgs e) => OpenTabPicker();
 
     private void LoadEditorFromSelectedTab()
     {

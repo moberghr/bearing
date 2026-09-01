@@ -3,6 +3,9 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Templates;
+using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Threading;
@@ -15,7 +18,10 @@ namespace Bearing.App.Tests.Ui;
 /// <summary>
 /// Reaching the tabs that fall off the right edge (#65). The strip sat in a horizontal StackPanel, which
 /// measures at infinite width, so the overflow was laid out and clipped with nothing to scroll it — no
-/// scrollbar, no wheel, no chevrons, and the <c>+</c> button pushed out of reach with the tabs.
+/// scrollbar, no wheel, no chevron, and the <c>+</c> button pushed out of reach with the tabs. The scrollbar
+/// was the first fix and the wrong one — on a strip this short it is a thin target, and it says "there is
+/// more" without saying more of *what*. The strip now scrolls by wheel, keeps the selection in view, and
+/// reports how many tabs are off the edge so the chevron can name them.
 /// <para>
 /// The strip is assembled here the way the XAML assembles it (a ScrollViewer around a TabStrip), because the
 /// behaviour under test is the scroller's, not the window's.
@@ -144,6 +150,88 @@ public class TabStripScrollerTests
         window.Close();
     });
 
+    // ---- the overflow count the chevron shows ----------------------------------------------------
+
+    [Fact]
+    public Task An_overflowing_strip_reports_how_many_tabs_are_off_the_edge() => _ui.Run(() =>
+    {
+        // The count is the chevron's whole message — "there are N more, and they are over here" — so a wrong
+        // number is worse than no chevron. Read from arranged bounds, which is why this is a UI test and not
+        // arithmetic (TabOverflowTests covers the arithmetic).
+        var (window, scroller, strip, s) = Strip(tabs: 30);
+        Assert.True(scroller.Extent.Width > scroller.Viewport.Width, "the fixture must overflow");
+
+        var hidden = s.HiddenCount();
+
+        Assert.True(hidden > 0, "an overflowing strip reported nothing hidden");
+        Assert.True(hidden < strip.ItemCount, $"all {strip.ItemCount} tabs reported hidden; some are on screen");
+        window.Close();
+    });
+
+    [Fact]
+    public Task A_strip_that_fits_reports_nothing_hidden() => _ui.Run(() =>
+    {
+        // Which is what hides the chevron. A chevron reading "» 0" beside a strip with room to spare is the
+        // failure this pins.
+        var (window, _, _, s) = Strip(tabs: 2, width: 2000);
+
+        Assert.Equal(0, s.HiddenCount());
+        window.Close();
+    });
+
+    [Fact]
+    public Task Scrolling_to_the_end_still_leaves_tabs_hidden_behind() => _ui.Run(() =>
+    {
+        // The count must follow the scroll rather than only ever meaning "off the right". Scrolled fully
+        // right, the hidden tabs are the ones behind you — and they are just as unreachable.
+        var (window, _, _, s) = Strip(tabs: 30);
+
+        s.ScrollBy(100_000);
+        window.UpdateLayout();
+
+        Assert.True(s.HiddenCount() > 0, "scrolled to the far end, the tabs behind were reported as visible");
+        window.Close();
+    });
+
+    [Fact]
+    public Task The_count_changes_when_the_window_is_narrowed() => _ui.Run(() =>
+    {
+        // The chevron is driven by an event that fires on layout, so the number has to actually move when the
+        // window does — a count computed once at construction would look right until the first resize.
+        var (window, _, _, s) = Strip(tabs: 30, width: 1200);
+        var wide = s.HiddenCount();
+
+        window.Width = 300;
+        window.UpdateLayout();
+        Pump(window);
+
+        Assert.True(s.HiddenCount() > wide,
+            $"narrowing the window from 1200 to 300 left the count at {s.HiddenCount()} (was {wide})");
+        window.Close();
+    });
+
+    [Fact]
+    public Task Overflow_changes_are_announced_once_per_change() => _ui.Run(() =>
+    {
+        // LayoutUpdated fires constantly; the event is filtered to actual changes so the chevron is not
+        // re-rendered every frame. Assert both halves: that a real change is announced, and that a pass which
+        // changes nothing is quiet.
+        var (window, _, _, s) = Strip(tabs: 30, width: 1200);
+        var announced = 0;
+        s.OverflowChanged += () => announced++;
+
+        window.Width = 300;
+        window.UpdateLayout();
+        Pump(window);
+        Assert.True(announced > 0, "narrowing the window announced no overflow change");
+
+        var afterResize = announced;
+        window.UpdateLayout();
+        Pump(window);
+        Assert.Equal(afterResize, announced);
+        window.Close();
+    });
+
     private static (Window Window, ScrollViewer Scroller, TabStrip Strip, TabStripScroller Scrolling)
         Strip(int tabs, double width = 400)
     {
@@ -152,6 +240,17 @@ public class TabStripScrollerTests
             ItemsSource = Enumerable.Range(1, tabs)
                 .Select(i => new EditorTabViewModel($"query-{i:00}.sql"))
                 .ToList(),
+            // The header template the XAML uses, capped and ellipsized the same way. Without it a tab renders
+            // the view model's ToString() — 539px of type name, wider than the whole viewport — so every tab
+            // counted as partly hidden and the overflow count was 30 out of 30. A fixture whose tabs cannot
+            // fit under any circumstances is not the strip the app has.
+            ItemTemplate = new FuncDataTemplate<EditorTabViewModel>((tab, _) => new TextBlock
+            {
+                Text = tab?.Header,
+                MaxWidth = 160,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center,
+            }, supportsRecycling: true),
         };
         var scroller = new ScrollViewer
         {
