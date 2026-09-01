@@ -22,6 +22,22 @@ namespace Bearing.App.Controls;
 /// </summary>
 public static class ResultChrome
 {
+    /// <summary>
+    /// Content height a result's meta row always reserves, whether or not the commit group is showing.
+    /// <para>
+    /// The group (● N pending · Discard · Save) appears on the first pending edit and is a pixel taller than
+    /// the row's other buttons, so revealing it grew the meta row and re-measured the grid beneath it —
+    /// moving the row the user had just edited (#60). Reserving the taller state costs the clean row one
+    /// pixel and costs the dirty row nothing, which is the right way round.
+    /// </para>
+    /// <para>
+    /// A measured number, not a guess: 22 is the commit group's own height at the button metrics in
+    /// <see cref="ResultEditToolbar"/>. <c>Ui.ResultGridScrollTests</c> asserts the grid does not change
+    /// height across the first edit, so if those metrics move this fails rather than drifts.
+    /// </para>
+    /// </summary>
+    public const double MetaRowContentHeight = 22;
+
     // Filled collapse triangles. Right = collapsed, down = expanded.
     private const string ChevronRightData = "M0,0 L5,4 L0,8 Z";
     private const string ChevronDownData = "M0,0 L8,0 L4,5 Z";

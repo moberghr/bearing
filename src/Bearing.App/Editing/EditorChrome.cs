@@ -1,5 +1,7 @@
 using Avalonia.Media;
+using Avalonia.Styling;
 using AvaloniaEdit;
+using AvaloniaEdit.Folding;
 using AvaloniaEdit.TextMate;
 using TextMateSharp.Grammars;
 using static Bearing.App.Controls.Tokens;
@@ -33,6 +35,30 @@ public static class EditorChrome
         editor.TextArea.TextView.CurrentLineBackground = new SolidColorBrush(lineActive);
         editor.TextArea.TextView.CurrentLineBorder = new Pen(new SolidColorBrush(lineActive)); // no contrasting box
         editor.TextArea.SelectionBrush = SelectionBrush;
+        ApplyFoldMarginColours(editor);
+    }
+
+    /// <summary>
+    /// Colour the fold gutter from the app's palette. AvaloniaEdit 12's Fluent theme sets none of these, so
+    /// the markers fell back to the library's own CLR defaults — a gray outline on a <b>white</b> fill with a
+    /// black hover — which made the one part of the editor that ignored the dark variant a light-first chip
+    /// in a graphite gutter (#74).
+    /// <para>
+    /// Dim rather than faint, and filled with the editor surface so the marker reads as a mark in the gutter
+    /// rather than a chip on top of it: the same weight as the line numbers beside it, which is what the
+    /// gutter's other content is. Applied as a style rather than to the margin instance, because the margin
+    /// is installed later (by <c>SqlFoldingController</c>) and can be re-created by a re-template.
+    /// </para>
+    /// </summary>
+    private static void ApplyFoldMarginColours(TextEditor editor)
+    {
+        var style = new Style(x => x.OfType<FoldingMargin>());
+        style.Setters.Add(new Setter(FoldingMargin.FoldingMarkerBrushProperty, Res("Text.Dim")));
+        style.Setters.Add(new Setter(FoldingMargin.FoldingMarkerBackgroundBrushProperty, Res("Bg.Editor")));
+        // Hover: brighter stroke, same fill — the affordance is the contrast coming up, not a colour change.
+        style.Setters.Add(new Setter(FoldingMargin.SelectedFoldingMarkerBrushProperty, Res("Text.Primary")));
+        style.Setters.Add(new Setter(FoldingMargin.SelectedFoldingMarkerBackgroundBrushProperty, Res("Bg.Editor")));
+        editor.Styles.Add(style);
     }
 
     // One registry for the process, built on first use. Constructing it is the ~100ms — parsing the grammar

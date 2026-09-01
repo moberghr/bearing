@@ -156,6 +156,15 @@ public sealed partial class ResultView
             if (e.Row.DataContext is not object?[] row || e.Column.Tag is not int idx) return;
             if (e.EditingElement is TextBox tb) result.SetCell(row, idx, tb.Text);
             ResultRowPainter.ApplyRowStatus(e.Row, result); // tint + status bar on the edited row immediately
+
+            // The same corrective the click path has (ResultCellFactory.KeepClickedCellInView), for the same
+            // reason: whatever moved the viewport while the editor tore down — the grid re-adopting a current
+            // cell, the row re-tinting, the cell's content swapping — the cell you just edited ends up
+            // visible again (#60). A no-op when nothing moved, and posted because the layout pass that could
+            // move it happens after this returns.
+            var column = e.Column;
+            Avalonia.Threading.Dispatcher.UIThread.Post(
+                () => grid.ScrollIntoView(row, column), Avalonia.Threading.DispatcherPriority.Loaded);
         };
     }
 

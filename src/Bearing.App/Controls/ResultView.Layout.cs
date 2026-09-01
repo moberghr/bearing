@@ -120,7 +120,13 @@ public sealed partial class ResultView
         // Right of the meta row: Export (any grid result), then subtle edit controls for an editable result or
         // a read-only lock chip + reason for a locked one (design RESULTS_GRID §8). A non-grid result
         // (statement message / error) shows none of it.
-        var metaRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        // Height reserved for the tallest state the row can take, so the commit group appearing cannot
+        // re-measure the grid under the cell being edited (#60 — see ResultChrome.MetaRowContentHeight).
+        var metaRow = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            MinHeight = ResultChrome.MetaRowContentHeight,
+        };
         Grid.SetColumn(left, 0);
         metaRow.Children.Add(left);
         Control? right = BuildMetaActions(result, grid);

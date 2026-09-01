@@ -94,8 +94,12 @@ faster, parallelizable, and reads better. Reach for a UI test when the visual tr
   foreground for a line the tokenizer has not reached — and "the comment's colour does not appear below it"
   then passes because nothing is coloured at all. Pumping to a stable signature did not close it (still ~1
   run in 3 red over eight runs), so a colouring suite was written and then dropped rather than shipped
-  flaky. Verify highlighting by eye; #69 was investigated this way and did not reproduce (LF and CRLF,
-  wholesale load and incremental edit).
+  flaky. Verify highlighting by eye; #69 was investigated this way and did not reproduce — LF and CRLF,
+  wholesale load and incremental edit, and every comment shape that could plausibly leak tokenizer state
+  (no space after the dashes, trailing on a code line, inside a statement, last line, and a line comment
+  containing `/*`, an apostrophe or a quoted word). The **one** shape that colours the rest of the buffer
+  green is an unterminated `/*`, which is correct — Postgres comments to end of file too — and is invisible
+  to execution, because Bearing runs the statement under the caret rather than the file.
 - **Available and unused so far:** synthetic input on any `TopLevel` (`MouseDown`/`MouseMove`/`MouseUp`/
   `MouseWheel`, `KeyPress`/`KeyPressQwerty`, `KeyTextInput`, `SetRenderScaling`, and `DragDrop`, which takes
   an `IDataTransfer` and so already matches the v12 typed API, §9.3), plus real pixels via

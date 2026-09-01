@@ -4,6 +4,8 @@ using System.Threading.Tasks;
 using Avalonia.Controls;
 using AvaloniaEdit;
 using AvaloniaEdit.Folding;
+using Avalonia.Media;
+using Bearing.App.Controls;
 using Bearing.App.Editing;
 using Bearing.App.ViewModels;
 using Xunit;
@@ -124,6 +126,28 @@ public class EditorFoldingTests
         Assert.NotEqual(unfolded, folded);
         f.Window.Close();
     });
+
+    /// <summary>The gutter is coloured from the app's palette rather than from AvaloniaEdit's own defaults,
+    /// which are light-first — a gray outline on a white fill, with a black hover, in a graphite gutter.
+    /// That is #74's one confirmed defect, so it is pinned to the tokens rather than to literals.</summary>
+    [Fact]
+    public Task The_fold_margin_is_coloured_from_the_apps_palette() => _ui.Run(() =>
+    {
+        var f = Editor();
+        f.Load(TwoStatements);
+        var margin = f.Editor.TextArea.LeftMargins.OfType<FoldingMargin>().Single();
+
+        Assert.Equal(Colour(Tokens.Res("Text.Dim")), Colour(margin.FoldingMarkerBrush));
+        Assert.Equal(Colour(Tokens.Res("Bg.Editor")), Colour(margin.FoldingMarkerBackgroundBrush));
+        Assert.Equal(Colour(Tokens.Res("Text.Primary")), Colour(margin.SelectedFoldingMarkerBrush));
+        // The library's defaults, so a regression to them is unambiguous.
+        Assert.NotEqual(Colors.White, Colour(margin.FoldingMarkerBackgroundBrush));
+        Assert.NotEqual(Colors.Gray, Colour(margin.FoldingMarkerBrush));
+        f.Window.Close();
+    });
+
+    private static Color Colour(IBrush? brush)
+        => (brush as ISolidColorBrush)?.Color ?? Colors.Transparent;
 
     /// <summary>Fold in one tab, switch to another: the new buffer must not open wearing the old one's folds,
     /// and measuring it must not throw. Measured honestly, this passes without <c>Reset</c> too — a

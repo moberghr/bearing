@@ -91,12 +91,54 @@ public class ResultGridScrollTests
         Assert.Equal("edited", target[10]);
         Assert.True(rs.HasPendingChanges);
 
-        // …and the cell it landed on is still realized, in the same place, at the same horizontal offset.
+        // …and the cell it landed on is still realized, in exactly the same place. No tolerance any more:
+        // the one pixel that used to be here was the commit group appearing and re-measuring the grid, and
+        // the meta row now reserves its height (ResultChrome.MetaRowContentHeight).
         var after = ResultsHarness.PositionIn(ResultsHarness.RequireCell(view, target, 10), grid);
         Assert.Equal(beforeH, Offsets(grid).Horizontal);
-        Assert.Equal(before.X, after.X);
-        Assert.True(Math.Abs(before.Y - after.Y) <= 1,
-            $"the edited cell moved vertically: {before.Y} -> {after.Y}");
+        Assert.Equal(before, after);
+        window.Close();
+    });
+
+    /// <summary>The first pending edit does not change the grid's height. The commit group
+    /// (● N pending · Discard · Save) is a pixel taller than the row's other buttons, so revealing it grew
+    /// the meta row and re-measured the grid beneath it — which is the reflow #60 asks to be reserved
+    /// away.</summary>
+    [Fact]
+    public Task The_first_pending_edit_does_not_reflow_the_grid() => _ui.Run(() =>
+    {
+        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (window, view) = ResultsHarness.Show(rs);
+        var grid = ResultsHarness.Grid(view);
+
+        Assert.False(rs.HasPendingChanges);
+        var before = grid.Bounds.Height;
+
+        rs.SetCell(rows[0], 1, "edited");
+        ResultsHarness.Pump(window);
+
+        Assert.True(rs.HasPendingChanges, "the fixture must have made the commit group appear");
+        Assert.Equal(before, grid.Bounds.Height);
+        window.Close();
+    });
+
+    /// <summary>…and neither does discarding them again, so the reserve holds in both directions.</summary>
+    [Fact]
+    public Task Clearing_the_pending_edits_does_not_reflow_the_grid_either() => _ui.Run(() =>
+    {
+        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (window, view) = ResultsHarness.Show(rs);
+        var grid = ResultsHarness.Grid(view);
+
+        rs.SetCell(rows[0], 1, "edited");
+        ResultsHarness.Pump(window);
+        var dirty = grid.Bounds.Height;
+
+        rs.ClearPending();
+        ResultsHarness.Pump(window);
+
+        Assert.False(rs.HasPendingChanges);
+        Assert.Equal(dirty, grid.Bounds.Height);
         window.Close();
     });
 
