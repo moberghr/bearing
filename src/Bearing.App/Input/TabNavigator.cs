@@ -40,16 +40,32 @@ public sealed class TabNavigator
     /// <summary>tab.next / tab.prev: move to the adjacent tab in visual (strip) order, wrapping around.</summary>
     public void SelectAdjacent(WorkspaceViewModel workspace, int dir)
     {
-        if (workspace.Tabs.Count == 0) return;
-        var i = workspace.SelectedTab is { } t ? workspace.Tabs.IndexOf(t) : 0;
-        workspace.SelectedTab = workspace.Tabs[AdjacentIndex(workspace.Tabs.Count, i, dir)];
+        // Visual order, not Tabs order: pinned tabs are drawn in their own row above the strip (#67), so
+        // stepping has to follow what is on screen or "next tab" jumps rows unpredictably.
+        var order = VisualOrder(workspace);
+        if (order.Count == 0) return;
+        var i = workspace.SelectedTab is { } t ? Math.Max(0, order.IndexOf(t)) : 0;
+        workspace.SelectedTab = order[AdjacentIndex(order.Count, i, dir)];
+    }
+
+    /// <summary>The tabs in the order they are drawn: the pinned row first, then the strip, each keeping its
+    /// own relative order.</summary>
+    internal static List<EditorTabViewModel> VisualOrder(WorkspaceViewModel workspace)
+    {
+        var order = new List<EditorTabViewModel>(workspace.Tabs.Count);
+        foreach (var tab in workspace.Tabs) if (tab.IsPinned) order.Add(tab);
+        foreach (var tab in workspace.Tabs) if (!tab.IsPinned) order.Add(tab);
+        return order;
     }
 
     /// <summary>tab.goto{n}: jump to tab n (1-based); n=9 is "last tab" (browser convention). Clamps.</summary>
     public void SelectByIndex(WorkspaceViewModel workspace, int n)
     {
-        if (workspace.Tabs.Count == 0) return;
-        workspace.SelectedTab = workspace.Tabs[GotoIndex(workspace.Tabs.Count, n)];
+        // Also visual order: Alt+1 means "the first tab I can see", which is the first pinned one when there
+        // are any.
+        var order = VisualOrder(workspace);
+        if (order.Count == 0) return;
+        workspace.SelectedTab = order[GotoIndex(order.Count, n)];
     }
 
     /// <summary>tab.mruNext / tab.mruPrev: step through tabs in most-recently-used order while the binding's

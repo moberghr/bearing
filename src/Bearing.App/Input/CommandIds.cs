@@ -13,6 +13,10 @@ public static class CommandIds
     public const string FileSaveAs = "file.saveAs";
     public const string FileOpen = "file.open";
     public const string TabNew = "tab.new";
+
+    /// <summary>Pin or unpin the selected tab (#67). One command rather than two, because the menu item and
+    /// the keystroke both mean "flip this" and a separate Unpin would need its own disabled state.</summary>
+    public const string TabTogglePin = "tab.togglePin";
     public const string TabClose = "tab.close";
     public const string TabRename = "tab.rename";
     public const string ViewToggleSidePane = "view.toggleSidePane";

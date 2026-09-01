@@ -1,8 +1,10 @@
 using System;
+using System.Collections;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
@@ -20,11 +22,49 @@ public partial class MainWindow
 
     private void OnNewTabClick(object? sender, RoutedEventArgs e) => NewTabAndFocus();
 
+    /// <summary>
+    /// Point whichever row holds the selected tab at it.
+    /// <para>
+    /// Selection flows one way — the view model decides, the strips display (#67). Two strips cannot share a
+    /// two-way <c>SelectedTab</c>: the row without the tab writes its own null back and unselects the other
+    /// row. Listening to <c>SelectionChanged</c> is no better — a strip auto-selects an item of its own when
+    /// its items change, so pinning the selected tab made the row that lost it claim a different tab and push
+    /// that into the view model. What the user clicked arrives through the header's own
+    /// <see cref="OnTabHeaderPressed"/> instead, which is unambiguous.
+    /// </para>
+    /// <para>
+    /// The other row is not cleared, because it cannot be: a <c>TabStrip</c> is always-selected and will
+    /// re-assert one. It is stopped from <i>drawing</i> it instead — the <c>dormant</c> class in the XAML,
+    /// bound to which row owns the selection.
+    /// </para>
+    /// </summary>
+    private void SyncTabStripSelection()
+    {
+        var tab = Vm?.Workspace.SelectedTab;
+        if (tab is null) return;
+        Show(PinnedTabStrip, tab);
+        Show(TabStrip, tab);
+
+        static void Show(TabStrip strip, EditorTabViewModel tab)
+        {
+            if (strip.ItemsSource is IEnumerable items && items.Cast<object?>().Any(i => ReferenceEquals(i, tab)))
+                strip.SelectedItem = tab;
+        }
+    }
+
     /// <summary>Open a tab and put the caret in it (#88). Opening a tab is only ever a prelude to typing in
     /// it, and the ＋ button and the keyboard command both left focus where it was — on the button, or
     /// wherever the keystroke came from — so the first thing typed went nowhere.
     /// <para>One helper for both routes so they cannot diverge; the view-model creates the tab and does not
     /// know about focus, which is the right split.</para></summary>
+    /// <summary>Which tab a left-click on a header selects. The strips do not report their own selection
+    /// (see <see cref="SyncTabStripSelection"/>), so this is where a click becomes a selection.</summary>
+    private void SelectTabFromHeader(Control target, EditorTabViewModel tab, PointerPressedEventArgs e)
+    {
+        if (!TabPointerGestures.ActivatesCloseButton(e.GetCurrentPoint(target).Properties.PointerUpdateKind)) return;
+        if (Vm?.Workspace is { } workspace) workspace.SelectedTab = tab;
+    }
+
     internal void NewTabAndFocus(Guid? connectionId = null)
     {
         Vm?.Workspace.NewTab(connectionId: connectionId);
@@ -48,11 +88,15 @@ public partial class MainWindow
     private async void OnTabHeaderPressed(object? sender, PointerPressedEventArgs e)
     {
         if (sender is not Control { DataContext: EditorTabViewModel tab } target) return;
+        SelectTabFromHeader(target, tab, e);
         if (!TabPointerGestures.ClosesTab(e.GetCurrentPoint(target).Properties.PointerUpdateKind)) return;
         // The inline rename box lives in this same panel, and on X11 a middle-click in a text box pastes the
         // primary selection — so closing the tab on that press would take the tab away mid-rename, from a
         // gesture that meant "paste".
         if (tab.IsRenaming || e.Source is TextBox) return;
+        // A pinned tab is one you mean to keep, and its row has no ✕ for the same reason (#67). Unpin first.
+        if (tab.IsPinned) return;
+
         e.Handled = true;
         await CloseTabAsync(tab);
     }
@@ -136,9 +180,11 @@ public partial class MainWindow
             reveal: path is null ? null : () => vm.RevealScript(path),
             openFolder: path is null ? null : () => OpenContainingFolderAsync(path),
             delete: path is null ? null : () => DeleteTabFileAsync(tab),
+            togglePin: () => vm.Workspace.SetPinned(tab, !tab.IsPinned),
             renameGesture: MenuGesture(CommandIds.TabRename),
             saveGesture: MenuGesture(CommandIds.FileSave),
-            closeGesture: MenuGesture(CommandIds.TabClose));
+            closeGesture: MenuGesture(CommandIds.TabClose),
+            pinGesture: MenuGesture(CommandIds.TabTogglePin));
 
         menu.ShowAt(host, showAtPointer: true);
         e.Handled = true;

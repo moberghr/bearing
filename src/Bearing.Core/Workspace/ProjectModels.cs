@@ -54,6 +54,10 @@ public sealed record OpenEditor
 
     public int CaretOffset { get; init; }
     public Guid? ConnectionId { get; init; }
+
+    /// <summary>Whether the tab was pinned (#67). Pinning is a statement about which scripts matter, so it
+    /// is worth surviving a restart — unlike the tab's scroll position or its zoom.</summary>
+    public bool Pinned { get; init; }
 }
 
 /// <summary>Per-user, gitignored session state ("resume where I left off").</summary>

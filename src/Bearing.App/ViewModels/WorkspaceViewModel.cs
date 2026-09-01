@@ -44,7 +44,15 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         _autosave.FileCreated += _scripts.RefreshScripts;
         // Re-raise the binding notification when the selection changes underneath us (the context is the
         // single owner; the connections concern also listens to the same event).
-        _ctx.SelectedTabChanged += () => OnPropertyChanged(nameof(SelectedTab));
+        _ctx.SelectedTabChanged += () =>
+        {
+            OnPropertyChanged(nameof(SelectedTab));
+            OnPropertyChanged(nameof(SelectionIsPinned));
+        };
+        // Hooked once here rather than called at each Tabs mutation: opening, closing, restoring and a
+        // project switch all move tabs, and a split that has to be remembered at five call sites is a split
+        // that will be forgotten at the sixth.
+        ((System.Collections.Specialized.INotifyCollectionChanged)Tabs).CollectionChanged += (_, _) => ResplitTabs();
     }
 
     /// <summary>The autosave coordinator. Also reached by the execution concern through
@@ -205,6 +213,50 @@ public sealed partial class WorkspaceViewModel : ObservableObject
             SelectedTab = Tabs[Math.Max(0, index - 1)];
     }
 
+    /// <summary>
+    /// The pinned tabs and the rest, in <see cref="Tabs"/> order — two live views over the one source, so the
+    /// strip can render pinned tabs in their own row (#67) while every index-based rule keeps reading
+    /// <see cref="Tabs"/>.
+    /// <para>
+    /// Kept in step by minimal edits rather than rebuilt: the strips bind their selection two-way, so a
+    /// <c>Clear()</c> would make the control fix up its own selection and write that back — the shape of
+    /// #87, and the reason these are patched in place.
+    /// </para>
+    /// </summary>
+    public ObservableCollection<EditorTabViewModel> PinnedTabs { get; } = new();
+
+    /// <inheritdoc cref="PinnedTabs"/>
+    public ObservableCollection<EditorTabViewModel> UnpinnedTabs { get; } = new();
+
+    /// <summary>
+    /// Whether the selected tab is in the pinned row. The strips read this to decide which of them draws a
+    /// selection at all: a <c>TabStrip</c> is always-selected, so the row that does not hold the selected tab
+    /// still has one of its own, and without this both rows would look selected (#67).
+    /// </summary>
+    public bool SelectionIsPinned => SelectedTab?.IsPinned == true;
+
+    /// <summary>True while any tab is pinned — the pinned row is hidden entirely when none is, rather than
+    /// sitting there as an empty strip.</summary>
+    public bool HasPinnedTabs => PinnedTabs.Count > 0;
+
+    /// <summary>Pin or unpin, and re-split the views. Public because the context menu, the command and the
+    /// session restore all reach for it.</summary>
+    public void SetPinned(EditorTabViewModel tab, bool pinned)
+    {
+        if (!Tabs.Contains(tab) || tab.IsPinned == pinned) return;
+        tab.IsPinned = pinned;
+        ResplitTabs();
+    }
+
+    /// <summary>Re-derive <see cref="PinnedTabs"/> and <see cref="UnpinnedTabs"/> from <see cref="Tabs"/>.</summary>
+    private void ResplitTabs()
+    {
+        TabViewSync.Apply(PinnedTabs, Tabs.Where(t => t.IsPinned).ToList());
+        TabViewSync.Apply(UnpinnedTabs, Tabs.Where(t => !t.IsPinned).ToList());
+        OnPropertyChanged(nameof(HasPinnedTabs));
+        OnPropertyChanged(nameof(SelectionIsPinned));
+    }
+
     public async Task RestoreTabsAsync(SessionState? session)
     {
         Tabs.Clear();
@@ -242,11 +294,13 @@ public sealed partial class WorkspaceViewModel : ObservableObject
                 }
             }
             tab.ConnectionId = e.ConnectionId ?? _ctx.DefaultConnectionId;
+            tab.IsPinned = e.Pinned;
         }
 
         if (Tabs.Count == 0)
             NewTab();
 
+        ResplitTabs();
         var idx = session?.SelectedEditorIndex ?? 0;
         SelectedTab = Tabs[Math.Clamp(idx, 0, Tabs.Count - 1)];
     }

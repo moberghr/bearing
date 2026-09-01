@@ -22,6 +22,8 @@ public static class KeymapDefaults
         yield return G(CommandIds.FileOpen, "Ctrl+O");
         yield return G(CommandIds.TabNew, "Ctrl+N"); // primary (shown in menu); Ctrl+T is the alias
         yield return G(CommandIds.TabNew, "Ctrl+T");
+        // Alt+P: Ctrl+P is the command palette's territory in every editor, and Ctrl+Shift+P too.
+        yield return G(CommandIds.TabTogglePin, "Alt+P");
         yield return G(CommandIds.TabClose, "Ctrl+F4"); // Windows MDI convention; Ctrl+W is the editor's delete-word
         yield return G(CommandIds.TabRename, "F2");
         yield return G(CommandIds.ViewToggleSidePane, "Ctrl+B");

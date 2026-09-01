@@ -31,6 +31,7 @@ public partial class MainWindow : Window
     private readonly TabNavigator _tabs;                    // visual / MRU / go-to-N tab switching
     private readonly ResultsPaneController _resultsPane;    // editor / results split visibility
     private readonly TabStripScroller _tabScroll;           // overflowing tab strip: wheel + keep-selected-visible
+    private readonly TabStripScroller _pinnedTabScroll;      // …and the pinned row, which overflows the same way
     private readonly IReadOnlyList<string> _keymapWarnings;
     private bool _keymapWarningsShown;
     private HashSet<string> _navCommands = new();
@@ -68,6 +69,7 @@ public partial class MainWindow : Window
         _palette = new CommandPaletteHost(this, _commands, () => _dispatcher!.Keymap);
         _resultsPane = new ResultsPaneController(WorkspaceGrid, ResultsSplitter, ResultsView);
         _tabScroll = new TabStripScroller(TabScroll, TabStrip);
+        _pinnedTabScroll = new TabStripScroller(PinnedTabScroll, PinnedTabStrip);
         // The editor's FontSize is applied here rather than bound in XAML: one editor serves every tab,
         // and each tab carries its own zoom over the configured base size. The controller also owns the
         // Ctrl+wheel gesture; this window only says where the resulting size is announced.
@@ -197,6 +199,13 @@ public partial class MainWindow : Window
         Vm.Connections.PropertyChanged += OnViewModelPropertyChanged;
         Vm.Connections.TabDatabases.CollectionChanged -= OnTabDatabasesChanged;
         Vm.Connections.TabDatabases.CollectionChanged += OnTabDatabasesChanged;
+        // Pinning moves a tab between the two rows without changing which tab is selected, so the strips have
+        // to be re-told even though the selection did not move (#67) — otherwise the row that lost the tab
+        // keeps showing it selected.
+        Vm.Workspace.PinnedTabs.CollectionChanged -= OnTabRowsChanged;
+        Vm.Workspace.PinnedTabs.CollectionChanged += OnTabRowsChanged;
+        Vm.Workspace.UnpinnedTabs.CollectionChanged -= OnTabRowsChanged;
+        Vm.Workspace.UnpinnedTabs.CollectionChanged += OnTabRowsChanged;
         // A Clear() + N adds rebuild (RefreshConnections, on every connection save/delete) drops the
         // server pill's rendered selection; re-select once it has settled.
         Vm.Connections.Connections.CollectionChanged -= OnConnectionsListChanged;
@@ -355,11 +364,18 @@ public partial class MainWindow : Window
         if (Vm is { } vm) vm.StatusText = $"Editor font {size:0.#} pt (this tab)";
     }
 
+    private void OnTabRowsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        => SyncTabStripSelection();
+
     private void LoadEditorFromSelectedTab()
     {
         // Every route to a different tab comes through here, keyboard ones included, so this is where the
-        // strip is told to show what is now selected (#65).
+        // strips are told to show what is now selected (#65). Both are asked: only the row holding the
+        // selection has anything to do, and neither knows which that is.
+        // Which row shows the selection, before asking either to scroll to it.
+        SyncTabStripSelection();
         _tabScroll.BringSelectionIntoView();
+        _pinnedTabScroll.BringSelectionIntoView();
         var tab = Vm?.Workspace.SelectedTab;
         // Folds belong to the editor, not to a tab (one editor serves all of them), so they are dropped
         // before the buffer is replaced rather than carried into it — and dropped *first*, while the old

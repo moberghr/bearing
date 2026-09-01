@@ -398,16 +398,14 @@
       <DockPanel LastChildFill="True">
         <Border DockPanel.Dock="Top" Padding="4,4,4,0" Background="{DynamicResource Bg.Chrome}"
                 BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
-          <!-- The strip scrolls; the + button is docked outside it so it can never be pushed off the right
+          <!-- Pinned tabs get their own row above the strip (#67): a fixed position you can build muscle
+               memory for, which the churn of scratch tabs below never moves. Hidden entirely when nothing is
+               pinned, rather than sitting there as an empty strip. Both rows scroll (#65).
+               The strip scrolls; the + button is docked outside it so it can never be pushed off the right
                edge with the tabs (#65). A horizontal StackPanel measured the strip at infinite width, so the
                overflow was laid out and then clipped, with nothing to reach it by. -->
           <DockPanel LastChildFill="True">
-            <Button DockPanel.Dock="Right" Content="+" Click="OnNewTabClick" Padding="8,2" Margin="6,0,0,0"
-                    VerticalAlignment="Center" ToolTip.Tip="New editor tab (Ctrl+T)"/>
-            <ScrollViewer x:Name="TabScroll" HorizontalScrollBarVisibility="Auto"
-                          VerticalScrollBarVisibility="Disabled">
-            <TabStrip x:Name="TabStrip" ItemsSource="{Binding Workspace.Tabs}" SelectedItem="{Binding Workspace.SelectedTab}">
-              <TabStrip.Styles>
+            <DockPanel.Styles>
                 <!-- Compact, underline-style tabs. Retemplated so the only selected marker is a
                      bottom border at the tab's true bottom edge (Fluent's default draws an oversized
                      font plus a mid-tab selection pipe). -->
@@ -448,7 +446,56 @@
                   <Setter Property="FontWeight" Value="SemiBold"/>
                   <Setter Property="Opacity" Value="1"/>
                 </Style>
-              </TabStrip.Styles>
+                <!-- …but only in the row that actually holds it. A TabStrip is always-selected, so the other
+                     row keeps a selection of its own; without this both rows would look selected (#67). -->
+                <Style Selector="TabStrip.dormant TabStripItem:selected">
+                  <Setter Property="Background" Value="Transparent"/>
+                  <Setter Property="BorderBrush" Value="Transparent"/>
+                  <Setter Property="Foreground" Value="{DynamicResource Text.Dim}"/>
+                  <Setter Property="FontWeight" Value="Normal"/>
+                  <Setter Property="Opacity" Value="0.8"/>
+                </Style>
+            </DockPanel.Styles>
+            <ScrollViewer x:Name="PinnedTabScroll" DockPanel.Dock="Top"
+                          IsVisible="{Binding Workspace.HasPinnedTabs}"
+                          HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                          Margin="0,0,0,2">
+              <!-- Selection is pushed from code-behind (SyncTabStripSelection) rather than bound: two strips
+                   over one SelectedTab cannot both bind it. Two-way, the row without the selected tab writes
+                   its own null back and unselects the other row; one-way, it keeps a stale selection instead,
+                   because a SelectingItemsControl ignores an item it does not contain. Only the window knows
+                   which row holds the tab, so the window says. -->
+              <TabStrip x:Name="PinnedTabStrip" ItemsSource="{Binding Workspace.PinnedTabs}"
+                        Classes.dormant="{Binding !Workspace.SelectionIsPinned}">
+                <TabStrip.ItemTemplate>
+                  <DataTemplate x:DataType="vm:EditorTabViewModel">
+                    <!-- Compact on purpose: name, state beacon, dirty dot. No X — a pinned tab is one you
+                         mean to keep, and a close target two pixels from it is how you lose it. Unpin from
+                         the right-click menu or Alt+P, then close. -->
+                    <StackPanel Orientation="Horizontal" DoubleTapped="OnTabHeaderDoubleTapped"
+                                ContextRequested="OnTabContextRequested"
+                                PointerPressed="OnTabHeaderPressed">
+                      <TextBlock Text="{Binding Header}" VerticalAlignment="Center"
+                                 ToolTip.Tip="{Binding HeaderTooltip}"/>
+                      <TextBlock Text="●" FontSize="9" Margin="5,0,0,0" VerticalAlignment="Center"
+                                 Foreground="{DynamicResource Accent.Brand}" ToolTip.Tip="Unsaved changes"
+                                 IsVisible="{Binding IsDirty}"/>
+                      <controls:ConnectionBeacon Width="12" Height="12" Margin="6,0,0,0"
+                                                 VerticalAlignment="Center"
+                                                 State="{Binding ConnectionState}"
+                                                 ToolTip.Tip="{Binding ConnectionDisplay}"
+                                                 IsVisible="{Binding ConnectionDisplay, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+                    </StackPanel>
+                  </DataTemplate>
+                </TabStrip.ItemTemplate>
+              </TabStrip>
+            </ScrollViewer>
+            <Button DockPanel.Dock="Right" Content="+" Click="OnNewTabClick" Padding="8,2" Margin="6,0,0,0"
+                    VerticalAlignment="Center" ToolTip.Tip="New editor tab (Ctrl+T)"/>
+            <ScrollViewer x:Name="TabScroll" HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Disabled">
+            <TabStrip x:Name="TabStrip" ItemsSource="{Binding Workspace.UnpinnedTabs}"
+                      Classes.dormant="{Binding Workspace.SelectionIsPinned}">
               <TabStrip.ItemTemplate>
                 <DataTemplate x:DataType="vm:EditorTabViewModel">
                   <!-- Right-click: Rename / Save / Close / Reveal in Scripts / Open containing folder,
