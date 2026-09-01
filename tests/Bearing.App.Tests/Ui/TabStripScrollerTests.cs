@@ -64,7 +64,7 @@ public class TabStripScrollerTests
         Assert.False(scroller.Extent.Width > scroller.Viewport.Width,
             $"the fixture must not overflow: extent {scroller.Extent.Width}, viewport {scroller.Viewport.Width}");
 
-        s.ScrollBy(300);
+        Assert.False(s.ScrollBy(300), "a strip that fits reported a scroll");
 
         Assert.Equal(0, scroller.Offset.X);
         window.Close();
@@ -89,6 +89,31 @@ public class TabStripScrollerTests
         window.MouseWheel(point.Value, new Vector(0, 1));
         window.UpdateLayout();
         Assert.True(scroller.Offset.X < scrolled, "the wheel does not scroll back");
+        window.Close();
+    });
+
+    /// <summary>A wheel that cannot scroll is left for someone else. The handler runs in the tunnel phase,
+    /// so marking it handled anyway would kill the gesture over a strip that already fits — dead rather than
+    /// merely inert (found in review).</summary>
+    [Fact]
+    public Task A_wheel_that_cannot_scroll_is_not_swallowed() => _ui.Run(() =>
+    {
+        var (window, scroller, _, s) = Strip(tabs: 1, width: 2000);
+
+        Assert.False(s.ScrollBy(-100), "already at the left edge");
+        Assert.False(s.ScrollBy(100), "nothing to scroll");
+        window.Close();
+    });
+
+    /// <summary>At the far end there is nothing left to give either, so the wheel passes through there too.</summary>
+    [Fact]
+    public Task A_wheel_at_the_end_of_the_strip_is_not_swallowed() => _ui.Run(() =>
+    {
+        var (window, scroller, _, s) = Strip(tabs: 30);
+
+        Assert.True(s.ScrollBy(100_000), "the first scroll should move it to the end");
+        window.UpdateLayout();
+        Assert.False(s.ScrollBy(100), "already at the right edge");
         window.Close();
     });
 

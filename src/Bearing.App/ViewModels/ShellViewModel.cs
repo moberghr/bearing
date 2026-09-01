@@ -197,9 +197,19 @@ public sealed partial class ShellViewModel : ObservableObject
     /// </summary>
     private void RefreshHistoryIfShowing()
     {
-        if (ActivePanel == SidePanel.History && SidePaneOpen)
-            _ = History.ReloadAsync(CancellationToken.None);
+        if (ActivePanel != SidePanel.History || !SidePaneOpen) return;
+
+        // One reload in flight, newest wins. Running a 200-statement script fires this 200 times, and
+        // unordered concurrent FTS searches can settle the panel on an older answer than one already
+        // applied — as well as rebuilding the tree 200 times for one run.
+        var superseded = _historyReload;
+        _historyReload = new CancellationTokenSource();
+        superseded?.Cancel();
+        superseded?.Dispose();
+        _ = History.ReloadAsync(_historyReload.Token);
     }
+
+    private CancellationTokenSource? _historyReload;
 
     /// <summary>Environment color of a connection by display name (for the history dot); null if unknown.</summary>
     private string? ColorForConnection(string name)

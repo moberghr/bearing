@@ -43,11 +43,15 @@ internal sealed class TabStripScroller
 
     /// <summary>Scroll the strip by <paramref name="delta"/> horizontal pixels, clamped to what exists.
     /// A strip that fits entirely does not move.</summary>
-    public void ScrollBy(double delta)
+    /// <returns>Whether the strip actually moved — false when it already fits, or is already at that end.</returns>
+    public bool ScrollBy(double delta)
     {
         var maximum = _scroller.Extent.Width - _scroller.Viewport.Width;
-        if (maximum <= 0) return;
-        _scroller.Offset = _scroller.Offset.WithX(Clamp(_scroller.Offset.X + delta, 0, maximum));
+        if (maximum <= 0) return false;
+        var target = Clamp(_scroller.Offset.X + delta, 0, maximum);
+        if (target == _scroller.Offset.X) return false;
+        _scroller.Offset = _scroller.Offset.WithX(target);
+        return true;
     }
 
     /// <summary>
@@ -73,8 +77,9 @@ internal sealed class TabStripScroller
         // that is still what the user means. Down/away scrolls right, matching every horizontal strip.
         var notches = e.Delta.X != 0 ? e.Delta.X : e.Delta.Y;
         if (notches == 0) return;
-        ScrollBy(-notches * WheelStep);
-        e.Handled = true;
+        // Handled only if the strip moved. This runs in the tunnel phase, so swallowing a wheel that did
+        // nothing would leave the gesture dead over a strip that already fits.
+        if (ScrollBy(-notches * WheelStep)) e.Handled = true;
     }
 
     private static double Clamp(double value, double min, double max)

@@ -38,6 +38,18 @@ public sealed class TabAutosave : IDisposable
     private readonly Func<DateOnly> _today;
     private readonly Dictionary<EditorTabViewModel, CancellationTokenSource> _pending = new();
     private readonly HashSet<EditorTabViewModel> _watched = new();
+
+    /// <summary>
+    /// Guards <see cref="_pending"/> and <see cref="_watched"/>. Both are reached from whatever thread
+    /// raised the event that got here — a tab's PropertyChanged, the tabs collection changing, a flush on
+    /// the shutdown path — and a Dictionary or HashSet torn by two of those at once loses entries silently.
+    /// The visible symptom is a tab that was never subscribed, so typing in it never schedules a write.
+    /// <para>
+    /// Held only around the collection work, never across a file write.
+    /// </para>
+    /// </summary>
+    private readonly object _gate = new();
+
     private bool _disposed;
 
     public TabAutosave(WorkspaceContext ctx, TimeSpan? debounce = null, Func<DateOnly>? today = null)
@@ -69,14 +81,21 @@ public sealed class TabAutosave : IDisposable
 
     private void Watch(EditorTabViewModel tab)
     {
-        if (_watched.Add(tab)) tab.PropertyChanged += OnTabPropertyChanged;
+        bool added;
+        lock (_gate) added = _watched.Add(tab);
+        if (added) tab.PropertyChanged += OnTabPropertyChanged;
     }
 
     private void Unwatch(EditorTabViewModel tab)
     {
-        if (!_watched.Remove(tab)) return;
+        CancellationTokenSource? cts;
+        lock (_gate)
+        {
+            if (!_watched.Remove(tab)) return;
+            _pending.Remove(tab, out cts);
+        }
         tab.PropertyChanged -= OnTabPropertyChanged;
-        if (_pending.Remove(tab, out var cts)) { cts.Cancel(); cts.Dispose(); }
+        if (cts is not null) { cts.Cancel(); cts.Dispose(); }
     }
 
     private void OnTabPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -89,11 +108,23 @@ public sealed class TabAutosave : IDisposable
     private void Schedule(EditorTabViewModel tab)
     {
         if (_disposed) return;
-        if (_pending.Remove(tab, out var prior)) { prior.Cancel(); prior.Dispose(); }
 
         var cts = new CancellationTokenSource();
-        _pending[tab] = cts;
+        CancellationTokenSource? prior;
+        lock (_gate)
+        {
+            _pending.Remove(tab, out prior);
+            _pending[tab] = cts;
+        }
+        if (prior is not null) { prior.Cancel(); prior.Dispose(); }
         _ = DebouncedSaveAsync(tab, cts.Token);
+    }
+
+    /// <summary>Take a tab's pending write off the books, returning it so the caller can cancel it outside
+    /// the lock.</summary>
+    private CancellationTokenSource? TakePending(EditorTabViewModel tab)
+    {
+        lock (_gate) return _pending.Remove(tab, out var cts) ? cts : null;
     }
 
     private async Task DebouncedSaveAsync(EditorTabViewModel tab, CancellationToken ct)
@@ -114,7 +145,7 @@ public sealed class TabAutosave : IDisposable
     /// </summary>
     public async Task FlushAsync(EditorTabViewModel tab)
     {
-        if (_pending.Remove(tab, out var cts)) { cts.Cancel(); cts.Dispose(); }
+        if (TakePending(tab) is { } cts) { cts.Cancel(); cts.Dispose(); }
         if (!tab.IsScratch && Mode == AutosaveMode.Off) return;
         await SaveAsync(tab);
     }
@@ -126,13 +157,13 @@ public sealed class TabAutosave : IDisposable
     /// </summary>
     public void Discard(EditorTabViewModel tab)
     {
-        if (_pending.Remove(tab, out var cts)) { cts.Cancel(); cts.Dispose(); }
+        if (TakePending(tab) is { } cts) { cts.Cancel(); cts.Dispose(); }
     }
 
     /// <summary>Flush every watched tab (project switch).</summary>
     public async Task FlushAllAsync()
     {
-        foreach (var tab in _watched.ToList()) await FlushAsync(tab);
+        foreach (var tab in Watched()) await FlushAsync(tab);
     }
 
     /// <summary>The tab just ran its SQL — the write point for <see cref="AutosaveMode.OnExecute"/>.</summary>
@@ -149,7 +180,7 @@ public sealed class TabAutosave : IDisposable
     /// </summary>
     public void FlushExistingBlocking()
     {
-        foreach (var tab in _watched.ToList())
+        foreach (var tab in Watched())
         {
             if (!tab.IsScratch && Mode == AutosaveMode.Off) continue;
             if (tab.ScriptPath is not { } path || tab.Text.Trim().Length == 0) continue;
@@ -157,6 +188,13 @@ public sealed class TabAutosave : IDisposable
             try { Task.Run(() => _ctx.ScriptStore.WriteTextAsync(path, text, CancellationToken.None)).GetAwaiter().GetResult(); }
             catch { /* best-effort on shutdown (§5.2) */ }
         }
+    }
+
+    /// <summary>A snapshot of the watched tabs, taken under the lock so an enumeration can't run while
+    /// another thread is adding one.</summary>
+    private List<EditorTabViewModel> Watched()
+    {
+        lock (_gate) return _watched.ToList();
     }
 
     private async Task SaveAsync(EditorTabViewModel tab)
@@ -231,6 +269,6 @@ public sealed class TabAutosave : IDisposable
         if (_disposed) return;
         _disposed = true;
         _ctx.Tabs.CollectionChanged -= OnTabsChanged;
-        foreach (var tab in _watched.ToList()) Unwatch(tab);
+        foreach (var tab in Watched()) Unwatch(tab);
     }
 }

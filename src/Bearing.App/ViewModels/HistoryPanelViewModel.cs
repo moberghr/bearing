@@ -47,9 +47,17 @@ public sealed partial class HistoryPanelViewModel : ObservableObject
         var text = string.IsNullOrWhiteSpace(SearchText) ? null : SearchText;
         try
         {
-            _entries = await _search(text, ct);
+            var found = await _search(text, ct);
+            // A superseded reload must not land: the caller cancels the previous one for each new query in
+            // a run, and applying a stale answer after a newer one would leave the panel behind the log.
+            ct.ThrowIfCancellationRequested();
+            _entries = found;
             Regroup(DateTimeOffset.Now);
             Status = _entries.Count == 0 ? "No matching queries." : $"{_entries.Count} quer{(_entries.Count == 1 ? "y" : "ies")}.";
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded, not failed — the newer reload owns the panel and will set the status.
         }
         catch (Exception ex)
         {

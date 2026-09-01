@@ -72,6 +72,15 @@ public class EditorFoldingTests
 
         public int FoldedCount => Folding.Sections.Count(s => s.IsFolded);
 
+        /// <summary>The host's rule, in one place so the test asserts the same condition MainWindow uses:
+        /// drop the folds when the buffer about to be loaded differs from what the editor holds.</summary>
+        public void ResetIfBufferChanged(EditorTabViewModel? tab)
+        {
+            if (!ReferenceEquals(tab, Text.Tab)
+                || !string.Equals(tab?.Text ?? "", Editor.Text, System.StringComparison.Ordinal))
+                Folding.Reset();
+        }
+
         public bool CaretHasVisualLine
             => Editor.TextArea.TextView.GetOrConstructVisualLine(
                    Editor.Document.GetLineByOffset(Editor.CaretOffset)) is not null;
@@ -137,6 +146,54 @@ public class EditorFoldingTests
 
         Assert.Equal(0, f.FoldedCount);
         Assert.True(f.CaretHasVisualLine);
+        f.Window.Close();
+    });
+
+    /// <summary>Loading a different script into the tab you are already on is a buffer swap too. Guarding
+    /// the fold reset on the tab's identity missed it — Open replaces the text of the same tab object, so
+    /// the document changed under live collapsed sections, which is exactly the state #82 needs (found in
+    /// review of the guard).</summary>
+    [Fact]
+    public Task Loading_another_script_into_the_same_tab_drops_its_folds() => _ui.Run(() =>
+    {
+        var f = Editor();
+        var tab = new EditorTabViewModel("open.sql", TwoStatements);
+        f.Folding.Reset();
+        f.Text.Bind(tab);
+        f.Window.UpdateLayout();
+
+        f.Folding.FoldAll();
+        f.Window.UpdateLayout();
+        Assert.Equal(2, f.FoldedCount);
+
+        // What Open does: the same tab, a different buffer.
+        tab.Text = TwoStatements.Replace("select", "SELECT", System.StringComparison.Ordinal);
+        f.ResetIfBufferChanged(tab);
+        f.Text.Bind(tab);
+        f.Window.UpdateLayout();
+
+        Assert.Equal(0, f.FoldedCount);
+        Assert.True(f.CaretHasVisualLine);
+        f.Window.Close();
+    });
+
+    /// <summary>…and a re-bind that does not change the buffer keeps them. That is the sidebar's editor-sync
+    /// callback, which fires after deleting any script — including one that isn't open.</summary>
+    [Fact]
+    public Task Re_binding_the_same_buffer_keeps_the_folds() => _ui.Run(() =>
+    {
+        var f = Editor();
+        var tab = new EditorTabViewModel("open.sql", TwoStatements);
+        f.Text.Bind(tab);
+        f.Window.UpdateLayout();
+        f.Folding.FoldAll();
+        f.Window.UpdateLayout();
+        Assert.Equal(2, f.FoldedCount);
+
+        f.ResetIfBufferChanged(tab);   // no text change: nothing to drop
+        f.Window.UpdateLayout();
+
+        Assert.Equal(2, f.FoldedCount);
         f.Window.Close();
     });
 

@@ -287,7 +287,10 @@ public sealed class GridSelectionController
         if (!_corners.TryGetValue(grid, out var corner) || corner is { Parent: null })
         {
             corner = grid.GetVisualDescendants().OfType<Control>().FirstOrDefault(c => c.Name == CornerHeaderName);
-            if (corner is not null) _corners.Add(grid, corner);
+            // AddOrUpdate, not Add: the refresh branch is also reached with the key already present (a
+            // re-templated grid detaches the cached corner), and Add throws on a duplicate — out of a
+            // pointer-press handler, for a press on the scrollbar.
+            if (corner is not null) _corners.AddOrUpdate(grid, corner);
         }
         if (corner is null || !corner.IsVisible || corner.Bounds.Width <= 0) return false;
         if (corner.TranslatePoint(default, grid) is not { } origin) return false;

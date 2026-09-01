@@ -143,6 +143,42 @@ public class HistoryPanelTests
         Assert.Null(vm.SelectedRow);
     }
 
+    [Fact]
+    public async Task A_superseded_reload_does_not_overwrite_a_newer_one()
+    {
+        // Running a script fires one refresh per statement, and unordered concurrent searches could settle
+        // the panel on an older answer than one already applied. The caller cancels the previous reload, so
+        // a cancelled one must land nothing at all — not its rows, and not an error in the status line.
+        var now = DateTimeOffset.Now;
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stale = new[] { Entry(now.AddMinutes(-5), ok: true) };
+        var fresh = new[] { Entry(now, ok: true), Entry(now.AddMinutes(-5), ok: true) };
+        var first = true;
+
+        var vm = new HistoryPanelViewModel(
+            async (_, ct) =>
+            {
+                if (!first) return fresh;
+                first = false;
+                await gate.Task;                                     // the slow, superseded search
+                ct.ThrowIfCancellationRequested();
+                return (IReadOnlyList<QueryLogEntry>)stale;
+            },
+            _ => "#7AA89F");
+
+        using var superseded = new CancellationTokenSource();
+        var slow = vm.ReloadAsync(superseded.Token);
+        await vm.ReloadAsync(CancellationToken.None);                 // the newer one wins
+        Assert.Equal(2, vm.Groups.SelectMany(g => g.Rows).Count());
+
+        superseded.Cancel();
+        gate.SetResult();
+        await slow;
+
+        Assert.Equal(2, vm.Groups.SelectMany(g => g.Rows).Count());
+        Assert.DoesNotContain("error", vm.Status, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static HistoryPanelViewModel Make(IReadOnlyList<QueryLogEntry> entries)
         => new(
             (_, _) => Task.FromResult(entries),

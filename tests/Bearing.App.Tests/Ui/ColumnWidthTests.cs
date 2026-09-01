@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Controls.Templates;
 using Avalonia.Controls.Primitives;
 using Avalonia.VisualTree;
 using Bearing.App.Controls;
@@ -106,6 +107,39 @@ public class ColumnWidthTests
         var header = view.GetVisualDescendants().OfType<DataGridColumnHeader>()
             .SelectMany(h => h.GetVisualDescendants().OfType<TextBlock>())
             .First(t => t.Text == "release_year");
+        Assert.Equal(ResultGridChrome.HeaderFontSize, header.FontSize);
+        window.Close();
+    });
+
+    /// <summary>
+    /// The premise those constants rest on: they are the sizes the Fluent theme has been giving cells and
+    /// headers all along, so pinning them changed nothing on screen and only stopped the theme deciding.
+    /// Measured on a grid the app's chrome has <i>not</i> touched — asserting a styled cell against the
+    /// constant is true of any constant, and if the premise were wrong every cell's text would have jumped
+    /// 13 → 15px inside an unchanged 26px row.
+    /// </summary>
+    [Fact]
+    public Task The_pinned_sizes_are_the_themes_own() => _ui.Run(() =>
+    {
+        var grid = new DataGrid
+        {
+            AutoGenerateColumns = false,
+            ItemsSource = new[] { new object?[] { 1 } },
+        };
+        grid.Columns.Add(new DataGridTemplateColumn
+        {
+            Header = "id",
+            CellTemplate = new FuncDataTemplate<object?[]>((_, _) => new TextBlock { Text = "1" }),
+        });
+        var window = new Window { Width = 400, Height = 200, Content = grid };
+        window.Show();
+        window.UpdateLayout();
+
+        var cell = grid.GetVisualDescendants().OfType<DataGridCell>().First();
+        var header = grid.GetVisualDescendants().OfType<DataGridColumnHeader>()
+            .First(h => h.Content as string == "id");
+
+        Assert.Equal(ResultGridChrome.CellFontSize, cell.FontSize);
         Assert.Equal(ResultGridChrome.HeaderFontSize, header.FontSize);
         window.Close();
     });
