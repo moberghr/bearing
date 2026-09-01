@@ -38,7 +38,11 @@ public sealed partial class CompletionEngine : ICompletionEngine
         // A half-typed alias is a name the user is inventing — nothing in the catalog or the grammar
         // belongs there, and whatever sat under Enter would overwrite it. An *empty* alias slot still
         // gets keywords (as / join / where), which is what actually follows a named source.
-        if (aliasSlot && caret.ReplacementLength > 0)
+        // …unless the caret is at the start of a line, where the more likely reading is a new statement being
+        // typed rather than an alias for the relation on the line above (#68). The alias rule keys off the
+        // previous meaningful token, which does not care that a newline came between.
+        var statementStart = StatementStartHint.AtLineStart(sql, caretOffset);
+        if (aliasSlot && !statementStart && caret.ReplacementLength > 0)
             return new CompletionResult(Array.Empty<Suggestion>(), caret.ReplacementStart, caret.ReplacementLength);
 
         var suggestions = new List<Suggestion>();
@@ -91,6 +95,30 @@ public sealed partial class CompletionEngine : ICompletionEngine
                         Kind = SuggestionKind.Keyword,
                         Priority = 1,
                     });
+            }
+
+            // At a line start, add the keywords that could open a statement. Added rather than substituted:
+            // a line holding one bare word is genuinely ambiguous — `where` continuing the query above and
+            // `select` starting a new one are both plausible — so replacing the scope with the current line,
+            // as #68 first proposed, would have traded one missing answer for the other. The grammar's own
+            // candidates keep the higher priority, and the typed fragment narrows both (SuggestionRanker).
+            if (statementStart)
+            {
+                var already = suggestions
+                    .Where(s => s.Kind == SuggestionKind.Keyword)
+                    .Select(s => s.DisplayText)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                foreach (var kw in StatementSplitter.StatementStarters)
+                {
+                    if (!already.Add(kw)) continue;
+                    suggestions.Add(new Suggestion
+                    {
+                        DisplayText = kw,
+                        ReplacementText = kw,
+                        Kind = SuggestionKind.Keyword,
+                        Priority = 0,
+                    });
+                }
             }
         }
 
