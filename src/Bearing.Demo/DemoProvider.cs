@@ -7,10 +7,10 @@ using System.Threading.Tasks;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
 
-namespace Bearing.App.Tests.Demo;
+namespace Bearing.Demo;
 
 /// <summary>
-/// A provider that serves <see cref="DemoData"/> — a whole database's worth of behaviour with no database
+/// A provider that serves <see cref="DemoCatalog"/> — a whole database's worth of behaviour with no database
 /// (#63). <c>FakeProvider</c> is a lifecycle stub whose executor returns an empty result from every method;
 /// this one returns rows.
 /// <para>
@@ -18,25 +18,40 @@ namespace Bearing.App.Tests.Demo;
 /// is manual <c>new</c> (§2.4) — so putting it in front of the real UI is one argument.
 /// </para>
 /// </summary>
-internal sealed class DemoProvider : IDbProvider, IProviderRegistry
+public sealed class DemoProvider : IDbProvider, IProviderRegistry
 {
     private readonly DemoExecutor _executor;
 
     /// <param name="executor">The executor every session shares, so a test can script it once and then
-    /// assert what the UI asked for. Defaults to one serving <see cref="DemoData"/>'s tables by name.</param>
+    /// assert what the UI asked for. Defaults to one serving <see cref="DemoCatalog"/>'s tables by name.</param>
     public DemoProvider(DemoExecutor? executor = null) => _executor = executor ?? DemoExecutor.Default();
 
     /// <summary>The shared executor — where the results are scripted and the writes are recorded.</summary>
     public DemoExecutor Executor => _executor;
 
-    /// <summary>Matches the real Postgres provider's id, so a stored <see cref="ConnectionInfo"/> resolves
-    /// to this without being rewritten.</summary>
-    public string Id => "postgres";
+    /// <summary>
+    /// The provider id a demo connection carries. Its own, not "postgres": a demo session replaces the
+    /// registry wholesale (see <c>DemoMode</c>), so nothing needs it to impersonate the real provider — and a
+    /// demo connection that somehow reached a normal session would then fail to resolve rather than quietly
+    /// serving fixed data where real data was expected.
+    /// </summary>
+    public const string ProviderId = "demo";
+
+    public string Id => ProviderId;
 
     public string DisplayName => "Demo";
     public IReadOnlyList<ConnectionField> ConnectionFields => Array.Empty<ConnectionField>();
 
-    public IDbProvider Get(string providerId) => this;
+    /// <summary>
+    /// Resolves this provider, and only this provider. A demo session's registry holds nothing else, so a
+    /// request for "postgres" is a bug worth hearing about rather than something to silently serve fake rows
+    /// for — a project file carried into a demo session would otherwise look like it had connected.
+    /// </summary>
+    public IDbProvider Get(string providerId)
+        => string.Equals(providerId, ProviderId, StringComparison.OrdinalIgnoreCase)
+            ? this
+            : throw new KeyNotFoundException(
+                $"'{providerId}' is not available in a demo session — only '{ProviderId}' is.");
     public IReadOnlyCollection<IDbProvider> All => [this];
 
     public IDbConnectionFactory CreateConnectionFactory(ConnectionInfo info, string? password)
@@ -48,23 +63,23 @@ internal sealed class DemoProvider : IDbProvider, IProviderRegistry
 }
 
 /// <summary>A factory whose connections always open. There is nothing to fail against.</summary>
-internal sealed class DemoConnectionFactory : IDbConnectionFactory
+public sealed class DemoConnectionFactory : IDbConnectionFactory
 {
     public Task<bool> TestConnectionAsync(CancellationToken ct) => Task.FromResult(true);
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
-internal sealed class DemoMetadata : IMetadataReader
+public sealed class DemoMetadata : IMetadataReader
 {
     public Task<IReadOnlyList<string>> GetDatabasesAsync(CancellationToken ct)
-        => Task.FromResult<IReadOnlyList<string>>([DemoData.Database, "postgres"]);
+        => Task.FromResult<IReadOnlyList<string>>([DemoCatalog.Database, "postgres"]);
 
     /// <summary>The demo catalog, whatever database is asked for — named after the request so the schema
     /// browser's per-database caching is still exercised.</summary>
     public Task<ISchemaSnapshot> LoadSnapshotAsync(string database, CancellationToken ct)
     {
-        var demo = DemoData.Snapshot();
-        return Task.FromResult<ISchemaSnapshot>(database == DemoData.Database
+        var demo = DemoCatalog.Snapshot();
+        return Task.FromResult<ISchemaSnapshot>(database == DemoCatalog.Database
             ? demo
             : new SchemaSnapshot(database, demo.Schemas, demo.Tables,
                 demo.Tables.SelectMany(t => demo.ColumnsOf(t.Id)).ToList(),
@@ -73,14 +88,14 @@ internal sealed class DemoMetadata : IMetadataReader
     }
 
     public Task<IReadOnlyList<RoutineInfo>> GetRoutinesAsync(CancellationToken ct)
-        => Task.FromResult(DemoData.Routines());
+        => Task.FromResult(DemoCatalog.Routines());
 
     public Task<string> GetViewDefinitionAsync(long tableId, CancellationToken ct)
         => Task.FromResult("select p.id as payment_id, s.name as store_name\n"
                            + "from shop.payment p join shop.store s on s.id = p.store_id");
 
     public Task<TableDetails> GetTableDetailsAsync(long tableId, CancellationToken ct)
-        => Task.FromResult(DemoData.DetailsOf(tableId));
+        => Task.FromResult(DemoCatalog.DetailsOf(tableId));
 
     public Task<string> GetRoutineDefinitionAsync(long routineId, CancellationToken ct)
         => Task.FromResult("create function shop.gross_revenue(from_date date) returns numeric\n"
@@ -95,7 +110,7 @@ internal sealed class DemoMetadata : IMetadataReader
 /// <see cref="Executed"/> or <see cref="Writes"/>.
 /// </para>
 /// </summary>
-internal sealed class DemoExecutor : IQueryExecutor
+public sealed class DemoExecutor : IQueryExecutor
 {
     private readonly List<(string Mentions, IReadOnlyList<QueryResult> Results)> _scripted = [];
 
@@ -107,7 +122,7 @@ internal sealed class DemoExecutor : IQueryExecutor
 
     /// <summary>What an unmatched query returns. Defaults to an empty grid rather than an error, so an
     /// unscripted query in a UI test is a blank result and not a red banner.</summary>
-    public IReadOnlyList<QueryResult> Fallback { get; set; } = [DemoData.NoRows()];
+    public IReadOnlyList<QueryResult> Fallback { get; set; } = [DemoCatalog.NoRows()];
 
     /// <summary>When set, <see cref="CountAsync"/> throws this instead of counting — a real count failure,
     /// which the UI has to report rather than showing a missing total.</summary>
@@ -117,15 +132,15 @@ internal sealed class DemoExecutor : IQueryExecutor
     /// counted, which is a blank total rather than an error.</summary>
     public bool Uncountable { get; set; }
 
-    /// <summary>An executor that answers each of <see cref="DemoData"/>'s tables by name.</summary>
+    /// <summary>An executor that answers each of <see cref="DemoCatalog"/>'s tables by name.</summary>
     public static DemoExecutor Default()
     {
         var executor = new DemoExecutor();
-        executor.Serve("payment", DemoData.Payments(40));
-        executor.Serve("store", DemoData.Stores());
-        executor.Serve("document", DemoData.Documents());
-        executor.Serve("metric", DemoData.Metrics());
-        executor.Serve("receipt", DemoData.ReceiptView());
+        executor.Serve("payment", DemoCatalog.Payments(40));
+        executor.Serve("store", DemoCatalog.Stores());
+        executor.Serve("document", DemoCatalog.Documents());
+        executor.Serve("metric", DemoCatalog.Metrics());
+        executor.Serve("receipt", DemoCatalog.ReceiptView());
         return executor;
     }
 
@@ -202,7 +217,7 @@ internal sealed class DemoExecutor : IQueryExecutor
         ct.ThrowIfCancellationRequested();
         Writes.Add(commands);
         return Task.FromResult<IReadOnlyList<QueryResult>>(
-            commands.Select(c => DemoData.Affected(1) with { Message = Verb(c.Sql) + " 1" }).ToList());
+            commands.Select(c => DemoCatalog.Affected(1) with { Message = Verb(c.Sql) + " 1" }).ToList());
     }
 
     private IReadOnlyList<QueryResult> Match(string sql)

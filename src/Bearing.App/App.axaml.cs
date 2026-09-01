@@ -13,6 +13,9 @@ using Bearing.App.Views;
 using Bearing.Core.Logging;
 using Bearing.Core.Workspace;
 using Bearing.Data;
+using Bearing.App.Demo;
+using Bearing.Core.Data;
+using Bearing.Demo;
 using Bearing.Persistence;
 using Bearing.Updates;
 
@@ -53,17 +56,25 @@ public partial class App : Application
             CrashReporter.Surface = (context, ex) =>
                 Dispatcher.UIThread.Post(() => Views.ErrorDialog.Show(desktop.MainWindow, context, ex));
 
-            var providers = new ProviderRegistry();
-            IProjectStore projectStore = new JsonProjectStore();
-            ISessionStore sessionStore = new JsonSessionStore();
+            // Demo mode (#64): a whole session served from fixed data, in a temp directory that is deleted on
+            // the way out. Decided here, once, because it replaces half the object graph — the provider
+            // registry, all four stores and the secret store — and a session cannot be half a demo.
+            _demo = DemoMode.Requested(desktop.Args) ? DemoWorkspace.Create() : null;
+
             var settings = new Settings.SettingsService(new AppSettingsStore());
-            IQueryLog queryLog = new SqliteQueryLog(
+            // The demo registry holds the demo provider *instead of* Postgres, not beside it: that is what
+            // makes the fake unreachable from any normal connection flow, since in an ordinary session it is
+            // not in the graph at all.
+            IProviderRegistry providers = _demo is null ? new ProviderRegistry() : new DemoProvider();
+            IProjectStore projectStore = _demo?.Projects ?? new JsonProjectStore();
+            ISessionStore sessionStore = _demo?.Sessions ?? new JsonSessionStore();
+            IQueryLog queryLog = _demo?.QueryLog ?? new SqliteQueryLog(
                 retentionDays: settings.Current.QueryLogRetentionDays,
                 // The dialect's own lexer decides what a literal is; the store only knows it was handed a
                 // string (§2.2). Read once at startup, so a mid-session flip cannot leave half the log
                 // redacted and half not.
                 redactSql: settings.Current.QueryLogRedactLiterals ? Bearing.Sql.SqlRedactor.Redact : null);
-            IRecentProjects recentProjects = new FileRecentProjects();
+            IRecentProjects recentProjects = _demo?.RecentProjects ?? new FileRecentProjects();
 
             var vm = new ShellViewModel(providers, projectStore, sessionStore, queryLog, recentProjects,
                 dialogs: new Views.DialogService(),
@@ -124,6 +135,15 @@ public partial class App : Application
             window.Closed += (_, _) =>
             {
                 if (updates.ApplyIfPending() is { } failure) CrashLog.Note("update apply-on-exit", failure);
+                // A demo leaves nothing behind: the temp directory holding its project, session, history and
+                // recent-projects list goes with it. Blocking on purpose — this is the last thing the process
+                // does, and letting it run unobserved would race the exit and leave the directory. Capped, so
+                // a stuck delete cannot hold the window shut (§5.2 — it stays best-effort).
+                if (_demo is { } demo)
+                {
+                    try { demo.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(2)); }
+                    catch (Exception ex) { CrashLog.Note("demo cleanup", ex.Message); }
+                }
             };
 
             // Window size is persisted state, not a preference — the setting only decides whether it is
@@ -184,6 +204,16 @@ public partial class App : Application
         // The same call is handed over as the re-probe: this one runs very early, and a keyring that wasn't
         // serving yet at this instant would otherwise pin the whole session into storing nothing.
         vm.AttachSecretStore(secretStore, reprobe: SecretStoreFactory.CreateAsync);
+        if (_demo is { } demo)
+        {
+            // A demo opens its own throwaway project rather than the last-used one: the user's real project
+            // is neither read nor written, and there is nothing in the recent list to go back to because
+            // this one is never added to it (#64).
+            await vm.StartDemoAsync(demo.ProjectDirectory, DemoMode.WelcomeScript);
+            LogStartup("demo ready");
+            return;
+        }
+
         // Reopen the last-used project; fall back to the default project on first run (or if it's gone).
         await vm.ResumeLastProjectAsync(DefaultProjectDirectory());
         // Opt-in convenience: seed the local pagila demo connection only when BEARING_SEED_DEMO is set.
@@ -192,6 +222,9 @@ public partial class App : Application
             await vm.Connections.SeedDemoConnectionAsync("localhost", 5434, "pagila", "postgres", "squirrel");
         LogStartup("project ready");
     }
+
+    /// <summary>The demo session's throwaway workspace, or null in an ordinary session (#64).</summary>
+    private static Demo.DemoWorkspace? _demo;
 
     /// <summary>Write a startup milestone (ms since process start) when BEARING_STARTUP_TIMING is set.</summary>
     internal static void LogStartup(string milestone)

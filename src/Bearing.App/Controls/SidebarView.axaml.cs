@@ -33,6 +33,9 @@ public partial class SidebarView : UserControl
     /// folder path to file the new connection into, or null for the top level.</summary>
     public System.Action<string?>? AddConnectionRequested { get; set; }
 
+    /// <summary>Raised by the empty state's "Explore demo data" button (#64).</summary>
+    public System.Action? ExploreDemoRequested { get; set; }
+
     /// <summary>Raised after an action changed the selected tab, so the shell re-syncs the editor buffer.</summary>
     public System.Action? EditorSyncRequested { get; set; }
 
@@ -90,6 +93,10 @@ public partial class SidebarView : UserControl
     // ---- connections ----
 
     private void OnAddConnectionClick(object? sender, RoutedEventArgs e) => AddConnectionRequested?.Invoke(null);
+
+    /// <summary>Start a demo session (#64). Reported through the callback so the status bar carries the
+    /// outcome — a view does not own messages.</summary>
+    private void OnExploreDemoClick(object? sender, RoutedEventArgs e) => ExploreDemoRequested?.Invoke();
 
     /// <summary>The schema-tree node the clicked menu item / tapped row belongs to (via its DataContext).</summary>
     private static SchemaNodeViewModel? NodeOf(object? sender) => (sender as Control)?.DataContext as SchemaNodeViewModel;

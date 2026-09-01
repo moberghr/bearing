@@ -104,6 +104,33 @@ public sealed partial class ShellViewModel
     /// coexist in the one manager without collision.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Open a demo session: the demo project, its one connection, and a starter script (#64).
+    /// <para>
+    /// The script arrives as a <b>new tab</b> rather than as text assigned to the tab already on screen,
+    /// because the editor loads a tab's text when that tab becomes selected — writing to the selected tab's
+    /// <c>Text</c> after the fact left the editor empty, which a render capture caught and no assertion here
+    /// would have. Creating a tab selects it, so the load happens for free; the empty scratch tab the restore
+    /// left behind is then closed.
+    /// </para>
+    /// </summary>
+    public async Task StartDemoAsync(string projectDirectory, string welcomeScript)
+    {
+        await OpenProjectAsync(projectDirectory);
+        await Connections.AddDemoConnectionAsync();
+
+        var stale = Workspace.Tabs
+            .Where(t => t.IsScratch && string.IsNullOrWhiteSpace(t.Text))
+            .ToList();
+        // Named, because the scratch counter has already used "Scratch 1" on the tab the restore made and
+        // being handed a lone tab called "Scratch 2" reads as though one went missing.
+        Workspace.NewTab(welcomeScript).DisplayName = "Demo";
+        foreach (var tab in stale) await Workspace.CloseTabAsync(tab);
+
+        StatusText = "Demo data — no database is involved, and nothing is saved outside this session. "
+                   + "Press F5 to run.";
+    }
+
     public async Task OpenProjectAsync(string projectDirectory)
     {
         if (_project is not null && string.Equals(Path.GetFullPath(projectDirectory), _project.Directory, StringComparison.Ordinal))

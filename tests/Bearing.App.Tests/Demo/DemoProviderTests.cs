@@ -6,16 +6,17 @@ using System.Threading.Tasks;
 using Bearing.App.Results;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
+using Bearing.Demo;
 using Xunit;
 
-namespace Bearing.App.Tests.Demo;
+namespace Bearing.App.Tests;
 
 /// <summary>
 /// What the demo provider gives the UI (#63): result shapes the app's own machinery recognises, and the
 /// awkward paths — streaming, the row ceiling, a failing count, a write batch — behaving like the real one.
 /// <para>
 /// These are assertions about the <i>fixtures being usable</i>, not about resolution being correct. Whether
-/// Postgres really reports an FK the way <see cref="DemoData"/> claims belongs in <c>Bearing.Data.Tests</c>
+/// Postgres really reports an FK the way <see cref="DemoCatalog"/> claims belongs in <c>Bearing.Data.Tests</c>
 /// against live pagila (§4.6) — asserting the fixture's assumptions back would be a green suite over a
 /// broken app.
 /// </para>
@@ -32,7 +33,7 @@ public class DemoProviderTests
         // The whole reason for declaring column origins rather than setting the view model's flags: the real
         // ResultSetBuilder, resolvers included, is what runs.
         var sets = ResultSetBuilder.BuildResultSets(
-            [DemoData.Payments()], "select * from shop.payment", DemoData.Snapshot());
+            [DemoCatalog.Payments()], "select * from shop.payment", DemoCatalog.Snapshot());
 
         var payments = Assert.Single(sets);
         Assert.True(payments.IsEditable);
@@ -46,7 +47,7 @@ public class DemoProviderTests
     {
         // #61's repro has to be in the data, not just in the schema: a dimmed-italic NULL in an FK column is
         // only reachable if some row actually has one.
-        var payments = DemoData.Payments();
+        var payments = DemoCatalog.Payments();
 
         Assert.Contains(payments.Rows, row => row[1] is null);
         Assert.Contains(payments.Rows, row => row[1] is not null);
@@ -58,7 +59,7 @@ public class DemoProviderTests
         // Real origins, no primary key among them — the lock chip's path, which an origin-less fake cannot
         // reach at all.
         var sets = ResultSetBuilder.BuildResultSets(
-            [DemoData.ReceiptView()], "select * from shop.receipt", DemoData.Snapshot());
+            [DemoCatalog.ReceiptView()], "select * from shop.receipt", DemoCatalog.Snapshot());
 
         var receipts = Assert.Single(sets);
         Assert.False(receipts.IsEditable);
@@ -69,8 +70,8 @@ public class DemoProviderTests
     public void An_aggregate_is_a_grid_and_nothing_more()
     {
         var sets = ResultSetBuilder.BuildResultSets(
-            [DemoData.Aggregate()], "select store_id, count(*) from shop.payment group by 1",
-            DemoData.Snapshot());
+            [DemoCatalog.Aggregate()], "select store_id, count(*) from shop.payment group by 1",
+            DemoCatalog.Snapshot());
 
         var aggregate = Assert.Single(sets);
         Assert.False(aggregate.IsEditable);
@@ -82,20 +83,20 @@ public class DemoProviderTests
     [Fact]
     public void Foreign_key_navigation_has_somewhere_to_land()
     {
-        var snapshot = DemoData.Snapshot();
+        var snapshot = DemoCatalog.Snapshot();
 
-        var target = ForeignKeyResolver.Resolve(snapshot, DemoData.Payments().Columns, clickedColumn: 1);
+        var target = ForeignKeyResolver.Resolve(snapshot, DemoCatalog.Payments().Columns, clickedColumn: 1);
 
         Assert.NotNull(target);
-        Assert.Equal("store", snapshot.Tables.Single(t => t.Id == DemoData.StoreId).Name);
+        Assert.Equal("store", snapshot.Tables.Single(t => t.Id == DemoCatalog.StoreId).Name);
         // And the landing table is one the executor can actually serve, or the navigation dead-ends.
-        Assert.Contains("Vukovar", DemoData.Stores().Rows.Select(r => r[1]));
+        Assert.Contains("Vukovar", DemoCatalog.Stores().Rows.Select(r => r[1]));
     }
 
     [Fact]
     public void A_run_covers_the_shapes_that_render_differently()
     {
-        var run = DemoData.Run();
+        var run = DemoCatalog.Run();
 
         Assert.Contains(run, r => r.Columns.Count > 0 && r.Success);   // a grid
         Assert.Contains(run, r => r.Message is not null);              // a rows-affected message
@@ -107,8 +108,8 @@ public class DemoProviderTests
     {
         // Captures get diffed and assertions count rows, so a clock or a GUID in here would be a flake.
         Assert.Equal(
-            Rendered(DemoData.Run()),
-            Rendered(DemoData.Run()));
+            Rendered(DemoCatalog.Run()),
+            Rendered(DemoCatalog.Run()));
 
         static string Rendered(IReadOnlyList<QueryResult> run) => string.Join("|", run.Select(r =>
             $"{r.Duration.Ticks}:{r.Message}:{r.Error?.Message}:"
@@ -146,7 +147,7 @@ public class DemoProviderTests
     [Fact]
     public async Task The_row_ceiling_truncates_and_says_so()
     {
-        var executor = new DemoExecutor().Serve("payment", DemoData.Payments(40));
+        var executor = new DemoExecutor().Serve("payment", DemoCatalog.Payments(40));
 
         var results = await executor.ExecuteAsync(
             "select * from shop.payment", new QueryOptions { MaxRows = 10 }, default);
@@ -158,7 +159,7 @@ public class DemoProviderTests
     [Fact]
     public async Task Streaming_arrives_in_batches_in_row_order()
     {
-        var executor = new DemoExecutor().Serve("payment", DemoData.Payments(25));
+        var executor = new DemoExecutor().Serve("payment", DemoCatalog.Payments(25));
 
         var batches = await Batches(executor, new QueryOptions { BatchRows = 10 });
 
@@ -175,7 +176,7 @@ public class DemoProviderTests
     {
         // The distinction the incremental read depends on: "this is the whole result" versus "this is where
         // the ceiling stopped".
-        var executor = new DemoExecutor().Serve("payment", DemoData.Payments(25));
+        var executor = new DemoExecutor().Serve("payment", DemoCatalog.Payments(25));
 
         var batches = await Batches(executor, new QueryOptions { BatchRows = 10, MaxRows = 15 });
 
@@ -187,7 +188,7 @@ public class DemoProviderTests
     [Fact]
     public async Task Streaming_a_result_that_fits_exactly_is_not_truncated()
     {
-        var executor = new DemoExecutor().Serve("payment", DemoData.Payments(20));
+        var executor = new DemoExecutor().Serve("payment", DemoCatalog.Payments(20));
 
         var batches = await Batches(executor, new QueryOptions { BatchRows = 10, MaxRows = 20 });
 
@@ -198,7 +199,7 @@ public class DemoProviderTests
     [Fact]
     public async Task Streaming_stops_when_the_read_is_cancelled()
     {
-        var executor = new DemoExecutor().Serve("payment", DemoData.Payments(40));
+        var executor = new DemoExecutor().Serve("payment", DemoCatalog.Payments(40));
         using var cts = new CancellationTokenSource();
 
         var seen = 0;
@@ -226,7 +227,7 @@ public class DemoProviderTests
             "select * from (select * from shop.payment) t limit 10 offset 10", default);
 
         Assert.All(page.Columns, c => Assert.False(c.HasBaseColumn));
-        Assert.True(DemoData.Payments().Columns.All(c => c.HasBaseColumn));
+        Assert.True(DemoCatalog.Payments().Columns.All(c => c.HasBaseColumn));
     }
 
     [Fact]
@@ -277,11 +278,11 @@ public class DemoProviderTests
         var metadata = provider.CreateMetadataReader(factory);
 
         Assert.True(await factory.TestConnectionAsync(default));
-        Assert.Contains(DemoData.Database, await metadata.GetDatabasesAsync(default));
+        Assert.Contains(DemoCatalog.Database, await metadata.GetDatabasesAsync(default));
 
-        var snapshot = await metadata.LoadSnapshotAsync(DemoData.Database, default);
-        Assert.Equal(DemoData.Database, snapshot.Database);
-        Assert.NotNull(snapshot.ResolveTable(DemoData.Schema, "payment"));
+        var snapshot = await metadata.LoadSnapshotAsync(DemoCatalog.Database, default);
+        Assert.Equal(DemoCatalog.Database, snapshot.Database);
+        Assert.NotNull(snapshot.ResolveTable(DemoCatalog.Schema, "payment"));
         Assert.NotEmpty(await metadata.GetRoutinesAsync(default));
     }
 
@@ -295,7 +296,7 @@ public class DemoProviderTests
         var other = await metadata.LoadSnapshotAsync("postgres", default);
 
         Assert.Equal("postgres", other.Database);
-        Assert.NotNull(other.ResolveTable(DemoData.Schema, "payment"));
+        Assert.NotNull(other.ResolveTable(DemoCatalog.Schema, "payment"));
     }
 
     [Fact]

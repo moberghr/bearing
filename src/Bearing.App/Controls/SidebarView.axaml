@@ -51,6 +51,11 @@
                       HorizontalContentAlignment="Center" Click="OnAddConnectionClick"/>
               <!-- Drops the same source list the context menu and File carry, so all three agree and a
                    second importer is one more MenuItem rather than a rename. -->
+              <!-- The discoverable way into demo mode (#64). An environment variable helps nobody who is
+                   evaluating the tool, and this is exactly where a new user is standing. -->
+              <Button Content="Explore demo data" HorizontalAlignment="Stretch"
+                      HorizontalContentAlignment="Center" Click="OnExploreDemoClick"
+                      ToolTip.Tip="Restart with fixed sample data — no database, and nothing saved outside the session"/>
               <Button Content="Import connections…" HorizontalAlignment="Stretch"
                       HorizontalContentAlignment="Center">
                 <Button.Flyout>

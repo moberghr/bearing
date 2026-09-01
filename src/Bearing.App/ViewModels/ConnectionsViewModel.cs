@@ -922,6 +922,24 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     }
 
     /// <summary>First-run convenience: seed a demo connection if the project has none, and target it.</summary>
+    /// <summary>
+    /// Add the demo connection and make it the default (#64).
+    /// <para>
+    /// Through the ordinary add path with <c>password: null</c>, which skips the secret store entirely — so
+    /// no keychain call is made for a session that has no secret to keep (§1.1). The manifest write it does
+    /// perform lands in the demo's own temp project, never the user's.
+    /// </para>
+    /// </summary>
+    public async Task AddDemoConnectionAsync()
+    {
+        if (_ctx.Project is null || _ctx.Project.Manifest.Connections.Count > 0) return;
+
+        await AddOrUpdateConnectionAsync(Bearing.Demo.DemoMode.Connection, password: null);
+        _ctx.DefaultConnectionId = Bearing.Demo.DemoMode.ConnectionId;
+        foreach (var tab in Tabs)
+            if (tab.ConnectionId is null) SetTabConnection(tab, Bearing.Demo.DemoMode.ConnectionId);
+    }
+
     public async Task SeedDemoConnectionAsync(string host, int port, string database, string user, string password)
     {
         if (_ctx.Project is null || _ctx.Project.Manifest.Connections.Count > 0) return;

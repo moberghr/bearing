@@ -231,11 +231,20 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         return results;
     }
 
-    /// <summary>Flush pending writes and close (used by tests; the app can let the process own it).</summary>
+    /// <summary>
+    /// Flush pending writes and close.
+    /// <para>
+    /// The pool is released too, and that is the part that matters to a caller who then wants the file gone:
+    /// reads open their own connection and hand it back to Microsoft.Data.Sqlite's pool on dispose, so the
+    /// handle outlives this object and a delete fails with "used by another process". Only this log's pool —
+    /// keyed by its own connection string — so a second store on another file is untouched.
+    /// </para>
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
         _channel.Writer.TryComplete();
         try { await _writerLoop.ConfigureAwait(false); } catch { }
         await _writeConnection.DisposeAsync().ConfigureAwait(false);
+        try { SqliteConnection.ClearPool(new SqliteConnection(_connectionString)); } catch { /* best-effort */ }
     }
 }

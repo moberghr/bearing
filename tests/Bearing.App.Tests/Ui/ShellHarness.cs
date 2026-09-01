@@ -44,6 +44,9 @@ internal sealed class ShellHarness : IDisposable
     public MainWindow Window { get; }
     public ShellViewModel Vm { get; }
 
+    /// <summary>The project this harness opened, for a test that needs to reopen or re-target it.</summary>
+    public string ProjectDirectory { get; private init; } = "";
+
     /// <summary>Build the shell over a fresh temporary project and show it.</summary>
     public static async Task<ShellHarness> ShowAsync(string name)
     {
@@ -62,7 +65,7 @@ internal sealed class ShellHarness : IDisposable
 
         var window = new MainWindow { DataContext = vm, Width = 1200, Height = 800 };
         window.Show();
-        var harness = new ShellHarness(root, window, vm);
+        var harness = new ShellHarness(root, window, vm) { ProjectDirectory = Path.Combine(root, name) };
         harness.Pump();
         return harness;
     }

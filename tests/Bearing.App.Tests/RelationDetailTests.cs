@@ -4,7 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Bearing.App.Connections;
-using Bearing.App.Tests.Demo;
+using Bearing.Demo;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
@@ -24,9 +24,9 @@ public class RelationDetailTests
 
     private static RelationNodeViewModel Node(long tableId, ISchemaBrowser browser)
     {
-        var snapshot = DemoData.Snapshot();
+        var snapshot = DemoCatalog.Snapshot();
         var table = snapshot.Tables.Single(t => t.Id == tableId);
-        return new RelationNodeViewModel(Conn(), DemoData.Database, table, snapshot, browser, DemoData.Schema);
+        return new RelationNodeViewModel(Conn(), DemoCatalog.Database, table, snapshot, browser, DemoCatalog.Schema);
     }
 
     private static SchemaGroupNodeViewModel? Folder(RelationNodeViewModel node, string title)
@@ -38,7 +38,7 @@ public class RelationDetailTests
     public async Task Columns_stay_inline_above_the_folders()
     {
         // Behind a Columns folder they would cost a click in the case nearly every expand is for.
-        var node = Node(DemoData.PaymentId, new DetailBrowser());
+        var node = Node(DemoCatalog.PaymentId, new DetailBrowser());
 
         await node.EnsureChildrenAsync();
 
@@ -53,7 +53,7 @@ public class RelationDetailTests
     [Fact]
     public async Task A_table_gets_a_folder_per_kind_of_thing_it_has()
     {
-        var node = Node(DemoData.StoreId, new DetailBrowser());
+        var node = Node(DemoCatalog.StoreId, new DetailBrowser());
 
         await node.EnsureChildrenAsync();
 
@@ -68,7 +68,7 @@ public class RelationDetailTests
     {
         // A table with no triggers should not have to say so, and a folder that opens onto nothing is worse
         // than no folder.
-        var node = Node(DemoData.PaymentId, new DetailBrowser());
+        var node = Node(DemoCatalog.PaymentId, new DetailBrowser());
 
         await node.EnsureChildrenAsync();
 
@@ -79,7 +79,7 @@ public class RelationDetailTests
     [Fact]
     public async Task A_folder_says_how_many_things_are_in_it()
     {
-        var node = Node(DemoData.StoreId, new DetailBrowser());
+        var node = Node(DemoCatalog.StoreId, new DetailBrowser());
 
         await node.EnsureChildrenAsync();
 
@@ -93,8 +93,8 @@ public class RelationDetailTests
     {
         // The distinction worth having: outgoing answers "what does this row point at", incoming answers
         // "what breaks if I delete it". ForeignKeysTouching returns both, so this is a partition.
-        var payment = Node(DemoData.PaymentId, new DetailBrowser());
-        var store = Node(DemoData.StoreId, new DetailBrowser());
+        var payment = Node(DemoCatalog.PaymentId, new DetailBrowser());
+        var store = Node(DemoCatalog.StoreId, new DetailBrowser());
 
         await payment.EnsureChildrenAsync();
         await store.EnsureChildrenAsync();
@@ -110,7 +110,7 @@ public class RelationDetailTests
     public async Task A_foreign_key_is_not_also_listed_as_a_constraint()
     {
         // It is one object; listing it twice under one table makes both counts lie.
-        var node = Node(DemoData.PaymentId, new DetailBrowser());
+        var node = Node(DemoCatalog.PaymentId, new DetailBrowser());
 
         await node.EnsureChildrenAsync();
 
@@ -122,7 +122,7 @@ public class RelationDetailTests
     [Fact]
     public async Task A_view_gets_no_folders_at_all()
     {
-        var node = Node(DemoData.ReceiptViewId, new DetailBrowser());
+        var node = Node(DemoCatalog.ReceiptViewId, new DetailBrowser());
 
         await node.EnsureChildrenAsync();
 
@@ -136,7 +136,7 @@ public class RelationDetailTests
         // The details read opens a connection, and an Npgsql connect failure quotes the whole connection
         // string — password included. That text goes straight into a tree row, so it has to be scrubbed
         // (§1.1) the way every other failure on this path already is.
-        var node = Node(DemoData.PaymentId, new LeakyDetailBrowser());
+        var node = Node(DemoCatalog.PaymentId, new LeakyDetailBrowser());
 
         await node.EnsureChildrenAsync();
 
@@ -153,7 +153,7 @@ public class RelationDetailTests
     {
         // The details need a round trip; the columns and both key directions come from the snapshot. Losing
         // all of them because the server said no would be a worse tree than before the folders existed.
-        var node = Node(DemoData.PaymentId, new ThrowingDetailBrowser());
+        var node = Node(DemoCatalog.PaymentId, new ThrowingDetailBrowser());
 
         await node.EnsureChildrenAsync();
 
@@ -168,7 +168,7 @@ public class RelationDetailTests
     public async Task Expanding_a_table_reads_its_details_once()
     {
         var browser = new DetailBrowser();
-        var node = Node(DemoData.PaymentId, browser);
+        var node = Node(DemoCatalog.PaymentId, browser);
 
         await node.EnsureChildrenAsync();
         await node.EnsureChildrenAsync();
@@ -181,7 +181,7 @@ public class RelationDetailTests
     [Fact]
     public async Task An_outgoing_key_reads_as_the_join_it_would_become()
     {
-        var node = Node(DemoData.PaymentId, new DetailBrowser());
+        var node = Node(DemoCatalog.PaymentId, new DetailBrowser());
         await node.EnsureChildrenAsync();
 
         var fk = Assert.Single(Folder(node, "Foreign Keys")!.Children);
@@ -192,7 +192,7 @@ public class RelationDetailTests
     [Fact]
     public async Task An_incoming_reference_names_the_table_that_points_here()
     {
-        var node = Node(DemoData.StoreId, new DetailBrowser());
+        var node = Node(DemoCatalog.StoreId, new DetailBrowser());
         await node.EnsureChildrenAsync();
 
         var reference = Assert.Single(Folder(node, "References")!.Children);
@@ -203,7 +203,7 @@ public class RelationDetailTests
     public async Task A_check_constraint_shows_its_expression()
     {
         // The columns are no answer for a CHECK — the expression is the whole content of the row.
-        var node = Node(DemoData.PaymentId, new DetailBrowser());
+        var node = Node(DemoCatalog.PaymentId, new DetailBrowser());
         await node.EnsureChildrenAsync();
 
         var check = Folder(node, "Constraints")!.Children.Single(c => c.Title == "payment_amount_positive");
@@ -213,7 +213,7 @@ public class RelationDetailTests
     [Fact]
     public async Task A_key_constraint_shows_its_columns()
     {
-        var node = Node(DemoData.StoreId, new DetailBrowser());
+        var node = Node(DemoCatalog.StoreId, new DetailBrowser());
         await node.EnsureChildrenAsync();
 
         var constraints = Folder(node, "Constraints")!.Children;
@@ -226,7 +226,7 @@ public class RelationDetailTests
     {
         // What a failed CREATE INDEX CONCURRENTLY leaves behind. The planner ignores it, which is exactly the
         // thing you are hunting when a query is slow despite "having an index".
-        var node = Node(DemoData.PaymentId, new DetailBrowser());
+        var node = Node(DemoCatalog.PaymentId, new DetailBrowser());
         await node.EnsureChildrenAsync();
 
         var index = Folder(node, "Indexes")!.Children.Single(i => i.Title == "payment_note_idx");
@@ -238,7 +238,7 @@ public class RelationDetailTests
     public async Task An_expression_index_falls_back_to_its_definition()
     {
         // No resolvable column ordinals, so a column list would be empty and the row would say nothing.
-        var node = Node(DemoData.DocumentId, new DetailBrowser());
+        var node = Node(DemoCatalog.DocumentId, new DetailBrowser());
         await node.EnsureChildrenAsync();
 
         var index = Folder(node, "Indexes")!.Children.Single(i => i.Title == "document_channel_idx");
@@ -249,8 +249,8 @@ public class RelationDetailTests
     [Fact]
     public async Task A_trigger_shows_when_it_fires_and_whether_it_is_off()
     {
-        var store = Node(DemoData.StoreId, new DetailBrowser());
-        var document = Node(DemoData.DocumentId, new DetailBrowser());
+        var store = Node(DemoCatalog.StoreId, new DetailBrowser());
+        var document = Node(DemoCatalog.DocumentId, new DetailBrowser());
         await store.EnsureChildrenAsync();
         await document.EnsureChildrenAsync();
 
@@ -267,7 +267,7 @@ public class RelationDetailTests
     public async Task A_detail_row_can_show_the_definition_it_already_has()
     {
         // Fetched with the table's details, so there is no second round trip to make.
-        var node = Node(DemoData.StoreId, new DetailBrowser());
+        var node = Node(DemoCatalog.StoreId, new DetailBrowser());
         await node.EnsureChildrenAsync();
 
         var index = Folder(node, "Indexes")!.Children.First();
@@ -282,9 +282,9 @@ public class RelationDetailTests
     {
         // Dropping it would silently understate a key — a two-column unique constraint reading as one column
         // is a wrong answer, where "#7" is a visible gap.
-        var snapshot = DemoData.Snapshot();
+        var snapshot = DemoCatalog.Snapshot();
 
-        Assert.Equal("id, #7", RelationDetailText.Columns(snapshot, DemoData.StoreId, [1, 7]));
+        Assert.Equal("id, #7", RelationDetailText.Columns(snapshot, DemoCatalog.StoreId, [1, 7]));
     }
 
     [Fact]
@@ -293,8 +293,8 @@ public class RelationDetailTests
         // A foreign key can reference a table in a schema the snapshot filtered out. Its columns cannot be
         // named either, so they come out as ordinals — a row that is honest about what it does not know,
         // rather than one that looks like a key on nothing.
-        var snapshot = DemoData.Snapshot();
-        var fk = new ForeignKeyInfo(9, "orphan_fkey", DemoData.PaymentId, [2], 999_999, [1]);
+        var snapshot = DemoCatalog.Snapshot();
+        var fk = new ForeignKeyInfo(9, "orphan_fkey", DemoCatalog.PaymentId, [2], 999_999, [1]);
 
         Assert.Equal("store_id → (table 999999)(#1)", RelationDetailText.Outgoing(snapshot, fk));
     }
@@ -327,8 +327,8 @@ public class RelationDetailTests
         // that happened to cover the same columns, and kept the index behind an exclusion constraint — which
         // is neither primary nor unique, so every other test let it through and the DDL then failed on a
         // duplicate name.
-        var snapshot = DemoData.Snapshot();
-        var table = snapshot.Tables.Single(t => t.Id == DemoData.StoreId);
+        var snapshot = DemoCatalog.Snapshot();
+        var table = snapshot.Tables.Single(t => t.Id == DemoCatalog.StoreId);
         var details = new TableDetails(
             [new ConstraintInfo(1, "store_room_excl", ConstraintKind.Exclusion, [2, 3],
                 "EXCLUDE USING gist (name WITH =, active WITH =)")],
@@ -353,10 +353,10 @@ public class RelationDetailTests
     public void The_generated_ddl_now_carries_constraints_and_indexes()
     {
         // The generator's own note admitted this hole: "indexes, defaults, checks are omitted".
-        var snapshot = DemoData.Snapshot();
-        var table = snapshot.Tables.Single(t => t.Id == DemoData.PaymentId);
+        var snapshot = DemoCatalog.Snapshot();
+        var table = snapshot.Tables.Single(t => t.Id == DemoCatalog.PaymentId);
 
-        var ddl = Bearing.Sql.TableDdlGenerator.CreateTable(table, snapshot, DemoData.DetailsOf(DemoData.PaymentId));
+        var ddl = Bearing.Sql.TableDdlGenerator.CreateTable(table, snapshot, DemoCatalog.DetailsOf(DemoCatalog.PaymentId));
 
         Assert.Contains("constraint \"payment_amount_positive\" CHECK ((amount > (0)::numeric))", ddl);
         Assert.Contains("CREATE INDEX payment_store_id_idx", ddl);
@@ -367,10 +367,10 @@ public class RelationDetailTests
     [Fact]
     public void A_unique_constraint_does_not_also_emit_its_index()
     {
-        var snapshot = DemoData.Snapshot();
-        var table = snapshot.Tables.Single(t => t.Id == DemoData.StoreId);
+        var snapshot = DemoCatalog.Snapshot();
+        var table = snapshot.Tables.Single(t => t.Id == DemoCatalog.StoreId);
 
-        var ddl = Bearing.Sql.TableDdlGenerator.CreateTable(table, snapshot, DemoData.DetailsOf(DemoData.StoreId));
+        var ddl = Bearing.Sql.TableDdlGenerator.CreateTable(table, snapshot, DemoCatalog.DetailsOf(DemoCatalog.StoreId));
 
         Assert.Contains("constraint \"store_name_key\" UNIQUE (name)", ddl);
         Assert.DoesNotContain("CREATE UNIQUE INDEX store_name_key", ddl);
@@ -381,8 +381,8 @@ public class RelationDetailTests
     {
         // Null means "not read" — a caller with no server, or a read that failed. It must not become an
         // assertion that the table has no constraints.
-        var snapshot = DemoData.Snapshot();
-        var table = snapshot.Tables.Single(t => t.Id == DemoData.PaymentId);
+        var snapshot = DemoCatalog.Snapshot();
+        var table = snapshot.Tables.Single(t => t.Id == DemoCatalog.PaymentId);
 
         var ddl = Bearing.Sql.TableDdlGenerator.CreateTable(table, snapshot);
 
@@ -400,10 +400,10 @@ public class RelationDetailTests
         public int DetailCalls;
 
         public Task<IReadOnlyList<string>> GetDatabasesAsync(ConnectionInfo connection, CancellationToken ct)
-            => Task.FromResult<IReadOnlyList<string>>([DemoData.Database]);
+            => Task.FromResult<IReadOnlyList<string>>([DemoCatalog.Database]);
 
         public Task<DatabaseObjects> GetObjectsAsync(ConnectionInfo connection, string database, CancellationToken ct)
-            => Task.FromResult(new DatabaseObjects(DemoData.Snapshot(), DemoData.Routines()));
+            => Task.FromResult(new DatabaseObjects(DemoCatalog.Snapshot(), DemoCatalog.Routines()));
 
         public Task<string> GetViewDefinitionAsync(ConnectionInfo connection, string database, long tableId, CancellationToken ct)
             => Task.FromResult("select 1");
@@ -412,7 +412,7 @@ public class RelationDetailTests
             ConnectionInfo connection, string database, long tableId, CancellationToken ct)
         {
             Interlocked.Increment(ref DetailCalls);
-            return Task.FromResult(DemoData.DetailsOf(tableId));
+            return Task.FromResult(DemoCatalog.DetailsOf(tableId));
         }
 
         public Task<string> GetRoutineDefinitionAsync(ConnectionInfo connection, string database, long routineId, CancellationToken ct)

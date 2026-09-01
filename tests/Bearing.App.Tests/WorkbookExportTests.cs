@@ -4,7 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using Bearing.App.Results;
-using Bearing.App.Tests.Demo;
+using Bearing.Demo;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
@@ -278,7 +278,7 @@ public class WorkbookExportTests : IDisposable
     public void A_demo_run_exports_as_a_workbook_of_its_grids()
     {
         // The whole shape end to end, off the fixtures: five results, three of them grids (#63).
-        var results = ResultSetBuilder.BuildResultSets(DemoData.Run(), "select …", DemoData.Snapshot());
+        var results = ResultSetBuilder.BuildResultSets(DemoCatalog.Run(), "select …", DemoCatalog.Snapshot());
         var path = In("demo.xlsx");
 
         ResultExport.WriteWorkbook(path, ResultExport.RunSheets(results));

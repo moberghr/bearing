@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Bearing.Demo: a provider that serves fixed, hand-authored data so the app runs with no database
+       (#63/#64). Core only, like every other provider-side project (§2.2). -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\Bearing.Core\Bearing.Core.csproj" />
+  </ItemGroup>
+
+</Project>

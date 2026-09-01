@@ -14,8 +14,17 @@ namespace Bearing.App.Connections;
 /// </summary>
 public static class ConnectionEndpoint
 {
-    /// <summary>The server itself: <c>host:port</c>. What a tree row's dim second line shows.</summary>
-    public static string HostPort(ConnectionInfo info) => $"{info.Host}:{info.Port}";
+    /// <summary>
+    /// The server itself: <c>host:port</c>. What a tree row's dim second line shows.
+    /// <para>
+    /// A port of <b>zero</b> is dropped, and that is not the exception the note above forbids: zero is not a
+    /// default anyone could infer, it is the absence of a port — which is what a provider that opens no
+    /// socket has (the demo provider, #64). Rendering it as <c>demo:0</c> reads as a bug rather than as a
+    /// fact.
+    /// </para>
+    /// </summary>
+    public static string HostPort(ConnectionInfo info)
+        => info.Port == 0 ? info.Host : $"{info.Host}:{info.Port}";
 
     /// <summary>The server and what it is pointed at: <c>host:port/database</c>. A connection with no
     /// database drops the slash rather than trailing one.</summary>

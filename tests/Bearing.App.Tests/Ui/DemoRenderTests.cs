@@ -6,7 +6,7 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.VisualTree;
 using Bearing.App.Results;
-using Bearing.App.Tests.Demo;
+using Bearing.Demo;
 using Bearing.App.ViewModels;
 using Bearing.App.Formatting;
 using Bearing.Core.Data;
@@ -19,7 +19,7 @@ namespace Bearing.App.Tests.Ui;
 /// <c>ResultView</c>, with no Postgres and nothing hand-set on the view models.
 /// <para>
 /// The distinction that matters is where the affordances come from. These tests do not tell the view a column
-/// is a foreign key — they declare the column's origin in <see cref="DemoData"/>'s catalog and let
+/// is a foreign key — they declare the column's origin in <see cref="DemoCatalog"/>'s catalog and let
 /// <see cref="ResultSetBuilder"/> and the resolvers work it out, which is the path the app takes.
 /// </para>
 /// </summary>
@@ -32,12 +32,12 @@ public class DemoRenderTests
 
     /// <summary>Build view models the way the app does — through the real builder, over the demo catalog.</summary>
     internal static List<ResultSetViewModel> Sets(string sql, params QueryResult[] results)
-        => ResultSetBuilder.BuildResultSets(results, sql, DemoData.Snapshot());
+        => ResultSetBuilder.BuildResultSets(results, sql, DemoCatalog.Snapshot());
 
     [Fact]
     public Task A_whole_demo_run_renders() => _ui.Run(() =>
     {
-        var sets = Sets("select * from shop.store; select * from shop.payment", [.. DemoData.Run()]);
+        var sets = Sets("select * from shop.store; select * from shop.payment", [.. DemoCatalog.Run()]);
         var (window, view) = ResultsHarness.Show([.. sets]);
 
         // Every set in the run got a container, the grids among them included.
@@ -52,7 +52,7 @@ public class DemoRenderTests
     {
         // #61, off the fixtures rather than a hand-set ForeignKeyColumns: payment.store_id is a real FK in the
         // demo catalog and every third row has none.
-        var payments = Sets("select * from shop.payment", DemoData.Payments())[0];
+        var payments = Sets("select * from shop.payment", DemoCatalog.Payments())[0];
         Assert.Contains(1, payments.ForeignKeyColumns);
         var (window, _) = ResultsHarness.Show(payments);
 
@@ -70,7 +70,7 @@ public class DemoRenderTests
     {
         // #30 / #73 in both directions: a column whose name is far wider than its values, beside one whose
         // values are far wider than its name.
-        var metrics = Sets("select * from shop.metric", DemoData.Metrics())[0];
+        var metrics = Sets("select * from shop.metric", DemoCatalog.Metrics())[0];
         var (window, view) = ResultsHarness.Show(metrics);
 
         var grid = ResultsHarness.Grid(view);
@@ -86,7 +86,7 @@ public class DemoRenderTests
     [Fact]
     public Task An_error_result_renders_without_a_grid() => _ui.Run(() =>
     {
-        var failure = Sets("select * from shop.paymnet", DemoData.Failure())[0];
+        var failure = Sets("select * from shop.paymnet", DemoCatalog.Failure())[0];
         var (window, view) = ResultsHarness.Show(failure);
 
         Assert.Empty(view.GetVisualDescendants().OfType<DataGrid>());
@@ -99,7 +99,7 @@ public class DemoRenderTests
     [Fact]
     public Task A_rows_affected_message_renders_without_a_grid() => _ui.Run(() =>
     {
-        var affected = Sets("update shop.payment set note = null", DemoData.Affected())[0];
+        var affected = Sets("update shop.payment set note = null", DemoCatalog.Affected())[0];
         var (window, view) = ResultsHarness.Show(affected);
 
         Assert.Empty(view.GetVisualDescendants().OfType<DataGrid>());
@@ -114,7 +114,7 @@ public class DemoRenderTests
     {
         // Editability is resolved from the catalog, not declared by the test — the meta row's commit group
         // only appears because payment has a primary key the fixtures gave it.
-        var payments = Sets("select * from shop.payment", DemoData.Payments())[0];
+        var payments = Sets("select * from shop.payment", DemoCatalog.Payments())[0];
         Assert.True(payments.IsEditable);
         var (window, view) = ResultsHarness.Show(payments);
 
@@ -128,7 +128,7 @@ public class DemoRenderTests
     {
         // The view is a real relation with real column origins and no primary key, so the lock chip's reason
         // comes out of resolution rather than a string a test set.
-        var receipts = Sets("select * from shop.receipt", DemoData.ReceiptView())[0];
+        var receipts = Sets("select * from shop.receipt", DemoCatalog.ReceiptView())[0];
         var (window, view) = ResultsHarness.Show(receipts);
 
         Assert.False(receipts.IsEditable);

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
+using Bearing.Demo;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -59,10 +60,25 @@ public class LookProbe
         var dir = CaptureDir();
         return _ui.Run(() =>
         {
-            var sets = DemoRenderTests.Sets("select * from shop.store", [.. Demo.DemoData.Run()]);
+            var sets = DemoRenderTests.Sets("select * from shop.store", [.. DemoCatalog.Run()]);
             var (window, _) = ResultsHarness.Show([.. sets]);
             Write(window, dir, "demo-run.png");
             window.Close();
+        });
+    }
+
+    /// <summary>A demo session's first screen (#64): the connection, the welcome script, the empty state gone.</summary>
+    [SkippableFact]
+    public Task DemoSession()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(async () =>
+        {
+            using var shell = await ShellHarness.ShowAsync(nameof(DemoSession));
+            // The real entry point, so the capture shows what a demo launch actually produces.
+            await shell.Vm.StartDemoAsync(shell.ProjectDirectory, DemoMode.WelcomeScript);
+            shell.Pump();
+            Write(shell.Window, dir, "demo-session.png");
         });
     }
 

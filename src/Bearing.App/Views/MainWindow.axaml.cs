@@ -144,6 +144,14 @@ public partial class MainWindow : Window
     private void WireSidebar()
     {
         Sidebar.AddConnectionRequested = folder => _ = AddConnectionAsync(folder);
+        // Demo mode is decided at startup (it replaces the registry and every store), so this starts a second
+        // process rather than switching this one — and deliberately leaves this window open, so trying the
+        // demo never costs the user their session (#64).
+        Sidebar.ExploreDemoRequested = () =>
+        {
+            if (Demo.DemoRelaunch.Start() is { } failure) { if (Vm is not null) Vm.StatusText = failure; }
+            else if (Vm is not null) Vm.StatusText = "Opening a demo session in a new window…";
+        };
         Sidebar.ImportConnectionsRequested = () => _ = ImportFromDBeaverAsync();
         Sidebar.EditorSyncRequested = LoadEditorFromSelectedTab;
         Sidebar.SqlPreviewRequested = _dialogs.ShowSqlPreview;

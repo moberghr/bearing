@@ -134,3 +134,25 @@ away a working pool, its TLS handshake, and all its server-side state (#54, fixe
 ## §9.5 — antlr4-c3 completion
 - The vendored `antlr4-c3` `CodeCompletionCore` is used for SQL completion. There is a known gotcha noted in
   project memory — verify completion behavior against the existing `CompletionEngine` tests when touching it.
+
+## §9.7 — Demo mode is a whole session, decided once
+`--demo` / `BEARING_DEMO` (or the Connections empty state's "Explore demo data") starts a session served from
+`Bearing.Demo`'s fixed catalog with no database anywhere (#64). It is **process-wide**: the demo registry holds
+`DemoProvider` *instead of* Postgres, so the fake is not reachable from any normal connection flow — in an
+ordinary session it is not in the object graph at all.
+
+- WHEN adding to it, keep the isolation. `App.DemoWorkspace` points the project store, session store, query
+  log and recent-projects list at one temp directory and deletes it on close, and hands the session a
+  `NoSecretStore`. Nothing may touch `BearingPaths.DataDir`/`ConfigDir`: no manifest write in the user's
+  project, no recent-projects entry, no query-log rows beside their history (§1.3), no keychain call (§1.1).
+- The demo connection keeps `RequireWriteConfirmation` — §1.2 says the write guard is not special-cased, and
+  the confirmation is a feature worth demonstrating. It is labelled through the existing environment
+  mechanism (§9.3a), not a new mark.
+- It ships in **Release**, not compiled out: evaluation by someone with no Postgres is the strongest argument
+  for the feature, and a build without it cannot serve that. Safety comes from the isolation above.
+- The empty-state button **relaunches** rather than switching, and leaves the current window open — demo mode
+  is decided at startup, and swapping the registry and every store under a live session is how you get a
+  window that is half demo and half real.
+- `DemoWorkspace.DisposeAsync` closes the query log *first*. `SqliteQueryLog.DisposeAsync` now also releases
+  its own connection pool, because reads hand connections back to it and the handle otherwise outlives the
+  object — a demo that cannot delete its directory leaves exactly the residue it exists not to leave.

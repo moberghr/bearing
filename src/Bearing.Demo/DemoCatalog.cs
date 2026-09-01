@@ -4,7 +4,7 @@ using System.Linq;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
 
-namespace Bearing.App.Tests.Demo;
+namespace Bearing.Demo;
 
 /// <summary>
 /// A small hand-authored catalog and the result sets it can produce, so the UI can be driven against fixed
@@ -27,7 +27,7 @@ namespace Bearing.App.Tests.Demo;
 /// (§4.2, §4.6). What belongs here is how the UI behaves <i>given</i> a result shape.
 /// </para>
 /// </summary>
-internal static class DemoData
+public static class DemoCatalog
 {
     public const string Database = "demo";
     public const string Schema = "shop";
