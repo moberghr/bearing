@@ -32,7 +32,7 @@ public partial class MainWindow
         // selected there instead of inheriting the current tab's. Null everywhere else, which is the old
         // behaviour exactly.
         r.Register(KeyCommand.Sync(CommandIds.TabNew, "New tab", KeyScope.Global, "File",
-            () => Vm?.Workspace.NewTab(connectionId: Sidebar.FocusedTreeConnectionId)));
+            () => NewTabAndFocus(Sidebar.FocusedTreeConnectionId)));
         r.Register(new KeyCommand(CommandIds.TabClose, "Close tab", KeyScope.Global, "File",
             async () => { if (Vm?.Workspace.SelectedTab is { } tab) await CloseTabAsync(tab); }, canRun: () => Vm?.Workspace.SelectedTab is not null));
         r.Register(KeyCommand.Sync(CommandIds.TabRename, "Rename tab", KeyScope.Global, "File",

@@ -18,7 +18,18 @@ public partial class MainWindow
 {
     // ---- tabs ----
 
-    private void OnNewTabClick(object? sender, RoutedEventArgs e) => Vm?.Workspace.NewTab();
+    private void OnNewTabClick(object? sender, RoutedEventArgs e) => NewTabAndFocus();
+
+    /// <summary>Open a tab and put the caret in it (#88). Opening a tab is only ever a prelude to typing in
+    /// it, and the ＋ button and the keyboard command both left focus where it was — on the button, or
+    /// wherever the keystroke came from — so the first thing typed went nowhere.
+    /// <para>One helper for both routes so they cannot diverge; the view-model creates the tab and does not
+    /// know about focus, which is the right split.</para></summary>
+    internal void NewTabAndFocus(Guid? connectionId = null)
+    {
+        Vm?.Workspace.NewTab(connectionId: connectionId);
+        Editor.TextArea.Focus();
+    }
 
     private async void OnCloseTabPressed(object? sender, PointerPressedEventArgs e)
     {

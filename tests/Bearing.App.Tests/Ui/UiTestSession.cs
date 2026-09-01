@@ -58,6 +58,11 @@ public sealed class UiTestSession : IDisposable
     /// returned task, so a test method is written as <c>public Task Name() =&gt; _ui.Run(() =&gt; …);</c>.</summary>
     public Task Run(Action body) => _session.Dispatch(body, CancellationToken.None);
 
+    /// <summary>The same, for a body that awaits — the shell's own setup is async. Awaits resume on the
+    /// dispatcher thread, so the body stays on it throughout.</summary>
+    public Task Run(Func<Task> body) => _session.Dispatch(
+        async () => { await body(); return true; }, CancellationToken.None);
+
     public void Dispose() => _session.Dispose();
 }
 

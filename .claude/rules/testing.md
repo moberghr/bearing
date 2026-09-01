@@ -100,6 +100,17 @@ faster, parallelizable, and reads better. Reach for a UI test when the visual tr
   containing `/*`, an apostrophe or a quoted word). The **one** shape that colours the rest of the buffer
   green is an unterminated `/*`, which is correct — Postgres comments to end of file too — and is invisible
   to execution, because Bearing runs the statement under the caret rather than the file.
+- **`MainWindow` builds headlessly, but the whole shell is not testable yet.** `new MainWindow { DataContext = vm }`
+  after `ShellViewModel.InitializeAsync` constructs, shows and lays out — which makes focus, the tab strip's
+  two-way selection binding and the key routing all reachable, and it was tried (#87/#88). It was backed out
+  rather than shipped, for two reasons worth knowing before trying again: the shell leaves
+  `Application.Current` set, and tests that assert the *no-Application* fallback path
+  (`EnvironmentWashTests.Badge_mode_falls_back_to_a_translucent_neutral`) then fail; and avoiding the reverse
+  contamination — a shared brush built on an xunit worker thread and then used in the shell's visual tree,
+  which throws `VerifyAccess` from the compositor — needed `parallelizeTestCollections: false`, taking the
+  suite from 35s to 88s. Enabling it means first making the Application-dependent tests explicit about
+  whether one exists. Until then, shell-level wiring is eyeball QA (§4.3) and the behaviour underneath it is
+  tested at the view-model level, where the bug usually is anyway.
 - **Available and unused so far:** synthetic input on any `TopLevel` (`MouseDown`/`MouseMove`/`MouseUp`/
   `MouseWheel`, `KeyPress`/`KeyPressQwerty`, `KeyTextInput`, `SetRenderScaling`, and `DragDrop`, which takes
   an `IDataTransfer` and so already matches the v12 typed API, §9.3), plus real pixels via

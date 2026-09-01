@@ -178,14 +178,31 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     }
 
     /// <summary>Remove the tab and settle the selection. The workspace always keeps at least one tab.</summary>
+    /// <summary>
+    /// Drop a tab and land the selection on its left-hand neighbour (its right-hand one when it was the
+    /// leftmost). Closing a run of tabs then keeps walking left, instead of stopping dead the moment the
+    /// selection reaches the end of the strip.
+    /// <para>
+    /// Whether the closing tab was selected is read <b>before</b> it leaves the list, not after (#87).
+    /// <see cref="SelectedTab"/> is bound two-way to the tab strip's <c>SelectedItem</c>, so removing the
+    /// item makes the control fix up its own selection and write that back through the binding — by the time
+    /// the old check ran, <c>SelectedTab</c> was already whatever the control had picked, the guard was
+    /// false, and the workspace never chose a replacement at all. It read as correct with no view attached,
+    /// which is exactly why it shipped, so the test below fakes a control that does the same write.
+    /// </para>
+    /// </summary>
     private void Remove(EditorTabViewModel tab)
     {
         var index = Tabs.IndexOf(tab);
         if (index < 0) return;
+
+        var wasSelected = ReferenceEquals(SelectedTab, tab);
         Tabs.Remove(tab);
         if (Tabs.Count == 0) { NewTab(); return; }
-        if (ReferenceEquals(SelectedTab, tab) || SelectedTab is null)
-            SelectedTab = Tabs[Math.Min(index, Tabs.Count - 1)];
+
+        // Also re-selects when the control left SelectedTab on a tab that is no longer in the list.
+        if (wasSelected || SelectedTab is null || !Tabs.Contains(SelectedTab))
+            SelectedTab = Tabs[Math.Max(0, index - 1)];
     }
 
     public async Task RestoreTabsAsync(SessionState? session)
