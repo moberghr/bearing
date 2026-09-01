@@ -25,6 +25,7 @@ internal static class TabContextMenu
     /// <param name="reveal">Select this tab's file in the Scripts panel; null hides the item.</param>
     /// <param name="openFolder">Show this tab's file in the OS file manager; null hides the item.</param>
     /// <param name="delete">Delete this tab's file and close it; null hides the item.</param>
+    /// <param name="togglePin">Pin the tab, or unpin it if it already is; null hides the item.</param>
     public static MenuFlyout Build(
         EditorTabViewModel tab,
         Func<Task> rename,
@@ -34,9 +35,11 @@ internal static class TabContextMenu
         Action? reveal,
         Func<Task>? openFolder,
         Func<Task>? delete,
+        Action? togglePin = null,
         KeyGesture? renameGesture = null,
         KeyGesture? saveGesture = null,
-        KeyGesture? closeGesture = null)
+        KeyGesture? closeGesture = null,
+        KeyGesture? pinGesture = null)
     {
         var menu = new MenuFlyout();
 
@@ -45,6 +48,13 @@ internal static class TabContextMenu
         menu.Items.Add(Item(tab.IsScratch ? "Rename / promote…" : "Rename file…", renameGesture, rename));
         menu.Items.Add(Item("Save", saveGesture, save, canSave));
         menu.Items.Add(Item("Close", closeGesture, close));
+
+        // "Pin" / "Unpin", not a checkbox: built per right-click, so the label can simply say what the item
+        // will do to *this* tab (#67).
+        if (togglePin is not null)
+            menu.Items.Add(Item(
+                tab.IsPinned ? "Unpin tab" : "Pin tab", pinGesture,
+                () => { togglePin(); return Task.CompletedTask; }));
 
         if (reveal is not null || openFolder is not null)
         {

@@ -76,6 +76,7 @@ public sealed partial class ShellViewModel
             ScratchName = t.ScriptPath is null && t.IsUserNamed ? t.DisplayName : null,
             CaretOffset = t.CaretOffset,
             ConnectionId = t.ConnectionId,
+            Pinned = t.IsPinned,
         }).ToList();
 
         var selected = selectedIndex >= 0 && selectedIndex < tabs.Count ? tabs[selectedIndex] : null;

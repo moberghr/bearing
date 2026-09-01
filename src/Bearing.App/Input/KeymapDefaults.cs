@@ -22,6 +22,8 @@ public static class KeymapDefaults
         yield return G(CommandIds.FileOpen, "Ctrl+O");
         yield return G(CommandIds.TabNew, "Ctrl+N"); // primary (shown in menu); Ctrl+T is the alias
         yield return G(CommandIds.TabNew, "Ctrl+T");
+        // Alt+P: Ctrl+P is the command palette's territory in every editor, and Ctrl+Shift+P too.
+        yield return G(CommandIds.TabTogglePin, "Alt+P");
         yield return G(CommandIds.TabClose, "Ctrl+F4"); // Windows MDI convention; Ctrl+W is the editor's delete-word
         yield return G(CommandIds.TabRename, "F2");
         yield return G(CommandIds.ViewToggleSidePane, "Ctrl+B");
@@ -30,6 +32,11 @@ public static class KeymapDefaults
         yield return G(CommandIds.StatementNext, "Alt+Down");
         yield return G(CommandIds.AppEscape, "Escape");
         yield return G(CommandIds.PaletteOpen, "Ctrl+Shift+P");
+        // Ctrl+E, which is Eclipse's "quick switch editor" — the same chevron-and-list affordance, so DBeaver
+        // users already have the reflex. Explicitly NOT Ctrl+Shift+Tab: that is the backwards MRU cycle below,
+        // and taking it would have replaced a working gesture with a similar-looking one. The binding tests
+        // caught the collision, which is what they are for.
+        yield return G(CommandIds.TabPick, "Ctrl+E");
         yield return G(CommandIds.TabNext, "Ctrl+PageDown");     // visual order (tab strip)
         yield return G(CommandIds.TabPrev, "Ctrl+PageUp");
         yield return G(CommandIds.TabMruNext, "Ctrl+Tab");       // most-recently-used order

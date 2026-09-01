@@ -76,20 +76,22 @@ dotnet test
 
 Pure unit tests (SQL/completion, persistence, formatting) run with no external services. The `Bearing.Data`
 integration tests need a live PostgreSQL loaded with [pagila](https://github.com/devrimgunduz/pagila); they
-are `SkippableFact` and silently skip when no database is reachable. To run them, point the app at a container:
+are `SkippableFact` and silently skip when no database is reachable. One script provisions one:
 
 ```bash
-BEARING_TEST_PG_PORT=5434 dotnet test
+./build/test-db.sh          # start it, load pagila, verify (idempotent)
+dotnet test                 # no env vars needed — the defaults point at it
+./build/test-db.sh stop     # remove the container
 ```
 
-The tests read `BEARING_TEST_PG_*` env vars (host/port/db/user/password) and default to a local pagila
-container. Bring one up with e.g.:
+It creates the `squirrel-pg-test` container on **55434** with pagila loaded, which is exactly what
+`tests/Shared/PgTestServer.cs` defaults to. Deliberately not 5434: that port sits in the range other developer
+tooling claims, and on one machine here it was an SSM tunnel to a *real remote* database that these defaults
+reached and were refused by. The script refuses to bind over a listener it did not create, and the tests that
+run DDL check for a marker row it writes before doing so.
 
-```bash
-docker run -d --name bearing-pg-test -p 5434:5432 \
-  -e POSTGRES_PASSWORD=squirrel -e POSTGRES_DB=pagila postgres:17
-# then load the pagila schema + data into it
-```
+The tests read `BEARING_TEST_PG_*` env vars (host/port/db/user/password) if you would rather point them
+somewhere else.
 
 The default password is `squirrel` — a throwaway dev credential for the local test container, nothing to do
 with the app. Override it, and every other default, with `BEARING_TEST_PG_*` (`tests/Shared/PgTestServer.cs`).

@@ -33,6 +33,9 @@ public partial class SidebarView : UserControl
     /// folder path to file the new connection into, or null for the top level.</summary>
     public System.Action<string?>? AddConnectionRequested { get; set; }
 
+    /// <summary>Raised by the empty state's "Explore demo data" button (#64).</summary>
+    public System.Action? ExploreDemoRequested { get; set; }
+
     /// <summary>Raised after an action changed the selected tab, so the shell re-syncs the editor buffer.</summary>
     public System.Action? EditorSyncRequested { get; set; }
 
@@ -42,6 +45,10 @@ public partial class SidebarView : UserControl
     public SidebarView()
     {
         InitializeComponent();
+        // Dense rows in both navigators: Fluent's stock TreeViewItem is a touch target, and a schema row is
+        // one line of text with a 15px glyph (#71).
+        TreeChrome.Apply(SchemaTree);
+        TreeChrome.Apply(ScriptsTree);
         // Intercept Up/Down/Esc/Backspace before the TreeView's built-in node navigation, so a search
         // cycles matches instead of walking every row (same trick the shell used before extraction).
         SchemaTree.AddHandler(KeyDownEvent, OnSchemaTreeKeyDown, RoutingStrategies.Tunnel);
@@ -86,6 +93,10 @@ public partial class SidebarView : UserControl
     // ---- connections ----
 
     private void OnAddConnectionClick(object? sender, RoutedEventArgs e) => AddConnectionRequested?.Invoke(null);
+
+    /// <summary>Start a demo session (#64). Reported through the callback so the status bar carries the
+    /// outcome — a view does not own messages.</summary>
+    private void OnExploreDemoClick(object? sender, RoutedEventArgs e) => ExploreDemoRequested?.Invoke();
 
     /// <summary>The schema-tree node the clicked menu item / tapped row belongs to (via its DataContext).</summary>
     private static SchemaNodeViewModel? NodeOf(object? sender) => (sender as Control)?.DataContext as SchemaNodeViewModel;
@@ -211,6 +222,18 @@ public partial class SidebarView : UserControl
         if (result is null) return;
         if (result.Delete) await Vm.Connections.DeleteConnectionAsync(existing.Id);
         else await Vm.Connections.AddOrUpdateConnectionAsync(result.Connection, result.Password);
+    }
+
+    private void OnSortRelationsBySize(object? sender, RoutedEventArgs e)
+        => Order(sender, DatabaseNodeViewModel.RelationOrder.Size);
+
+    private void OnSortRelationsByName(object? sender, RoutedEventArgs e)
+        => Order(sender, DatabaseNodeViewModel.RelationOrder.Name);
+
+    /// <summary>Re-order a database's relation rows (#76).</summary>
+    private static void Order(object? sender, DatabaseNodeViewModel.RelationOrder order)
+    {
+        if (NodeOf(sender) is DatabaseNodeViewModel database) database.SetRelationOrder(order);
     }
 
     private void OnUseConnectionInTab(object? sender, RoutedEventArgs e) => AssignConnectionToTab(NodeOf(sender));

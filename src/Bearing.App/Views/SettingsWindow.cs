@@ -291,6 +291,46 @@ public sealed class SettingsWindow : Window
                     return (combo, () => combo.SelectedItem = e.Selected(_settings.Current));
                 }
 
+            case StringSetting str:
+                {
+                    // Editable, not a plain dropdown: the suggestion list is a convenience, and a value from
+                    // another platform (an IANA id on Windows) has to remain typeable (#77).
+                    var combo = new ComboBox
+                    {
+                        ItemsSource = str.Suggestions?.Invoke() ?? [],
+                        Width = 210,
+                        IsEditable = true,
+                    };
+                    var note = new TextBlock { Foreground = Res("Text.Dim"), FontSize = Metric("Font.Small") };
+
+                    void Commit(string? text)
+                    {
+                        if (_syncing || text is null) return;
+                        // Rejected input leaves the stored value alone rather than saving something that will
+                        // not resolve — and the box goes back to what is actually in force, because a typo
+                        // left on screen beside a different live value reads as accepted.
+                        _settings.Set(str, text);
+                        var current = str.Get(_settings.Current);
+                        if (current != text) combo.Text = current;
+                        note.Text = str.Describe?.Invoke(current) ?? "";
+                    }
+
+                    combo.SelectionChanged += (_, _) => Commit(combo.SelectedItem as string);
+                    combo.LostFocus += (_, _) => Commit(combo.Text);
+
+                    var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                    panel.Children.Add(combo);
+                    panel.Children.Add(note);
+                    return (panel, () =>
+                    {
+                        var current = str.Get(_settings.Current);
+                        combo.SelectedItem = current;
+                        combo.Text = current;
+                        note.Text = str.Describe?.Invoke(current) ?? "";
+                    }
+                    );
+                }
+
             default:
                 return (new TextBlock { Text = "(unsupported setting kind)", Foreground = Res("Warn.Amber") }, () => { });
         }

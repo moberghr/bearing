@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -19,9 +20,13 @@ namespace Bearing.App.Controls;
 /// being partial without re-doing the hit test.</summary>
 public enum GridPressTarget
 {
-    /// <summary>Grid chrome with no meaning for the selection — the scrollbar, the corner, empty space
-    /// below the last row. The caller clears the selection on this one.</summary>
+    /// <summary>Grid chrome with no meaning for the selection — the scrollbar, empty space below the last
+    /// row. The caller clears the selection on this one.</summary>
     None,
+
+    /// <summary>The corner above the row-number gutter: the whole result is now selected, as the same
+    /// corner does in every spreadsheet.</summary>
+    Corner,
 
     /// <summary>A cell, which selects itself (see <c>ResultCellFactory.MakeSelectable</c>).</summary>
     Cell,
@@ -45,7 +50,14 @@ public enum GridPressTarget
 /// </summary>
 public sealed class GridSelectionController
 {
+    /// <summary>Name the DataGrid's template gives the corner above the row-number gutter.</summary>
+    private const string CornerHeaderName = "PART_TopLeftCornerHeader";
+
     private readonly Control _owner; // used only to reach the TopLevel's clipboard
+
+    /// <summary>Each grid's corner template part, found once. Conditional so a grid that goes away takes its
+    /// entry with it.</summary>
+    private readonly ConditionalWeakTable<DataGrid, Control> _corners = new();
 
     public GridSelectionController(Control owner) => _owner = owner;
 
@@ -192,9 +204,14 @@ public sealed class GridSelectionController
 
         DataGridRowHeader? rowHeader = null;
         DataGridColumnHeader? columnHeader = null;
+        var corner = false;
         foreach (var visual in source.GetSelfAndVisualAncestors())
         {
             if (visual is Border { Tag: ValueTuple<object?[], int> }) return GridPressTarget.Cell;
+            // Tested before the DataGridColumnHeader case below, because in the DataGrid's template the
+            // corner *is* one — it just has no column, so it fell through to "chrome" and cleared the
+            // selection instead of selecting everything (#55).
+            if (visual is Control { Name: CornerHeaderName }) { corner = true; break; }
             if (visual is DataGridRowHeader rh) { rowHeader = rh; break; }
             if (visual is DataGridColumnHeader ch) { columnHeader = ch; break; }
         }
@@ -203,6 +220,28 @@ public sealed class GridSelectionController
         if (!point.IsLeftButtonPressed && !point.IsRightButtonPressed) return GridPressTarget.None;
         var extend = e.KeyModifiers.HasFlag(KeyModifiers.Shift) && CanExtendFrom(result);
         var add = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);
+
+        if (corner || (rowHeader is null && columnHeader is null && PressIsOnCorner(grid, e)))
+        {
+            if (result.Rows.Count == 0) return GridPressTarget.None;
+            // A right-press opens the context menu over whatever is already selected and leaves it alone.
+            // The row/column headers collapse the selection onto the band being pointed at; the corner's
+            // "band" is everything, so doing the same here would *expand* a deliberate selection into the
+            // whole result — and the menu's Copy / Export would then act on every row.
+            if (point.IsRightButtonPressed && ReferenceEquals(Model.Result, result) && Model.Cells.Count > 0)
+                return GridPressTarget.Corner;
+
+            grid.Focus();          // as a cell click does, so the keys that follow reach this grid
+            SelectAll(result);     // the same operation Ctrl+A runs, so the two can never disagree
+            // SelectAll only seeds the active cell when there wasn't one, which is right for Ctrl+A (it
+            // keeps the cursor where the user left it) and wrong here: this can arrive from a click in a
+            // *different* result, leaving Active/Anchor pointing at a row this result doesn't contain, and
+            // the next arrow key or Shift+click would navigate from outside the set.
+            Model.Active = (result.Rows[0], GridSelectionOps.FirstColumn(result));
+            Model.Anchor = Model.Active;
+            Notify();
+            return GridPressTarget.Corner;
+        }
 
         if (rowHeader is not null)
         {
@@ -227,6 +266,35 @@ public sealed class GridSelectionController
         }
 
         return GridPressTarget.None;
+    }
+
+    /// <summary>
+    /// Whether a press landed on the corner above the row-number gutter, matched by position rather than by
+    /// hit test. The corner is a <c>DataGridColumnHeader</c> in the template but nothing over it is
+    /// hit-testable — a press there reports the grid's outer border, with no corner in its ancestry — so the
+    /// ancestor walk cannot see it. Same shape as the bool cell, which tests the press against its
+    /// indicator's bounds for its own reasons (see <c>ResultCellFactory.BoolContent</c>).
+    /// <para>
+    /// Only reached once a press has failed to resolve to a cell or a header, so the tree walk costs nothing
+    /// on the presses that matter.
+    /// </para>
+    /// </summary>
+    private bool PressIsOnCorner(DataGrid grid, PointerPressedEventArgs e)
+    {
+        // Cached per grid: this runs for every press that resolved to nothing — the scrollbar, the space
+        // below the last row, the start of a drag — and the corner is a template part that is found once and
+        // then stays put, so re-walking a few hundred realized cell visuals each time bought nothing.
+        if (!_corners.TryGetValue(grid, out var corner) || corner is { Parent: null })
+        {
+            corner = grid.GetVisualDescendants().OfType<Control>().FirstOrDefault(c => c.Name == CornerHeaderName);
+            // AddOrUpdate, not Add: the refresh branch is also reached with the key already present (a
+            // re-templated grid detaches the cached corner), and Add throws on a duplicate — out of a
+            // pointer-press handler, for a press on the scrollbar.
+            if (corner is not null) _corners.AddOrUpdate(grid, corner);
+        }
+        if (corner is null || !corner.IsVisible || corner.Bounds.Width <= 0) return false;
+        if (corner.TranslatePoint(default, grid) is not { } origin) return false;
+        return new Rect(origin, corner.Bounds.Size).Contains(e.GetPosition(grid));
     }
 
     /// <summary>Select a whole-row / whole-column band. Returns false when there was nothing to select, or
@@ -265,7 +333,7 @@ public sealed class GridSelectionController
 
     // ---- keyboard ---------------------------------------------------------------------------
 
-    private static GridMotion? MotionOf(Key k) => k switch
+    private static GridMotion? MotionOf(Key k, KeyModifiers modifiers) => k switch
     {
         Key.Left => GridMotion.Left,
         Key.Right => GridMotion.Right,
@@ -275,12 +343,17 @@ public sealed class GridSelectionController
         Key.End => GridMotion.End,
         Key.PageUp => GridMotion.PageUp,
         Key.PageDown => GridMotion.PageDown,
+        // Field traversal (#10). Claimed from the framework's focus traversal, as every grid does — F6
+        // still cycles regions, and Ctrl+Tab is the tab-switching binding and never reaches here.
+        Key.Tab when !modifiers.HasFlag(KeyModifiers.Control) =>
+            modifiers.HasFlag(KeyModifiers.Shift) ? GridMotion.PreviousField : GridMotion.NextField,
         _ => null,
     };
 
-    /// <summary>Spatial cell-cursor motion: arrows / Home / End / PageUp / PageDown move the active cell,
-    /// Shift extends a rectangle from the anchor, Ctrl jumps to the row or column edge. Returns false for
-    /// any other key so it falls through to the shared command dispatcher or bubbles to the window.
+    /// <summary>Cell-cursor motion: arrows / Home / End / PageUp / PageDown move the active cell spatially,
+    /// Shift extends a rectangle from the anchor, Ctrl jumps to the row or column edge; Tab and Shift+Tab
+    /// walk fields in reading order, wrapping a row at each edge (#10). Returns false for any other key so
+    /// it falls through to the shared command dispatcher or bubbles to the window.
     /// <para>
     /// Intrinsic navigation, deliberately NOT rebindable commands — the same call the editor's caret motion
     /// gets (§9.2's stated exception).
@@ -288,7 +361,7 @@ public sealed class GridSelectionController
     /// </summary>
     public bool HandleNavigation(DataGrid grid, ResultSetViewModel result, KeyEventArgs e)
     {
-        if (MotionOf(e.Key) is not { } motion) return false;
+        if (MotionOf(e.Key, e.KeyModifiers) is not { } motion) return false;
 
         // First arrow into a grid that isn't the active one: seed the active cell at the top-left instead
         // of moving a cursor that isn't visible yet.
@@ -305,7 +378,10 @@ public sealed class GridSelectionController
         var page = Math.Max(1, VisiblePageSize(grid) - 1);
         var (nr, nc) = GridSelectionOps.Move(result, r, active.Col, motion, toEdge, page);
 
-        MoveActive(grid, result, result.Rows[nr], nc, extend: e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+        // Shift extends the rectangle for a spatial motion, but for Tab it chose the direction — a field
+        // traversal always lands on a single cell, the way tabbing through a form does.
+        var extend = e.KeyModifiers.HasFlag(KeyModifiers.Shift) && !GridSelectionOps.IsFieldMotion(motion);
+        MoveActive(grid, result, result.Rows[nr], nc, extend);
         return true;
     }
 

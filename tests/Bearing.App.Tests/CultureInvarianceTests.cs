@@ -23,15 +23,9 @@ namespace Bearing.App.Tests;
 /// </summary>
 public class CultureInvarianceTests
 {
-    /// <summary>Runs the body with <see cref="CultureInfo.CurrentCulture"/> pinned, then restores it.
-    /// Culture is per-execution-context, so this does not disturb tests running in parallel.</summary>
-    private static void InCulture(string name, Action body)
-    {
-        var previous = CultureInfo.CurrentCulture;
-        CultureInfo.CurrentCulture = new CultureInfo(name);
-        try { body(); }
-        finally { CultureInfo.CurrentCulture = previous; }
-    }
+    /// <summary>Runs the body under a pinned culture — see <see cref="CultureScope"/>, which this shares
+    /// with the assertions that pin a locale for the opposite reason.</summary>
+    private static void InCulture(string name, Action body) => CultureScope.In(name, body);
 
     // ---- display ---------------------------------------------------------------------------------
 

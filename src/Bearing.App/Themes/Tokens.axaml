@@ -71,4 +71,23 @@
   <x:Double x:Key="Width.Rail">52</x:Double>
   <x:Double x:Key="Width.SidePanel">262</x:Double>
 
+  <!-- Type sizes (#52). Tokens rather than literals for the same reason the colours are: a size scattered
+       across thirty call sites cannot be made settable, and the next control added to a panel gets a fresh
+       literal and quietly ignores the setting. Two dials drive them — Font.Ui for the chrome and Font.Grid
+       for the data — and App.SetUiFontSize/SetGridFontSize move these resources at runtime, exactly as
+       SetConnectionAccent moves ConnectionBrush.
+
+       The scale is relative to the dial, not absolute: Caption/Small/Body sit at -2/-1/±0 around Font.Ui, so
+       raising the dial keeps the hierarchy instead of flattening it. The values here are the defaults; the
+       app overwrites them on startup from settings. -->
+  <x:Double x:Key="Font.Caption">9</x:Double>
+  <x:Double x:Key="Font.Small">11</x:Double>
+  <x:Double x:Key="Font.Body">12</x:Double>
+  <x:Double x:Key="Font.Grid">13</x:Double>
+  <x:Double x:Key="Font.GridHeader">12</x:Double>
+
+  <!-- Derived from Font.Grid, not set beside it: a grid font above ~15 clips against a fixed row floor and
+       one below ~11 leaves the rows looking padded, so density has to follow the size (#52, #30). -->
+  <x:Double x:Key="Height.GridRow">26</x:Double>
+
 </ResourceDictionary>

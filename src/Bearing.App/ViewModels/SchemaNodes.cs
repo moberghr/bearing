@@ -46,6 +46,9 @@ public abstract partial class SchemaNodeViewModel : ObservableObject
     /// <summary>Whether the node can be expanded (drives the placeholder + the expander arrow).</summary>
     public bool HasChildren { get; }
 
+    /// <summary>Whether this row is a database — for the context menu's size-ordering items (#76).</summary>
+    public virtual bool IsDatabase => false;
+
     public ObservableCollection<SchemaNodeViewModel> Children { get; } = new();
 
     /// <summary>The row above this one, or null at the root. Set wherever children are attached, so a
@@ -300,11 +303,40 @@ public sealed partial class ServerNodeViewModel : SchemaNodeViewModel
     protected override async Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync()
     {
         var databases = await _browser.GetDatabasesAsync(Connection, CancellationToken.None);
-        return databases
+        var children = databases
             .Select(db => (SchemaNodeViewModel)new DatabaseNodeViewModel(
                 Connection, db, isConnected: string.Equals(db, Connection.Database, StringComparison.Ordinal), _browser))
             .ToList();
+
+        // Sizes after the tree, like the relation sizes below it (#76): pg_database_size stats a whole
+        // directory per database, and the server row must not wait for it.
+        _ = FillDatabaseSizesAsync(children);
+        return children;
     }
+
+    /// <summary>
+    /// Label each database row with its size on the server. Silent on failure and per row on unknown: a
+    /// database the user cannot connect to reports null rather than raising, and one they cannot reach must
+    /// not cost the sizes of the rest.
+    /// </summary>
+    private async Task FillDatabaseSizesAsync(IReadOnlyList<SchemaNodeViewModel> children)
+    {
+        IReadOnlyList<DatabaseSize> sizes;
+        try { sizes = await _browser.GetDatabaseSizesAsync(Connection, CancellationToken.None); }
+        catch (Exception) { return; }
+
+        var byName = new Dictionary<string, DatabaseSize>(StringComparer.Ordinal);
+        foreach (var size in sizes) byName[size.Database] = size;
+
+        foreach (var database in children.OfType<DatabaseNodeViewModel>())
+            if (byName.TryGetValue(database.Database, out var size) && size.Bytes is { } bytes)
+                database.ApplySize(bytes);
+
+        DatabaseSizesLoaded?.Invoke();
+    }
+
+    /// <summary>Raised once the database sizes have been applied. For tests; nothing in the app waits.</summary>
+    internal Action? DatabaseSizesLoaded { get; set; }
 }
 
 /// <summary>
@@ -324,10 +356,31 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
         _connection = connection;
         _database = database;
         _browser = browser;
+        _connectedLabel = isConnected ? "connected" : null;
     }
 
     public override string? IconKey => "Icon.Database";
     public override string IconColorHex => "#5FC9AD";
+
+    /// <summary>The database this row is for, so a server-level size read can match it by name.</summary>
+    internal string Database => _database;
+
+    /// <summary>
+    /// Label this row with the database's size (#76), keeping whatever else the detail said. Leading with the
+    /// size for the same reason a relation row does — the panel ellipsizes, and a truncated number is worse
+    /// than none.
+    /// </summary>
+    internal void ApplySize(long bytes)
+    {
+        var rest = string.IsNullOrEmpty(_connectedLabel) ? null : _connectedLabel;
+        Detail = rest is null ? ByteSize.Format(bytes) : $"{ByteSize.Format(bytes)} · {rest}";
+    }
+
+    private readonly string? _connectedLabel;
+
+    /// <summary>Lets the tree's one context menu show the size-ordering items on a database row only — the
+    /// same shape as <c>IsServer</c>, which the server-only items already bind.</summary>
+    public override bool IsDatabase => true;
 
     protected override async Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync()
     {
@@ -354,8 +407,105 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
         var children = Ordered(tables);
         if (views.Count > 0) children.Add(new SchemaGroupNodeViewModel("Views", "Icon.View", Ordered(views)));
         if (routines.Count > 0) children.Add(new SchemaGroupNodeViewModel("Functions", "Icon.Function", Ordered(routines)));
+
+        _loadOrder.Clear();
+        for (var i = 0; i < children.Count; i++)
+            if (children[i] is RelationNodeViewModel relation) _loadOrder[relation] = i;
+
+        // Sizes are read *after* the tree is handed back, never before: pg_total_relation_size stats files
+        // per relation, so waiting for it would make every expand as slow as the biggest database (#76). The
+        // rows re-label themselves when it lands.
+        _ = FillSizesAsync(children);
         return children;
     }
+
+    /// <summary>
+    /// How this database's relations are ordered (#76). Name is the default; size answers the question a
+    /// tree sorted by name cannot — "which table is eating the disk".
+    /// </summary>
+    public enum RelationOrder
+    {
+        Name,
+        Size,
+    }
+
+    private RelationOrder _order = RelationOrder.Name;
+
+    /// <summary>
+    /// Where each relation row sat when the database was expanded — the <c>Ordered()</c> ranking, which is
+    /// schema-rank then schema then kind then name. Kept so "sort by name" restores exactly that rather than
+    /// an approximation of it.
+    /// </summary>
+    private readonly Dictionary<RelationNodeViewModel, int> _loadOrder = new();
+
+    /// <summary>
+    /// Re-order the relation rows, in place.
+    /// <para>
+    /// By size means <b>total</b> size, descending, biggest first: the question is always "what is largest",
+    /// never "what is smallest". Relations whose size has not arrived — or that have none, like a view — sort
+    /// last rather than as zero, so a pending read does not look like an empty table.
+    /// </para>
+    /// <para>
+    /// Only the rows directly under the database move. The Views and Functions buckets keep their own order:
+    /// they are collapsed by default, and reordering inside a bucket the user has not opened is motion
+    /// nobody asked for.
+    /// </para>
+    /// </summary>
+    public void SetRelationOrder(RelationOrder order)
+    {
+        _order = order;
+        var relations = Children.OfType<RelationNodeViewModel>().ToList();
+        if (relations.Count == 0) return;
+
+        var sorted = order == RelationOrder.Size
+            ? relations
+                .OrderByDescending(r => r.Size is not null)
+                .ThenByDescending(r => r.Size?.TotalBytes ?? 0)
+                .ThenBy(r => r.Title, StringComparer.OrdinalIgnoreCase)
+                .ToList()
+            // Back to the order the rows were *loaded* in, not merely alphabetical by title. Sorting on Title
+            // alone interleaved the default schema's bare names among the qualified ones and dropped the kind
+            // ranking, so the item labelled as the default sort could not actually restore it.
+            : relations.OrderBy(r => _loadOrder.GetValueOrDefault(r, int.MaxValue)).ToList();
+
+        // Moved rather than removed and re-added: these nodes hold expanded children, and replacing them
+        // would collapse whatever the user had open (the same reason ApplySize re-labels in place).
+        for (var target = 0; target < sorted.Count; target++)
+        {
+            var current = Children.IndexOf(sorted[target]);
+            if (current != target) Children.Move(current, target);
+        }
+    }
+
+    /// <summary>
+    /// Read every relation's size and label the rows with it. Deliberately fire-and-forget and silent on
+    /// failure: sizes are a nicety, and a permission error or a slow catalog must not turn an expanded tree
+    /// into an error message.
+    /// </summary>
+    private async Task FillSizesAsync(IReadOnlyList<SchemaNodeViewModel> children)
+    {
+        IReadOnlyList<RelationSize> sizes;
+        try { sizes = await _browser.GetRelationSizesAsync(_connection, _database, CancellationToken.None); }
+        catch (Exception) { return; }
+
+        var byTable = sizes.ToDictionary(s => s.TableId);
+        foreach (var relation in Relations(children))
+            if (byTable.TryGetValue(relation.TableId, out var size)) relation.ApplySize(size);
+
+        // If the user asked for size order before the sizes existed, this is when it can be honoured.
+        if (_order == RelationOrder.Size) SetRelationOrder(RelationOrder.Size);
+        SizesLoaded?.Invoke();
+    }
+
+    /// <summary>Raised once the size read has re-labelled the rows. For tests — nothing in the app waits on
+    /// it, which is the point of loading them late.</summary>
+    internal Action? SizesLoaded { get; set; }
+
+    /// <summary>Every relation row under this database, the ones inside the Views bucket included.</summary>
+    private static IEnumerable<RelationNodeViewModel> Relations(IReadOnlyList<SchemaNodeViewModel> children)
+        => children
+            .SelectMany(c => c is SchemaGroupNodeViewModel group ? group.Children : [c])
+            .OfType<RelationNodeViewModel>();
 
     private Sortable Entry(string schema, string name, int rank, string defaultSchema, SchemaNodeViewModel node)
         => new(SchemaObjectLabel.SchemaRank(schema, defaultSchema), schema, rank, name, node);
@@ -434,21 +584,126 @@ public sealed class RelationNodeViewModel : SchemaNodeViewModel
         _table = table;
         _snapshot = snapshot;
         _browser = browser;
+        _defaultSchema = defaultSchema;
     }
+
+    private readonly string _defaultSchema;
 
     private bool IsViewLike => _table.Kind is RelationKind.View or RelationKind.MaterializedView;
 
     public override bool CanShowDefinition => true;
 
-    // Columns are already in the loaded snapshot — no round-trip.
-    protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync()
-        => Task.FromResult<IReadOnlyList<SchemaNodeViewModel>>(
-            _snapshot.ColumnsOf(_table.Id).Select(c => (SchemaNodeViewModel)new ColumnNodeViewModel(c)).ToList());
+    /// <summary>This relation's id, so a size read can find the row it belongs to.</summary>
+    internal long TableId => _table.Id;
 
+    /// <summary>What this relation costs on disk, once a size read has answered. Null until then, and for a
+    /// view, which has no storage of its own.</summary>
+    internal RelationSize? Size { get; private set; }
+
+    /// <summary>
+    /// Attach a size, re-labelling the row in place (#76).
+    /// <para>
+    /// In place rather than by rebuilding: the sizes arrive after the tree is on screen, and replacing nodes
+    /// would collapse whatever the user had expanded while they were waiting. <c>Detail</c> is settable for
+    /// exactly this reason.
+    /// </para>
+    /// </summary>
+    internal void ApplySize(RelationSize size)
+    {
+        Size = size;
+        Detail = SchemaObjectLabel.WithSize(
+            SchemaObjectLabel.Detail(KindLabel(_table.Kind), _table.Schema, _defaultSchema),
+            size);
+    }
+
+    /// <summary>
+    /// Columns inline, then a folder per other kind of thing a table has (#46).
+    /// <para>
+    /// Columns stay inline rather than going behind a <c>Columns</c> folder: they are what nearly every
+    /// expand is for, and a folder in front of them would add a click to the common case to tidy the rare
+    /// one. Constraints, keys, references, indexes and triggers are folders, and an empty one is left out — a
+    /// table with no triggers should not have to say so.
+    /// </para>
+    /// <para>
+    /// The two foreign-key directions get separate folders, which is the part worth having: outgoing answers
+    /// "what does this row point at?", incoming answers "what breaks if I delete it?". Both come out of the
+    /// snapshot, so they cost nothing; only constraints, indexes and triggers need the round trip, and if it
+    /// fails the columns and the key folders are still there with the reason beside them.
+    /// </para>
+    /// </summary>
+    protected override async Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync()
+    {
+        var children = new List<SchemaNodeViewModel>();
+        foreach (var column in _snapshot.ColumnsOf(_table.Id))
+            children.Add(new ColumnNodeViewModel(column));
+
+        var (outgoing, incoming) = RelationDetailText.SplitByDirection(_snapshot, _table.Id);
+
+        TableDetails details;
+        SchemaNodeViewModel? failure = null;
+        try
+        {
+            details = await _browser.GetTableDetailsAsync(_connection, _database, _table.Id, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            details = TableDetails.Empty;
+            // SafeErrorText, not ex.Message: this read opens a connection, and a connect- or parse-time
+            // Npgsql failure quotes the whole connection string — password included — into whatever shows it
+            // (§1.1). The same reason EnsureChildrenAsync scrubs its own failures.
+            failure = new MessageNodeViewModel(
+                "⚠", $"Couldn't read indexes and constraints: {SafeErrorText.Of(ex)}");
+        }
+
+        // Constraints minus the foreign keys: those are the Foreign Keys folder, and listing a key twice
+        // under one table makes both counts lie.
+        var constraints = details.Constraints.Where(c => c.Kind != ConstraintKind.ForeignKey).ToList();
+
+        Folder("Constraints", "Icon.Constraint", constraints
+            .Select(c => (SchemaNodeViewModel)new ConstraintNodeViewModel(_snapshot, _table.Id, c)));
+        Folder("Foreign Keys", "Icon.ForeignKey", outgoing
+            .Select(fk => (SchemaNodeViewModel)new ForeignKeyNodeViewModel(_snapshot, fk, incoming: false)));
+        Folder("References", "Icon.Reference", incoming
+            .Select(fk => (SchemaNodeViewModel)new ForeignKeyNodeViewModel(_snapshot, fk, incoming: true)));
+        Folder("Indexes", "Icon.Index", details.Indexes
+            .Select(i => (SchemaNodeViewModel)new IndexNodeViewModel(_snapshot, _table.Id, i, i.SizeBytes)));
+        Folder("Triggers", "Icon.Trigger", details.Triggers
+            .Select(t => (SchemaNodeViewModel)new TriggerNodeViewModel(t)));
+
+        if (failure is not null) children.Add(failure);
+        return children;
+
+        void Folder(string title, string icon, IEnumerable<SchemaNodeViewModel> members)
+        {
+            var list = members.ToList();
+            if (list.Count > 0) children.Add(new SchemaGroupNodeViewModel(title, icon, list));
+        }
+    }
+
+    /// <summary>
+    /// A view's SQL, or a table's DDL — which now carries its constraints and indexes, the hole the
+    /// generator's own note admitted to (#46). The read can fail (no server, no permission); the columns are
+    /// still worth showing, so the DDL comes out either way.
+    /// </summary>
     public override async Task<string> LoadDefinitionAsync(CancellationToken ct)
-        => IsViewLike
-            ? await _browser.GetViewDefinitionAsync(_connection, _database, _table.Id, ct)
-            : TableDdlGenerator.CreateTable(_table, _snapshot);
+    {
+        if (IsViewLike)
+            return await _browser.GetViewDefinitionAsync(_connection, _database, _table.Id, ct);
+
+        TableDetails details;
+        try
+        {
+            details = await _browser.GetTableDetailsAsync(_connection, _database, _table.Id, ct);
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            details = TableDetails.Empty;
+        }
+        var ddl = TableDdlGenerator.CreateTable(_table, _snapshot, details);
+        // The fuller breakdown goes here rather than on the row: heap / indexes / toast / rows has room in a
+        // definition view and would not fit on one tight tree line (#71, #76).
+        return Size is { } size ? ddl + "\n" + SchemaObjectLabel.SizeBreakdown(size) : ddl;
+    }
 
     private static string KindLabel(RelationKind kind) => kind switch
     {
@@ -523,4 +778,83 @@ public sealed class ColumnNodeViewModel : SchemaNodeViewModel
         if (c.IsPrimaryKey) s += " · PK";
         return s;
     }
+}
+
+/// <summary>A constraint of a relation. Leaf; shows the server's own definition on request (#46).</summary>
+public sealed class ConstraintNodeViewModel : SchemaNodeViewModel
+{
+    private readonly ConstraintInfo _constraint;
+
+    public ConstraintNodeViewModel(ISchemaSnapshot snapshot, long tableId, ConstraintInfo constraint)
+        : base(RelationDetailText.ConstraintGlyph(constraint.Kind),
+            constraint.Name,
+            RelationDetailText.Constraint(snapshot, tableId, constraint),
+            hasChildren: false)
+        => _constraint = constraint;
+
+    /// <summary>Already fetched with the table's details, so showing it costs no round trip.</summary>
+    public override bool CanShowDefinition => _constraint.Definition.Length > 0;
+
+    public override Task<string> LoadDefinitionAsync(CancellationToken ct) => Task.FromResult(_constraint.Definition);
+
+    protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync() => Task.FromResult(None);
+}
+
+/// <summary>An index of a relation. Leaf; shows its <c>CREATE INDEX</c> on request (#46).</summary>
+public sealed class IndexNodeViewModel : SchemaNodeViewModel
+{
+    private readonly IndexInfo _index;
+
+    public IndexNodeViewModel(ISchemaSnapshot snapshot, long tableId, IndexInfo index, long? sizeBytes = null)
+        : base(RelationDetailText.IndexGlyph(index),
+            index.Name,
+            // The size is what makes "is this index worth its cost" answerable — an index row without it
+            // answers only half the question (#76).
+            sizeBytes is { } bytes
+                ? $"{RelationDetailText.Index(snapshot, tableId, index)} · {ByteSize.Format(bytes)}"
+                : RelationDetailText.Index(snapshot, tableId, index),
+            hasChildren: false)
+        => _index = index;
+
+    public override bool CanShowDefinition => _index.Definition.Length > 0;
+
+    public override Task<string> LoadDefinitionAsync(CancellationToken ct) => Task.FromResult(_index.Definition);
+
+    protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync() => Task.FromResult(None);
+}
+
+/// <summary>A trigger of a relation. Leaf; shows its <c>CREATE TRIGGER</c> on request (#46).</summary>
+public sealed class TriggerNodeViewModel : SchemaNodeViewModel
+{
+    private readonly TriggerInfo _trigger;
+
+    public TriggerNodeViewModel(TriggerInfo trigger)
+        : base(RelationDetailText.TriggerGlyph(trigger),
+            trigger.Name,
+            RelationDetailText.Trigger(trigger),
+            hasChildren: false)
+        => _trigger = trigger;
+
+    public override bool CanShowDefinition => _trigger.Definition.Length > 0;
+
+    public override Task<string> LoadDefinitionAsync(CancellationToken ct) => Task.FromResult(_trigger.Definition);
+
+    protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync() => Task.FromResult(None);
+}
+
+/// <summary>
+/// One foreign key, read from whichever end the user is looking at (#46). The same constraint appears under
+/// its declaring table as an outgoing key and under the referenced table as an incoming reference, and the
+/// two rows say different things — so the direction is a parameter, not two node types.
+/// </summary>
+public sealed class ForeignKeyNodeViewModel : SchemaNodeViewModel
+{
+    public ForeignKeyNodeViewModel(ISchemaSnapshot snapshot, ForeignKeyInfo fk, bool incoming)
+        : base(incoming ? "←" : "→",
+            fk.Name,
+            incoming ? RelationDetailText.Incoming(snapshot, fk) : RelationDetailText.Outgoing(snapshot, fk),
+            hasChildren: false)
+    { }
+
+    protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync() => Task.FromResult(None);
 }

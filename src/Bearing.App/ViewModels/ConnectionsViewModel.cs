@@ -895,9 +895,16 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         _ctx.SetStatus("Schema metadata refreshed.");
     }
 
+    /// <summary>
+    /// Whether two records describe the same server reached the same way. Gates both keeping a tree node and
+    /// keeping a live session on save — so the transport's mode belongs in it: a connection whose encryption
+    /// was raised is not still reachable "the same way", and leaving its pool alone would keep the old socket
+    /// while the UI reported the new setting (#23).
+    /// </summary>
     private static bool SameNetwork(ConnectionInfo a, ConnectionInfo b)
         => a.ProviderId == b.ProviderId && a.Host == b.Host && a.Port == b.Port
-           && a.Database == b.Database && a.User == b.User;
+           && a.Database == b.Database && a.User == b.User
+           && TlsPolicy.Resolve(a) == TlsPolicy.Resolve(b);
 
     /// <summary>Build a throwaway connection and test it (for the dialog's Test button); nothing is persisted.
     /// For an Entra connection the token is minted through the resolver (ignoring the box); prompt / stored
@@ -935,6 +942,25 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         foreach (var t in Tabs) if (t.ConnectionId is null) SetTabConnection(t, conn.Id);
         _ctx.SetStatus($"Added demo connection '{conn.Name}'. Press F5 to run.");
     }
+
+    /// <summary>
+    /// Add the demo connection and make it the default (#64).
+    /// <para>
+    /// Through the ordinary add path with <c>password: null</c>, which skips the secret store entirely — so
+    /// no keychain call is made for a session that has no secret to keep (§1.1). The manifest write it does
+    /// perform lands in the demo's own temp project, never the user's.
+    /// </para>
+    /// </summary>
+    public async Task AddDemoConnectionAsync()
+    {
+        if (_ctx.Project is null || _ctx.Project.Manifest.Connections.Count > 0) return;
+
+        await AddOrUpdateConnectionAsync(Bearing.Demo.DemoMode.Connection, password: null);
+        _ctx.DefaultConnectionId = Bearing.Demo.DemoMode.ConnectionId;
+        foreach (var tab in Tabs)
+            if (tab.ConnectionId is null) SetTabConnection(tab, Bearing.Demo.DemoMode.ConnectionId);
+    }
+
 
     /// <summary>Establish the connection on an explicit trigger — the toolbar chain toggle
     /// (<paramref name="isExplicit"/> = true) or a metadata refresh (<paramref name="isExplicit"/> = false).

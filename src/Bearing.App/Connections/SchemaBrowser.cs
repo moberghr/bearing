@@ -51,10 +51,31 @@ public sealed class SchemaBrowser : ISchemaBrowser
         return await reader.Metadata.GetViewDefinitionAsync(tableId, ct);
     }
 
+    public async Task<TableDetails> GetTableDetailsAsync(
+        ConnectionInfo connection, string database, long tableId, CancellationToken ct)
+    {
+        var reader = await GetReaderAsync(connection, database, ct);
+        return await reader.Metadata.GetTableDetailsAsync(tableId, ct);
+    }
+
     public async Task<string> GetRoutineDefinitionAsync(ConnectionInfo connection, string database, long routineId, CancellationToken ct)
     {
         var reader = await GetReaderAsync(connection, database, ct);
         return await reader.Metadata.GetRoutineDefinitionAsync(routineId, ct);
+    }
+
+    public async Task<IReadOnlyList<RelationSize>> GetRelationSizesAsync(
+        ConnectionInfo connection, string database, CancellationToken ct)
+    {
+        var reader = await GetReaderAsync(connection, database, ct);
+        return await reader.Metadata.GetRelationSizesAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(ConnectionInfo connection, CancellationToken ct)
+    {
+        // pg_database is cluster-wide, so the connection's own database can answer for all of them.
+        var reader = await GetReaderAsync(connection, connection.Database, ct);
+        return await reader.Metadata.GetDatabaseSizesAsync(ct);
     }
 
     private Task<Reader> GetReaderAsync(ConnectionInfo connection, string database, CancellationToken ct)

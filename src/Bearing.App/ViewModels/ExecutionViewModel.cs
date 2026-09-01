@@ -495,6 +495,62 @@ public sealed partial class ExecutionViewModel : ObservableObject
         ExportCompleted?.Invoke(new ExportCompletion(path, block.Rows.Count, format));
     }
 
+    /// <summary>
+    /// Export every grid result of the current run as one workbook, a sheet each (#12).
+    /// <para>
+    /// <b>All or nothing.</b> Each incomplete set has to be fetched to the end first, and if any of them
+    /// cannot be, nothing is written. A workbook leaves the app: it gets mailed, filed, and read by someone
+    /// who was not here, and a sheet quietly missing from it is undetectable downstream. A failed export is
+    /// obvious and can simply be repeated.
+    /// </para>
+    /// </summary>
+    public async Task ExportRunAsync()
+    {
+        var tab = Selected;
+        if (tab is null) { _ctx.SetStatus("No editor."); return; }
+        if (tab.IsRunning) { _ctx.SetStatus("Wait for the running query to finish before exporting."); return; }
+        if (_dialogs is not { } dialogs) return;
+
+        var results = tab.Results.ToList();
+        if (!results.Any(r => r.HasGrid))
+        {
+            _ctx.SetStatus(results.Count == 0 ? "Nothing to export." : "No result grids in this run to export.");
+            return;
+        }
+
+        // Every set, before the file dialog: being asked where to save and *then* told the export cannot
+        // happen is the wrong order to find out in.
+        foreach (var rs in results.Where(r => r.HasGrid && r.HasMore))
+        {
+            if (await FetchAllAsync(rs)) continue;
+            _ctx.SetStatus("Export stopped — a result isn't fully loaded, and a workbook missing a sheet is "
+                         + "worse than no workbook.");
+            return;
+        }
+
+        var suggested = ResultExport.SuggestedRunName(tab.Header, DateTime.Now);
+        if (await dialogs.PickExportFileAsync(suggested, ExportFormat.Xlsx) is not { } path) return;
+
+        // Snapshot on this (UI) thread — Rows is an observable collection the grid keeps mutating — then
+        // format and write off it, as the single-set export does.
+        var sheets = ResultExport.RunSheets(results);
+        var rows = sheets.Sum(sheet => sheet.Block.Rows.Count);
+        _ctx.SetStatus($"Exporting {sheets.Count} result{(sheets.Count == 1 ? "" : "s")}, {rows:N0} rows…");
+        try
+        {
+            await Task.Run(() => ResultExport.WriteWorkbook(path, sheets));
+        }
+        catch (Exception ex)
+        {
+            _ctx.SetStatus($"Export failed: {ex.Message}");
+            return;
+        }
+
+        _ctx.SetStatus($"Exported {sheets.Count} result{(sheets.Count == 1 ? "" : "s")} "
+                     + $"({rows:N0} rows) to {System.IO.Path.GetFileName(path)}.");
+        ExportCompleted?.Invoke(new ExportCompletion(path, rows, ExportFormat.Xlsx));
+    }
+
     /// <summary>A lease on the already-connected session for the selected tab (paging/count/nav/save run
     /// post-execute, so the connection is live). Keeps the session from being disposed by an idle sweep /
     /// evict while the follow-up runs — dispose it when done. Null (with a status set) if the tab lost its

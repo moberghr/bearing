@@ -31,6 +31,64 @@ public class JoinCompletionTests
         Assert.Equal("users u on u.id = o.user_id", users!.ReplacementText);
     }
 
+    // ---- the keyword the insertion has to supply (#75) ----------------------------------------
+
+    [Fact]
+    public void A_join_accepted_after_a_bare_source_brings_its_own_keyword()
+    {
+        // The reported case: `from users u ` with no `join` typed. The insertion used to be
+        // `orders o on o.user_id = u.id`, producing `from users u orders o on …` — invalid SQL.
+        var orders = JoinsFor("select * from users u ").SingleOrDefault(j => j.DisplayText == "orders");
+        Assert.NotNull(orders);
+        Assert.Equal("join orders o on o.user_id = u.id", orders!.ReplacementText);
+    }
+
+    [Fact]
+    public void No_join_is_offered_while_the_caret_is_still_the_sources_alias_slot()
+    {
+        // `from users |` is where the alias goes, and that rule predates this one: a relation offered there
+        // would overwrite the alias the user is about to type. Pinned so the keyword fix above is not read
+        // as "offer a join wherever a source precedes the caret".
+        Assert.Empty(JoinsFor("select * from users "));
+    }
+
+    [Theory]
+    [InlineData("left")]
+    [InlineData("left outer")]
+    [InlineData("right")]
+    [InlineData("inner")]
+    [InlineData("full")]
+    public void A_typed_join_qualifier_is_completed_with_the_missing_keyword(string qualifier)
+    {
+        var orders = JoinsFor($"select * from users u {qualifier} ").SingleOrDefault(j => j.DisplayText == "orders");
+        Assert.NotNull(orders);
+        Assert.Equal("join orders o on o.user_id = u.id", orders!.ReplacementText);
+    }
+
+    [Theory]
+    [InlineData("cross")]
+    [InlineData("natural")]
+    public void No_fk_join_is_offered_after_a_qualifier_that_takes_no_on_clause(string qualifier)
+        // `cross join t x on …` and `natural join t x on …` are syntax errors, not a missing keyword — an
+        // FK-equality suggestion has no valid shape here, so there is nothing correct to offer.
+        => Assert.Empty(JoinsFor($"select * from users u {qualifier} "));
+
+    [Fact]
+    public void A_typed_join_keyword_is_not_repeated()
+    {
+        var orders = JoinsFor("select * from users u left join ").SingleOrDefault(j => j.DisplayText == "orders");
+        Assert.NotNull(orders);
+        Assert.Equal("orders o on o.user_id = u.id", orders!.ReplacementText);
+    }
+
+    [Fact]
+    public void No_join_is_offered_after_a_comma()
+    {
+        // A comma-separated source cannot carry an `on` clause — the predicate belongs in the WHERE — so
+        // there is no correct insertion to offer here.
+        Assert.Empty(JoinsFor("select * from users u, "));
+    }
+
     [Fact]
     public void No_join_suggestions_before_any_source_is_present()
     {

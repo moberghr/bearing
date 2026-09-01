@@ -120,6 +120,18 @@ public static class SettingsCatalog
             Get = s => s.ConfirmTabClose,
             Set = (s, v) => s with { ConfirmTabClose = v },
         },
+        new BoolSetting
+        {
+            Key = "editor.autoCloseBrackets",
+            CategoryId = Editor,
+            Title = "Close quotes and brackets as you type",
+            Description = "Typing ' or \" or ( inserts the closing half too and leaves the caret between "
+                        + "them. Typing the closer yourself steps over it, Backspace on an empty pair takes "
+                        + "both, and Enter jumps past the closer instead of breaking the line.",
+            Keywords = "auto close bracket paren parenthesis quote pair surround wrap insert",
+            Get = s => s.AutoCloseBrackets,
+            Set = (s, v) => s with { AutoCloseBrackets = v },
+        },
 
         // ---- Results ---------------------------------------------------------------------------
         new IntSetting
@@ -150,6 +162,55 @@ public static class SettingsCatalog
             Unit = "pt",
             Get = s => s.InspectorFontSize,
             Set = (s, v) => s with { InspectorFontSize = v },
+        },
+        new IntSetting
+        {
+            Key = "results.gridFontSize",
+            CategoryId = Results,
+            Title = "Result grid font size",
+            Description = "The size values and column headers render at. Row height follows it, so a bigger "
+                        + "font gives taller rows rather than clipped ones.",
+            Keywords = "font size grid results zoom text bigger smaller accessibility density row height",
+            Min = 9,
+            Max = 22,
+            Unit = "pt",
+            Get = s => s.GridFontSize,
+            Set = (s, v) => s with { GridFontSize = v },
+        },
+        new StringSetting
+        {
+            Key = "results.displayTimeZone",
+            CategoryId = Results,
+            Title = "Show timestamps in",
+            Description = "Applies to timestamptz values, which are stored as instants — the offset is shown "
+                        + "so the value is unambiguous. A timestamp without time zone has none to convert "
+                        + "from and is left alone, with its column badged accordingly.",
+            Keywords = "timezone time zone tz utc offset timestamp timestamptz local display convert",
+            Get = s => s.DisplayTimeZone,
+            Set = (s, v) => s with { DisplayTimeZone = v },
+            // Supplied by the app layer, which owns the zone database lookup — Core stays dependency-free
+            // and does not need to know what a TimeZoneInfo is (§2.1).
+            // Lambdas over the hooks, not the hooks themselves: this list is built by a static initializer,
+            // which runs *before* the app assigns them — so `Suggestions = TimeZoneSuggestions` captured null
+            // and the picker was permanently empty. IsValid and Describe were already lambdas and were fine,
+            // which is exactly why the inconsistency was easy to miss.
+            Suggestions = () => TimeZoneSuggestions?.Invoke() ?? [],
+            IsValid = id => TimeZoneValidator?.Invoke(id) ?? true,
+            Describe = id => TimeZoneDescriber?.Invoke(id) ?? id,
+        },
+        new IntSetting
+        {
+            Key = "general.uiFontSize",
+            CategoryId = General,
+            Title = "Interface font size",
+            Description = "Panels, tab strip, status bar and result meta rows. Captions stay proportionally "
+                        + "smaller, so the hierarchy survives a bigger setting.",
+            Keywords = "font size ui chrome panels sidebar tabs status bar zoom text accessibility",
+            Min = 9,
+            Max = 22,
+            Unit = "pt",
+            Get = s => s.UiFontSize,
+            Set = (s, v) => s with { UiFontSize = v },
         },
         new IntSetting
         {
@@ -198,7 +259,32 @@ public static class SettingsCatalog
             Get = s => s.QueryLogRetentionDays,
             Set = (s, v) => s with { QueryLogRetentionDays = v },
         },
+        new BoolSetting
+        {
+            Key = "history.redactLiterals",
+            CategoryId = History,
+            Title = "Replace values in logged SQL with placeholders",
+            Description = "The history file otherwise holds every value you typed into a WHERE clause — "
+                        + "emails, ids, names — in plain text until retention prunes it. Redacted entries "
+                        + "record the statement's shape but cannot be re-run from the history panel.",
+            Keywords = "query log privacy redact strip literals pii gdpr anonymise",
+            AppliesNote = "Applies to queries run after the next restart; entries already logged are unchanged.",
+            Get = s => s.QueryLogRedactLiterals,
+            Set = (s, v) => s with { QueryLogRedactLiterals = v },
+        },
     ];
+
+    /// <summary>
+    /// The zone list, validator and describer for <c>results.displayTimeZone</c>, injected by the app layer
+    /// at startup. Hooks rather than a dependency: resolving a zone id means <c>TimeZoneInfo</c>, and
+    /// <c>Core</c> holds abstractions and records only (§2.1) — while the descriptor still has to live here
+    /// with every other setting, since that is the whole contract the settings window renders from.
+    /// </summary>
+    public static Func<IReadOnlyList<string>>? TimeZoneSuggestions { get; set; }
+
+    public static Func<string, bool>? TimeZoneValidator { get; set; }
+
+    public static Func<string, string>? TimeZoneDescriber { get; set; }
 
     /// <summary>The descriptors in a section, in declaration order.</summary>
     public static IReadOnlyList<SettingDescriptor> InCategory(string categoryId)

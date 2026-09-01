@@ -26,6 +26,32 @@ public static class Tokens
     public static IBrush Res(string key)
         => (Application.Current?.FindResource(key) as IBrush) ?? Brushes.Transparent;
 
+    /// <summary>
+    /// A numeric token by key — the type scale and the metrics derived from it (#52), for visuals built in
+    /// C#. Named Metric rather than Size because <c>using static Tokens</c> would otherwise shadow Avalonia's
+    /// own <c>Size</c> struct at every call site that pulls this in. XAML uses
+    /// <c>{DynamicResource Font.Body}</c> and follows a change on its own; a code-built <c>TextBlock</c> reads
+    /// the value once, which is why the settings window rebuilds the results view after a change rather than
+    /// expecting it to update itself.
+    /// </summary>
+    public static double Metric(string key) => Theming.FontScale.Get(key, FallbackFor(key));
+
+    /// <summary>
+    /// What a key is worth with no application to ask (a unit test, the designer) — per key, matching the
+    /// token defaults. One shared fallback rendered a caption at body size and would have given any future
+    /// <c>Height.GridRow</c> caller 12 pixels.
+    /// </summary>
+    private static double FallbackFor(string key) => key switch
+    {
+        "Font.Caption" => 9,
+        "Font.Small" => 11,
+        "Font.Body" => 12,
+        "Font.Grid" => 13,
+        "Font.GridHeader" => 12,
+        "Height.GridRow" => 26,
+        _ => 12,
+    };
+
     /// <summary>A token color re-emitted at a given alpha (for faint row / selection / badge tints).</summary>
     public static IBrush Tint(string key, byte alpha)
     {

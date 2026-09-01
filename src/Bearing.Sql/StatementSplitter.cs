@@ -105,6 +105,11 @@ public static class StatementSplitter
     /// <summary>Keywords that can begin a top-level SQL statement — used to decide whether a blank line
     /// separates two statements or merely wraps one. Conservative: an unknown leader keeps the lines
     /// together (recoverable with an explicit <c>;</c>) rather than risking a false split.</summary>
+    /// <summary>The keywords that can open a statement — the set this splitter uses to decide whether a
+    /// blank line is a boundary. Exposed because completion offers the same set at a line start (#68), and
+    /// two copies of it would drift.</summary>
+    public static IReadOnlySet<string> StatementStarters => StatementStartKeywords;
+
     private static readonly HashSet<string> StatementStartKeywords = new(StringComparer.OrdinalIgnoreCase)
     {
         "select", "insert", "update", "delete", "merge", "with", "values", "table",

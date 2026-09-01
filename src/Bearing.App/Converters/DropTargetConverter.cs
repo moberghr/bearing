@@ -16,9 +16,9 @@ public sealed class DropTargetConverter : IValueConverter
 
     // {Accent.Brand}, resolved from the theme token (falls back to the token's literal value).
     private static readonly Color Fallback = Color.FromRgb(0x35, 0xD0, 0xBE);
-    private static IBrush? _fill;
+    private static (Avalonia.Application? Owner, Avalonia.Media.IImmutableBrush Brush)? _fill;
 
-    private static IBrush Fill => _fill ??= ThemeBrush.AtAlpha("Accent.Brand", 0x26, Fallback);
+    private static IBrush Fill => ThemeBrush.AtAlphaCached(ref _fill, "Accent.Brand", 0x26, Fallback);
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
         => value is true ? Fill : Brushes.Transparent;

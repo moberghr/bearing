@@ -67,7 +67,7 @@ public static class ResultEditToolbar
         var pending = new TextBlock
         {
             VerticalAlignment = VerticalAlignment.Center,
-            FontSize = 12,
+            FontSize = Metric("Font.Body"),
             Margin = new Thickness(0, 0, 6, 0),
             Foreground = Res("Text.Primary"),
         };
@@ -76,7 +76,7 @@ public static class ResultEditToolbar
         var discard = new Button
         {
             Content = "Discard",
-            FontSize = 12,
+            FontSize = Metric("Font.Body"),
             Padding = new Thickness(8, 2),
             Margin = new Thickness(0, 0, 6, 0),
             Background = Brushes.Transparent,
@@ -91,7 +91,7 @@ public static class ResultEditToolbar
         var save = new Button
         {
             Content = "✓ Save",
-            FontSize = 12,
+            FontSize = Metric("Font.Body"),
             Padding = new Thickness(8, 2),
             Background = Res("Ok.Green"),
             Foreground = Res("Bg.Editor"),

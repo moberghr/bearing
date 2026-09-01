@@ -16,6 +16,7 @@
     <ProjectReference Include="..\Bearing.Core\Bearing.Core.csproj" />
     <ProjectReference Include="..\Bearing.Sql\Bearing.Sql.csproj" />
     <ProjectReference Include="..\Bearing.Data\Bearing.Data.csproj" />
+    <ProjectReference Include="..\Bearing.Demo\Bearing.Demo.csproj" />
     <ProjectReference Include="..\Bearing.Persistence\Bearing.Persistence.csproj" />
     <ProjectReference Include="..\Bearing.Updates\Bearing.Updates.csproj" />
   </ItemGroup>

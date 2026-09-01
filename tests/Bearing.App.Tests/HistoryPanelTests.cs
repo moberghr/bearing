@@ -84,20 +84,99 @@ public class HistoryPanelTests
     }
 
     [Fact]
-    public async Task Regrouping_drops_a_selection_whose_row_no_longer_exists()
+    public async Task A_reload_keeps_the_selection_on_the_same_logged_row()
     {
-        // Rows are rebuilt wholesale, so the view-model owns clearing the selection — the per-day lists are
-        // bound one-way precisely so they can't (#43), and a stale selection would leave a query in the
-        // preview with nothing selected to explain where it came from.
+        // Rows are rebuilt wholesale, so the projection the user selected is gone after a reload and the
+        // view-model has to re-find it by the entry behind it. This used to drop the selection instead,
+        // which was harmless while reloading only happened on a panel switch — but since #78 a reload
+        // happens every time a query lands in the log, and dropping it would clear the user's selection and
+        // collapse the preview it drives, under them, mid-session.
         var now = DateTimeOffset.Now;
         var vm = Make(new[] { Entry(now, ok: true), Entry(now.AddDays(-1), ok: true) });
         await vm.ReloadAsync(CancellationToken.None);
-        vm.SelectedRow = vm.Groups[1].Rows[0];      // a row under yesterday
-        Assert.NotNull(vm.SelectedRow);
+        var yesterday = vm.Groups[1].Rows[0];
+        vm.SelectedRow = yesterday;
 
         await vm.ReloadAsync(CancellationToken.None);
 
+        Assert.NotNull(vm.SelectedRow);
+        Assert.NotSame(yesterday, vm.SelectedRow);                       // a fresh projection…
+        Assert.Same(yesterday.Entry, vm.SelectedRow!.Entry);             // …of the same logged row
+        Assert.Contains(vm.SelectedRow, vm.Groups.SelectMany(g => g.Rows));
+    }
+
+    [Fact]
+    public async Task A_new_query_arrives_without_disturbing_the_selection()
+    {
+        // The #78 case end to end: a run finishes, the panel reloads, the new row is on screen and the row
+        // the user was reading is still selected.
+        var now = DateTimeOffset.Now;
+        var entries = new List<QueryLogEntry> { Entry(now.AddMinutes(-5), ok: true) };
+        var vm = new HistoryPanelViewModel(
+            (_, _) => Task.FromResult<IReadOnlyList<QueryLogEntry>>(entries.ToList()),
+            _ => "#7AA89F");
+
+        await vm.ReloadAsync(CancellationToken.None);
+        var reading = vm.Groups[0].Rows[0];
+        vm.SelectedRow = reading;
+
+        entries.Insert(0, Entry(now, ok: true) with { SqlText = "select just_ran" });
+        await vm.ReloadAsync(CancellationToken.None);
+
+        Assert.Contains(vm.Groups.SelectMany(g => g.Rows), r => r.Sql == "select just_ran");
+        Assert.Same(reading.Entry, vm.SelectedRow!.Entry);
+    }
+
+    [Fact]
+    public async Task A_selection_that_is_filtered_away_is_dropped()
+    {
+        // The other half: when the row really is gone — a filter switch, a search that no longer matches it
+        // — there is nothing to re-find, and the preview closes rather than showing a query that is no
+        // longer in the list.
+        var now = DateTimeOffset.Now;
+        var vm = Make(new[] { Entry(now, ok: true), Entry(now.AddMinutes(-1), ok: false) });
+        await vm.ReloadAsync(CancellationToken.None);
+        vm.SelectedRow = vm.Groups.SelectMany(g => g.Rows).Single(r => !r.IsError);
+
+        vm.Filter = HistoryFilter.Error;
+
         Assert.Null(vm.SelectedRow);
+    }
+
+    [Fact]
+    public async Task A_superseded_reload_does_not_overwrite_a_newer_one()
+    {
+        // Running a script fires one refresh per statement, and unordered concurrent searches could settle
+        // the panel on an older answer than one already applied. The caller cancels the previous reload, so
+        // a cancelled one must land nothing at all — not its rows, and not an error in the status line.
+        var now = DateTimeOffset.Now;
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stale = new[] { Entry(now.AddMinutes(-5), ok: true) };
+        var fresh = new[] { Entry(now, ok: true), Entry(now.AddMinutes(-5), ok: true) };
+        var first = true;
+
+        var vm = new HistoryPanelViewModel(
+            async (_, ct) =>
+            {
+                if (!first) return fresh;
+                first = false;
+                await gate.Task;                                     // the slow, superseded search
+                ct.ThrowIfCancellationRequested();
+                return (IReadOnlyList<QueryLogEntry>)stale;
+            },
+            _ => "#7AA89F");
+
+        using var superseded = new CancellationTokenSource();
+        var slow = vm.ReloadAsync(superseded.Token);
+        await vm.ReloadAsync(CancellationToken.None);                 // the newer one wins
+        Assert.Equal(2, vm.Groups.SelectMany(g => g.Rows).Count());
+
+        superseded.Cancel();
+        gate.SetResult();
+        await slow;
+
+        Assert.Equal(2, vm.Groups.SelectMany(g => g.Rows).Count());
+        Assert.DoesNotContain("error", vm.Status, StringComparison.OrdinalIgnoreCase);
     }
 
     private static HistoryPanelViewModel Make(IReadOnlyList<QueryLogEntry> entries)

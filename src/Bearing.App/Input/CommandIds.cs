@@ -13,6 +13,10 @@ public static class CommandIds
     public const string FileSaveAs = "file.saveAs";
     public const string FileOpen = "file.open";
     public const string TabNew = "tab.new";
+
+    /// <summary>Pin or unpin the selected tab (#67). One command rather than two, because the menu item and
+    /// the keystroke both mean "flip this" and a separate Unpin would need its own disabled state.</summary>
+    public const string TabTogglePin = "tab.togglePin";
     public const string TabClose = "tab.close";
     public const string TabRename = "tab.rename";
     public const string ViewToggleSidePane = "view.toggleSidePane";
@@ -25,6 +29,7 @@ public static class CommandIds
     public const string TabPrev = "tab.prev";
     public const string TabMruNext = "tab.mruNext";    // most-recently-used order (Ctrl+Tab)
     public const string TabMruPrev = "tab.mruPrev";
+    public const string TabPick = "tab.pick";          // the strip's chevron: pick from a list of all tabs
     public const string FocusCycle = "focus.cycle";
     public const string FocusEditor = "focus.editor";
     public const string FocusResults = "focus.results";
@@ -74,6 +79,12 @@ public static class CommandIds
 
     /// <summary>Export the whole result set: <c>grid.export.csv</c> / <c>grid.export.xlsx</c>.</summary>
     public static string GridExport(ExportFormat format) => "grid.export." + Lower(format.ToString());
+
+    /// <summary>
+    /// Export every result of the run as one workbook (#12). Global rather than grid-scoped: a run belongs to
+    /// the tab, not to whichever grid the caret happens to be in, and it is reachable with no grid focused.
+    /// </summary>
+    public const string QueryExportRun = "query.export.run";
 
     /// <summary>Enum name → id segment (<c>SqlInsert</c> → <c>sqlInsert</c>), so ids stay camelCase like
     /// every other one here.</summary>

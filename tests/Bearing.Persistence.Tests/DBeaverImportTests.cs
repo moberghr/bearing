@@ -110,10 +110,11 @@ public class DBeaverImportTests
     }
 
     [Fact]
-    public void Sslmode_survives_as_something_Npgsql_can_parse()
+    public void Sslmode_survives_as_the_typed_encryption_setting()
     {
-        var azure = Parsed().Connections.Single(c => c.Options.ContainsKey("sslmode"));
-        Assert.Equal("require", azure.Options["sslmode"]);
+        // The real workspace's Azure entry asks for require; it has to arrive as that and not as the default.
+        var azure = Parsed().Connections.Single(c => c.Tls == TlsMode.Require);
+        Assert.False(azure.Options.ContainsKey("sslmode"));
     }
 
     // ---- connection types ----------------------------------------------------------------------
@@ -260,16 +261,46 @@ public class DBeaverImportTests
     }
 
     [Fact]
-    public void A_hyphenated_sslmode_is_rewritten_for_Npgsql()
+    public void A_hyphenated_sslmode_becomes_the_typed_encryption_setting()
     {
-        // JDBC spells it verify-ca; Npgsql's SslMode enum has no hyphen, so the imported value would
-        // otherwise fail to parse at connect time.
+        // JDBC spells it verify-full. It now lands on ConnectionInfo.Tls rather than in the options bag
+        // (#23): it is a security setting, and DBeaver's value is the user's own intent for that server.
         var result = DBeaverImport.Parse("""
         {"connections":{"c1":{"name":"p","provider":"postgresql",
           "configuration":{"host":"h","properties":{"sslmode":"verify-full"}}}}}
         """);
 
-        Assert.Equal("verifyfull", result.Connections.Single().Options["sslmode"]);
+        var imported = result.Connections.Single();
+        Assert.Equal(TlsMode.VerifyFull, imported.Tls);
+        // And it is not left in the bag as a second source of truth the field would have to outrank.
+        Assert.False(imported.Options.ContainsKey("sslmode"));
+    }
+
+    [Fact]
+    public void An_import_with_no_sslmode_keeps_working_rather_than_being_upgraded()
+    {
+        // An import migrates a configuration that already works, and DBeaver's own default is no SSL. Applying
+        // the new-connection rule (Require for anything remote) would turn every imported remote connection
+        // into one that fails to connect, with nothing saying the importer had changed the setting.
+        var remote = DBeaverImport.Parse("""
+        {"connections":{"c1":{"name":"p","provider":"postgresql","configuration":{"host":"db.example.com"}}}}
+        """).Connections.Single();
+
+        Assert.Equal(TlsPolicy.Default, remote.Tls);
+    }
+
+    [Fact]
+    public void An_imported_options_bag_is_still_read_case_insensitively()
+    {
+        // The bag is rebuilt to drop sslmode, and the comparer has to travel with it: the documented `entra.*`
+        // keys are looked up case-insensitively, so losing it would start missing them.
+        var imported = DBeaverImport.Parse("""
+        {"connections":{"c1":{"name":"p","provider":"postgresql",
+          "configuration":{"host":"h","properties":{"search_path":"shop"}}}}}
+        """).Connections.Single();
+
+        Assert.True(imported.Options.TryGetValue("SEARCH_PATH", out var value));
+        Assert.Equal("shop", value);
     }
 
     [Fact]

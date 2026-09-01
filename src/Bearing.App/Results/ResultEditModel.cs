@@ -106,7 +106,8 @@ internal static class ResultEditModel
         var committed = (object?[])row.Clone();
         foreach (var c in t.Columns)
             if (c.ResultIndex < committed.Length && committed[c.ResultIndex] is string s)
-                committed[c.ResultIndex] = Coerce(s, rs.Columns[c.ResultIndex].ClrType);
+                committed[c.ResultIndex] = Coerce(s, rs.Columns[c.ResultIndex].ClrType,
+                    ColumnKinds.IsTimestampWithZone(rs.Columns[c.ResultIndex].DataTypeName));
         return committed;
     }
 
@@ -140,7 +141,8 @@ internal static class ResultEditModel
             // Compare *coerced* to original: the grid writes strings, so a cell holding "5" never equalled the
             // typed 5 it came from and every touched cell produced an assignment — re-writing values that
             // hadn't changed (and re-touching audit triggers on those columns).
-            var value = Coerce(row[c.ResultIndex], rs.Columns[c.ResultIndex].ClrType);
+            var value = Coerce(row[c.ResultIndex], rs.Columns[c.ResultIndex].ClrType,
+                ColumnKinds.IsTimestampWithZone(rs.Columns[c.ResultIndex].DataTypeName));
             if (Equals(value, original[c.ResultIndex])) continue;
             list.Add(new ColumnValue(c.BaseColumn, value));
         }
@@ -156,7 +158,11 @@ internal static class ResultEditModel
             if (c.ResultIndex >= row.Length) continue;
             var value = row[c.ResultIndex];
             if (value is null) continue; // let serial/defaults fill it
-            list.Add(new ColumnValue(c.BaseColumn, Coerce(value, rs.Columns[c.ResultIndex].ClrType)));
+            // The third Coerce call site, and it needs the zone flag as much as the other two: without it,
+            // the same displayed wall time typed into a new row and into an existing one produced values
+            // hours apart, and a Kind=Unspecified DateTime that Npgsql will not take for a timestamptz.
+            list.Add(new ColumnValue(c.BaseColumn, Coerce(value, rs.Columns[c.ResultIndex].ClrType,
+                ColumnKinds.IsTimestampWithZone(rs.Columns[c.ResultIndex].DataTypeName))));
         }
         return list;
     }
@@ -164,7 +170,13 @@ internal static class ResultEditModel
     /// <summary>Coerce a grid string back to the column's CLR type. The "(null)" token ⇒ NULL; an empty
     /// string stays empty for text columns and ⇒ NULL for others. Falls back to the raw string (letting
     /// the DB reject it) when parsing fails.</summary>
-    private static object? Coerce(object? value, Type clrType)
+    /// <param name="utcColumn">
+    /// True for a <c>timestamptz</c> column (#77). Its displayed text may have been converted into the
+    /// display zone, so parsing it back has to undo that: a UTC 15:00 shown as 18:00+03:00 and edited must
+    /// write back 15:00 UTC, not 18:00. Text without an offset is then a wall time in the zone the user was
+    /// looking at, which is what they typed.
+    /// </param>
+    private static object? Coerce(object? value, Type clrType, bool utcColumn = false)
     {
         if (value is not string s) return value; // unchanged cells keep their typed value
         if (CellFormat.IsNullToken(s)) return null;
@@ -177,7 +189,7 @@ internal static class ResultEditModel
             if (t == typeof(bool)) return bool.Parse(s);
             if (t.IsEnum) return Enum.Parse(t, s, ignoreCase: true);
             // Dates: accept the ISO display forms (yyyy-MM-dd HH:mm:ss) the user sees, else a lenient parse.
-            if (CellFormat.TryParseDate(s, t, out var date)) return date;
+            if (CellFormat.TryParseDate(s, t, out var date, utcColumn, zone: null)) return date;
             // Numbers are CellFormat's, not Convert's. Convert.ChangeType allows group separators even under
             // InvariantCulture, so it reads "9,5" as 95 without complaint — a silent tenfold write for anyone
             // typing a comma-decimal. A refused number falls through to the raw string, which the server

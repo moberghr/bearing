@@ -33,14 +33,62 @@ public static class CellFormat
     /// old shared date/time pattern did — silently lost the zone on every copy.</summary>
     public const string DateTimeOffsetPattern = "yyyy-MM-dd HH:mm:ss.FFFFFFzzz";
 
+    /// <summary>A <c>timetz</c>: the time and its offset, with no date — Postgres stores none, and the one
+    /// the driver supplies is a placeholder.</summary>
+    public const string TimeOffsetPattern = "HH:mm:ss.FFFFFFzzz";
+
     /// <summary>Shown for a NULL cell, and the token a user types to set a cell to NULL. Distinct from
     /// an empty string (which renders blank and, for text columns, saves as empty).</summary>
     public const string NullToken = "(null)";
 
-    public static string Display(object? value) => value switch
+    /// <summary>
+    /// The zone timestamps are displayed in (#77). App-global, set from settings at startup and on change —
+    /// the setting is one choice applied to every result, and threading it through every call site (grid,
+    /// clipboard, CSV, inspector, exports) would be the same value passed a dozen times.
+    /// <para>
+    /// Every method that reads it also takes it as an optional argument, so a test states the zone it means
+    /// instead of mutating shared state and hoping about ordering.
+    /// </para>
+    /// </summary>
+    public static TimeZoneInfo Zone { get; set; } = TimeZoneInfo.Utc;
+
+    public static string Display(object? value) => Display(value, null);
+
+    /// <summary>
+    /// Cell text, with timestamps in <paramref name="zone"/> (or <see cref="Zone"/>).
+    /// <para>
+    /// The two <c>DateTime</c> arms are the heart of #77, and <c>Kind</c> is what separates them — confirmed
+    /// against Npgsql 10, which returns <c>timestamptz</c> as <c>Kind = Utc</c> and <c>timestamp</c> as
+    /// <c>Kind = Unspecified</c>:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><b>Utc</b> — a real instant. Converted to the display zone and rendered <i>with</i> its offset,
+    /// so the value is unambiguous on screen and on the clipboard.</item>
+    /// <item><b>Unspecified</b> — a <c>timestamp without time zone</c>. Rendered as-is and without an offset,
+    /// because it has none: printing <c>+00:00</c> beside a column of local wall times would invent
+    /// information, and it is the arm most likely to mislead. The column is marked instead
+    /// (<c>ColumnKinds.IsTimestampWithoutZone</c>), where the mark cannot leak into the text.</item>
+    /// </list>
+    /// </summary>
+    public static string Display(object? value, TimeZoneInfo? zone) => value switch
     {
         null => NullToken,
+        // A real instant: show it in the display zone, with the offset that makes it readable back.
+        DateTime { Kind: DateTimeKind.Utc } utc
+            => new DateTimeOffset(utc).ToOffset(In(zone).GetUtcOffset(utc))
+                .ToString(DateTimeOffsetPattern, CultureInfo.InvariantCulture),
+        // No zone, and never had one. Nothing to convert from, so nothing is claimed.
         DateTime dt => dt.ToString(DateTimePattern, CultureInfo.InvariantCulture),
+        // A value that already states an offset keeps it. The display zone exists for instants that have no
+        // representation of their own — a timestamptz, which arrives as a bare UTC DateTime. A timetz (which
+        // Npgsql maps here) has chosen an offset already, and re-expressing it would both change what the
+        // column appears to say and drag a date-less value across a zone boundary near DateTime.MinValue.
+        //
+        // A timetz carries no date, so Npgsql supplies a placeholder one — and "0001-01-02 17:30:00+02:00" in
+        // a time column is worse than the missing offset this change was about. The date is dropped when it
+        // is that placeholder, which is the only case it can be: a real instant is never in year one.
+        DateTimeOffset { Year: <= 1 } timeOnly
+            => timeOnly.ToString(TimeOffsetPattern, CultureInfo.InvariantCulture),
         DateTimeOffset dto => dto.ToString(DateTimeOffsetPattern, CultureInfo.InvariantCulture),
         DateOnly d => d.ToString(DatePattern, CultureInfo.InvariantCulture),
         TimeOnly t => t.ToString(TimePattern, CultureInfo.InvariantCulture),
@@ -56,6 +104,8 @@ public static class CellFormat
         IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
         _ => value.ToString() ?? "",
     };
+
+    private static TimeZoneInfo In(TimeZoneInfo? zone) => zone ?? Zone;
 
     /// <summary>A Postgres array value as <c>[a, b, c]</c>, elements formatted via <see cref="Display"/>
     /// (so nested arrays, dates and nulls render consistently).</summary>
@@ -104,10 +154,70 @@ public static class CellFormat
     /// <summary>Parse an edited cell string back to <paramref name="target"/> — the ISO display forms
     /// first, then a lenient current-culture parse. Returns false if neither matches.</summary>
     public static bool TryParseDate(string s, Type target, out object? value)
+        => TryParseDate(s, target, out value, utcColumn: false, zone: null);
+
+    /// <summary>
+    /// Parse an edited cell back to a value, undoing the display conversion (#77).
+    /// <para>
+    /// <b>This is the round-trip that must not lose an hour.</b> A UTC 15:00 shown as <c>18:00+03:00</c> and
+    /// edited has to write back 15:00 UTC — not 18:00 UTC, and not 18:00 with the offset dropped. The same
+    /// class of bug as the comment at the top of this file describes for numbers, with a three-hour blast
+    /// radius instead of a tenfold one.
+    /// </para>
+    /// <para>
+    /// <paramref name="utcColumn"/> says the column is a <c>timestamptz</c> (the original value's
+    /// <c>Kind</c> was Utc). For one of those, text <i>without</i> an offset is read in the display zone
+    /// rather than as UTC — the user edits what they see — and then converted back. Reading it as UTC is the
+    /// lenient path that would silently eat the shift.
+    /// </para>
+    /// </summary>
+    public static bool TryParseDate(string s, Type target, out object? value, bool utcColumn, TimeZoneInfo? zone)
     {
         value = null;
         if (target == typeof(DateTime))
         {
+            if (utcColumn)
+            {
+                // Text that states an offset is an instant, and is *never* reinterpreted as a wall time.
+                // That branch order is the whole safety property: a shape the exact-format list happens not
+                // to cover ("…T15:00:00Z", "18:00 +03:00", "18:00+03:00" with no seconds) would otherwise
+                // fall through and be shifted by the display zone — the silent hour this exists to prevent.
+                if (HasOffset(s))
+                {
+                    if (DateTimeOffset.TryParseExact(s, DateTimeOffsetFormats, CultureInfo.InvariantCulture,
+                            DateTimeStyles.None, out var exact))
+                    {
+                        value = exact.UtcDateTime;
+                        return true;
+                    }
+                    // A form the list does not carry, but that still states its offset. Lenient here, and
+                    // AssumeUniversal is irrelevant because the offset is present by construction.
+                    if (DateTimeOffset.TryParse(s, CultureInfo.CurrentCulture, DateTimeStyles.None,
+                            out var lenient))
+                    {
+                        value = lenient.UtcDateTime;
+                        return true;
+                    }
+                    // It claims an offset that cannot be read. Refused rather than guessed at — the raw
+                    // string then reaches the server, which rejects it visibly, exactly as a refused number
+                    // does (see the note at the top of this file).
+                    return false;
+                }
+
+                // No offset stated: a wall time in the zone the user is looking at, which is what they typed.
+                if (DateTime.TryParseExact(s, DateTimeFormats, CultureInfo.InvariantCulture,
+                        DateTimeStyles.None, out var wall)
+                    || DateTime.TryParse(s, CultureInfo.CurrentCulture, DateTimeStyles.None, out wall))
+                {
+                    value = DateTime.SpecifyKind(
+                        TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(wall, DateTimeKind.Unspecified),
+                            In(zone)),
+                        DateTimeKind.Utc);
+                    return true;
+                }
+                return false;
+            }
+
             if (DateTime.TryParseExact(s, DateTimeFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var v)
                 || DateTime.TryParse(s, CultureInfo.CurrentCulture, DateTimeStyles.None, out v)) { value = v; return true; }
         }
@@ -127,6 +237,30 @@ public static class CellFormat
                 || TimeOnly.TryParse(s, CultureInfo.CurrentCulture, DateTimeStyles.None, out v)) { value = v; return true; }
         }
         return false;
+    }
+
+    /// <summary>
+    /// Whether the text states an offset of its own.
+    /// <para>
+    /// Checked in the text rather than inferred from a successful parse, because
+    /// <c>DateTimeOffset.TryParseExact</c> succeeds on an offset-less string by assuming the machine's local
+    /// zone — which is precisely the assumption that would silently shift a value.
+    /// </para>
+    /// <para>
+    /// Only the time part is examined: a date carries hyphens of its own, so "2026-08-26" would otherwise
+    /// look like it stated an offset of minus something.
+    /// </para>
+    /// </summary>
+    private static bool HasOffset(string s)
+    {
+        var text = s.Trim();
+        if (text.EndsWith('Z') || text.EndsWith('z')) return true;
+
+        var split = text.LastIndexOfAny([' ', 'T', 't']);
+        if (split < 0) return false;   // no time part at all, so nothing to carry an offset
+
+        var time = text[(split + 1)..];
+        return time.Contains('+') || time.Contains('-');
     }
 
     /// <summary>Whether <paramref name="target"/> is one of the numeric types <see cref="Display"/> renders

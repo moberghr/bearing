@@ -8,7 +8,11 @@ namespace Bearing.App.Results;
 
 /// <summary>Spatial cell-cursor motion in a results grid. Deliberately not <c>Avalonia.Input.Key</c>: the
 /// controller maps keystrokes onto these so the motion arithmetic stays toolkit-free and testable.</summary>
-public enum GridMotion { Left, Right, Up, Down, Home, End, PageUp, PageDown }
+/// <summary>How the cell cursor is being asked to move. The first eight are spatial — a direction on the
+/// grid. The last two are a <i>field traversal</i>: Tab and Shift+Tab walk the cells in reading order and
+/// step to the next or previous row at the edge, which is how every spreadsheet and every record form
+/// behaves and is not expressible as a direction (#10).</summary>
+public enum GridMotion { Left, Right, Up, Down, Home, End, PageUp, PageDown, NextField, PreviousField }
 
 /// <summary>
 /// The arithmetic behind results-grid cell selection: where a motion lands, which cells a rectangle covers,
@@ -24,6 +28,11 @@ public enum GridMotion { Left, Right, Up, Down, Home, End, PageUp, PageDown }
 /// </summary>
 public static class GridSelectionOps
 {
+    /// <summary>Whether a motion walks fields in reading order rather than in a direction. Shift means
+    /// "the other way" for these, not "extend the selection" as it does for a direction.</summary>
+    public static bool IsFieldMotion(GridMotion motion)
+        => motion is GridMotion.NextField or GridMotion.PreviousField;
+
     /// <summary>The leftmost column (0, also for a result with no columns at all).</summary>
     public static int FirstColumn(ResultSetViewModel result) => 0;
 
@@ -41,6 +50,8 @@ public static class GridSelectionOps
     /// <summary>Where a motion lands from (<paramref name="row"/>, <paramref name="col"/>).
     /// <paramref name="toEdge"/> is the Ctrl modifier — it jumps to the row/column extreme instead of
     /// stepping. Rows and columns both clamp at the edges and stay in range.</summary>
+    /// <param name="toEdge">Ctrl is held: a spatial motion runs to the edge instead of one step. Ignored by
+    /// the field motions, which have their own notion of an edge.</param>
     public static (int Row, int Col) Move(
         ResultSetViewModel result, int row, int col, GridMotion motion, bool toEdge, int pageSize)
     {
@@ -57,6 +68,18 @@ public static class GridSelectionOps
             case GridMotion.End: nc = LastColumn(result); if (toEdge) nr = last; break;
             case GridMotion.PageUp: nr = Math.Max(0, nr - page); break;
             case GridMotion.PageDown: nr = Math.Min(last, nr + page); break;
+
+            // Reading order, wrapping a row at each edge. It stops at the two ends of the result rather
+            // than cycling: Tab past the last field is the end of the data, and looping back to the first
+            // row would move the cursor a screen away from where the user is looking.
+            case GridMotion.NextField:
+                if (col < LastColumn(result)) { nc = StepColumn(result, col, +1); }
+                else if (nr < last) { nr++; nc = FirstColumn(result); }
+                break;
+            case GridMotion.PreviousField:
+                if (col > FirstColumn(result)) { nc = StepColumn(result, col, -1); }
+                else if (nr > 0) { nr--; nc = LastColumn(result); }
+                break;
         }
         return (nr, nc);
     }

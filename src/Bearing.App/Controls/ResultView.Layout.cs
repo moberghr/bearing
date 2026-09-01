@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Avalonia;
 using Avalonia.Controls;
@@ -83,20 +84,33 @@ public sealed partial class ResultView
             return tabs;
         }
 
-        // Stacked: every set vertically in one scroll area, each capped so you can scroll between them.
-        var stack = new StackPanel { Spacing = 0 };
+        // Stacked: every set vertically, with a draggable divider between them (#81). No outer ScrollViewer —
+        // the sets share the pane through star rows and each grid scrolls internally, which is what lets one
+        // set be given the space and the others a sliver.
+        var built = new List<(ResultSetViewModel Result, Control Container)>(results.Count);
+        ResultStackView? stack = null;
         for (var i = 0; i < results.Count; i++)
-            stack.Children.Add(BuildSetContainer(results[i], $"Result {i + 1}", collapsible: true, capHeight: true));
-        return new ScrollViewer
         {
-            Content = stack,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-        };
+            var result = results[i];
+            built.Add((result, BuildSetContainer(
+                result, $"Result {i + 1}", collapsible: true, capHeight: false,
+                // Deferred: the stack does not exist until every container is built, and a chevron cannot be
+                // clicked before then either.
+                onCollapsed: collapsed => stack?.SetCollapsed(result, collapsed))));
+        }
+        stack = new ResultStackView(built);
+        // Sets the user had already collapsed keep their space released across a re-render (a view-mode flip).
+        foreach (var (result, _) in built)
+            if (_collapsed.Contains(result)) stack.SetCollapsed(result, true);
+        return stack;
     }
 
     /// <summary>A result set = meta row (Result · N rows · ms, optional collapse chevron) + its body.</summary>
-    private Control BuildSetContainer(ResultSetViewModel result, string? label, bool collapsible, bool capHeight)
+    /// <param name="onCollapsed">Told whenever the chevron flips, so the stacked layout can release the
+    /// set's share of the pane (#81). Null where nothing needs to know — a single set or a tab.</param>
+    private Control BuildSetContainer(
+        ResultSetViewModel result, string? label, bool collapsible, bool capHeight,
+        Action<bool>? onCollapsed = null)
     {
         var body = BuildResultSet(result, out var grid);
         if (capHeight)
@@ -113,14 +127,20 @@ public sealed partial class ResultView
             {
                 Text = ResultMetaText.Meta(label, result),
                 Foreground = Res("Text.Dim"),
-                FontSize = 12,
+                FontSize = Metric("Font.Body"),
                 VerticalAlignment = VerticalAlignment.Center,
             });
 
         // Right of the meta row: Export (any grid result), then subtle edit controls for an editable result or
         // a read-only lock chip + reason for a locked one (design RESULTS_GRID §8). A non-grid result
         // (statement message / error) shows none of it.
-        var metaRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        // Height reserved for the tallest state the row can take, so the commit group appearing cannot
+        // re-measure the grid under the cell being edited (#60 — see ResultChrome.MetaRowContentHeight).
+        var metaRow = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            MinHeight = ResultChrome.MetaRowContentHeight,
+        };
         Grid.SetColumn(left, 0);
         metaRow.Children.Add(left);
         Control? right = BuildMetaActions(result, grid);
@@ -139,6 +159,7 @@ public sealed partial class ResultView
                 if (collapsed) _collapsed.Add(result);
                 body.IsVisible = !collapsed;
                 chevronGlyph.Data = ResultChrome.ChevronGeometry(collapsed);
+                onCollapsed?.Invoke(collapsed);
             };
 
         var bar = new Border
@@ -166,13 +187,13 @@ public sealed partial class ResultView
         {
             Text = $"{label ?? "Result"} · ",
             Foreground = Res("Text.Dim"),
-            FontSize = 12,
+            FontSize = Metric("Font.Body"),
             VerticalAlignment = VerticalAlignment.Center,
         });
         var detail = new TextBlock
         {
             Foreground = Res("Text.Dim"),
-            FontSize = 12,
+            FontSize = Metric("Font.Body"),
             VerticalAlignment = VerticalAlignment.Center,
             DataContext = result,
         };

@@ -39,6 +39,36 @@ public interface IMetadataReader
     /// <summary>Rendered SQL of a view / materialized view, by its table id (<see cref="TableInfo.Id"/>).</summary>
     Task<string> GetViewDefinitionAsync(long tableId, CancellationToken ct);
 
+    /// <summary>
+    /// Constraints, indexes and triggers of one relation, read on demand (§4.6 of the tree: a table is
+    /// expanded far less often than a keystroke happens). Deliberately not part of
+    /// <see cref="ISchemaSnapshot"/> — see <see cref="TableDetails"/>.
+    /// </summary>
+    Task<TableDetails> GetTableDetailsAsync(long tableId, CancellationToken ct);
+
+    /// <summary>
+    /// Every relation's size in the connected database, keyed by table id (#76).
+    /// <para>
+    /// One read for the whole database rather than one per table: the sizes come from a single
+    /// <c>pg_class</c> join, so fetching them a table at a time would be strictly worse — and the tree wants
+    /// them all at once anyway, to sort by them.
+    /// </para>
+    /// <para>
+    /// Not part of <see cref="ISchemaSnapshot"/>, for the same reason as <see cref="TableDetails"/> and one
+    /// more: sizes are volatile, so caching them next to structure that is not would make the snapshot stale
+    /// in a way nothing else there is. <c>pg_total_relation_size</c> also stats files per relation, which is
+    /// not free on a large database — this must never be on the path that renders the tree.
+    /// </para>
+    /// </summary>
+    Task<IReadOnlyList<RelationSize>> GetRelationSizesAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Every database's size on the server. A size that cannot be read comes back null rather than throwing:
+    /// <c>pg_database_size</c> raises for a database the user cannot connect to, and one inaccessible database
+    /// must not cost the sizes of the rest.
+    /// </summary>
+    Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(CancellationToken ct);
+
     /// <summary>Rendered <c>CREATE … FUNCTION/PROCEDURE</c> source, by routine id (<see cref="RoutineInfo.Id"/>).</summary>
     Task<string> GetRoutineDefinitionAsync(long routineId, CancellationToken ct);
 }

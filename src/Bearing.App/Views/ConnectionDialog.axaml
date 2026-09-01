@@ -13,7 +13,8 @@
       <TextBox   Grid.Row="0" Grid.Column="1" x:Name="NameBox" PlaceholderText="e.g. pagila (local)"/>
 
       <TextBlock Grid.Row="1" Grid.Column="0" Text="Host" VerticalAlignment="Center" Margin="0,6,0,0"/>
-      <TextBox   Grid.Row="1" Grid.Column="1" x:Name="HostBox" Margin="0,6,0,0"/>
+      <TextBox   Grid.Row="1" Grid.Column="1" x:Name="HostBox" Margin="0,6,0,0"
+                 TextChanged="OnHostChanged"/>
 
       <TextBlock Grid.Row="2" Grid.Column="0" Text="Port" VerticalAlignment="Center" Margin="0,6,0,0"/>
       <TextBox   Grid.Row="2" Grid.Column="1" x:Name="PortBox" Margin="0,6,0,0"/>
@@ -45,6 +46,23 @@
             Background="#2F2B22" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
             Padding="8,6" Margin="0,4,0,0">
       <TextBlock x:Name="NoStorageWarningText" TextWrapping="Wrap"
+                 Foreground="{DynamicResource Warn.Amber}" FontSize="12"/>
+    </Border>
+
+    <Separator Margin="0,4"/>
+
+    <!-- Transport security (#23). It used to be settable only by hand-editing project.json, so in practice
+         every connection ran on the driver's default: encrypt if offered, tell nobody either way. -->
+    <TextBlock Text="Encryption" Opacity="0.8"/>
+    <ComboBox x:Name="TlsBox" HorizontalAlignment="Stretch" SelectionChanged="OnTlsChanged"/>
+
+    <!-- What the chosen mode leaves open, in its own words. Amber, matching the keychain block: the posture is
+         surfaced, never silent (§1.1) — and it names *which* guarantee is missing, because "require" reads as
+         the secure choice while accepting any certificate at all. -->
+    <Border x:Name="TlsWarning" IsVisible="False"
+            Background="#2F2B22" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
+            Padding="8,6" Margin="0,4,0,0">
+      <TextBlock x:Name="TlsWarningText" TextWrapping="Wrap"
                  Foreground="{DynamicResource Warn.Amber}" FontSize="12"/>
     </Border>
 

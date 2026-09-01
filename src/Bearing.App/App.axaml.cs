@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
@@ -13,6 +14,9 @@ using Bearing.App.Views;
 using Bearing.Core.Logging;
 using Bearing.Core.Workspace;
 using Bearing.Data;
+using Bearing.App.Demo;
+using Bearing.Core.Data;
+using Bearing.Demo;
 using Bearing.Persistence;
 using Bearing.Updates;
 
@@ -53,12 +57,38 @@ public partial class App : Application
             CrashReporter.Surface = (context, ex) =>
                 Dispatcher.UIThread.Post(() => Views.ErrorDialog.Show(desktop.MainWindow, context, ex));
 
-            var providers = new ProviderRegistry();
-            IProjectStore projectStore = new JsonProjectStore();
-            ISessionStore sessionStore = new JsonSessionStore();
+            // Demo mode (#64): a whole session served from fixed data, in a temp directory that is deleted on
+            // the way out. Decided here, once, because it replaces half the object graph — the provider
+            // registry, all four stores and the secret store — and a session cannot be half a demo.
+            _demo = DemoMode.Requested(desktop.Args) ? DemoWorkspace.Create() : null;
+
             var settings = new Settings.SettingsService(new AppSettingsStore());
-            IQueryLog queryLog = new SqliteQueryLog(retentionDays: settings.Current.QueryLogRetentionDays);
-            IRecentProjects recentProjects = new FileRecentProjects();
+            // The type scale, before any window is built: the tokens in Tokens.axaml carry defaults, and this
+            // overwrites them from settings so the first frame is already at the user's size (#52).
+            Theming.FontScale.Apply(settings.Current.UiFontSize, settings.Current.GridFontSize);
+            // The timezone setting's picker, validation and description live in the app layer: resolving a
+            // zone id means TimeZoneInfo, and Core holds abstractions and records only (§2.1, #77).
+            Formatting.DisplayTimeZone.InstallSettingsHooks();
+            Formatting.CellFormat.Zone = Formatting.DisplayTimeZone.Resolve(settings.Current.DisplayTimeZone);
+            // The demo registry holds the demo provider *instead of* Postgres, not beside it: that is what
+            // makes the fake unreachable from any normal connection flow, since in an ordinary session it is
+            // not in the graph at all.
+            // The demo executor is handed the real statement splitter: it lives in Bearing.Sql, which
+            // Bearing.Demo may not reference (§2.2), and without it a multi-statement run — which the demo's
+            // own welcome script invites — would return one result set instead of two.
+            IProviderRegistry providers = _demo is null
+                ? new ProviderRegistry()
+                : new DemoProvider(DemoExecutor.Default(
+                    sql => Bearing.Sql.StatementSplitter.Split(sql).Select(span => span.Text).ToList()));
+            IProjectStore projectStore = _demo?.Projects ?? new JsonProjectStore();
+            ISessionStore sessionStore = _demo?.Sessions ?? new JsonSessionStore();
+            IQueryLog queryLog = _demo?.QueryLog ?? new SqliteQueryLog(
+                retentionDays: settings.Current.QueryLogRetentionDays,
+                // The dialect's own lexer decides what a literal is; the store only knows it was handed a
+                // string (§2.2). Read once at startup, so a mid-session flip cannot leave half the log
+                // redacted and half not.
+                redactSql: settings.Current.QueryLogRedactLiterals ? Bearing.Sql.SqlRedactor.Redact : null);
+            IRecentProjects recentProjects = _demo?.RecentProjects ?? new FileRecentProjects();
 
             var vm = new ShellViewModel(providers, projectStore, sessionStore, queryLog, recentProjects,
                 dialogs: new Views.DialogService(),
@@ -68,6 +98,19 @@ public partial class App : Application
             settings.SaveFailed = message => vm.StatusText = message;
             LogStartup("vm created");
             var window = new MainWindow { DataContext = vm };
+
+            // The type scale follows the settings live (#52). XAML reads the tokens through
+            // {DynamicResource} and updates itself; the results grid is built in code and reads its sizes
+            // once, so it is told to re-render — a font setting that waited for the next query would look
+            // broken while the user was still moving the dial.
+            settings.Changed += s =>
+            {
+                Theming.FontScale.Apply(s.UiFontSize, s.GridFontSize);
+                // The zone reaches the grid the same way a font size does — the cell text is built in code,
+                // so the results have to be re-rendered rather than left to a binding (#77).
+                Formatting.CellFormat.Zone = Formatting.DisplayTimeZone.Resolve(s.DisplayTimeZone);
+                Dispatcher.UIThread.Post(window.RefreshTypeScale);
+            };
             LogStartup("window constructed");
 
             // Self-update (#20). The coordinator owns the policy (one check per launch, honour the setting,
@@ -119,7 +162,13 @@ public partial class App : Application
             window.Closed += (_, _) =>
             {
                 if (updates.ApplyIfPending() is { } failure) CrashLog.Note("update apply-on-exit", failure);
+                CleanUpDemo();
             };
+            // Every exit path, exactly once, mirroring SaveSession above: a killed process (Ctrl+C in the
+            // terminal, IDE stop) never fires Closed, and %TEMP% is not reliably swept on Windows — so
+            // without this a demo stopped from the debugger leaves its directory for good.
+            desktop.ShutdownRequested += (_, _) => CleanUpDemo();
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => CleanUpDemo();
 
             // Window size is persisted state, not a preference — the setting only decides whether it is
             // replayed. Position is deliberately left to the window manager (Wayland won't honour it
@@ -175,17 +224,62 @@ public partial class App : Application
         // it is best-effort and never blocks the app (§5.2).
         LegacySecretFiles.Purge();
 
+        if (_demo is { } demo)
+        {
+            // The demo's own store, and *before* anything probes the real one: SecretStoreFactory.CreateAsync
+            // reaches for the OS keychain, which on Linux can prompt to unlock the keyring — for a session
+            // that has no secret to keep. Attaching it here rather than after the probe is what makes the
+            // "no keychain call" claim true instead of aspirational (§1.1).
+            vm.AttachSecretStore(demo.Secrets, reprobe: _ => Task.FromResult(demo.Secrets));
+            // A demo opens its own throwaway project rather than the last-used one: the user's real project
+            // is neither read nor written, and there is nothing in the recent list to go back to because
+            // this one is never added to it (#64).
+            await vm.StartDemoAsync(demo.ProjectDirectory, DemoMode.WelcomeScript);
+            LogStartup("demo ready");
+            return;
+        }
+
         var secretStore = await SecretStoreFactory.CreateAsync();
         // The same call is handed over as the re-probe: this one runs very early, and a keyring that wasn't
         // serving yet at this instant would otherwise pin the whole session into storing nothing.
         vm.AttachSecretStore(secretStore, reprobe: SecretStoreFactory.CreateAsync);
+
         // Reopen the last-used project; fall back to the default project on first run (or if it's gone).
         await vm.ResumeLastProjectAsync(DefaultProjectDirectory());
         // Opt-in convenience: seed the local pagila demo connection only when BEARING_SEED_DEMO is set.
         // By default a fresh profile starts as an empty project — no connections, no history.
         if (Environment.GetEnvironmentVariable("BEARING_SEED_DEMO") is { Length: > 0 })
-            await vm.Connections.SeedDemoConnectionAsync("localhost", 5434, "pagila", "postgres", "squirrel");
+            // 55434 to match build/test-db.sh, which is the pagila this points at. It used to say 5434,
+            // where a developer machine can have something else entirely listening (§4.2).
+            await vm.Connections.SeedDemoConnectionAsync("localhost", 55434, "pagila", "postgres", "squirrel");
         LogStartup("project ready");
+    }
+
+    /// <summary>The demo session's throwaway workspace, or null in an ordinary session (#64).</summary>
+    private static Demo.DemoWorkspace? _demo;
+
+    private static int _demoCleaned;
+
+    /// <summary>
+    /// Delete the demo's temp directory, once, from whichever exit path gets there first.
+    /// <para>
+    /// The wait happens on a pool thread, not the caller's: this runs from the UI thread on a window close,
+    /// and blocking that thread on work whose continuations want it is a deadlock — the wait would time out
+    /// and leave the directory behind. Capped so a stuck delete cannot hold the exit, and swallowed at the
+    /// end because a demo that cannot tidy up must not become a crash on the way out (§5.2).
+    /// </para>
+    /// </summary>
+    private static void CleanUpDemo()
+    {
+        if (_demo is not { } demo) return;
+        if (Interlocked.Exchange(ref _demoCleaned, 1) != 0) return;
+
+        try
+        {
+            if (!Task.Run(() => demo.DisposeAsync().AsTask()).Wait(TimeSpan.FromSeconds(2)))
+                CrashLog.Note("demo cleanup", "timed out; the temp directory was left for the OS to collect");
+        }
+        catch (Exception ex) { CrashLog.Note("demo cleanup", ex.Message); }
     }
 
     /// <summary>Write a startup milestone (ms since process start) when BEARING_STARTUP_TIMING is set.</summary>
