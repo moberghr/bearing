@@ -44,6 +44,9 @@ public static class CommandIds
     /// <summary>Command id for jumping to tab <paramref name="n"/> (1-based); n=9 is "last tab" (browser convention).</summary>
     public static string TabGoto(int n) => $"tab.goto{n}";
     public const string QueryRunAll = "query.runAll";
+    public const string QueryCancel = "query.cancel";
+    public const string QueryExplain = "query.explain";
+    public const string QueryExplainAnalyze = "query.explainAnalyze";
     public const string PanelConnections = "panel.connections";
     public const string PanelScripts = "panel.scripts";
     public const string PanelHistory = "panel.history";
