@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 using Bearing.App.Connections;
 using Bearing.App.Services;
 using Bearing.Core.Data;
@@ -169,16 +170,53 @@ public partial class ConnectionDialog : Window
             // Case-insensitively, as the bag is read: the documented `entra.*` keys are looked up that way.
             .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>The preset buttons' own labels — the set this dialog considers its own to overwrite.</summary>
+    private static readonly string[] PresetLabels = ["local", "staging", "production"];
+
     private void OnPresetColorClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button { Tag: string hex } b)
+        if (sender is not Button { Tag: string hex } b) return;
+
+        EnvColorBox.Text = hex;
+        var label = b.Content?.ToString()?.ToLowerInvariant();
+        // Re-label when the box is empty or still holds another preset's label — clicking Local and then
+        // Production has to end up saying "production". A hand-typed label ("staging-eu") is the user's, and
+        // survives.
+        var current = EnvBox.Text?.Trim() ?? "";
+        if (current.Length == 0 ||
+            Array.Exists(PresetLabels, l => string.Equals(l, current, StringComparison.OrdinalIgnoreCase)))
         {
-            EnvColorBox.Text = hex;
-            var label = b.Content?.ToString()?.ToLowerInvariant();
-            if (string.IsNullOrWhiteSpace(EnvBox.Text)) EnvBox.Text = label;
-            // Production defaults to guarded; the user can still uncheck it.
-            if (label == "production") ConfirmWritesBox.IsChecked = true;
+            EnvBox.Text = label;
         }
+        // Production defaults to guarded; the user can still uncheck it. Deliberately not unset when moving
+        // back to a lesser preset — dropping a write guard is the user's call, not a side effect of a click.
+        if (label == "production") ConfirmWritesBox.IsChecked = true;
+    }
+
+    // The hex box is what gets saved; the picker is a second way to fill it. Each pushes into the other, so
+    // the guard is what stops a round trip from re-entering and overwriting what the user is typing.
+    private bool _syncingColor;
+
+    private void OnEnvColorTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (_syncingColor) return;
+        if (Color.TryParse(EnvColorBox.Text, out var color)) SyncPickerColor(color);
+    }
+
+    private void OnEnvColorPicked(object? sender, ColorChangedEventArgs e)
+    {
+        if (_syncingColor) return;
+        _syncingColor = true;
+        // #RRGGBB: alpha is off on the picker, and an environment colour is a hue, not a translucency.
+        try { EnvColorBox.Text = $"#{e.NewColor.R:X2}{e.NewColor.G:X2}{e.NewColor.B:X2}"; }
+        finally { _syncingColor = false; }
+    }
+
+    private void SyncPickerColor(Color color)
+    {
+        _syncingColor = true;
+        try { EnvColorPicker.Color = color; }
+        finally { _syncingColor = false; }
     }
 
     private ConnectionInfo BuildConnection() => new()
