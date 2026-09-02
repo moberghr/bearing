@@ -27,6 +27,15 @@ public static class SqlFolding
             // Single-line statement (no newline, or the newline sits past its content): nothing to fold.
             if (firstLineEnd < 0 || firstLineEnd >= end) continue;
 
+            // Back up over a CR so the region starts at the end of the line's *text*, never inside the line
+            // delimiter. Not cosmetic: the fold margin looks for a folding whose start lies within a line, and
+            // a document line ends at the CR — so under CRLF an offset at the LF is one past the line and the
+            // margin creates no marker for it. The section still exists and the fold commands still work,
+            // which is exactly why this hid: everything reported six foldings and the gutter was empty. Under
+            // LF the two positions coincide, which is why every LF fixture passed.
+            if (firstLineEnd > 0 && sql[firstLineEnd - 1] == '\r') firstLineEnd--;
+            if (firstLineEnd <= span.TrimmedStart) continue;   // an empty first line folds nothing
+
             regions.Add(new FoldRegion(firstLineEnd, end));
         }
         return regions;
