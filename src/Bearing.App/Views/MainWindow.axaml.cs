@@ -30,7 +30,7 @@ public partial class MainWindow : Window
     private readonly CommandPaletteHost _palette;           // command palette + quick-pick overlays
     private readonly TabNavigator _tabs;                    // visual / MRU / go-to-N tab switching
     private readonly ResultsPaneController _resultsPane;    // editor / results split visibility
-    private readonly TabStripScroller _tabScroll;           // overflowing tab strip: wheel + keep-selected-visible
+    private readonly TabStripScroller _tabScroll;           // tab strip: wheel switches tabs + keep-selected-visible
     private readonly TabStripScroller _pinnedTabScroll;      // …and the pinned row, which overflows the same way
     private readonly IReadOnlyList<string> _keymapWarnings;
     private bool _keymapWarningsShown;
@@ -74,6 +74,13 @@ public partial class MainWindow : Window
         // per row. Either row overflowing lights it, and its list holds every tab regardless.
         _tabScroll.OverflowChanged += SyncTabOverflow;
         _pinnedTabScroll.OverflowChanged += SyncTabOverflow;
+        // The wheel over either row switches tabs. One step for both, because the drawn order spans them:
+        // scrolling off the end of the pinned row continues into the strip rather than stopping at a row
+        // boundary. The selection then brings itself into view (LoadEditorFromSelectedTab), so the row
+        // follows the wheel without this having to scroll anything itself.
+        Func<int, bool> stepTab = dir => Vm?.Workspace is { } workspace && _tabs.StepSelection(workspace, dir);
+        _tabScroll.SelectionStep = stepTab;
+        _pinnedTabScroll.SelectionStep = stepTab;
         WireTabStrips();
         // The editor's FontSize is applied here rather than bound in XAML: one editor serves every tab,
         // and each tab carries its own zoom over the configured base size. The controller also owns the

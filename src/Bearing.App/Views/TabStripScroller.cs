@@ -24,8 +24,10 @@ namespace Bearing.App.Views;
 /// behaviours that a ScrollViewer does not give for free:
 /// </para>
 /// <list type="bullet">
-/// <item>the wheel scrolls the strip sideways, since there is nothing to scroll vertically and a vertical
-/// wheel over a horizontal strip should still move it;</item>
+/// <item>the wheel over the strip switches tabs (see <see cref="SelectionStep"/>), with Shift+wheel left as
+/// the pan — a vertical wheel over a horizontal strip has to mean <i>something</i>, and "the next tab" is
+/// the one people reach for it expecting (it is Firefox's and every IDE's gesture). Panning the strip is
+/// still what Shift does, and what the chevron and the selection-follows-scroll below cover;</item>
 /// <item>the selected tab is scrolled into view, so keyboard switching (Ctrl+PageUp/Down, Ctrl+Tab's MRU
 /// cycle, goto-N) cannot land on a tab that is off screen — the tabs were never lost to the keyboard, only
 /// to the eye, and this is what closes that gap;</item>
@@ -40,12 +42,27 @@ namespace Bearing.App.Views;
 /// </summary>
 internal sealed class TabStripScroller
 {
-    /// <summary>Horizontal pixels per wheel notch. About one narrow tab, so a notch reads as "next tab"
-    /// rather than as a jump.</summary>
+    /// <summary>Horizontal pixels per wheel notch for the Shift+wheel pan. About one narrow tab, so a notch
+    /// reads as "one tab along" rather than as a jump.</summary>
     private const double WheelStep = 48;
 
     private readonly ScrollViewer _scroller;
     private readonly TabStrip _strip;
+
+    /// <summary>Banks trackpad fractions so a swipe is a couple of tabs and not the whole strip; a mouse
+    /// notch arrives as ±1 and spends immediately.</summary>
+    private readonly WheelNotches _notches = new();
+
+    /// <summary>
+    /// Move the selection <c>±1</c> tab, returning whether it moved. Set by the window, which is the only
+    /// thing that knows the two rows are one strip: the drawn order spans both (<c>TabNavigator</c>), so a
+    /// wheel that runs off the end of the pinned row carries on into the unpinned one instead of stopping at
+    /// a row boundary the user never drew.
+    /// <para>
+    /// Left null the strip only pans, which is what the bare fixtures in the tests do.
+    /// </para>
+    /// </summary>
+    public Func<int, bool>? SelectionStep { get; set; }
 
     public TabStripScroller(ScrollViewer scroller, TabStrip strip)
     {
@@ -205,13 +222,42 @@ internal sealed class TabStripScroller
 
     private void OnWheel(object? sender, PointerWheelEventArgs e)
     {
-        // A tilt wheel reports X; an ordinary wheel reports Y, and over a strip that only scrolls sideways
-        // that is still what the user means. Down/away scrolls right, matching every horizontal strip.
-        var notches = e.Delta.X != 0 ? e.Delta.X : e.Delta.Y;
-        if (notches == 0) return;
-        // Handled only if the strip moved. This runs in the tunnel phase, so swallowing a wheel that did
-        // nothing would leave the gesture dead over a strip that already fits.
-        if (ScrollBy(-notches * WheelStep)) e.Handled = true;
+        // A tilt wheel reports X; an ordinary wheel reports Y, and over a strip that runs sideways that is
+        // still what the user means. Down/away means forward — the next tab, the direction the strip used to
+        // scroll.
+        var delta = e.Delta.X != 0 ? e.Delta.X : e.Delta.Y;
+        if (delta == 0) return;
+
+        // Shift is the pan: peek along a long strip without dragging the editor, the results and the
+        // connection to another tab on the way. It is the old gesture, kept rather than deleted, because
+        // moving the selection is not always what you want from a strip you are only reading.
+        if (SelectionStep is not { } step || e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            // Handled only if the strip moved. This runs in the tunnel phase, so swallowing a wheel that did
+            // nothing would leave the gesture dead over a strip that already fits.
+            if (ScrollBy(-delta * WheelStep)) e.Handled = true;
+            return;
+        }
+
+        var notches = _notches.Add(-delta);
+        if (notches == 0)
+        {
+            // A trackpad fraction, banked toward the next tab. Consumed rather than passed on: unhandled it
+            // reaches the ScrollViewer's own wheel logic, and the strip would then drift sideways under a
+            // gesture that means "switch tabs" while the selection waited for a whole notch.
+            e.Handled = true;
+            return;
+        }
+
+        // One tab at a time even for a burst, so a fast flick lands on the tab it passed through last rather
+        // than skipping the ones between — and so the end of the strip stops it (StepSelection does not wrap).
+        var direction = Math.Sign(notches);
+        var moved = false;
+        for (var i = 0; i < Math.Abs(notches); i++) moved |= step(direction);
+        // At either end nothing moved, so the wheel is left for whoever else wants it — the same rule as the
+        // pan above. Nothing else does want it: a strip whose selection cannot move that way is either at
+        // its own scroll limit or short enough to fit, so this reads as inert rather than as a dead gesture.
+        if (moved) e.Handled = true;
     }
 
     private static double Clamp(double value, double min, double max)

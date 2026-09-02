@@ -177,6 +177,35 @@ public class PinnedTabTests : IDisposable
         Assert.Same(tabs[3], workspace.SelectedTab);
     }
 
+    [Fact]
+    public async Task The_wheel_steps_across_both_rows_and_stops_at_the_ends()
+    {
+        // The wheel over a tab strip switches tabs, and the two rows are one strip to the user: scrolling off
+        // the end of the pinned row has to continue into the unpinned one. It also must not wrap — a wheel
+        // overshoots, and being thrown to the other end of the strip mid-gesture is how you lose the tab you
+        // were hunting for (that is the difference from tab.next).
+        var vm = await Project();
+        var workspace = vm.Workspace;
+        var tabs = FourTabs(workspace);
+        workspace.SetPinned(tabs[2], true);          // drawn order: [2] | [0] [1] [3]
+        var navigator = new TabNavigator(() => new Keymap([]));
+
+        workspace.SelectedTab = tabs[2];
+        Assert.True(navigator.StepSelection(workspace, +1));
+        Assert.Same(tabs[0], workspace.SelectedTab);  // out of the pinned row, into the strip
+
+        Assert.True(navigator.StepSelection(workspace, -1));
+        Assert.Same(tabs[2], workspace.SelectedTab);  // and back up into it
+
+        // At the first tab, backwards is a no-op rather than a jump to the last.
+        Assert.False(navigator.StepSelection(workspace, -1));
+        Assert.Same(tabs[2], workspace.SelectedTab);
+
+        workspace.SelectedTab = tabs[3];              // the last in drawn order
+        Assert.False(navigator.StepSelection(workspace, +1));
+        Assert.Same(tabs[3], workspace.SelectedTab);
+    }
+
     // ---- persistence ----------------------------------------------------------------------------
 
     [Fact]
