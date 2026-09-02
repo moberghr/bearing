@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
+using Bearing.App.Connections;
 using Bearing.App.Formatting;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
@@ -16,6 +17,13 @@ namespace Bearing.App.Results;
 /// parameterized <see cref="SqlWriteCommand"/>s, applies a successful save back into the grid rows,
 /// and renders values as SQL literals for preview. Also builds the FK-navigation lookup. No
 /// connection or UI state — extracted from the shell view-model as a named, testable unit.
+/// <para>
+/// Every entry point comes in two forms: a <see cref="ProviderTraits"/>-first one, which a caller holding
+/// a connection must use, and a plain one that renders PostgreSQL. The difference is not cosmetic — the
+/// identifier delimiter, the INSERT's "give me back the row I wrote" clause and the boolean literal all
+/// change with the engine — so the plain overloads exist only for the callers (and tests) that
+/// legitimately have no connection to ask.
+/// </para>
 /// </summary>
 internal static class ResultEditModel
 {
@@ -25,15 +33,22 @@ internal static class ResultEditModel
     /// applied back to that exact row (delete → remove, update → committed values, insert → RETURNING).</summary>
     public sealed record PendingChange(ChangeKind Kind, object?[] Row, SqlWriteCommand Command);
 
-    /// <summary>Turn a result set's pending state into row-tagged, ordered changes (deletes, updates, inserts).</summary>
+    /// <summary>Turn a result set's pending state into row-tagged, ordered changes (deletes, updates,
+    /// inserts), as PostgreSQL.</summary>
     public static List<PendingChange> BuildPendingChanges(ResultSetViewModel rs, EditTarget t)
+        => BuildPendingChanges(ProviderTraits.Postgres, rs, t);
+
+    /// <inheritdoc cref="BuildPendingChanges(ResultSetViewModel, EditTarget)"/>
+    public static List<PendingChange> BuildPendingChanges(
+        ProviderTraits traits, ResultSetViewModel rs, EditTarget t)
     {
         var changes = new List<PendingChange>();
+        var d = traits.Dialect;
 
         foreach (var row in rs.DeletedRows)
         {
             var keys = KeyValues(t, rs.OriginalOf(row) ?? row);
-            if (keys.Count > 0) changes.Add(new PendingChange(ChangeKind.Delete, row, DmlGenerator.Delete(t.Schema, t.Table, keys)));
+            if (keys.Count > 0) changes.Add(new PendingChange(ChangeKind.Delete, row, DmlGenerator.Delete(d, t.Schema, t.Table, keys)));
         }
         foreach (var row in rs.EditedRows)
         {
@@ -41,12 +56,12 @@ internal static class ResultEditModel
             var assignments = ChangedAssignments(rs, t, original, row);
             var keys = KeyValues(t, original);
             if (assignments.Count > 0 && keys.Count > 0)
-                changes.Add(new PendingChange(ChangeKind.Update, row, DmlGenerator.Update(t.Schema, t.Table, assignments, keys)));
+                changes.Add(new PendingChange(ChangeKind.Update, row, DmlGenerator.Update(d, t.Schema, t.Table, assignments, keys)));
         }
         foreach (var row in rs.NewRows)
         {
             var values = InsertValues(rs, t, row);
-            if (values.Count > 0) changes.Add(new PendingChange(ChangeKind.Insert, row, DmlGenerator.Insert(t.Schema, t.Table, values)));
+            if (values.Count > 0) changes.Add(new PendingChange(ChangeKind.Insert, row, DmlGenerator.Insert(d, t.Schema, t.Table, values)));
         }
         return changes;
     }
@@ -76,27 +91,39 @@ internal static class ResultEditModel
         rs.ClearPending();
     }
 
-    /// <summary>Substitute a command's @pN parameters with SQL literals in a single pass (so neither
-    /// overlapping names nor a value that contains "@pN" corrupts the rendered SQL).</summary>
+    /// <summary>Substitute a command's @pN parameters with PostgreSQL literals in a single pass (so
+    /// neither overlapping names nor a value that contains "@pN" corrupts the rendered SQL).</summary>
     public static string InlineParameters(SqlWriteCommand c)
+        => InlineParameters(ProviderTraits.Postgres, c);
+
+    /// <inheritdoc cref="InlineParameters(SqlWriteCommand)"/>
+    public static string InlineParameters(ProviderTraits traits, SqlWriteCommand c)
     {
         var byName = c.Parameters.ToDictionary(p => p.Name, p => p.Value);
         return Regex.Replace(c.Sql, @"@p\d+", m =>
-            byName.TryGetValue(m.Value, out var v) ? SqlValue.Literal(v) : m.Value);
+            byName.TryGetValue(m.Value, out var v) ? SqlValue.Literal(traits.Literals, v) : m.Value);
     }
 
     /// <summary>`select * from ref where refcol = &lt;value&gt; [and …]` with all key parts from the row.</summary>
     public static string BuildForeignKeySelect(ForeignKeyTarget t, object?[] row)
+        => BuildForeignKeySelect(ProviderTraits.Postgres, t, row);
+
+    /// <inheritdoc cref="BuildForeignKeySelect(ForeignKeyTarget, object?[])"/>
+    /// <remarks>Unlike the inline-edit preview, this string is <em>executed</em>: a bracket-quoted
+    /// identifier or a <c>1</c>/<c>0</c> boolean is the difference between a working lookup and a syntax
+    /// error, so a caller with a connection has no business calling the plain overload.</remarks>
+    public static string BuildForeignKeySelect(ProviderTraits traits, ForeignKeyTarget t, object?[] row)
     {
         var preds = new List<string>(t.RefColumns.Count);
         for (var i = 0; i < t.RefColumns.Count; i++)
         {
             var value = row[t.SourceColumnIndices[i]];
             preds.Add(value is null
-                ? $"{QuoteIdent(t.RefColumns[i])} is null"
-                : $"{QuoteIdent(t.RefColumns[i])} = {SqlValue.Literal(value)}");
+                ? $"{QuoteIdent(traits, t.RefColumns[i])} is null"
+                : $"{QuoteIdent(traits, t.RefColumns[i])} = {SqlValue.Literal(traits.Literals, value)}");
         }
-        return $"select * from {QuoteIdent(t.RefSchema)}.{QuoteIdent(t.RefTable)}\nwhere {string.Join("\n  and ", preds)};";
+        return $"select * from {QuoteIdent(traits, t.RefSchema)}.{QuoteIdent(traits, t.RefTable)}"
+             + $"\nwhere {string.Join("\n  and ", preds)};";
     }
 
     /// <summary>The committed form of an edited row: original values with the edited cells coerced to
@@ -188,6 +215,7 @@ internal static class ResultEditModel
         catch { return s; }
     }
 
-    /// <summary>Generated write SQL always quotes — nobody types over this output, so the safe form wins.</summary>
-    private static string QuoteIdent(string ident) => Bearing.Sql.PgIdentifier.Quote(ident);
+    /// <summary>Generated write SQL always quotes — nobody types over this output, so the safe form
+    /// wins. The delimiter is the engine's: <c>"..."</c> for Postgres, <c>[...]</c> for T-SQL.</summary>
+    private static string QuoteIdent(ProviderTraits traits, string ident) => traits.Dialect.Quote(ident);
 }

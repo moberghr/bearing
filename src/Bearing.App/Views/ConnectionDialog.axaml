@@ -8,36 +8,49 @@
 
   <StackPanel Margin="16" Spacing="8">
 
-    <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" >
-      <TextBlock Grid.Row="0" Grid.Column="0" Text="Name" VerticalAlignment="Center"/>
-      <TextBox   Grid.Row="0" Grid.Column="1" x:Name="NameBox" PlaceholderText="e.g. pagila (local)"/>
+    <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto">
+      <TextBlock Grid.Row="0" Grid.Column="0" Text="Engine" VerticalAlignment="Center"/>
+      <ComboBox  Grid.Row="0" Grid.Column="1" x:Name="ProviderBox" HorizontalAlignment="Stretch"
+                 SelectionChanged="OnProviderChanged"/>
 
-      <TextBlock Grid.Row="1" Grid.Column="0" Text="Host" VerticalAlignment="Center" Margin="0,6,0,0"/>
-      <TextBox   Grid.Row="1" Grid.Column="1" x:Name="HostBox" Margin="0,6,0,0"/>
+      <TextBlock Grid.Row="1" Grid.Column="0" Text="Name" VerticalAlignment="Center" Margin="0,6,0,0"/>
+      <TextBox   Grid.Row="1" Grid.Column="1" x:Name="NameBox" Margin="0,6,0,0"
+                 PlaceholderText="e.g. pagila (local)"/>
+    </Grid>
 
-      <TextBlock Grid.Row="2" Grid.Column="0" Text="Port" VerticalAlignment="Center" Margin="0,6,0,0"/>
-      <TextBox   Grid.Row="2" Grid.Column="1" x:Name="PortBox" Margin="0,6,0,0"/>
+    <!-- Host / Port / Database / User / driver options are NOT written out here: they are whatever the
+         selected provider declares (IDbProvider.ConnectionFields), so the rows are built in code from
+         Connections/ConnectionFieldModel and rebuilt when the engine changes. The code-behind only makes
+         labels and boxes; which fields exist, what they default to and how they map to ConnectionInfo is
+         the model's (§0.5, §2.3). -->
+    <StackPanel x:Name="FieldsHost" Spacing="0"/>
 
-      <TextBlock Grid.Row="3" Grid.Column="0" Text="Database" VerticalAlignment="Center" Margin="0,6,0,0"/>
-      <TextBox   Grid.Row="3" Grid.Column="1" x:Name="DatabaseBox" Margin="0,6,0,0"/>
+    <TextBlock x:Name="EndpointHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12"
+               Margin="90,2,0,0"/>
 
-      <TextBlock Grid.Row="4" Grid.Column="0" Text="User" VerticalAlignment="Center" Margin="0,6,0,0"/>
-      <TextBox   Grid.Row="4" Grid.Column="1" x:Name="UserBox" Margin="0,6,0,0"/>
+    <!-- Live, and advisory only: it names the fields the selected provider can't connect without, and
+         updates as they are filled in. It deliberately does NOT gate Save — this dialog is the only way to
+         edit an existing connection, and one saved before these fields were validated would otherwise be
+         uneditable until every complaint was cleared. -->
+    <TextBlock x:Name="ValidationHint" IsVisible="False" TextWrapping="Wrap" FontSize="12"
+               Foreground="{DynamicResource Warn.Amber}" Margin="90,2,0,0"/>
 
-      <TextBlock Grid.Row="5" Grid.Column="0" Text="Credential" VerticalAlignment="Center" Margin="0,6,0,0"/>
-      <ComboBox  Grid.Row="5" Grid.Column="1" x:Name="CredentialKindBox" Margin="0,6,0,0"
-                 HorizontalAlignment="Stretch" SelectionChanged="OnCredentialKindChanged">
-        <ComboBoxItem Content="Stored password"/>
-        <ComboBoxItem Content="Prompt each time (not saved)"/>
-        <ComboBoxItem Content="Microsoft Entra token (az login)"/>
-      </ComboBox>
+    <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto">
+      <TextBlock Grid.Row="0" Grid.Column="0" Text="Credential" VerticalAlignment="Center" Margin="0,6,0,0"/>
+      <!-- Items come from Connections/CredentialKindOptions: "Windows / integrated authentication" is
+           offered only by an engine whose driver can negotiate the OS identity. -->
+      <ComboBox  Grid.Row="0" Grid.Column="1" x:Name="CredentialKindBox" Margin="0,6,0,0"
+                 HorizontalAlignment="Stretch" SelectionChanged="OnCredentialKindChanged"/>
 
-      <TextBlock Grid.Row="6" Grid.Column="0" x:Name="PasswordLabel" Text="Password" VerticalAlignment="Center" Margin="0,6,0,0"/>
-      <TextBox   Grid.Row="6" Grid.Column="1" x:Name="PasswordBox" PasswordChar="•" Margin="0,6,0,0"/>
+      <TextBlock Grid.Row="1" Grid.Column="0" x:Name="PasswordLabel" Text="Password" VerticalAlignment="Center" Margin="0,6,0,0"/>
+      <TextBox   Grid.Row="1" Grid.Column="1" x:Name="PasswordBox" PasswordChar="&#x2022;" Margin="0,6,0,0"/>
     </Grid>
 
     <TextBlock x:Name="EntraHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,4,0,0"
                Text="Signs in via the Azure CLI (`az account get-access-token`). Run `az login` first. The token is refreshed automatically and never touches the secret store."/>
+
+    <TextBlock x:Name="IntegratedHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,4,0,0"
+               Text="Connects as the Windows account running Bearing. No password is stored, prompted for, or read from the keychain."/>
 
     <!-- No keychain: nothing is stored anywhere, so say what will happen instead — and why, which the
          code-behind fills in from what the store actually reported (SecretStorageAdvice). -->

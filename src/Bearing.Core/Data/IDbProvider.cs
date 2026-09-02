@@ -15,6 +15,39 @@ public interface IDbProvider
     /// <summary>Fields the connect dialog renders for this engine.</summary>
     IReadOnlyList<ConnectionField> ConnectionFields { get; }
 
+    /// <summary>Whether this engine can authenticate as the OS identity
+    /// (<see cref="CredentialKind.Integrated"/>). The dialog offers that credential kind only where it
+    /// works, rather than knowing per-engine which ones have it.</summary>
+    bool SupportsIntegratedAuth { get; }
+
+    /// <summary>
+    /// Whether this engine's connection factory can actually authenticate with a short-lived Entra access
+    /// token (<see cref="CredentialKind.EntraToken"/>) — that is, whether the token has somewhere to go.
+    /// <para>
+    /// A separate flag from <see cref="SupportsIntegratedAuth"/> for the same reason that one exists: the
+    /// dialog must not offer a credential kind the factory cannot honour. Postgres takes the token as the
+    /// password, so it simply works. SQL Server does not — SqlClient accepts a token only through
+    /// <c>SqlConnection.AccessToken</c> or an <c>Authentication=Active Directory…</c> mode, never as a
+    /// password keyword — so until that path is wired the entry must not appear, rather than appearing and
+    /// failing at login.
+    /// </para>
+    /// </summary>
+    bool SupportsEntraToken { get; }
+
+    /// <summary>
+    /// Place a failed statement's error (see <see cref="QueryError.SqlState"/>) on the neutral
+    /// <see cref="DbErrorKind"/> scale. The engine's codes never leave the provider: the App layer used
+    /// to sniff Postgres SQLSTATEs as strings, which quietly mislabelled every other engine's errors.
+    /// </summary>
+    DbErrorKind Classify(QueryError error);
+
+    /// <summary>
+    /// The same judgement for a thrown exception rather than a returned error — what the connect path
+    /// has, since a failed handshake never produces a <see cref="QueryError"/>. Implementations should
+    /// walk the inner-exception chain: drivers wrap the typed error more often than not.
+    /// </summary>
+    DbErrorKind ClassifyException(Exception exception);
+
     IDbConnectionFactory CreateConnectionFactory(ConnectionInfo info, string? password);
     IMetadataReader CreateMetadataReader(IDbConnectionFactory factory);
     IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory);
@@ -78,13 +111,20 @@ public interface IQueryExecutor
     IAsyncEnumerable<RowBatch> StreamRowsAsync(string sql, QueryOptions options, CancellationToken ct);
 
     /// <summary>
-    /// Total row count of a single SELECT (<c>select count(*) from (&lt;sql&gt;)</c>). Null means the query's
-    /// <em>shape</em> can't be counted (a multi-statement batch, a non-SELECT, a data-modifying CTE) and the
-    /// caller should simply show no total. A real failure — connection lost, table dropped, permission
+    /// Run one already-built count query (the caller shaped the <c>select count(*) from (…)</c> wrapper —
+    /// see <c>ISqlDialect.CountWrap</c>) and return its scalar. As with <see cref="ExecutePageAsync"/>, the
+    /// executor only runs the SQL — it doesn't shape it: the wrapper is dialect-varying text (SQL Server's
+    /// needs an <c>OFFSET 0 ROWS</c> repair before a derived table may carry an <c>ORDER BY</c>), and
+    /// generating it here would put a second copy of that text next to every driver.
+    /// <para>
+    /// Null means the query's <em>shape</em> can't be counted (a multi-statement batch, a non-SELECT, a
+    /// data-modifying CTE, or — on SQL Server — a derived table with an unnamed or duplicated column) and
+    /// the caller should simply show no total. A real failure — connection lost, table dropped, permission
     /// denied, timeout, cancellation — is <em>thrown</em>, never reported as a missing total, so the UI can
     /// say the count failed instead of silently leaving the row count blank.
+    /// </para>
     /// </summary>
-    Task<long?> CountAsync(string sql, CancellationToken ct);
+    Task<long?> CountAsync(string countSql, CancellationToken ct);
 
     /// <summary>
     /// Run one or more generated writes (UPDATE/DELETE/INSERT) in a single transaction. Returns one

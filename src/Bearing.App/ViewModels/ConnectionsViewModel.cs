@@ -10,6 +10,7 @@ using Bearing.App.Connections;
 using Bearing.App.Workspace;
 using Bearing.Core.Data;
 using Bearing.Core.Workspace;
+using Bearing.Data.Postgres;
 
 namespace Bearing.App.ViewModels;
 
@@ -24,6 +25,10 @@ namespace Bearing.App.ViewModels;
 public sealed partial class ConnectionsViewModel : ObservableObject
 {
     private readonly WorkspaceContext _ctx;
+
+    /// <summary>The engines this build ships. Exposed for the connection editor, which is provider-driven:
+    /// its picker and every field it renders come from here (<c>IDbProvider.ConnectionFields</c>).</summary>
+    public IProviderRegistry Providers => _ctx.Providers;
 
     public ConnectionsViewModel(WorkspaceContext ctx)
     {
@@ -472,7 +477,10 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         {
             Id = Guid.NewGuid(),
             Name = $"{database} (local)",
-            ProviderId = "postgres",
+            // The constant, not the string: the demo seed is Postgres because pagila is, and an id typed
+            // out by hand is an id that can drift from the provider that has to resolve it. There is
+            // deliberately no SQL Server equivalent of this seed.
+            ProviderId = PostgresProvider.ProviderId,
             Host = host,
             Port = port,
             Database = database,

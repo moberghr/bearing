@@ -189,21 +189,30 @@ public static class TableFormats
     /// parameterized (§5.4).
     /// </summary>
     public static string SqlInsert(TableBlock block, string? schema, string table)
+        => SqlInsert(block, Connections.ProviderTraits.Postgres, schema, table);
+
+    /// <inheritdoc cref="SqlInsert(TableBlock, string?, string)"/>
+    /// <remarks>The clipboard text has to be valid on the engine the rows came from: a SQL Server grid
+    /// copied with Postgres rules gave <c>true</c>/<c>false</c> for a bit column (a T-SQL error, at least
+    /// visible) and <c>'02'</c> for varbinary, which SSMS implicitly converts — so the INSERT
+    /// succeeded and stored the bytes of the six characters instead of the two intended ones.</remarks>
+    public static string SqlInsert(
+        TableBlock block, Connections.ProviderTraits traits, string? schema, string table)
     {
-        var target = schema is { Length: > 0 } ? $"{Quote(schema)}.{Quote(table)}" : Quote(table);
-        var columns = string.Join(", ", block.Columns.Select(c => Quote(c.Name)));
+        var q = traits.Dialect;
+        var target = schema is { Length: > 0 } ? $"{q.Quote(schema)}.{q.Quote(table)}" : q.Quote(table);
+        var columns = string.Join(", ", block.Columns.Select(c => q.Quote(c.Name)));
         var sb = new StringBuilder();
         for (var r = 0; r < block.Rows.Count; r++)
         {
             var values = new List<string>(block.Columns.Count);
-            for (var c = 0; c < block.Columns.Count; c++) values.Add(SqlValue.Literal(block.Value(r, c)));
+            for (var c = 0; c < block.Columns.Count; c++)
+                values.Add(SqlValue.Literal(traits.Literals, block.Value(r, c)));
             sb.Append("insert into ").Append(target).Append(" (").Append(columns)
               .Append(")\nvalues (").Append(string.Join(", ", values)).Append(");\n");
         }
         return sb.ToString();
     }
-
-    private static string Quote(string ident) => "\"" + ident.Replace("\"", "\"\"") + "\"";
 
     /// <summary>
     /// Every selected value as a comma-separated list of SQL literals, ready to paste <i>between the
@@ -217,6 +226,10 @@ public static class TableFormats
     /// </para>
     /// </summary>
     public static string InList(TableBlock block)
+        => InList(block, Connections.ProviderTraits.Postgres);
+
+    /// <inheritdoc cref="InList(TableBlock)"/>
+    public static string InList(TableBlock block, Connections.ProviderTraits traits)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var values = new List<string>();
@@ -224,7 +237,7 @@ public static class TableFormats
             for (var c = 0; c < block.Columns.Count; c++)
             {
                 if (block.Value(r, c) is not { } value) continue;   // NULL → skipped, see above
-                var literal = SqlValue.Literal(value);
+                var literal = SqlValue.Literal(traits.Literals, value);
                 if (seen.Add(literal)) values.Add(literal);
             }
         return string.Join(", ", values);

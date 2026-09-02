@@ -177,7 +177,7 @@ public sealed class ServerNodeViewModel : SchemaNodeViewModel
     public override bool IsServer => true;
     public override string? RowAccentColor => Connection.EnvironmentColor;
     public override bool ShowsConnectionState => true;
-    public override string? IconKey => "Icon.Connections"; // server / postgres
+    public override string? IconKey => "Icon.Connections"; // a server, whichever engine it runs
     public override string IconColorHex => "#6FA6E2";
 
     protected override async Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync()
@@ -331,7 +331,9 @@ public sealed class RelationNodeViewModel : SchemaNodeViewModel
     public override async Task<string> LoadDefinitionAsync(CancellationToken ct)
         => IsViewLike
             ? await _browser.GetViewDefinitionAsync(_connection, _database, _table.Id, ct)
-            : TableDdlGenerator.CreateTable(_table, _snapshot);
+            // Rendered in the connection's own dialect: DDL shown as `create table "public"."t"` for a
+            // SQL Server table would be DDL the user cannot paste back into the server it came from.
+            : TableDdlGenerator.CreateTable(ProviderTraits.For(_connection).Dialect, _table, _snapshot);
 
     private static string KindLabel(RelationKind kind) => kind switch
     {

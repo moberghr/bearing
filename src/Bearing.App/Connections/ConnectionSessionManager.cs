@@ -508,15 +508,27 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         }
     }
 
+    /// <summary>The failure message. The endpoint goes through <see cref="ConnectionEndpoint"/> because a
+    /// SQL Server named instance has no meaningful port, and printing one next to <c>HOST\INSTANCE</c> sends
+    /// the user to check a port that had nothing to do with the failure.</summary>
     private static string Describe(ConnectionInfo info, string detail)
-        => $"Could not connect to '{info.Name}' ({info.Host}:{info.Port}/{info.Database}): {detail}";
+        => $"Could not connect to '{info.Name}' ({ConnectionEndpoint.Of(info)}): {detail}";
 
     /// <summary>Compares only the fields that define the live connection; name/environment/color are cosmetic.
     /// Database is part of <see cref="SessionKey"/> and so always already equal at every call site — kept in
-    /// the comparison so the predicate is true to its name if it is ever reused off the keyed path.</summary>
+    /// the comparison so the predicate is true to its name if it is ever reused off the keyed path.
+    /// <para>
+    /// <see cref="ConnectionInfo.CredentialKind"/> belongs here because it decides <em>who</em> the pooled
+    /// connection is authenticated as, not merely how the secret was fetched: the SQL Server factory
+    /// branches on it to set <c>Integrated Security</c> and to omit the user name and password entirely.
+    /// Without it, switching a live connection from a stored password to Windows authentication left the
+    /// existing pool in place and every statement kept running as the old SQL login, while the dialog, the
+    /// record and the beacon all said otherwise.
+    /// </para></summary>
     private static bool SameConnection(ConnectionInfo a, ConnectionInfo b)
         => a.ProviderId == b.ProviderId && a.Host == b.Host && a.Port == b.Port
-           && a.Database == b.Database && a.User == b.User && SameOptions(a.Options, b.Options);
+           && a.Database == b.Database && a.User == b.User
+           && a.CredentialKind == b.CredentialKind && SameOptions(a.Options, b.Options);
 
     private static bool SameOptions(IReadOnlyDictionary<string, string> a, IReadOnlyDictionary<string, string> b)
     {

@@ -10,8 +10,9 @@ namespace Bearing.App.Connections;
 /// <summary>
 /// Resolves the secret a connection authenticates with, according to its <see cref="CredentialKind"/>:
 /// a fixed <see cref="ISecretStore"/> password, a value prompted from the user, or a freshly-minted Entra
-/// token. Prompted passwords and tokens are cached <b>in memory only</b>, keyed by connection id, for the
-/// life of the app session — never persisted. <see cref="Invalidate"/> drops a cache entry so the next
+/// token — or, for <see cref="CredentialKind.Integrated"/>, no secret at all. Prompted passwords and
+/// tokens are cached <b>in memory only</b>, keyed by connection id, for the life of the app session —
+/// never persisted. <see cref="Invalidate"/> drops a cache entry so the next
 /// resolve re-prompts / re-mints (used on auth failure and expiry eviction).
 /// </summary>
 public sealed class CredentialResolver
@@ -92,6 +93,18 @@ public sealed class CredentialResolver
                     _cache[info.Id] = cred;
                     return cred;
                 }
+
+            case CredentialKind.Integrated:
+                // The OS identity authenticates the connection, so there is nothing to resolve: the driver
+                // negotiates it (SqlClient's Integrated Security=true) and the factory deliberately sends
+                // neither user nor password. Deliberately ahead of any store or prompt code — this kind
+                // must never read the secret store, never write to it, and never ask the user for anything
+                // (§1.1). No expiry either: the process's own token is refreshed by the OS, not by us, so
+                // the session manager has no disconnect-before-expiry to schedule.
+                //
+                // Not cached, because there is nothing to cache; and a forceRefresh retry would re-mint
+                // nothing, which is why ExecutionViewModel.CanRefreshCredential excludes this kind.
+                return new Credential(null, null);
 
             case CredentialKind.EntraToken:
                 {

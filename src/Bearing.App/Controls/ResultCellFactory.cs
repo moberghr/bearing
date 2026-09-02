@@ -95,18 +95,20 @@ public sealed class ResultCellFactory
         if (result.PrimaryKeyColumns.Contains(index)) badges.Add(("PK", "Accent.Brand"));
         if (result.ForeignKeyColumns.Contains(index)) badges.Add(("FK", "Syntax.Keyword"));
         var type = result.Columns[index].DataTypeName;
-        if (ColumnKinds.IsJson(type)) badges.Add((type.ToLowerInvariant(), "Syntax.Table"));
+        if (ColumnKinds.IsDocument(type)) badges.Add((type.ToLowerInvariant(), "Syntax.Table"));
         return badges;
     }
 
     /// <summary>The width the column opens at: whatever its header and its widest loaded value need, capped
     /// (<see cref="ColumnWidths"/>). Nothing is left on the DataGrid's <c>Auto</c> sizing, which grew a
     /// column to its longest realized value and pushed the rest off screen (#30). A foreign-key or json
-    /// column also reserves room for its always-present ↗ / ⤢ glyph, so the value isn't sized into it.</summary>
+    /// column also reserves room for its always-present ↗ / ⤢ glyph, so the value isn't sized into it.
+    /// ("json column" is any document column now — xml gets the same affordance, see
+    /// <see cref="ColumnKinds.IsDocument"/>.)</summary>
     private static double InitialWidth(ResultSetViewModel result, int index)
     {
         var column = result.Columns[index];
-        var hasGlyph = result.ForeignKeyColumns.Contains(index) || ColumnKinds.IsJson(column.DataTypeName);
+        var hasGlyph = result.ForeignKeyColumns.Contains(index) || ColumnKinds.IsDocument(column.DataTypeName);
         return ColumnWidths.Initial(
             headerChars: column.Name.Length,
             headerExtra: ResultGridChrome.HeaderChromeFor(Badges(result, index).Select(b => b.Text)),
@@ -116,11 +118,11 @@ public sealed class ResultCellFactory
     }
 
     /// <summary>A value display cell: text (dimmed italic "(null)", numeric in code color), plus an
-    /// inspect (⤢) affordance for jsonb/json and any long/multiline value. Every value cell is
+    /// inspect (⤢) affordance for document columns (json/jsonb/xml) and any long/multiline value. Every value cell is
     /// selectable (single/drag/modifier-click); numeric selections drive the quick-stats bar.</summary>
     private IDataTemplate ValueCell(ResultSetViewModel result, int index, DataGrid grid)
     {
-        var isJsonCol = ColumnKinds.IsJson(result.Columns[index].DataTypeName);
+        var isJsonCol = ColumnKinds.IsDocument(result.Columns[index].DataTypeName);
         var numeric = CellStats.IsNumeric(result.Columns[index].ClrType);
         return new FuncDataTemplate<object?[]>((row, _) =>
             MakeSelectable(() => ValueContent(result, index, row, isJsonCol, numeric), result, row, index, grid));

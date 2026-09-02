@@ -49,6 +49,16 @@ public sealed class ConfirmWriteDialog : Window
                 Foreground = Res("Warn.Amber"),
                 TextWrapping = TextWrapping.Wrap,
             });
+        // Why a SELECT is being confirmed, when it is. Dimmed rather than amber: it is an explanation of
+        // the prompt's own caution, not a second warning about the statements.
+        if (request.GuardNote is { } note)
+            layout.Children.Add(new TextBlock
+            {
+                Text = note,
+                TextWrapping = TextWrapping.Wrap,
+                Opacity = 0.7,
+                FontSize = 12,
+            });
 
         // The statement list is the only part that can grow: cap it so a migration-sized batch still leaves
         // the heading and the buttons on screen (SizeToContent.Height sizes the window to whatever it needs).

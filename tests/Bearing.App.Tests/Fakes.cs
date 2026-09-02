@@ -23,6 +23,35 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
     public string DisplayName => "Fake";
     public IReadOnlyList<ConnectionField> ConnectionFields => System.Array.Empty<ConnectionField>();
 
+    /// <summary>Matches PostgresProvider (no SSPI path), so the dialog-facing behaviour a test observes
+    /// through this fake is the Postgres one — which is what <c>Id</c> already claims to be.</summary>
+    public bool SupportsIntegratedAuth => false;
+    public bool SupportsEntraToken => true;
+
+    /// <summary>The Postgres SQLSTATE rules, spelled out rather than referenced: this project has no
+    /// Npgsql reference, and a fake that classified nothing would make every classification test pass
+    /// vacuously. <c>Id</c> is "postgres", so these are the verdicts a caller should expect here.</summary>
+    public DbErrorKind Classify(QueryError error) => FromSqlState(error.SqlState);
+
+    public DbErrorKind ClassifyException(Exception exception)
+    {
+        for (Exception? e = exception; e is not null; e = e.InnerException)
+            if (e.Message.Contains("28P01", StringComparison.OrdinalIgnoreCase)
+                || e.Message.Contains("28000", StringComparison.OrdinalIgnoreCase)
+                || e.Message.Contains("authentication failed", StringComparison.OrdinalIgnoreCase))
+                return DbErrorKind.Authentication;
+        return DbErrorKind.Unknown;
+    }
+
+    private static DbErrorKind FromSqlState(string? sqlState) => sqlState switch
+    {
+        null => DbErrorKind.Unknown,
+        "57014" => DbErrorKind.Canceled,
+        "42601" or "0A000" => DbErrorKind.SyntaxOrShape,
+        _ when sqlState.StartsWith("28", StringComparison.Ordinal) => DbErrorKind.Authentication,
+        _ => DbErrorKind.Unknown,
+    };
+
     public IDbProvider Get(string providerId) => this;
     public IReadOnlyCollection<IDbProvider> All => new[] { (IDbProvider)this };
 
@@ -159,6 +188,15 @@ internal sealed class PageableExecutor : IQueryExecutor
     /// view-model built (it must skip the rows already on screen and stop at the ceiling).</summary>
     public string? LastStreamSql { get; private set; }
 
+    /// <summary>The SQL the last <see cref="ExecuteAsync"/> was asked for. Records the first-page limit the
+    /// view-model chose, which is dialect-varying (Postgres' <c>limit N</c> vs T-SQL's
+    /// <c>offset 0 rows fetch next N rows only</c>).</summary>
+    public string? LastExecuteSql { get; private set; }
+
+    /// <summary>The SQL the last page was asked for, so a test can assert the paging clause travelled with
+    /// the connection rather than defaulting to Postgres.</summary>
+    public string? LastPageSql { get; private set; }
+
     private int _served;
 
     /// <summary>Delay each page by this many milliseconds — long enough for a test to cancel mid-fetch.</summary>
@@ -188,6 +226,7 @@ internal sealed class PageableExecutor : IQueryExecutor
 
     public Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
     {
+        LastExecuteSql = sql;
         _served = 0; // a re-run starts the source query over
         return Task.FromResult<IReadOnlyList<QueryResult>>(new[] { NextPage() });
     }
@@ -199,6 +238,7 @@ internal sealed class PageableExecutor : IQueryExecutor
 
     public async Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
     {
+        LastPageSql = pageSql;
         PageCalls++;
         BeforePage?.Invoke(PageCalls);
         // Returned ahead of the token check on purpose: a *cancelled* statement also comes back this way
@@ -501,7 +541,8 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
 
     public Task<Bearing.App.Views.ConnectionDialogResult?> ShowConnectionDialogAsync(ConnectionInfo? existing, string? existingPassword,
         Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
-        Bearing.App.Services.SecretStoragePosture storage)
+        Bearing.App.Services.SecretStoragePosture storage,
+        IProviderRegistry providers)
         => Task.FromResult<Bearing.App.Views.ConnectionDialogResult?>(null);
     public Task<string?> ShowTextPromptAsync(string prompt, string initial = "") => Task.FromResult<string?>(null);
     /// <summary>Where the folder picker was told to start, per call — the projects folder, not home.</summary>

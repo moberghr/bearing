@@ -16,7 +16,8 @@ internal static class ResultSetBuilder
 {
     /// <summary>Wrap raw query results into pageable/FK-aware/editable view models (shared by run + navigation).</summary>
     public static List<ResultSetViewModel> BuildResultSets(
-        IReadOnlyList<QueryResult> results, string sql, ISchemaSnapshot? snapshot)
+        IReadOnlyList<QueryResult> results, string sql, ISchemaSnapshot? snapshot,
+        Connections.ProviderTraits? traits = null)
     {
         var pageable = results.Count == 1 && results[0].Success && results[0].Columns.Count > 0;
         return results
@@ -28,6 +29,8 @@ internal static class ResultSetBuilder
                     : EditabilityResolver.ResolveWithReason(snapshot, r.Columns);
                 var vm = new ResultSetViewModel(r, sql, pageable)
                 {
+                    // So Copy as ▸ SQL renders this engine's literals and quoting, not Postgres'.
+                    Traits = traits ?? Connections.ProviderTraits.Postgres,
                     ForeignKeyColumns = DetectForeignKeyColumns(snapshot, r.Columns),
                     PrimaryKeyColumns = DetectPrimaryKeyColumns(snapshot, r.Columns),
                     EditTarget = target,
