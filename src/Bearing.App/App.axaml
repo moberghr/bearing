@@ -135,6 +135,9 @@
     <FluentTheme />
     <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
     <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml" />
+    <!-- ColorPicker/ColorView (connection editor's environment hue). Its Fluent.xaml root is <Styles>,
+         not a ResourceDictionary, so it belongs here rather than in MergedDictionaries above. -->
+    <StyleInclude Source="avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml" />
     <!-- Completion popup in Bearing's palette — must follow the AvaloniaEdit theme to win. -->
     <StyleInclude Source="avares://Bearing.App/Themes/Completion.axaml" />
 

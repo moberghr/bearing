@@ -9,6 +9,7 @@ using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Avalonia.Input;
+using Avalonia.Media;
 using AvaloniaEdit;
 using Bearing.App.Editing;
 using Bearing.App.Formatting;
@@ -502,6 +503,89 @@ public class WiringTests : IDisposable
         Assert.True(editor.TextArea.TextView.LineTransformers.Count > before,
             "InstallSqlHighlighting added no line transformer");
     });
+
+    // ---- the connection dialog's environment presets ---------------------------------------------
+
+    [Fact]
+    public Task A_preset_relabels_another_preset_but_never_a_typed_label() => _ui.Run(() =>
+    {
+        // The colour always follows the click; the label only does when it is still one of ours. Clicking
+        // Local and then Production used to leave the connection reading "local" in red.
+        var dialog = NewConnectionDialog();
+        var env = dialog.GetVisualDescendants().OfType<TextBox>().First(t => t.Name == "EnvBox");
+        var hex = dialog.GetVisualDescendants().OfType<TextBox>().First(t => t.Name == "EnvColorBox");
+        var confirmWrites = dialog.GetVisualDescendants().OfType<CheckBox>().First(c => c.Name == "ConfirmWritesBox");
+
+        Preset(dialog, "Local");
+        Assert.Equal("local", env.Text);
+        Assert.Equal("#3FB950", hex.Text);
+
+        Preset(dialog, "Production");
+        Assert.Equal("production", env.Text);
+        Assert.Equal("#E5484D", hex.Text);
+        Assert.True(confirmWrites.IsChecked);
+
+        env.Text = "staging-eu";
+        Preset(dialog, "Staging");
+        Assert.Equal("staging-eu", env.Text);      // the user's own label survives
+        Assert.Equal("#D29922", hex.Text);         // but the hue is what they clicked
+        dialog.Close();
+    });
+
+    [Fact]
+    public Task The_colour_picker_and_the_hex_box_track_each_other() => _ui.Run(() =>
+    {
+        var dialog = NewConnectionDialog();
+        var hex = dialog.GetVisualDescendants().OfType<TextBox>().First(t => t.Name == "EnvColorBox");
+        var picker = dialog.GetVisualDescendants().OfType<ColorPicker>().First(p => p.Name == "EnvColorPicker");
+
+        // Typed (or preset) hex reaches the picker...
+        hex.Text = "#3FB950";
+        Pump(dialog);
+        Assert.Equal(Color.Parse("#3FB950"), picker.Color);
+
+        // ...and a pick writes the value back in the #RRGGBB the record stores, without the guard letting
+        // the round trip re-enter and undo it.
+        picker.Color = Color.Parse("#D29922");
+        Pump(dialog);
+        Assert.Equal("#D29922", hex.Text);
+        Assert.Equal(Color.Parse("#D29922"), picker.Color);
+
+        // The swatch is the picker's button content, bound to the box — so it shows what will be saved.
+        var swatch = dialog.GetVisualDescendants().OfType<Border>().First(b => b.Name == "ColorSwatch");
+        Assert.Equal(Color.Parse("#D29922"), Assert.IsType<SolidColorBrush>(swatch.Background).Color);
+        dialog.Close();
+    });
+
+    [Fact]
+    public Task Opening_the_swatch_builds_the_picker() => _ui.Run(() =>
+    {
+        // What a new package's theme include can break, and it breaks at open time: the flyout body and its
+        // primitives all resolve out of ColorPicker's own Fluent dictionary, merged in App.axaml.
+        var dialog = NewConnectionDialog();
+        var picker = dialog.GetVisualDescendants().OfType<ColorPicker>().First(p => p.Name == "EnvColorPicker");
+        var button = picker.GetVisualDescendants().OfType<DropDownButton>().First();
+
+        var flyout = Assert.IsType<Flyout>(button.Flyout);
+        flyout.ShowAt(button);
+        Pump(dialog);
+        Assert.True(flyout.IsOpen, "the picker's flyout did not open");
+
+        // Present and *templated*: an unresolved control theme would leave the spectrum an empty shell
+        // rather than throw, so the visual children are the part worth asserting.
+        var spectrum = ((Control)flyout.Content!).GetVisualDescendants().OfType<ColorSpectrum>().First();
+        Assert.NotEmpty(spectrum.GetVisualChildren());
+        flyout.Hide();
+        dialog.Close();
+    });
+
+    private static void Preset(Window dialog, string label)
+    {
+        var button = dialog.GetVisualDescendants().OfType<Button>()
+            .First(b => b.Content as string == label);
+        button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Pump(dialog);
+    }
 
     private static ConnectionDialog NewConnectionDialog()
     {
