@@ -16,6 +16,12 @@ public sealed partial class CompletionEngine : ICompletionEngine
     {
         caretOffset = Math.Clamp(caretOffset, 0, sql.Length);
 
+        // Nothing in the catalog or the grammar belongs inside 'text' — it is data, and a popup over it is
+        // noise you have to dismiss. Double-quoted spans are deliberately still completed: those are quoted
+        // *identifiers*, which is precisely where a table or column name goes.
+        if (SqlStringLiterals.Contains(sql, caretOffset))
+            return new CompletionResult(Array.Empty<Suggestion>(), caretOffset, 0);
+
         var parsed = PgParsing.Create(sql);
         parsed.Tokens.Fill();
         var caret = ResolveCaret(parsed.Tokens, caretOffset);
