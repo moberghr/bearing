@@ -221,12 +221,20 @@ public class ShellTabTests
         workspace.SetPinned(kept, true);
         shell.Pump();
 
-        // The ✕ is a 16x16 transparent border in the unpinned template; the pinned one has none.
-        var closers = Strip(shell, "PinnedTabStrip")
+        // Found by Tag, which is what the production code keys on (IsCloseAffordance). This used to count
+        // any 16x16 border and broke the moment the row gained a pin toggle of the same size — a dimension
+        // is not an identity, and the proxy outlived its accuracy.
+        var affordances = Strip(shell, "PinnedTabStrip")
             .GetVisualDescendants()
             .OfType<Border>()
-            .Count(b => b is { Width: 16, Height: 16 });
-        Assert.Equal(0, closers);
+            .Select(b => b.Tag as string)
+            .Where(t => t is not null)
+            .ToList();
+
+        Assert.DoesNotContain("close", affordances);
+        // …and the row does have the one affordance it needs: the pinned template has no ✕ by design, so
+        // unpinning is the only way out of it, and it must be reachable by mouse.
+        Assert.Contains("pin", affordances);
     });
 
     /// <summary>
@@ -520,4 +528,186 @@ public class ShellTabTests
     /// history preview is one — so taking the first is a coin toss.</summary>
     private static TextEditor Editor(ShellHarness shell)
         => shell.Window.GetVisualDescendants().OfType<TextEditor>().First(e => e.Name == "Editor");
+
+    // ---- the pin toggle ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// The pin is hidden until the pointer is on its tab, and a pinned tab keeps its pin regardless.
+    /// <para>
+    /// Hover-only because always-visible pins would put a permanent mark on every tab of a strip that was
+    /// deliberately narrowed; kept visible while pinned because that row's pin is the only thing saying why
+    /// the row exists, and the only place the unpin action lives.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public Task The_pin_is_revealed_by_hovering_its_tab() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(The_pin_is_revealed_by_hovering_its_tab));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        var first = workspace.NewTab("-- one");
+        var second = workspace.NewTab("-- two");
+        workspace.SelectedTab = first;
+        shell.Pump();
+
+        Assert.All(Pins(shell), pin => Assert.Equal(0, pin.Opacity));
+
+        Hover(shell, second);
+
+        Assert.True(Pin(shell, second).Opacity > 0, "hovering a tab did not reveal its pin");
+        Assert.Equal(0, Pin(shell, first).Opacity);
+        // An invisible 16px target would otherwise swallow presses aimed at the tab itself.
+        Assert.False(Pin(shell, first).IsHitTestVisible);
+    });
+
+    [Fact]
+    public Task A_pinned_tabs_pin_stays_visible_without_hovering() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(A_pinned_tabs_pin_stays_visible_without_hovering));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        var kept = workspace.NewTab("-- kept");
+        workspace.NewTab("-- other");
+        workspace.SetPinned(kept, true);
+        shell.Pump();
+
+        var pin = Pin(shell, kept);
+        Assert.True(pin.Opacity > 0, "a pinned tab's pin is invisible");
+        Assert.True(pin.IsHitTestVisible);
+        Assert.Contains("pinned", pin.Classes);
+    });
+
+    [Fact]
+    public Task Clicking_the_pin_pins_the_tab_without_selecting_it() => _ui.Run(async () =>
+    {
+        // Pinning a tab you are not on is an ordinary thing to want, and dragging the selection along with
+        // it would be a surprise — which is why the strip's tunnel handler has to leave this press alone.
+        using var shell = await ShellHarness.ShowAsync(nameof(Clicking_the_pin_pins_the_tab_without_selecting_it));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        var selected = workspace.NewTab("-- selected");
+        var other = workspace.NewTab("-- other");
+        workspace.SelectedTab = selected;
+        shell.Pump();
+
+        Hover(shell, other);
+        PressWith(shell, Pin(shell, other), new Point(8, 8), MouseButton.Left);
+
+        Assert.True(other.IsPinned, "the pin did not pin the tab");
+        Assert.Same(selected, workspace.SelectedTab);
+        Assert.Contains(other, workspace.PinnedTabs);
+    });
+
+    [Fact]
+    public Task Clicking_a_pinned_tabs_pin_unpins_it() => _ui.Run(async () =>
+    {
+        // The pinned row has no ✕ by design, so this toggle is the only mouse route out of it.
+        using var shell = await ShellHarness.ShowAsync(nameof(Clicking_a_pinned_tabs_pin_unpins_it));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        var kept = workspace.NewTab("-- kept");
+        workspace.NewTab("-- other");
+        workspace.SetPinned(kept, true);
+        shell.Pump();
+
+        PressWith(shell, Pin(shell, kept), new Point(8, 8), MouseButton.Left);
+
+        Assert.False(kept.IsPinned);
+        Assert.Contains(kept, workspace.UnpinnedTabs);
+    });
+
+    [Fact]
+    public Task A_middle_press_on_the_pin_does_not_pin() => _ui.Run(async () =>
+    {
+        // Middle-click anywhere on a header is the close gesture. The pin takes the left button only, the
+        // same rule the ✕ follows (#66) — otherwise a middle-click aimed at closing would pin instead.
+        using var shell = await ShellHarness.ShowAsync(nameof(A_middle_press_on_the_pin_does_not_pin));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        var first = workspace.NewTab("-- one");
+        var second = workspace.NewTab("-- two");
+        workspace.SelectedTab = first;
+        shell.Pump();
+
+        Hover(shell, second);
+        PressWith(shell, Pin(shell, second), new Point(8, 8), MouseButton.Middle);
+
+        Assert.False(second.IsPinned, "a middle press on the pin pinned the tab");
+    });
+
+    private static System.Collections.Generic.List<Border> Pins(ShellHarness shell)
+        => shell.Window.GetVisualDescendants().OfType<Border>()
+            .Where(b => b.Tag as string == "pin").ToList();
+
+    private static Border Pin(ShellHarness shell, EditorTabViewModel tab)
+        => Pins(shell).First(b => ReferenceEquals(b.DataContext, tab));
+
+    /// <summary>Move the pointer onto a tab's header, which is what reveals its pin.</summary>
+    private static void Hover(ShellHarness shell, EditorTabViewModel tab)
+    {
+        var item = shell.Window.GetVisualDescendants().OfType<TabStripItem>()
+            .First(i => ReferenceEquals(i.DataContext, tab));
+        var centre = item.TranslatePoint(new Point(item.Bounds.Width / 2, item.Bounds.Height / 2), shell.Window)
+                     ?? throw new InvalidOperationException("the tab is not in the window");
+        shell.Window.MouseMove(centre);
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+    }
+
+    // ---- double-click the empty strip -------------------------------------------------------------
+
+    /// <summary>
+    /// A double-click on the empty part of the strip opens a tab, as every browser does.
+    /// <para>
+    /// Raised on the scroller, which is where that empty space lives: with few tabs the TabStrip is only as
+    /// wide as its items, so everything to the right of the last tab belongs to the scroller around it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public Task A_double_click_on_the_empty_strip_opens_a_tab() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(A_double_click_on_the_empty_strip_opens_a_tab));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        workspace.SelectedTab = workspace.NewTab("-- one");
+        shell.Pump();
+        var before = workspace.Tabs.Count;
+
+        Row(shell, "TabScroll").RaiseEvent(new TappedEventArgs(Control.DoubleTappedEvent, null!));
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(before + 1, workspace.Tabs.Count);
+    });
+
+    /// <summary>
+    /// …and a double-click on a tab still renames it rather than opening one.
+    /// <para>
+    /// The gesture on a tab already meant "rename" (#39), and the new handler sits on an ancestor, so a
+    /// double-click on a header reaches both. Without the source guard it would start a rename and then open
+    /// a tab on top of it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public Task A_double_click_on_a_tab_renames_it_and_opens_nothing() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(A_double_click_on_a_tab_renames_it_and_opens_nothing));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        var only = workspace.NewTab("-- one");
+        workspace.SelectedTab = only;
+        shell.Pump();
+        var before = workspace.Tabs.Count;
+
+        var item = shell.Window.GetVisualDescendants().OfType<TabStripItem>()
+            .First(i => ReferenceEquals(i.DataContext, only));
+        var header = item.GetVisualDescendants().OfType<TextBlock>().First();
+        header.RaiseEvent(new TappedEventArgs(Control.DoubleTappedEvent, null!));
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(before, workspace.Tabs.Count);
+        Assert.True(only.IsRenaming, "a double-click on a tab no longer starts a rename");
+    });
 }

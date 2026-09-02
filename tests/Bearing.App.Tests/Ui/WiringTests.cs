@@ -448,6 +448,36 @@ public class WiringTests : IDisposable
         return (combo, note);
     }
 
+    // ---- scrollbars sit beside content, not on top of it ------------------------------------------
+
+    /// <summary>
+    /// The settings list's scrollbar takes its own column instead of floating over the rows.
+    /// <para>
+    /// Avalonia's default is an auto-hiding overlay, which drew the bar straight through the <c>pt</c> beside
+    /// both font-size spinners and crowded every checkbox in the list. Reported as "covering text", and the
+    /// same call the results grid already made for the same reason.
+    /// </para>
+    /// <para>
+    /// Asserted on the property rather than on pixels: what the bar looks like is eyeball QA (§4.3), but
+    /// whether it reserves space is a fact about layout. The rendered check that it no longer crosses the
+    /// unit label was done by capture.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public Task The_settings_list_reserves_room_for_its_scrollbar() => _ui.Run(() =>
+    {
+        var (window, _) = OpenSettings("");
+
+        // Identified by its content, not by its scrollbar settings: the category list and the combo boxes
+        // bring ScrollViewers of their own, and one of those also disables horizontal scrolling.
+        var body = window.GetVisualDescendants().OfType<ScrollViewer>()
+            .First(v => v.Content is StackPanel { Children.Count: > 3 });
+
+        Assert.False(ScrollViewer.GetAllowAutoHide(body),
+            "the settings scrollbar auto-hides, so it floats over the rows instead of taking a column");
+        window.Close();
+    });
+
     // ---- syntax highlighting: the grammar is installed -------------------------------------------
 
     [Fact]

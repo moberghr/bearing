@@ -74,6 +74,20 @@ public partial class MainWindow
         => source is Visual visual
            && visual.FindAncestorOfType<Border>(includeSelf: true) is { Tag: "close" };
 
+    /// <summary>
+    /// Whether a pressed visual is (or is inside) a tab's pin toggle.
+    /// <para>
+    /// Separate from <see cref="IsCloseAffordance"/> rather than folded into one "is an affordance" check,
+    /// because the two do different things to the selection: closing must <b>not</b> select the tab first
+    /// (#87's neighbour rule would then pick from the wrong index), while pinning a tab you are not on is a
+    /// perfectly ordinary thing to want and selecting it would be a surprise. Both need the strip's tunnel
+    /// handler to leave them alone; only the reason differs.
+    /// </para>
+    /// </summary>
+    private static bool IsPinAffordance(object? source)
+        => source is Visual visual
+           && visual.FindAncestorOfType<Border>(includeSelf: true) is { Tag: "pin" };
+
     /// <summary>The tab a pressed visual belongs to, found by walking up to its container.</summary>
     private static (Control Target, EditorTabViewModel Tab)? Tab(object? source)
         => source is Visual visual
@@ -127,6 +141,21 @@ public partial class MainWindow
         Editor.TextArea.Focus();
     }
 
+    /// <summary>
+    /// The tab's pin toggle: pin an unpinned tab, unpin a pinned one.
+    /// <para>
+    /// Left button only, matching the ✕ — a right-click here is opening the tab's context menu (which has
+    /// the same action as a menu item), and a middle-click is the header's close gesture.
+    /// </para>
+    /// </summary>
+    private void OnPinTabPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is not Control { DataContext: EditorTabViewModel tab } target) return;
+        if (!TabPointerGestures.ActivatesCloseButton(e.GetCurrentPoint(target).Properties.PointerUpdateKind)) return;
+        e.Handled = true;
+        Vm?.Workspace.SetPinned(tab, !tab.IsPinned);
+    }
+
     private async void OnCloseTabPressed(object? sender, PointerPressedEventArgs e)
     {
         if (sender is not Control { DataContext: EditorTabViewModel tab } target) return;
@@ -161,6 +190,12 @@ public partial class MainWindow
         // one target it most obviously aims at, while working two pixels away.
         if (IsCloseAffordance(e.Source)
             && TabPointerGestures.ActivatesCloseButton(PressKind(e))) return;
+        // Likewise the pin toggle, which has its own handler. Different reason from the ✕ above: pinning a
+        // tab you are not currently on is an ordinary thing to want, and dragging the selection along with
+        // it would be a surprise — a middle-click on the pin is still the header's close gesture, so the
+        // same left-button-only condition applies.
+        if (IsPinAffordance(e.Source)
+            && TabPointerGestures.ActivatesCloseButton(PressKind(e))) return;
         if (Tab(e.Source) is not (var target, var tab)) return;
         SelectTabFromHeader(target, tab, e);
         if (!TabPointerGestures.ClosesTab(e.GetCurrentPoint(target).Properties.PointerUpdateKind)) return;
@@ -178,6 +213,22 @@ public partial class MainWindow
     private void OnTabHeaderDoubleTapped(object? sender, TappedEventArgs e)
     {
         if (sender is Control { DataContext: EditorTabViewModel tab }) BeginTabRename(tab);
+    }
+
+    /// <summary>
+    /// A double-click on the empty part of the tab strip opens a new tab, as every browser does.
+    /// <para>
+    /// Guarded on the source, because this is wired to the strip's scroller and a double-click on a tab
+    /// bubbles up through it — that gesture already means "rename this tab" (#39), and both firing would
+    /// rename a tab and then open another one on top of the rename.
+    /// </para>
+    /// </summary>
+    private void OnTabStripEmptyDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (e.Source is Visual source && source.FindAncestorOfType<TabStripItem>(includeSelf: true) is not null)
+            return;
+        e.Handled = true;
+        NewTabAndFocus();   // the same call the + button makes, so focus lands in the new buffer
     }
 
     /// <summary>

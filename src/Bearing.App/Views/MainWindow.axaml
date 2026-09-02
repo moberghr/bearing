@@ -442,6 +442,29 @@
                   <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
                   <Setter Property="Opacity" Value="1"/>
                 </Style>
+                <!-- The pin toggle is hover-only: always-visible pins on every tab would put a permanent
+                     mark on a strip we deliberately narrowed, and Chrome and VS Code both reveal their
+                     equivalents this way. Hidden by opacity rather than IsVisible so the tab's width does
+                     not change under the pointer — a strip that reflows as you move across it is worse than
+                     one with a quiet glyph. IsHitTestVisible follows, or an invisible 16px target would
+                     still swallow presses aimed at the tab. -->
+                <Style Selector="Border.tabpin">
+                  <Setter Property="Opacity" Value="0"/>
+                  <Setter Property="IsHitTestVisible" Value="False"/>
+                </Style>
+                <Style Selector="TabStripItem:pointerover Border.tabpin">
+                  <Setter Property="Opacity" Value="0.75"/>
+                  <Setter Property="IsHitTestVisible" Value="True"/>
+                </Style>
+                <Style Selector="TabStripItem:pointerover Border.tabpin:pointerover">
+                  <Setter Property="Opacity" Value="1"/>
+                </Style>
+                <!-- A pinned tab keeps its pin visible: it is the only thing on that row saying why the row
+                     exists, and the row is also the only place the unpin action lives. -->
+                <Style Selector="TabStripItem Border.tabpin.pinned">
+                  <Setter Property="Opacity" Value="0.85"/>
+                  <Setter Property="IsHitTestVisible" Value="True"/>
+                </Style>
                 <!-- Active tab: filled with the editor surface + a 2px top accent in ConnectionBrush. -->
                 <Style Selector="TabStripItem:selected">
                   <Setter Property="Background" Value="{DynamicResource Bg.Editor}"/>
@@ -521,7 +544,25 @@
                                                  State="{Binding ConnectionState}"
                                                  ToolTip.Tip="{Binding ConnectionDisplay}"
                                                  IsVisible="{Binding ConnectionDisplay, Converter={x:Static ObjectConverters.IsNotNull}}"/>
-                    </StackPanel>
+                                          <!-- Pin toggle (Tag names it for the strip's tunnel handler, as the ✕ does). Revealed on hover
+                           by the TabStripItem:pointerover style below, so a strip at rest stays as quiet as it was
+                           while the action stops being keyboard- and right-click-only. Filled head when pinned,
+                           hollow when not: the same silhouette-carries-the-state rule as the connection beacon. -->
+                      <Border Background="Transparent" Cursor="Hand" Width="16" Height="16" Tag="pin"
+                              Margin="6,0,0,0" VerticalAlignment="Center" Classes="tabpin"
+                              Classes.pinned="{Binding IsPinned}"
+                              ToolTip.Tip="{Binding PinTooltip}" PointerPressed="OnPinTabPressed">
+                        <Panel Width="10" Height="10">
+                          <Ellipse Width="6" Height="6" HorizontalAlignment="Center" VerticalAlignment="Top"
+                                   Stroke="#79838F" StrokeThickness="1.3"
+                                   IsVisible="{Binding !IsPinned}"/>
+                          <Ellipse Width="6" Height="6" HorizontalAlignment="Center" VerticalAlignment="Top"
+                                   Fill="#79838F" IsVisible="{Binding IsPinned}"/>
+                          <Rectangle Width="1.3" Height="4" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                                     Fill="#79838F"/>
+                        </Panel>
+                      </Border>
+                      </StackPanel>
                   </DataTemplate>
                 </TabStrip.ItemTemplate>
               </TabStrip>
@@ -539,8 +580,13 @@
                     Width="40" Padding="0" Margin="6,0,0,0" IsVisible="False"
                     HorizontalContentAlignment="Center" VerticalAlignment="Center"
                     ToolTip.Tip="Show all tabs (Ctrl+E)"/>
+            <!-- Double-click the empty part of the strip to open a tab, as every browser does. Wired on the
+                 scroller rather than the TabStrip: with few tabs the strip is only as wide as its items, so
+                 the empty space to the right belongs to the scroller. The handler ignores double-clicks that
+                 came from a tab, which already mean "rename". -->
             <ScrollViewer x:Name="TabScroll" HorizontalScrollBarVisibility="Hidden"
-                          VerticalScrollBarVisibility="Disabled">
+                          VerticalScrollBarVisibility="Disabled"
+                          DoubleTapped="OnTabStripEmptyDoubleTapped">
             <TabStrip x:Name="TabStrip" ItemsSource="{Binding Workspace.UnpinnedTabs}"
                       Classes.dormant="{Binding Workspace.SelectionIsPinned}"
                       SelectionChanged="OnTabStripSelectionChanged">
@@ -597,6 +643,24 @@
                                                State="{Binding ConnectionState}"
                                                ToolTip.Tip="{Binding ConnectionDisplay}"
                                                IsVisible="{Binding ConnectionDisplay, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+                    <!-- Pin toggle (Tag names it for the strip's tunnel handler, as the ✕ does). Revealed on hover
+                         by the TabStripItem:pointerover style below, so a strip at rest stays as quiet as it was
+                         while the action stops being keyboard- and right-click-only. Filled head when pinned,
+                         hollow when not: the same silhouette-carries-the-state rule as the connection beacon. -->
+                    <Border Background="Transparent" Cursor="Hand" Width="16" Height="16" Tag="pin"
+                            Margin="6,0,0,0" VerticalAlignment="Center" Classes="tabpin"
+                            Classes.pinned="{Binding IsPinned}"
+                            ToolTip.Tip="{Binding PinTooltip}" PointerPressed="OnPinTabPressed">
+                      <Panel Width="10" Height="10">
+                        <Ellipse Width="6" Height="6" HorizontalAlignment="Center" VerticalAlignment="Top"
+                                 Stroke="#79838F" StrokeThickness="1.3"
+                                 IsVisible="{Binding !IsPinned}"/>
+                        <Ellipse Width="6" Height="6" HorizontalAlignment="Center" VerticalAlignment="Top"
+                                 Fill="#79838F" IsVisible="{Binding IsPinned}"/>
+                        <Rectangle Width="1.3" Height="4" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                                   Fill="#79838F"/>
+                      </Panel>
+                    </Border>
                     <!-- Tag names it for the strip-level press handler, which tunnels and so would otherwise
                          select this tab on its way to closing it. -->
                     <Border Background="Transparent" Cursor="Hand" Width="16" Height="16" Tag="close"

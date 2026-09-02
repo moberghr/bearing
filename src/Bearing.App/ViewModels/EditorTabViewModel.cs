@@ -137,7 +137,13 @@ public sealed partial class EditorTabViewModel : ObservableObject
     /// position there, so the churn of scratch buffers below never moves the scripts you keep coming back
     /// to (#67) — and it cannot drift off the right edge as new tabs open.
     /// </summary>
-    [ObservableProperty] private bool _isPinned;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PinTooltip))]
+    private bool _isPinned;
+
+    /// <summary>Hover text for the tab's pin toggle. Carries the gesture, because the toggle exists to make
+    /// a feature discoverable that was previously only reachable by right-click, Alt+P or the palette.</summary>
+    public string PinTooltip => IsPinned ? "Unpin tab (Alt+P)" : "Pin tab (Alt+P)";
 
     /// <summary>Begin a run: publish the busy flag and a fresh cancellation source, returning its token.
     /// The caller has already ensured this tab isn't already running (one operation per tab).</summary>

@@ -71,6 +71,12 @@ public sealed class SettingsWindow : Window
             Margin = new Thickness(14, 0, 0, 0),
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
         };
+        // The bar gets its own column instead of floating over the rows. Avalonia's default is an
+        // auto-hiding overlay, which drew the scrollbar straight through the "pt" beside the two font-size
+        // spinners and crowded every checkbox in the list. A settings list is long enough that the bar is up
+        // whenever the window is open, so there is nothing to gain from hiding it and a unit label to lose.
+        // Same call the results grid already makes for the same reason (ResultGridChrome).
+        ScrollViewer.SetAllowAutoHide(scroll, false);
         Grid.SetColumn(scroll, 1);
         body.Children.Add(_categories);
         body.Children.Add(scroll);
