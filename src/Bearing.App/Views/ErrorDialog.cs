@@ -56,6 +56,9 @@ public sealed class ErrorDialog : Window
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
             VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
         };
+        // Own column: this holds a stack trace someone is reading to the end, and an overlay bar covers the
+        // right of every line it crosses.
+        ScrollViewer.SetAllowAutoHide(scroller, false);
 
         var copy = new Button { Content = "Copy details" };
         copy.Click += async (_, _) =>

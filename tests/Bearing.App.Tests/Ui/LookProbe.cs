@@ -259,6 +259,13 @@ public class LookProbe
                 Pump(settings);
                 Write(settings, dir, file);
             }
+
+            // And the whole list, unfiltered, which is the only state that actually scrolls — the three
+            // captures above narrow to a handful of rows, so the scrollbar never appears in them. Reported:
+            // it sits on top of the rightmost text rather than beside it.
+            Search(settings, "");
+            Pump(settings);
+            Write(settings, dir, "settings-full.png");
             settings.Close();
         });
     }

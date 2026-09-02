@@ -53,6 +53,10 @@ public sealed class ReleaseNotesDialog : Window
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         };
+        // Own column rather than an overlay. This is the dialog shown once after every update, and the notes
+        // are wrapped prose across the full width — a bar over the last characters of each line is the worst
+        // place to have one.
+        ScrollViewer.SetAllowAutoHide(scroller, false);
 
         var close = new Button
         {

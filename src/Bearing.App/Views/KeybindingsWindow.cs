@@ -65,7 +65,11 @@ public sealed class KeybindingsWindow : Window
         var root = new DockPanel { LastChildFill = true, Margin = new Thickness(12) };
         DockPanel.SetDock(footer, Dock.Bottom);
         root.Children.Add(footer);
-        root.Children.Add(new ScrollViewer { Content = _list });
+        // Own column rather than an overlay, so the bar cannot sit over the gesture text each row ends
+        // with — the same defect reported in the settings list, whose rows end in a unit label.
+        var scroller = new ScrollViewer { Content = _list };
+        ScrollViewer.SetAllowAutoHide(scroller, false);
+        root.Children.Add(scroller);
         Content = root;
 
         // Tunnel so a captured Enter/Space is claimed before the default (Save) button acts on it.
