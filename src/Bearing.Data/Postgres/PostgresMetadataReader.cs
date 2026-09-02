@@ -177,6 +177,222 @@ public sealed class PostgresMetadataReader : IMetadataReader
     public Task<string> GetRoutineDefinitionAsync(long routineId, CancellationToken ct)
         => ScalarTextAsync($"select pg_get_functiondef({routineId})", ct);
 
+    /// <summary>
+    /// One relation's constraints, indexes and triggers (#46). Three reads on one connection rather than
+    /// three round trips: they are always wanted together, because what the tree does with them is build the
+    /// folders under a table the user just expanded.
+    /// </summary>
+    public async Task<TableDetails> GetTableDetailsAsync(long tableId, CancellationToken ct)
+    {
+        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
+        var constraints = await ReadConstraintsAsync(conn, tableId, ct).ConfigureAwait(false);
+        var indexes = await ReadIndexesAsync(conn, tableId, ct).ConfigureAwait(false);
+        var triggers = await ReadTriggersAsync(conn, tableId, ct).ConfigureAwait(false);
+        return new TableDetails(constraints, indexes, triggers);
+    }
+
+    /// <summary>
+    /// Every relation's size in this database (#76), in one pass. The three size functions are separate calls
+    /// per relation but a single query overall — Postgres has no bulk form, and a round trip per table would
+    /// be far worse than a wider one.
+    /// </summary>
+    public async Task<IReadOnlyList<RelationSize>> GetRelationSizesAsync(CancellationToken ct)
+    {
+        // pg_total_relation_size stats files per relation, so this is the expensive read in the app. Only
+        // the relation kinds that have storage: a view has none, and asking costs the same as asking for a
+        // table. reltuples is -1 on a never-analysed table, which the mapping turns into null rather than
+        // letting a negative row count reach a label.
+        const string sql = """
+            select c.oid::bigint,
+                   pg_total_relation_size(c.oid)::bigint,
+                   pg_table_size(c.oid)::bigint,
+                   pg_indexes_size(c.oid)::bigint,
+                   coalesce(pg_total_relation_size(c.reltoastrelid), 0)::bigint,
+                   c.reltuples::bigint
+            from pg_class c
+            join pg_namespace n on n.oid = c.relnamespace
+            where c.relkind in ('r','m','f','p','t')
+              and n.nspname not in ('pg_catalog','information_schema')
+              and n.nspname not like 'pg\_temp%' and n.nspname not like 'pg\_toast%'
+            """;
+        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+        var list = new List<RelationSize>();
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+        {
+            var rows = r.GetInt64(5);
+            list.Add(new RelationSize(
+                TableId: r.GetInt64(0),
+                TotalBytes: r.GetInt64(1),
+                TableBytes: r.GetInt64(2),
+                IndexBytes: r.GetInt64(3),
+                ToastBytes: r.GetInt64(4),
+                // -1 means "never analysed". A row count of minus one is not a row count.
+                EstimatedRows: rows < 0 ? null : rows));
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// Every database's size (#76). Guarded per row: <c>pg_database_size</c> raises for a database the caller
+    /// cannot connect to, so it is only called where <c>has_database_privilege</c> says it will work — one
+    /// inaccessible database must not cost the sizes of the rest, and an exception per row would.
+    /// </summary>
+    public async Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(CancellationToken ct)
+    {
+        const string sql = """
+            select d.datname,
+                   case when has_database_privilege(d.datname, 'CONNECT')
+                        then pg_database_size(d.datname)::bigint
+                   end
+            from pg_database d
+            where d.datistemplate = false
+            order by d.datname
+            """;
+        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+        var list = new List<DatabaseSize>();
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+            list.Add(new DatabaseSize(r.GetString(0), r.IsDBNull(1) ? null : r.GetInt64(1)));
+        return list;
+    }
+
+    private static async Task<List<ConstraintInfo>> ReadConstraintsAsync(
+        NpgsqlConnection conn, long tableId, CancellationToken ct)
+    {
+        // pg_get_constraintdef rather than a reassembly from catalog columns: a CHECK body cannot be rebuilt
+        // from them at all, and where it could be, the server's own text is the one that matches the table.
+        // contype 'n' is excluded: PostgreSQL 18 stores every NOT NULL as a real pg_constraint row, so a
+        // three-column table reports three of them (verified on 18.3; 17.10 reports none). The column rows already say "not null", and listing them
+        // here would bury the table's actual constraints under one node per column and inflate the folder's
+        // count with information already on screen.
+        const string sql = """
+            select con.oid::bigint, con.conname, con.contype::text,
+                   coalesce(con.conkey, '{}')::int[], pg_get_constraintdef(con.oid, true)
+            from pg_constraint con
+            where con.conrelid = $1 and con.contype <> 'n'
+            order by case con.contype when 'p' then 0 when 'u' then 1 when 'f' then 2 when 'c' then 3 else 4 end,
+                     con.conname
+            """;
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue(tableId);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+        var list = new List<ConstraintInfo>();
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+        {
+            list.Add(new ConstraintInfo(
+                Id: r.GetInt64(0),
+                Name: r.GetString(1),
+                Kind: MapConType(r.GetString(2)[0]),
+                Ordinals: r.GetFieldValue<int[]>(3),
+                Definition: r.IsDBNull(4) ? "" : r.GetString(4)));
+        }
+        return list;
+    }
+
+    private static async Task<List<IndexInfo>> ReadIndexesAsync(
+        NpgsqlConnection conn, long tableId, CancellationToken ct)
+    {
+        // The pg_constraint join is narrowed three ways, and each one matters. conrelid = indrelid and
+        // contype in (p,u,x): a FOREIGN KEY also sets conindid, pointing at the *referenced* table's index —
+        // so an unrestricted join both duplicated a parent table's index once per key referencing it and
+        // marked a hand-made unique index as constraint-owned, which then vanished from generated DDL and
+        // took the FK depending on it with it.
+        //
+        // indkey spans indnatts, so it includes INCLUDE (non-key) columns; only the first indnkeyatts of them
+        // are the key the planner can search on. Reporting all of them made `create index … (a) include (b)`
+        // read as a two-column key, which is the one thing an index row must not misstate.
+        //
+        // indkey is an int2vector, and casting one to an array keeps its **zero**-based bounds — `[0:0]={1}`,
+        // which is not an int[] as far as a client is concerned. Rebuilding it with array_agg over unnest
+        // gives an ordinary 1-based array, and drops the 0 entries while it is there: a 0 in indkey marks an
+        // expression key rather than a column, and an ordinal that points at no column would resolve to the
+        // wrong name. An index on nothing but expressions therefore reports no ordinals at all, which is
+        // correct — its definition is what says what it covers.
+        const string sql = """
+            select i.indexrelid::bigint, c.relname, i.indisunique, i.indisprimary, i.indisvalid,
+                   coalesce((select array_agg(k order by ord)
+                             from unnest(i.indkey::int2[]) with ordinality as u(k, ord)
+                             where k > 0 and ord <= i.indnkeyatts), '{}')::int[],
+                   pg_get_indexdef(i.indexrelid, 0, true),
+                   con.oid is not null,
+                   pg_relation_size(i.indexrelid)::bigint
+            from pg_index i
+            join pg_class c on c.oid = i.indexrelid
+            left join pg_constraint con
+                   on con.conindid = i.indexrelid
+                  and con.conrelid = i.indrelid
+                  and con.contype in ('p', 'u', 'x')
+            where i.indrelid = $1
+            order by i.indisprimary desc, c.relname
+            """;
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue(tableId);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+        var list = new List<IndexInfo>();
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+        {
+            list.Add(new IndexInfo(
+                Id: r.GetInt64(0),
+                Name: r.GetString(1),
+                IsUnique: r.GetBoolean(2),
+                IsPrimary: r.GetBoolean(3),
+                IsValid: r.GetBoolean(4),
+                Ordinals: r.GetFieldValue<int[]>(5),
+                Definition: r.IsDBNull(6) ? "" : r.GetString(6),
+                BackedByConstraint: r.GetBoolean(7),
+                // Read here rather than in the bulk relation-size pass: an index's size is only wanted once
+                // its table is expanded, and it comes free from a query already keyed on indexrelid (#76).
+                SizeBytes: r.GetInt64(8)));
+        }
+        return list;
+    }
+
+    private static async Task<List<TriggerInfo>> ReadTriggersAsync(
+        NpgsqlConnection conn, long tableId, CancellationToken ct)
+    {
+        // tgisinternal excludes the triggers Postgres creates to enforce foreign keys and deferred
+        // constraints: they are the constraint, already listed as one, and there are three per FK.
+        const string sql = """
+            select t.oid::bigint, t.tgname, t.tgenabled::text, pg_get_triggerdef(t.oid, true)
+            from pg_trigger t
+            where t.tgrelid = $1 and not t.tgisinternal
+            order by t.tgname
+            """;
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue(tableId);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+        var list = new List<TriggerInfo>();
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+        {
+            list.Add(new TriggerInfo(
+                Id: r.GetInt64(0),
+                Name: r.GetString(1),
+                // 'D' is disabled; 'O', 'R' and 'A' are all enabled, differing only in which
+                // session_replication_role they fire under.
+                Enabled: r.GetString(2)[0] != 'D',
+                Definition: r.IsDBNull(3) ? "" : r.GetString(3)));
+        }
+        return list;
+    }
+
+    private static ConstraintKind MapConType(char contype) => contype switch
+    {
+        'p' => ConstraintKind.PrimaryKey,
+        'u' => ConstraintKind.Unique,
+        'c' => ConstraintKind.Check,
+        'f' => ConstraintKind.ForeignKey,
+        'x' => ConstraintKind.Exclusion,
+        _ => ConstraintKind.Other,
+    };
+
     private async Task<string> ScalarTextAsync(string sql, CancellationToken ct)
     {
         await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);

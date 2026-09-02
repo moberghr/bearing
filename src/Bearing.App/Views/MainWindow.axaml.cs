@@ -21,6 +21,7 @@ public partial class MainWindow : Window
 {
     private readonly CompletionController _completion;
     private readonly SqlFoldingController _folding;
+    private readonly EditorAutoClose _autoClose;            // paired quotes/brackets (#70)
     private readonly EditorTextCommands _text;              // statement-aware editor ops + Run's SQL
     private readonly EditorTextBehavior _editorText;        // editor <-> SelectedTab buffer/caret sync
     private readonly EditorZoomController _zoom;            // per-tab transient font zoom (Ctrl+= / - / 0)
@@ -29,6 +30,8 @@ public partial class MainWindow : Window
     private readonly CommandPaletteHost _palette;           // command palette + quick-pick overlays
     private readonly TabNavigator _tabs;                    // visual / MRU / go-to-N tab switching
     private readonly ResultsPaneController _resultsPane;    // editor / results split visibility
+    private readonly TabStripScroller _tabScroll;           // overflowing tab strip: wheel + keep-selected-visible
+    private readonly TabStripScroller _pinnedTabScroll;      // …and the pinned row, which overflows the same way
     private readonly IReadOnlyList<string> _keymapWarnings;
     private bool _keymapWarningsShown;
     private HashSet<string> _navCommands = new();
@@ -50,6 +53,12 @@ public partial class MainWindow : Window
 
         _completion = new CompletionController(Editor, new CompletionEngine(), () => Vm?.Execution.SnapshotForSelectedTab());
         _folding = new SqlFoldingController(Editor); // installs the fold margin (left of the text)
+        // Auto-close reads the setting live, and loses Enter to the completion popup — while a suggestion is
+        // selected, Enter accepts it rather than escaping a bracket (#70).
+        _autoClose = new EditorAutoClose(
+            Editor,
+            enabled: () => Vm?.SettingsService.Current.AutoCloseBrackets ?? true,
+            completionOpen: () => _completion.IsOpen);
         _text = new EditorTextCommands(Editor);      // installs the statement-highlight margin
 
         // These read the keymap lazily: the shortcuts editor can replace it at runtime, and they are built
@@ -59,6 +68,13 @@ public partial class MainWindow : Window
         _tabs = new TabNavigator(() => _dispatcher!.Keymap);
         _palette = new CommandPaletteHost(this, _commands, () => _dispatcher!.Keymap);
         _resultsPane = new ResultsPaneController(WorkspaceGrid, ResultsSplitter, ResultsView);
+        _tabScroll = new TabStripScroller(TabScroll, TabStrip);
+        _pinnedTabScroll = new TabStripScroller(PinnedTabScroll, PinnedTabStrip);
+        // One chevron for both rows: it is the answer to "where is my tab", and that question is not asked
+        // per row. Either row overflowing lights it, and its list holds every tab regardless.
+        _tabScroll.OverflowChanged += SyncTabOverflow;
+        _pinnedTabScroll.OverflowChanged += SyncTabOverflow;
+        WireTabStrips();
         // The editor's FontSize is applied here rather than bound in XAML: one editor serves every tab,
         // and each tab carries its own zoom over the configured base size. The controller also owns the
         // Ctrl+wheel gesture; this window only says where the resulting size is announced.
@@ -131,7 +147,16 @@ public partial class MainWindow : Window
     /// interactions and hands back the three actions the shell still owns.</summary>
     private void WireSidebar()
     {
-        Sidebar.AddConnectionRequested = () => _ = AddConnectionAsync();
+        Sidebar.AddConnectionRequested = folder => _ = AddConnectionAsync(folder);
+        // Demo mode is decided at startup (it replaces the registry and every store), so this starts a second
+        // process rather than switching this one — and deliberately leaves this window open, so trying the
+        // demo never costs the user their session (#64).
+        Sidebar.ExploreDemoRequested = () =>
+        {
+            if (Demo.DemoRelaunch.Start() is { } failure) { if (Vm is not null) Vm.StatusText = failure; }
+            else if (Vm is not null) Vm.StatusText = "Opening a demo session in a new window…";
+        };
+        Sidebar.ImportConnectionsRequested = () => _ = ImportFromDBeaverAsync();
         Sidebar.EditorSyncRequested = LoadEditorFromSelectedTab;
         Sidebar.SqlPreviewRequested = _dialogs.ShowSqlPreview;
     }
@@ -187,6 +212,13 @@ public partial class MainWindow : Window
         Vm.Connections.PropertyChanged += OnViewModelPropertyChanged;
         Vm.Connections.TabDatabases.CollectionChanged -= OnTabDatabasesChanged;
         Vm.Connections.TabDatabases.CollectionChanged += OnTabDatabasesChanged;
+        // Pinning moves a tab between the two rows without changing which tab is selected, so the strips have
+        // to be re-told even though the selection did not move (#67) — otherwise the row that lost the tab
+        // keeps showing it selected.
+        Vm.Workspace.PinnedTabs.CollectionChanged -= OnTabRowsChanged;
+        Vm.Workspace.PinnedTabs.CollectionChanged += OnTabRowsChanged;
+        Vm.Workspace.UnpinnedTabs.CollectionChanged -= OnTabRowsChanged;
+        Vm.Workspace.UnpinnedTabs.CollectionChanged += OnTabRowsChanged;
         // A Clear() + N adds rebuild (RefreshConnections, on every connection save/delete) drops the
         // server pill's rendered selection; re-select once it has settled.
         Vm.Connections.Connections.CollectionChanged -= OnConnectionsListChanged;
@@ -345,13 +377,95 @@ public partial class MainWindow : Window
         if (Vm is { } vm) vm.StatusText = $"Editor font {size:0.#} pt (this tab)";
     }
 
+    private void OnTabRowsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        => SyncTabStripSelection();
+
+    /// <summary>
+    /// Show or hide the overflow chevron, and put the count of hidden tabs on it (#65).
+    /// <para>
+    /// Set from code rather than bound because the count comes from arranged bounds — which tabs actually
+    /// ended up outside the viewport — and no binding can see those. Driven by
+    /// <c>TabStripScroller.OverflowChanged</c>, which only fires when the number changes, so this is not
+    /// per-frame work.
+    /// </para>
+    /// <para>
+    /// The two rows are summed rather than shown separately: one chevron answering "where is my tab" matches
+    /// the question, and a pinned row and an unpinned row each with their own count would make the user do
+    /// the addition.
+    /// </para>
+    /// </summary>
+    /// <summary>The chevron's own width, reserved from the strip whether it is showing or not. Wide enough
+    /// for a two-digit count; a strip with more than 99 hidden tabs is not one anyone is reading.</summary>
+    private const double TabChevronWidth = 40;
+
+    private void SyncTabOverflow()
+    {
+        // Reserve the chevron's width from both strips regardless of whether it is up. Otherwise showing it
+        // narrows the very viewport the count was read from, the count changes because the chevron appeared,
+        // and the answer oscillates. Not hypothetical: with this, the unconditional write below, and the
+        // button's fixed width all absent, the shell threw "Infinite layout loop detected" out of the render
+        // pass and never drew — found by a render capture, and pinned now by
+        // WiringTests.An_overflowing_strip_renders_instead_of_looping.
+        //
+        // Measured: removing any *one* of the three breaks the cycle on its own, so each is redundant with the
+        // others. All three are kept anyway — they are each independently the right thing (a count that does
+        // not depend on its own effect, no layout write from a layout callback, a chevron that does not resize
+        // as its number changes), and relying on exactly one of them would mean the next small change to any
+        // of the other two silently re-arms this.
+        var hidden = _tabScroll.HiddenCount(TabChevronWidth)
+                     + _pinnedTabScroll.HiddenCount(TabChevronWidth);
+        var visible = hidden > 0;
+        // The glyph carries the number, as it does in DBeaver: "there are 4 more, and they are over here".
+        // A bare chevron would say the first half only, which is what the scrollbar already failed to do.
+        var label = $"» {hidden}";
+
+        // Touch nothing unless something changed. An unconditional write from a layout callback invalidates
+        // layout on every pass, and the next pass arrives with the same numbers to write again.
+        if (TabOverflowButton.IsVisible == visible && (TabOverflowButton.Content as string) == label) return;
+        TabOverflowButton.IsVisible = visible;
+        TabOverflowButton.Content = label;
+    }
+
+    /// <summary>The chevron opens the same picker as tab.pick, so there is one list and one implementation.</summary>
+    private void OnTabOverflowClick(object? sender, RoutedEventArgs e) => OpenTabPicker();
+
     private void LoadEditorFromSelectedTab()
     {
+        // Every route to a different tab comes through here, keyboard ones included, so this is where the
+        // strips are told to show what is now selected (#65). Both are asked: only the row holding the
+        // selection has anything to do, and neither knows which that is.
+        // Which row shows the selection, before asking either to scroll to it.
+        SyncTabStripSelection();
+        // Only the row that holds the selection is scrolled to it. The other row keeps a selection of its own
+        // that it cannot be talked out of (a TabStrip is always-selected), so scrolling it would drag it
+        // sideways to a tab the user did not pick — and when nothing is pinned, that row is collapsed.
+        if (Vm?.Workspace.SelectionIsPinned == true) _pinnedTabScroll.BringSelectionIntoView();
+        else _tabScroll.BringSelectionIntoView();
         var tab = Vm?.Workspace.SelectedTab;
+        // Folds belong to the editor, not to a tab (one editor serves all of them), so they are dropped
+        // before the buffer is replaced rather than carried into it — and dropped *first*, while the old
+        // document's offsets still line up with the collapsed sections on the text view's height tree. A
+        // swap under live folds is how #82's "trying to build visual line from collapsed line" is reached.
+        //
+        // Only when the buffer is actually being replaced. Keying this on the *tab* was wrong: Open loads a
+        // different script into the tab you are already on, so the document swaps under live folds with the
+        // same tab object — the very condition this exists to remove. Keying it on the text covers that and
+        // still spares the sidebar's editor-sync callback, which fires after deleting *any* script,
+        // including one that isn't open: losing every fold because you tidied an unrelated file is not a
+        // buffer swap.
+        if (!ReferenceEquals(tab, _editorText.Tab) || !string.Equals(tab?.Text ?? "", Editor.Text, StringComparison.Ordinal))
+            _folding.Reset();
         _editorText.Bind(tab);   // pushes text/caret into the editor under the load guard
         _zoom.Bind(tab);         // …and that tab's own font zoom
         RebuildResults(tab);
         _text.UpdateStatementHighlight();
+        // Rebuild the folds for the buffer that is now loaded, explicitly — like the highlight above, and
+        // unlike the side effect this used to rely on. Refresh is wired to Editor.TextChanged, so after
+        // Reset() cleared the sections the only thing that rebuilt them was that event firing during Bind.
+        // Every other piece of per-buffer state here is rebuilt by name; folding was the one that depended
+        // on an event, and an event that does not fire leaves the gutter empty with nothing to say so.
+        // Refresh is idempotent (UpdateFoldings keeps unchanged regions), so doing it twice costs nothing.
+        _folding.Refresh();
     }
 
     private void SyncProjectCombo()

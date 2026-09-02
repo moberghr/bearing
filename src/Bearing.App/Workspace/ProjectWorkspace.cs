@@ -37,4 +37,12 @@ public sealed class ProjectWorkspace
     public bool SidePaneOpen { get; set; } = true;
     public double SidePaneWidth { get; set; } = 260;
     public ResultsViewMode ResultsViewMode { get; set; } = ResultsViewMode.Stacked;
+
+    /// <summary>
+    /// Connection folders (#80) the user has collapsed. Tracked as the exception rather than the rule so a
+    /// folder that appears — created, imported, or inferred from a hand-edited file — is open, and what is
+    /// in it is visible without a click. Per-project and per-user: which folders are open is not a fact
+    /// about the project, so it rides in session.json alongside the pane width, never the manifest.
+    /// </summary>
+    public HashSet<string> CollapsedConnectionFolders { get; } = new(StringComparer.OrdinalIgnoreCase);
 }

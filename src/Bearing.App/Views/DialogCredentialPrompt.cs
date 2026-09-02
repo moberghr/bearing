@@ -33,7 +33,7 @@ public sealed class DialogCredentialPrompt : ICredentialPrompt
 
         var prompt = new TextBlock
         {
-            Text = message ?? $"Password for {info.User}@{info.Host}/{info.Database}  ·  {info.Name}",
+            Text = message ?? $"Password for {ConnectionEndpoint.Full(info)}  ·  {info.Name}",
             TextWrapping = TextWrapping.Wrap,
         };
         var password = new TextBox { PasswordChar = '•', PlaceholderText = "Password", Margin = new Thickness(0, 8, 0, 0) };

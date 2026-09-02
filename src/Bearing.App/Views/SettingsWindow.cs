@@ -71,6 +71,12 @@ public sealed class SettingsWindow : Window
             Margin = new Thickness(14, 0, 0, 0),
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
         };
+        // The bar gets its own column instead of floating over the rows. Avalonia's default is an
+        // auto-hiding overlay, which drew the scrollbar straight through the "pt" beside the two font-size
+        // spinners and crowded every checkbox in the list. A settings list is long enough that the bar is up
+        // whenever the window is open, so there is nothing to gain from hiding it and a unit label to lose.
+        // Same call the results grid already makes for the same reason (ResultGridChrome).
+        ScrollViewer.SetAllowAutoHide(scroll, false);
         Grid.SetColumn(scroll, 1);
         body.Children.Add(_categories);
         body.Children.Add(scroll);
@@ -289,6 +295,46 @@ public sealed class SettingsWindow : Window
                         _settings.Set(e, option.Value);
                     };
                     return (combo, () => combo.SelectedItem = e.Selected(_settings.Current));
+                }
+
+            case StringSetting str:
+                {
+                    // Editable, not a plain dropdown: the suggestion list is a convenience, and a value from
+                    // another platform (an IANA id on Windows) has to remain typeable (#77).
+                    var combo = new ComboBox
+                    {
+                        ItemsSource = str.Suggestions?.Invoke() ?? [],
+                        Width = 210,
+                        IsEditable = true,
+                    };
+                    var note = new TextBlock { Foreground = Res("Text.Dim"), FontSize = Metric("Font.Small") };
+
+                    void Commit(string? text)
+                    {
+                        if (_syncing || text is null) return;
+                        // Rejected input leaves the stored value alone rather than saving something that will
+                        // not resolve — and the box goes back to what is actually in force, because a typo
+                        // left on screen beside a different live value reads as accepted.
+                        _settings.Set(str, text);
+                        var current = str.Get(_settings.Current);
+                        if (current != text) combo.Text = current;
+                        note.Text = str.Describe?.Invoke(current) ?? "";
+                    }
+
+                    combo.SelectionChanged += (_, _) => Commit(combo.SelectedItem as string);
+                    combo.LostFocus += (_, _) => Commit(combo.Text);
+
+                    var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                    panel.Children.Add(combo);
+                    panel.Children.Add(note);
+                    return (panel, () =>
+                    {
+                        var current = str.Get(_settings.Current);
+                        combo.SelectedItem = current;
+                        combo.Text = current;
+                        note.Text = str.Describe?.Invoke(current) ?? "";
+                    }
+                    );
                 }
 
             default:

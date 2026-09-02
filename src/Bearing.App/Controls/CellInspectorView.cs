@@ -266,7 +266,12 @@ public sealed class CellInspectorView : UserControl
             return;
         }
         if (_matchCount is not null) _matchCount.Text = "";     // find only applies to the formatted view
-        _bodyHost.Content = new ScrollViewer { Content = PlainText(_raw, TextWrapping.Wrap) };
+        // Wrapped text runs to the full width, so an overlay bar covers the last characters of every line
+        // it crosses. The inspector exists to read a value in full; that is the one pane where losing the
+        // end of a line matters most.
+        var wrapped = new ScrollViewer { Content = PlainText(_raw, TextWrapping.Wrap) };
+        ScrollViewer.SetAllowAutoHide(wrapped, false);
+        _bodyHost.Content = wrapped;
     }
 
     /// <summary>

@@ -24,6 +24,43 @@ public class ConnectionFieldModelTests
     private static readonly PostgresProvider Pg = new();
     private static readonly SqlServerProvider Ms = new();
 
+    /// <summary>
+    /// A provider that declares <em>option</em> fields, which neither shipped engine does any more: sslmode
+    /// and Encrypt/TrustServerCertificate all became the typed <see cref="ConnectionInfo.Tls"/> (#23). The
+    /// model still has to carry option fields to and from <see cref="ConnectionInfo.Options"/>, so that
+    /// contract is exercised here rather than against whichever keyword a real engine happens to want
+    /// configured this month (§4.1 — hand-rolled, no mocking library).
+    /// </summary>
+    private sealed class OptionProvider : IDbProvider
+    {
+        public string Id => "optiontest";
+        public string DisplayName => "Option Test";
+        public bool SupportsIntegratedAuth => false;
+        public bool SupportsEntraToken => false;
+        public DbErrorKind Classify(QueryError error) => DbErrorKind.Unknown;
+        public DbErrorKind ClassifyException(Exception exception) => DbErrorKind.Unknown;
+
+        public IReadOnlyList<ConnectionField> ConnectionFields { get; } = new[]
+        {
+            new ConnectionField("Host", "Host", ConnectionFieldKind.Text, Required: true, Default: "localhost"),
+            new ConnectionField("Port", "Port", ConnectionFieldKind.Number, Required: true, Default: "9999"),
+            new ConnectionField("Database", "Database", ConnectionFieldKind.Text, Required: true),
+            new ConnectionField("User", "User", ConnectionFieldKind.Text, Required: true),
+            new ConnectionField("Password", "Password", ConnectionFieldKind.Password, Required: false),
+            new ConnectionField("compression", "Compression", ConnectionFieldKind.Boolean, Required: false, Default: "true"),
+            new ConnectionField("search_path", "Search path", ConnectionFieldKind.Text, Required: false),
+        };
+
+        public IDbConnectionFactory CreateConnectionFactory(ConnectionInfo info, string? password)
+            => throw new NotSupportedException("declares fields only");
+        public IMetadataReader CreateMetadataReader(IDbConnectionFactory factory)
+            => throw new NotSupportedException("declares fields only");
+        public IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory)
+            => throw new NotSupportedException("declares fields only");
+    }
+
+    private static readonly OptionProvider Opt = new();
+
     private static ConnectionInfo Blank => new()
     {
         Id = Guid.NewGuid(),
@@ -38,12 +75,18 @@ public class ConnectionFieldModelTests
     {
         // The password is the secret store's, so it must not appear as a mappable field at all (§1.1) —
         // the dialog's own box owns it.
+        // Both shipped engines declare only the intrinsic four (plus the password, excluded here):
+        // transport security is the typed ConnectionInfo.Tls now, not a declared field (#23).
         Assert.Equal(
-            new[] { "Host", "Port", "Database", "User", "sslmode" },
+            new[] { "Host", "Port", "Database", "User" },
             ConnectionFieldModel.For(Pg).Fields.Select(f => f.Key));
         Assert.Equal(
-            new[] { "Host", "Port", "Database", "User", "Encrypt", "TrustServerCertificate" },
+            new[] { "Host", "Port", "Database", "User" },
             ConnectionFieldModel.For(Ms).Fields.Select(f => f.Key));
+        // ...and an engine that does declare options keeps them, in declared order, after the intrinsics.
+        Assert.Equal(
+            new[] { "Host", "Port", "Database", "User", "compression", "search_path" },
+            ConnectionFieldModel.For(Opt).Fields.Select(f => f.Key));
     }
 
     [Fact]
@@ -52,7 +95,7 @@ public class ConnectionFieldModelTests
         Assert.Equal("5432", ConnectionFieldModel.For(Pg).Get("Port"));
         Assert.Equal("1433", ConnectionFieldModel.For(Ms).Get("Port"));
         Assert.Equal("localhost", ConnectionFieldModel.For(Ms).Get("Host"));
-        Assert.Equal("true", ConnectionFieldModel.For(Ms).Get("Encrypt"));
+        Assert.Equal("true", ConnectionFieldModel.For(Opt).Get("compression"));
     }
 
     // ---- Mapping in ------------------------------------------------------------------------------
@@ -67,16 +110,16 @@ public class ConnectionFieldModelTests
             Port = 1444,
             Database = "sales",
             User = "app",
-            Options = new Dictionary<string, string> { ["Encrypt"] = "false", ["entra.resource"] = "https://x/" },
+            Options = new Dictionary<string, string> { ["compression"] = "false", ["entra.resource"] = "https://x/" },
         };
 
-        var model = ConnectionFieldModel.For(Ms, existing);
+        var model = ConnectionFieldModel.For(Opt, existing);
 
         Assert.Equal(@"SQLPROD\SALES", model.Get("Host"));
         Assert.Equal("1444", model.Get("Port"));
         Assert.Equal("sales", model.Get("Database"));
         Assert.Equal("app", model.Get("User"));
-        Assert.Equal("false", model.Get("Encrypt"));
+        Assert.Equal("false", model.Get("compression"));
         // A key no provider declares is not shown, but it is not lost either.
         Assert.Null(model.Get("entra.resource"));
         Assert.Equal("https://x/", model.Apply(existing).Options["entra.resource"]);
@@ -119,14 +162,14 @@ public class ConnectionFieldModelTests
     {
         // The factory forwards these to the driver verbatim, so the key has to be exactly what the provider
         // declared — anything else silently does nothing.
-        var model = ConnectionFieldModel.For(Ms);
-        model.Set("Encrypt", "false");
-        model.Set("TrustServerCertificate", "true");
+        var model = ConnectionFieldModel.For(Opt);
+        model.Set("compression", "false");
+        model.Set("search_path", "app,public");
 
         var options = model.Apply(Blank).Options;
 
-        Assert.Equal("false", options["Encrypt"]);
-        Assert.Equal("true", options["TrustServerCertificate"]);
+        Assert.Equal("false", options["compression"]);
+        Assert.Equal("app,public", options["search_path"]);
     }
 
     [Fact]
@@ -135,14 +178,14 @@ public class ConnectionFieldModelTests
         var existing = Blank with
         {
             ProviderId = SqlServerProvider.ProviderId,
-            Options = new Dictionary<string, string> { ["Encrypt"] = "false" },
+            Options = new Dictionary<string, string> { ["compression"] = "false" },
         };
-        var model = ConnectionFieldModel.For(Ms, existing);
-        model.Set("Encrypt", "true");
+        var model = ConnectionFieldModel.For(Opt, existing);
+        model.Set("compression", "true");
 
         // Dropping the key and writing Encrypt=true mean the same thing to the driver, and the empty form is
         // the one that keeps a project file honest about what the user actually chose.
-        Assert.DoesNotContain("Encrypt", model.Apply(existing).Options.Keys);
+        Assert.DoesNotContain("compression", model.Apply(existing).Options.Keys);
     }
 
     // ---- Switching engine ------------------------------------------------------------------------
@@ -177,20 +220,21 @@ public class ConnectionFieldModelTests
     public void Switching_engine_drops_the_other_engines_fields_from_the_form()
     {
         var switched = ConnectionFieldModel.For(Pg).SwitchTo(Ms);
-        Assert.Null(switched.Get("sslmode"));
-        Assert.Equal("true", switched.Get("Encrypt"));
+        // The other engine's option fields are gone from the form; the intrinsics survive.
+        Assert.Null(switched.Get("compression"));
+        Assert.Null(switched.Get("search_path"));
     }
 
     [Fact]
     public void Switching_engine_carries_a_dropped_field_the_user_had_set()
     {
-        // Switching by accident and switching back must not be how someone loses an sslmode they set.
-        var model = ConnectionFieldModel.For(Pg);
-        model.Set("sslmode", "Require");
+        // Switching by accident and switching back must not be how someone loses an option they set.
+        var model = ConnectionFieldModel.For(Opt);
+        model.Set("search_path", "app,public");
 
-        var back = model.SwitchTo(Ms).SwitchTo(Pg);
+        var back = model.SwitchTo(Pg).SwitchTo(Opt);
 
-        Assert.Equal("Require", back.Apply(Blank).Options["sslmode"]);
+        Assert.Equal("app,public", back.Apply(Blank).Options["search_path"]);
     }
 
     // ---- Validation ------------------------------------------------------------------------------

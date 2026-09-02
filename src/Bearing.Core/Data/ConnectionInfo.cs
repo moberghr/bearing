@@ -24,6 +24,14 @@ public sealed record ConnectionInfo
     /// deserializes to the classic stored-password behaviour.</summary>
     public CredentialKind CredentialKind { get; init; } = CredentialKind.StoredPassword;
 
+    /// <summary>
+    /// Where this connection is filed in the connections panel: a "/"-separated folder path
+    /// ("Aur/Production"), or null for the panel's root. Purely organisational — it never reaches a
+    /// connection string, and it is deliberately orthogonal to <see cref="Environment"/>: a folder is where
+    /// you filed it, an environment is how dangerous it is.
+    /// </summary>
+    public string? Folder { get; init; }
+
     /// <summary>Free-form environment label (e.g. "local", "staging", "production"); null = untagged.</summary>
     public string? Environment { get; init; }
 
@@ -37,7 +45,19 @@ public sealed record ConnectionInfo
     /// </summary>
     public bool RequireWriteConfirmation { get; init; }
 
-    /// <summary>Provider-specific extra options (e.g. sslmode, search_path).</summary>
+    /// <summary>
+    /// What this connection demands of the transport (#23). Default <see cref="TlsMode.Prefer"/> — the
+    /// driver's own default, so a missing value in an older project file keeps the behaviour it already had.
+    /// <para>
+    /// A field rather than an <see cref="Options"/> entry because it is a security setting, and a bag that
+    /// travels in a shared project.json is the wrong place for one: see <see cref="TlsPolicy.Resolve"/> for
+    /// the precedence that keeps older projects working without leaving two sources of truth.
+    /// </para>
+    /// </summary>
+    public TlsMode Tls { get; init; } = TlsPolicy.Default;
+
+    /// <summary>Provider-specific extra options (e.g. search_path). <c>sslmode</c> used to live here and is
+    /// still read from here for older projects — see <see cref="Tls"/>.</summary>
     public IReadOnlyDictionary<string, string> Options { get; init; }
         = new Dictionary<string, string>();
 }

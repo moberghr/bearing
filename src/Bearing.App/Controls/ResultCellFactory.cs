@@ -28,9 +28,21 @@ namespace Bearing.App.Controls;
 /// </summary>
 public sealed class ResultCellFactory
 {
-    // Non-text pixels inside a value cell: the text's margin plus the selection border's 1px reserve, both
-    // sides (see MakeSelectable).
-    private const double CellChrome = ResultGridChrome.CellTextInset * 2;
+    // Non-text pixels inside a value cell: the text's margin plus the selection border's 1px reserve on both
+    // sides (see MakeSelectable), then the 1px vertical grid line the column loses. HeaderChromeFor has
+    // always reserved that divider and the cell side never did, so the two sides were not measuring the same
+    // column (#73).
+    private const double CellChrome = ResultGridChrome.CellTextInset * 2 + 1 + TextSlack;
+
+    // A couple of pixels of deliberate give. A column sized to exactly its content leaves the renderer no
+    // room for its own rounding, and TextTrimming.CharacterEllipsis resolves that against the value — where
+    // one character too few costs two, since the ellipsis needs an advance of its own. Kept separate from
+    // CellTextInset, which is load-bearing for header/value left-edge alignment and must not absorb slack.
+    internal const double TextSlack = 2;
+
+    // Longest value that still renders inline. Past it (or on any newline) the cell grows a ⤲ inspect
+    // affordance, which the column has to have reserved room for — see InitialWidth.
+    private const int MaxInlineChars = 60;
 
     // On top of that, the width a cell reserves for an inline affordance: the 16–18px glyph with its
     // margins, plus the DockPanel's 18px right margin keeping it clear of the scrollbar.
@@ -96,6 +108,13 @@ public sealed class ResultCellFactory
         if (result.ForeignKeyColumns.Contains(index)) badges.Add(("FK", "Syntax.Keyword"));
         var type = result.Columns[index].DataTypeName;
         if (ColumnKinds.IsDocument(type)) badges.Add((type.ToLowerInvariant(), "Syntax.Table"));
+        // A timestamp *without* zone, said as the consequence rather than as the type name (#77). "timestamp"
+        // would be consistent with the json badge, but json's badge exists to separate json from jsonb, where
+        // the type name *is* the distinction. Here the reader's question is "can I trust this instant", and
+        // "timestamp" does not answer it for anyone who does not already know Postgres draws the line there.
+        // On the header, never in the cell: anything appended inside CellFormat.Display travels into the
+        // clipboard, the exports and the edit round-trip.
+        if (ColumnKinds.IsTimestampWithoutZone(type)) badges.Add(("no tz", "Warn.Amber"));
         return badges;
     }
 
@@ -108,13 +127,24 @@ public sealed class ResultCellFactory
     private static double InitialWidth(ResultSetViewModel result, int index)
     {
         var column = result.Columns[index];
-        var hasGlyph = result.ForeignKeyColumns.Contains(index) || ColumnKinds.IsDocument(column.DataTypeName);
+        var sample = ColumnWidths.Sample(result.Rows, index, MaxInlineChars);
+        // Every path that draws a glyph has to be reserved for, not just the always-on ones: a value past
+        // MaxInlineChars, or any multiline value, grows the inspect affordance too. The multiline case is the
+        // one that broke — the widest value stops at the first line, so a document with a short first line
+        // sized the column to Min and the glyph then took nearly all of it.
+        var hasGlyph = result.ForeignKeyColumns.Contains(index)
+            || ColumnKinds.IsDocument(column.DataTypeName)
+            || sample.AnyInspectable;
         return ColumnWidths.Initial(
-            headerChars: column.Name.Length,
+            headerTextWidth: ResultGridChrome.MeasureText(
+                column.Name, ResultGridChrome.HeaderFontSize, ResultGridChrome.HeaderFontWeight),
             headerExtra: ResultGridChrome.HeaderChromeFor(Badges(result, index).Select(b => b.Text)),
-            valueChars: ColumnWidths.ValueChars(result.Rows, index),
-            cellExtra: CellChrome + (hasGlyph ? AffordanceWidth : 0),
-            charWidth: ResultGridChrome.CharAdvance);
+            // The widest of the candidates, measured. A character count alone picks the wrong one when the
+            // mono stack falls back to a proportional face — "iiiiiiiiii" is longer than "WWWWWWWWW" and
+            // much narrower — which is #73's symptom again on the machines least likely to be tested.
+            valueTextWidth: sample.Candidates
+                .Max(v => ResultGridChrome.MeasureText(v, ResultGridChrome.CellFontSize)),
+            cellExtra: CellChrome + (hasGlyph ? AffordanceWidth : 0));
     }
 
     /// <summary>A value display cell: text (dimmed italic "(null)", numeric in code color), plus an
@@ -135,19 +165,11 @@ public sealed class ResultCellFactory
     private Control ValueContent(ResultSetViewModel result, int index, object?[]? row, bool isJsonCol, bool numeric)
     {
         var isNull = row is null || index >= row.Length || row[index] is null;
-        var text = new TextBlock
-        {
-            Text = GridSelectionOps.CellText(row, index),
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(ResultGridChrome.CellTextMargin, 0),
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            Foreground = isNull ? NullBrush : (numeric ? Res("Text.Code") : Res("Text.Primary")),
-            FontStyle = isNull ? FontStyle.Italic : FontStyle.Normal,
-        };
+        var text = ResultChrome.ValueText(GridSelectionOps.CellText(row, index), isNull, numeric);
         if (isNull) return text;
 
         var raw = GridSelectionOps.CellText(row, index);
-        if (!isJsonCol && raw.Length <= 60 && !raw.Contains('\n')) return text;
+        if (!isJsonCol && raw.Length <= MaxInlineChars && !raw.Contains('\n')) return text;
 
         var expand = ResultChrome.InspectAffordance();
         // handledEventsToo: the DataGrid marks the press handled in the tunnel phase.
@@ -179,13 +201,9 @@ public sealed class ResultCellFactory
     {
         var hasValue = row.Length > index && row[index] is not null;
 
-        var value = new TextBlock
-        {
-            Text = GridSelectionOps.CellText(row, index),
-            VerticalAlignment = VerticalAlignment.Center,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            Margin = new Thickness(ResultGridChrome.CellTextMargin, 0),
-        };
+        // Same text treatment as every other cell (#61) — a NULL here used to render bright and upright, the
+        // one column where "(null)" looked like a real value. numeric: false is deliberate; see ValueText.
+        var value = ResultChrome.ValueText(GridSelectionOps.CellText(row, index), isNull: !hasValue, numeric: false);
 
         var jump = ResultChrome.JumpAffordance();
         jump.IsVisible = hasValue;

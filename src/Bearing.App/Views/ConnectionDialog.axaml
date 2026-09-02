@@ -37,13 +37,13 @@
 
     <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto">
       <TextBlock Grid.Row="0" Grid.Column="0" Text="Credential" VerticalAlignment="Center" Margin="0,6,0,0"/>
-      <!-- Items come from Connections/CredentialKindOptions: "Windows / integrated authentication" is
-           offered only by an engine whose driver can negotiate the OS identity. -->
+      <!-- Items come from Connections/CredentialKindOptions: Windows authentication and the Entra token are
+           each offered only by an engine whose driver can actually honour them. -->
       <ComboBox  Grid.Row="0" Grid.Column="1" x:Name="CredentialKindBox" Margin="0,6,0,0"
                  HorizontalAlignment="Stretch" SelectionChanged="OnCredentialKindChanged"/>
 
       <TextBlock Grid.Row="1" Grid.Column="0" x:Name="PasswordLabel" Text="Password" VerticalAlignment="Center" Margin="0,6,0,0"/>
-      <TextBox   Grid.Row="1" Grid.Column="1" x:Name="PasswordBox" PasswordChar="&#x2022;" Margin="0,6,0,0"/>
+      <TextBox   Grid.Row="1" Grid.Column="1" x:Name="PasswordBox" PasswordChar="•" Margin="0,6,0,0"/>
     </Grid>
 
     <TextBlock x:Name="EntraHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,4,0,0"
@@ -63,14 +63,41 @@
 
     <Separator Margin="0,4"/>
 
+    <!-- Transport security (#23). It used to be settable only by hand-editing project.json, so in practice
+         every connection ran on the driver's default: encrypt if offered, tell nobody either way. -->
+    <TextBlock Text="Encryption" Opacity="0.8"/>
+    <ComboBox x:Name="TlsBox" HorizontalAlignment="Stretch" SelectionChanged="OnTlsChanged"/>
+
+    <!-- What the chosen mode leaves open, in its own words. Amber, matching the keychain block: the posture is
+         surfaced, never silent (§1.1) — and it names *which* guarantee is missing, because "require" reads as
+         the secure choice while accepting any certificate at all. -->
+    <Border x:Name="TlsWarning" IsVisible="False"
+            Background="#2F2B22" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
+            Padding="8,6" Margin="0,4,0,0">
+      <TextBlock x:Name="TlsWarningText" TextWrapping="Wrap"
+                 Foreground="{DynamicResource Warn.Amber}" FontSize="12"/>
+    </Border>
+
+    <Separator Margin="0,4"/>
+
     <TextBlock Text="Environment" Opacity="0.8"/>
     <StackPanel Orientation="Horizontal" Spacing="6">
-      <Border x:Name="ColorSwatch" Width="26" Height="26" CornerRadius="4"
-              Background="{Binding #EnvColorBox.Text, Converter={StaticResource HexBrush}}"/>
       <TextBox x:Name="EnvBox" Width="150" PlaceholderText="label, e.g. production"/>
-      <TextBox x:Name="EnvColorBox" Width="90" PlaceholderText="#RRGGBB"/>
+      <TextBox x:Name="EnvColorBox" Width="90" PlaceholderText="#RRGGBB" TextChanged="OnEnvColorTextChanged"/>
+      <!-- Beside the hex, because it is the same value by another route. The swatch is the picker's own
+           button and its content stays bound to the hex box rather than to the picker's colour, so a blank
+           or unparseable entry shows the neutral it will actually resolve to (§9.3a) instead of whatever
+           colour the picker happens to hold. -->
+      <ColorPicker x:Name="EnvColorPicker" Width="48" Height="26" VerticalAlignment="Center"
+                   IsAlphaEnabled="False" IsAlphaVisible="False"
+                   ColorChanged="OnEnvColorPicked">
+        <ColorPicker.Content>
+          <Border x:Name="ColorSwatch" CornerRadius="3" Margin="1"
+                  Background="{Binding #EnvColorBox.Text, Converter={StaticResource HexBrush}}"/>
+        </ColorPicker.Content>
+      </ColorPicker>
     </StackPanel>
-    <StackPanel Orientation="Horizontal" Spacing="6" Margin="32,0,0,0">
+    <StackPanel Orientation="Horizontal" Spacing="6">
       <Button Content="Local"      Tag="#3FB950" Click="OnPresetColorClick" Background="#3FB950" Foreground="White" Padding="8,2"/>
       <Button Content="Staging"    Tag="#D29922" Click="OnPresetColorClick" Background="#D29922" Foreground="White" Padding="8,2"/>
       <Button Content="Production" Tag="#E5484D" Click="OnPresetColorClick" Background="#E5484D" Foreground="White" Padding="8,2"/>

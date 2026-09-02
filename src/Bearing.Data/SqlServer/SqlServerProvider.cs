@@ -27,8 +27,6 @@ public sealed class SqlServerProvider : IDbProvider
         new ConnectionField("Database", "Database", ConnectionFieldKind.Text, Required: true),
         new ConnectionField("User", "User", ConnectionFieldKind.Text, Required: true),
         new ConnectionField("Password", "Password", ConnectionFieldKind.Password, Required: false),
-        new ConnectionField("Encrypt", "Encrypt connection", ConnectionFieldKind.Boolean, Required: false, Default: "true"),
-        new ConnectionField("TrustServerCertificate", "Trust server certificate", ConnectionFieldKind.Boolean, Required: false, Default: "false"),
     };
 
     /// <summary>True: Windows / integrated authentication is what most SQL Server installations are set up

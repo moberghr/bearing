@@ -123,6 +123,37 @@ public sealed record EnumSetting : SettingDescriptor
         => Options.FirstOrDefault(o => o.Value == Get(settings));
 }
 
+/// <summary>
+/// A free-text setting whose value is validated rather than bounded — an identifier drawn from a set too
+/// large to enumerate as options (#77's timezone: there are some six hundred).
+/// <para>
+/// <see cref="Suggestions"/> is a picker's contents, not a constraint: a value the user typed that is not in
+/// the list is still accepted if <see cref="IsValid"/> takes it, which is what lets a settings file written
+/// on another platform (IANA ids on a Windows machine) survive being opened here.
+/// </para>
+/// </summary>
+public sealed record StringSetting : SettingDescriptor
+{
+    public required Func<AppSettings, string> Get { get; init; }
+    public required Func<AppSettings, string, AppSettings> Set { get; init; }
+
+    /// <summary>What a picker offers. Empty means "free text with no suggestions".</summary>
+    public Func<IReadOnlyList<string>>? Suggestions { get; init; }
+
+    /// <summary>Whether a value is usable. Defaults to accepting anything; a rejected write leaves the
+    /// previous value rather than storing something that will not resolve.</summary>
+    public Func<string, bool>? IsValid { get; init; }
+
+    /// <summary>How the current value reads on the row, when its raw form is not the clearest ("system"
+    /// alone does not say which zone that is).</summary>
+    public Func<string, string>? Describe { get; init; }
+
+    public override object? Read(AppSettings settings) => Get(settings);
+
+    public override AppSettings Write(AppSettings settings, object? value)
+        => value is string s && (IsValid?.Invoke(s) ?? true) ? Set(settings, s) : settings;
+}
+
 /// <summary>A section of the settings window. Ordering is the declaration order in <see cref="SettingsCatalog"/>.</summary>
 /// <param name="Id">Stable id, matching <see cref="SettingDescriptor.CategoryId"/>.</param>
 /// <param name="Title">Section heading and nav-list label.</param>

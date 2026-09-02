@@ -28,7 +28,16 @@ public partial class MainWindow
         r.Register(new KeyCommand(CommandIds.FileSave, "Save", KeyScope.Global, "File", async () => await SaveAsync()));
         r.Register(new KeyCommand(CommandIds.FileSaveAs, "Save As…", KeyScope.Global, "File", async () => await SaveAsAsync()));
         r.Register(new KeyCommand(CommandIds.FileOpen, "Open…", KeyScope.Global, "File", async () => await OpenAsync()));
-        r.Register(KeyCommand.Sync(CommandIds.TabNew, "New tab", KeyScope.Global, "File", () => Vm?.Workspace.NewTab()));
+        // Context-aware (#57): with the connections tree focused, a new tab opens against the connection
+        // selected there instead of inheriting the current tab's. Null everywhere else, which is the old
+        // behaviour exactly.
+        r.Register(KeyCommand.Sync(CommandIds.TabNew, "New tab", KeyScope.Global, "File",
+            () => NewTabAndFocus(Sidebar.FocusedTreeConnectionId)));
+        r.Register(KeyCommand.Sync(CommandIds.TabTogglePin, "Pin / unpin tab", KeyScope.Global, "File", () =>
+        {
+            if (Vm?.Workspace is { SelectedTab: { } tab } workspace)
+                workspace.SetPinned(tab, !tab.IsPinned);
+        }));
         r.Register(new KeyCommand(CommandIds.TabClose, "Close tab", KeyScope.Global, "File",
             async () => { if (Vm?.Workspace.SelectedTab is { } tab) await CloseTabAsync(tab); }, canRun: () => Vm?.Workspace.SelectedTab is not null));
         r.Register(KeyCommand.Sync(CommandIds.TabRename, "Rename tab", KeyScope.Global, "File",
@@ -36,6 +45,9 @@ public partial class MainWindow
         r.Register(KeyCommand.Sync(CommandIds.ViewToggleSidePane, "Toggle side pane", KeyScope.Global, "View",
             () => { if (Vm is not null) Vm.SidePaneOpen = !Vm.SidePaneOpen; }));
         r.Register(KeyCommand.Sync(CommandIds.ViewToggleResults, "Toggle results", KeyScope.Global, "View", ToggleResultsVisible));
+        r.Register(new KeyCommand(CommandIds.QueryExportRun, "Export run to Excel workbook", KeyScope.Global, "Query",
+            async () => { if (Vm is { } vm) await vm.Execution.ExportRunAsync(); },
+            canRun: () => Vm?.Workspace.SelectedTab?.Results.Any(rs => rs.HasGrid) == true));
         r.Register(KeyCommand.Sync(CommandIds.StatementPrev, "Previous statement", KeyScope.Global, "Editor", () => _text.MoveToAdjacentStatement(-1)));
         r.Register(KeyCommand.Sync(CommandIds.StatementNext, "Next statement", KeyScope.Global, "Editor", () => _text.MoveToAdjacentStatement(+1)));
         // Escape only claims the key when there's something to dismiss; otherwise it falls through.
@@ -44,6 +56,7 @@ public partial class MainWindow
             canRun: () => Vm is not null && (_palette.AnyOpen || Vm.IsMenuTransient || Vm.Execution.IsBusy)));
         r.Register(KeyCommand.Sync(CommandIds.PaletteOpen, "Command palette", KeyScope.Global, "View",
             () => { if (Vm is not null) _palette.TogglePalette(); }));
+        r.Register(KeyCommand.Sync(CommandIds.TabPick, "Show all tabs…", KeyScope.Global, "Tabs", OpenTabPicker));
         r.Register(KeyCommand.Sync(CommandIds.TabNext, "Next tab (visual order)", KeyScope.Global, "Tabs", () => WithWorkspace(ws => _tabs.SelectAdjacent(ws, +1))));
         r.Register(KeyCommand.Sync(CommandIds.TabPrev, "Previous tab (visual order)", KeyScope.Global, "Tabs", () => WithWorkspace(ws => _tabs.SelectAdjacent(ws, -1))));
         r.Register(KeyCommand.Sync(CommandIds.TabMruNext, "Next tab (recently used)", KeyScope.Global, "Tabs", () => WithWorkspace(ws => _tabs.CycleMru(ws, +1))));
@@ -71,6 +84,8 @@ public partial class MainWindow
         r.Register(KeyCommand.Sync(CommandIds.PanelHistory, "Show History panel", KeyScope.Global, "View",
             () => Vm?.ShowPanel(SidePanel.History)));
         r.Register(new KeyCommand(CommandIds.ConnectionNew, "New connection…", KeyScope.Global, "Connection", async () => await AddConnectionAsync()));
+        r.Register(new KeyCommand(CommandIds.ConnectionImportDBeaver, "Import connections: from DBeaver…",
+            KeyScope.Global, "Connection", async () => await ImportFromDBeaverAsync()));
         r.Register(new KeyCommand(CommandIds.QueryRunAll, "Run entire script", KeyScope.Global, "Query", async () => await RunAllAsync()));
         r.Register(new KeyCommand(CommandIds.SettingsKeybindings, "Keyboard shortcuts…", KeyScope.Global, "View", async () => await EditKeybindingsAsync()));
         r.Register(new KeyCommand(CommandIds.SettingsOpen, "Settings…", KeyScope.Global, "View", async () => await OpenSettingsAsync()));
@@ -216,6 +231,7 @@ public partial class MainWindow
         MenuRenameTab.InputGesture = MenuGesture(CommandIds.TabRename);
         MenuToggleSidePane.InputGesture = MenuGesture(CommandIds.ViewToggleSidePane);
         MenuRun.InputGesture = MenuGesture(CommandIds.Run);
+        MenuExportRun.InputGesture = MenuGesture(CommandIds.QueryExportRun);
     }
 
     private KeyGesture? MenuGesture(string commandId)
@@ -280,6 +296,39 @@ public partial class MainWindow
         _palette.ShowQuickPick("Select connection…", Vm.Connections.Connections.Select(c =>
             (c.Name, (Action)(() => Vm.Connections.SelectedTabConnection = c))).ToList());
     }
+
+    /// <summary>
+    /// tab.pick, and the strip's overflow chevron: a filterable list of <b>every</b> open tab.
+    /// <para>
+    /// Every tab, not only the ones off the edge — a picker whose contents change as you resize the window is
+    /// a picker you cannot learn. The chevron's count says how many are hidden; the list is the whole set, in
+    /// strip order with the pinned row first, so its order matches what you were just looking at.
+    /// </para>
+    /// <para>
+    /// The label carries the folder because two tabs called <c>report.sql</c> from different directories are
+    /// otherwise indistinguishable in the list — which is exactly the situation that sends you to it.
+    /// </para>
+    /// </summary>
+    private void OpenTabPicker()
+    {
+        if (Vm is null) return;
+        var tabs = Vm.Workspace.PinnedTabs.Concat(Vm.Workspace.UnpinnedTabs).ToList();
+        _palette.ShowQuickPick("Go to tab…", tabs.Select(t =>
+            (TabPickerLabel(t), (Action)(() => Vm.Workspace.SelectedTab = t))).ToList());
+    }
+
+    /// <summary>
+    /// A tab's row in the picker: its name, then the same path its hover tooltip shows.
+    /// <para>
+    /// <c>HeaderTooltip</c> rather than a path formatted here, and not only to avoid duplicating the logic:
+    /// it is project-relative for a file inside the project and absolute for one outside, and it already
+    /// exists precisely to "tell two same-named scripts in different folders apart" — which is the situation
+    /// that sends someone to this list. Formatting it a second way here would make the picker and the tooltip
+    /// disagree about the same tab.
+    /// </para>
+    /// </summary>
+    private static string TabPickerLabel(ViewModels.EditorTabViewModel tab)
+        => $"{tab.Header}   {tab.HeaderTooltip}";
 
     private void OpenDatabasePicker()
     {

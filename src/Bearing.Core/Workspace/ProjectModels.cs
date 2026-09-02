@@ -11,6 +11,15 @@ public sealed record ProjectManifest
     public int SchemaVersion { get; init; } = 1;
     public string Name { get; init; } = "Untitled";
     public List<ConnectionInfo> Connections { get; init; } = new();
+
+    /// <summary>
+    /// Folders declared for the connections panel, as "/"-separated paths. Membership lives on
+    /// <see cref="ConnectionInfo.Folder"/>; this list exists so an <b>empty</b> folder survives a save —
+    /// otherwise you could not create one before putting something in it, which is the order people work in.
+    /// A path a connection references but nobody declared is still shown (the tree infers it), so a
+    /// hand-edited file cannot hide connections.
+    /// </summary>
+    public List<string> ConnectionFolders { get; init; } = new();
 }
 
 /// <summary>An opened project: its directory plus the loaded manifest.</summary>
@@ -45,6 +54,10 @@ public sealed record OpenEditor
 
     public int CaretOffset { get; init; }
     public Guid? ConnectionId { get; init; }
+
+    /// <summary>Whether the tab was pinned (#67). Pinning is a statement about which scripts matter, so it
+    /// is worth surviving a restart — unlike the tab's scroll position or its zoom.</summary>
+    public bool Pinned { get; init; }
 }
 
 /// <summary>Per-user, gitignored session state ("resume where I left off").</summary>
@@ -63,4 +76,8 @@ public sealed record SessionState
 
     /// <summary>How multiple result sets are presented in the results dock (stacked vs tabbed).</summary>
     public ResultsViewMode ResultsViewMode { get; init; } = ResultsViewMode.Stacked;
+
+    /// <summary>Connection folders the user has collapsed in the side pane. Collapsed rather than expanded
+    /// so a folder that did not exist last session opens by default.</summary>
+    public List<string> CollapsedConnectionFolders { get; init; } = new();
 }

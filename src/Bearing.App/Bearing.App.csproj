@@ -16,6 +16,7 @@
     <ProjectReference Include="..\Bearing.Core\Bearing.Core.csproj" />
     <ProjectReference Include="..\Bearing.Sql\Bearing.Sql.csproj" />
     <ProjectReference Include="..\Bearing.Data\Bearing.Data.csproj" />
+    <ProjectReference Include="..\Bearing.Demo\Bearing.Demo.csproj" />
     <ProjectReference Include="..\Bearing.Persistence\Bearing.Persistence.csproj" />
     <ProjectReference Include="..\Bearing.Updates\Bearing.Updates.csproj" />
   </ItemGroup>
@@ -26,6 +27,7 @@
     <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="Avalonia.Fonts.Inter" />
     <PackageReference Include="Avalonia.Controls.DataGrid" />
+    <PackageReference Include="Avalonia.Controls.ColorPicker" />
     <PackageReference Include="Avalonia.AvaloniaEdit" />
     <PackageReference Include="AvaloniaEdit.TextMate" />
     <PackageReference Include="CommunityToolkit.Mvvm" />

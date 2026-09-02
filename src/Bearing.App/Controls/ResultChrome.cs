@@ -11,10 +11,10 @@ using Path = Avalonia.Controls.Shapes.Path;
 namespace Bearing.App.Controls;
 
 /// <summary>
-/// The small, stateless visual atoms the results dock is assembled from — badges, borderless buttons, the
-/// drawn glyph affordances, the read-only lock chip, the back bar and the dock header's Stacked/Tabbed
-/// toggle (design RESULTS_GRID). Each returns a fresh control and holds no state, so the composition code in
-/// <see cref="ResultView"/> is left with layout decisions only.
+/// The small, stateless visual atoms the results dock is assembled from — a cell's value text, badges,
+/// borderless buttons, the drawn glyph affordances, the read-only lock chip, the back bar and the dock
+/// header's Stacked/Tabbed toggle (design RESULTS_GRID). Each returns a fresh control and holds no state, so
+/// the composition code in <see cref="ResultView"/> is left with layout decisions only.
 /// <para>
 /// Every icon here is a vector <see cref="Path"/> rather than a font glyph: symbol glyphs (▸ ▾ ↗ ⤢ 🔒)
 /// render clipped in the app font.
@@ -22,6 +22,22 @@ namespace Bearing.App.Controls;
 /// </summary>
 public static class ResultChrome
 {
+    /// <summary>
+    /// Content height a result's meta row always reserves, whether or not the commit group is showing.
+    /// <para>
+    /// The group (● N pending · Discard · Save) appears on the first pending edit and is a pixel taller than
+    /// the row's other buttons, so revealing it grew the meta row and re-measured the grid beneath it —
+    /// moving the row the user had just edited (#60). Reserving the taller state costs the clean row one
+    /// pixel and costs the dirty row nothing, which is the right way round.
+    /// </para>
+    /// <para>
+    /// A measured number, not a guess: 22 is the commit group's own height at the button metrics in
+    /// <see cref="ResultEditToolbar"/>. <c>Ui.ResultGridScrollTests</c> asserts the grid does not change
+    /// height across the first edit, so if those metrics move this fails rather than drifts.
+    /// </para>
+    /// </summary>
+    public const double MetaRowContentHeight = 22;
+
     // Filled collapse triangles. Right = collapsed, down = expanded.
     private const string ChevronRightData = "M0,0 L5,4 L0,8 Z";
     private const string ChevronDownData = "M0,0 L8,0 L4,5 Z";
@@ -69,7 +85,7 @@ public static class ResultChrome
             Child = new TextBlock
             {
                 Text = text,
-                FontSize = 9,
+                FontSize = Metric("Font.Caption"),
                 FontWeight = FontWeight.Bold,
                 Foreground = Res(colorKey),
             },
@@ -82,12 +98,12 @@ public static class ResultChrome
     {
         var tokens = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
         foreach (var t in content.Split(' ', StringSplitOptions.RemoveEmptyEntries))
-            tokens.Children.Add(new TextBlock { Text = t, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+            tokens.Children.Add(new TextBlock { Text = t, FontSize = Metric("Font.Body"), VerticalAlignment = VerticalAlignment.Center });
 
         var b = new Button
         {
             Content = tokens,
-            FontSize = 12,
+            FontSize = Metric("Font.Body"),
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
             Padding = new Thickness(6, 2),
@@ -145,6 +161,32 @@ public static class ResultChrome
         ToolTip.SetTip(b, tip);
         return b;
     }
+
+    /// <summary>
+    /// The text inside a value cell, in the one place that decides how a value looks: dimmed italic for a
+    /// NULL, code colour for a number, primary text otherwise, with the grid's text inset and ellipsis
+    /// trimming.
+    /// <para>
+    /// Shared rather than per-cell-kind because it drifted the moment it was not: the foreign-key cell built
+    /// its own TextBlock and set neither <c>Foreground</c> nor <c>FontStyle</c>, so a NULL FK rendered as
+    /// bright upright text — the one column where "(null)" looked like a real value (#61) — and a live FK
+    /// value inherited the theme's plain white instead of <c>Text.Primary</c>. A third cell kind now cannot
+    /// drift the same way.
+    /// </para>
+    /// </summary>
+    /// <param name="numeric">Numbers get <c>Text.Code</c>. Foreign keys pass false even though they are
+    /// usually integers: they are identifiers, and the grid already sets them apart with the FK badge and the
+    /// jump glyph.</param>
+    public static TextBlock ValueText(string text, bool isNull, bool numeric)
+        => new()
+        {
+            Text = text,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(ResultGridChrome.CellTextMargin, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Foreground = isNull ? NullBrush : (numeric ? Res("Text.Code") : Res("Text.Primary")),
+            FontStyle = isNull ? FontStyle.Italic : FontStyle.Normal,
+        };
 
     /// <summary>A small drawn "⤢" inspect icon that opens the cell inspector.</summary>
     public static Control InspectAffordance()
@@ -236,6 +278,21 @@ public static class ResultChrome
 
     /// <summary>An amber padlock chip for a locked (read-only) result; the reason lives in the tooltip
     /// (design RESULTS_GRID §8).</summary>
+    /// <summary>
+    /// The body of a result that has no grid — a statement message or an error. One line of text, so it takes
+    /// the data font size rather than inheriting the frame's, and it is inset to the same left edge as a
+    /// grid's first column so a run of mixed results lines up.
+    /// </summary>
+    public static Control ResultText(string text, IBrush foreground, bool wrap = false)
+        => new TextBlock
+        {
+            Text = text,
+            Foreground = foreground,
+            FontSize = ResultGridChrome.CellFontSize,
+            Margin = new Thickness(ResultGridChrome.HeaderPadding + 2, 8),
+            TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap,
+        };
+
     public static Control LockChip(string reason)
     {
         var padlock = new Path
@@ -306,7 +363,7 @@ public static class ResultChrome
         var label = new TextBlock
         {
             Text = "RESULTS",
-            FontSize = 11,
+            FontSize = Metric("Font.Small"),
             FontWeight = FontWeight.Bold,
             Foreground = Res("Text.Dim"),
             VerticalAlignment = VerticalAlignment.Center,
@@ -353,7 +410,7 @@ public static class ResultChrome
         var tb = new TextBlock
         {
             Text = text,
-            FontSize = 11,
+            FontSize = Metric("Font.Small"),
             FontWeight = isActive ? FontWeight.SemiBold : FontWeight.Normal,
             Foreground = isActive ? Res("Text.Primary") : Res("Text.Dim"),
             VerticalAlignment = VerticalAlignment.Center,

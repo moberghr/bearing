@@ -21,8 +21,9 @@ public sealed class StatementMargin : AbstractMargin
 
     // {Syntax.Func} azure at the bar's ~0xDD alpha. Resolved from the theme token (falls back
     // to the token's literal value) so a theme swap follows; cached after the first render.
-    private static IBrush? _bar;
-    private static IBrush Bar => _bar ??= ThemeBrush.AtAlpha("Syntax.Func", 0xDD, Color.FromRgb(0x6F, 0xA6, 0xE2));
+    private static (Avalonia.Application? Owner, Avalonia.Media.IImmutableBrush Brush)? _bar;
+    private static IBrush Bar =>
+        ThemeBrush.AtAlphaCached(ref _bar, "Syntax.Func", 0xDD, Color.FromRgb(0x6F, 0xA6, 0xE2));
 
     private int _start = -1;
     private int _end = -1;

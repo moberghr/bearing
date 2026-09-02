@@ -81,6 +81,16 @@
   <StreamGeometry x:Key="Icon.Function">M9,18 v-9 a2.5,2.5 0 0 1 2.5,-2.5 M7,12 h5 M16,7 a4.5,5.5 0 0 1 0,10 M4.5,7 a4.5,5.5 0 0 0 0,10</StreamGeometry>
 
   <!-- Snippet: a braced fragment -->
+  <!-- Schema-tree folders under a table (#46). The two foreign-key directions are one arrow each, pointing
+       the way the reference does: out of this table, or into it. That direction is the whole distinction
+       between "what does this row point at" and "what breaks if I delete it". -->
+  <StreamGeometry x:Key="Icon.Key">M6,12 a3,3 0 1 0 6,0 a3,3 0 1 0 -6,0 M12,12 h7 M16,12 v3 M19,12 v2.5</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Index">M5,7 h14 M5,12 h9 M5,17 h5</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Constraint">M8,11 h8 v7 h-8 z M9.5,11 v-2.5 a2.5,2.5 0 0 1 5,0 v2.5</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Trigger">M13,3 L7,13 h4.5 L10.5,21 L17,11 h-4.5 z</StreamGeometry>
+  <StreamGeometry x:Key="Icon.ForeignKey">M4,12 h12 M12,8 l4,4 l-4,4</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Reference">M20,12 h-12 M12,8 l-4,4 l4,4</StreamGeometry>
+
   <StreamGeometry x:Key="Icon.Snippet">M10,5 h-2 a2,2 0 0 0 -2,2 v3 a2,2 0 0 1 -2,2 a2,2 0 0 1 2,2 v3 a2,2 0 0 0 2,2 h2 M14,5 h2 a2,2 0 0 1 2,2 v3 a2,2 0 0 0 2,2 a2,2 0 0 0 -2,2 v3 a2,2 0 0 1 -2,2 h-2</StreamGeometry>
 
 </ResourceDictionary>

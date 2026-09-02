@@ -89,15 +89,17 @@ public class SqlServerConnectionOptionsTests
             .Where(f => !intrinsic.Contains(f.Key))
             .ToList();
 
-        Assert.Equal(new[] { "Encrypt", "TrustServerCertificate" }, optionFields.Select(f => f.Key));
+        // Currently none: Encrypt/TrustServerCertificate became the typed ConnectionInfo.Tls (#23), so
+        // every field this provider declares is intrinsic. The assertion is kept rather than deleted
+        // because it is what would catch a future declared field that the factory would silently drop.
+        Assert.Empty(optionFields);
         Assert.All(optionFields, f => Assert.True(
             builder.ContainsKey(f.Key),
             $"'{f.Key}' is not a SqlClient connection-string keyword, so the factory would drop it silently."));
 
-        // And their defaults restate the driver's own, so a user who leaves them alone changes nothing —
-        // in particular nothing here disables encryption or certificate validation (§1.4).
-        Assert.Equal("true", optionFields.Single(f => f.Key == "Encrypt").Default);
-        Assert.Equal("false", optionFields.Single(f => f.Key == "TrustServerCertificate").Default);
+        // Transport security is not here to have a default: ConnectionInfo.Tls owns it, and the factory
+        // blocks both TLS keywords from the options bag so there is one source of truth (§1.4, #23).
+        Assert.DoesNotContain("Encrypt", new SqlServerProvider().ConnectionFields.Select(f => f.Key));
     }
 
     // ---- Against a live server -------------------------------------------------------------------

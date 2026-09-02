@@ -104,4 +104,41 @@ public class CompletionEngineTests
         Assert.Equal(14, result.ReplacementStart);
         Assert.Equal(0, result.ReplacementLength);
     }
+
+    // ---- string literals ------------------------------------------------------------------------
+
+    [Fact]
+    public void No_suggestions_inside_a_string_literal()
+    {
+        // 'text' is data. Nothing in the catalog or the grammar belongs there, and a popup over it is noise
+        // to dismiss on the way to typing a value.
+        const string sql = "select * from users where name = 'us";
+
+        var result = Engine.Complete(sql, sql.Length, Schema);
+
+        Assert.Empty(result.Suggestions);
+    }
+
+    [Fact]
+    public void A_string_literal_does_not_silence_the_rest_of_the_statement()
+    {
+        // The gate is the caret's position, not "this statement contains a quote".
+        const string sql = "select * from users where name = 'ada' and u";
+
+        var result = Engine.Complete(sql, sql.Length, Schema);
+
+        Assert.NotEmpty(result.Suggestions);
+    }
+
+    [Fact]
+    public void A_quoted_identifier_still_gets_suggestions()
+    {
+        // The reason this is single-quote only: "..." is a quoted *identifier* — how you name a table with a
+        // capital or a space — so it is precisely where a table name is wanted.
+        const string sql = "select * from \"us";
+
+        var result = Engine.Complete(sql, sql.Length, Schema);
+
+        Assert.NotEmpty(result.Suggestions);
+    }
 }

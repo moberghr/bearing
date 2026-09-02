@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Bearing.Core.Schema;
 
 namespace Bearing.App.ViewModels;
 
@@ -35,4 +36,48 @@ internal static class SchemaObjectLabel
     /// </summary>
     public static string Detail(string kindLabel, string schema, string defaultSchema)
         => IsDefault(schema, defaultSchema) ? $"{kindLabel} · {schema}" : kindLabel;
+
+    /// <summary>
+    /// A detail line led by the relation's size (#76). Secondary text on the same line, not a second one:
+    /// #71 made these rows tighter on purpose, and a size is a field rather than a paragraph.
+    /// <para>
+    /// The size comes <b>first</b>, which a capture of the tree settled: the side panel is 262px, so the
+    /// detail is ellipsized, and a size appended at the end was being cut to "9." — a truncated number is
+    /// worse than none. Leading with it also reads better for the question it answers, since scanning a
+    /// column of sizes is the point.
+    /// </para>
+    /// <para>
+    /// The kind and schema follow. Both are recoverable elsewhere — the row's icon says which kind it is,
+    /// and the title carries a <c>schema.</c> prefix outside the default schema — so they are the half that
+    /// can afford to be clipped.
+    /// </para>
+    /// </summary>
+    public static string WithSize(string detail, RelationSize size)
+    {
+        var parts = new List<string> { ByteSize.Format(size.TotalBytes) };
+        if (ByteSize.FormatRows(size.EstimatedRows) is { } rows) parts.Add(rows);
+        parts.Add(detail);
+        return string.Join(" · ", parts);
+    }
+
+    /// <summary>
+    /// The full breakdown, for the definition view: total, heap, indexes, toast, rows.
+    /// <para>
+    /// The split is the point. A 2 GB table that is 400 MB of heap and 1.6 GB of indexes is a different
+    /// problem from the reverse, and one "size" number hides which one you have.
+    /// </para>
+    /// </summary>
+    public static string SizeBreakdown(RelationSize size)
+    {
+        var lines = new List<string>
+        {
+            $"-- total    {ByteSize.Format(size.TotalBytes)}",
+            $"-- heap     {ByteSize.Format(size.TableBytes)}",
+            $"-- indexes  {ByteSize.Format(size.IndexBytes)}",
+        };
+        // Only when there is any: every table would otherwise carry a "toast 0 B" line saying nothing.
+        if (size.ToastBytes > 0) lines.Add($"-- toast    {ByteSize.Format(size.ToastBytes)}");
+        lines.Add($"-- rows     {ByteSize.FormatRows(size.EstimatedRows) ?? "unknown (never analysed)"}");
+        return string.Join("\n", lines) + "\n";
+    }
 }

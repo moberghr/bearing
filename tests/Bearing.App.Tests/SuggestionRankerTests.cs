@@ -112,4 +112,51 @@ public class SuggestionRankerTests
         Assert.Equal(new[] { "orders" }, Names(SuggestionRanker.Rank(new[] { join }, "ord")));
         Assert.Empty(SuggestionRanker.Rank(new[] { join }, "user"));
     }
+
+    // ---- keywords matched by accident ------------------------------------------------------------
+
+    [Fact]
+    public void A_keyword_the_query_is_merely_buried_inside_sinks_below_the_schema()
+    {
+        // "ete" is scattered through "delete" and none of its start was typed, so it is an accident of
+        // spelling rather than a request. Reported: keywords like this crowded out the tables.
+        var ranked = SuggestionRanker.Rank([Keyword("delete"), Table("fee_types"), Column("item_type")], "ete");
+
+        Assert.All(ranked, s => Assert.True(true));
+        Assert.Equal(SuggestionKind.Keyword, ranked[^1].Kind);
+        Assert.NotEqual(SuggestionKind.Keyword, ranked[0].Kind);
+    }
+
+    [Fact]
+    public void A_keyword_whose_start_was_typed_keeps_its_place()
+    {
+        // The other half, and the reason this is not simply "priority first": typing "sel" and pressing
+        // Enter has to still give you select, not whichever table happens to contain an s, an e and an l.
+        var ranked = SuggestionRanker.Rank([Keyword("select"), Table("settlements")], "sel");
+
+        Assert.Equal("select", ranked[0].DisplayText);
+    }
+
+    [Fact]
+    public void A_keywords_initials_are_not_an_accident_either()
+    {
+        // "gb" for "group by" is deliberate shorthand, so that keyword is not demoted.
+        var ranked = SuggestionRanker.Rank([Keyword("group by"), Table("global_batches")], "gb");
+
+        Assert.Contains("group by", ranked.Select(s => s.DisplayText));
+    }
+
+    [Fact]
+    public void At_equal_quality_a_table_still_beats_a_keyword()
+    {
+        // Unchanged behaviour, pinned so the demotion cannot be mistaken for the whole rule. "ord" is a
+        // prefix of both, so quality ties and Priority decides.
+        var ranked = SuggestionRanker.Rank([Keyword("order"), Table("orders")], "ord");
+
+        Assert.Equal("orders", ranked[0].DisplayText);
+
+        // …and an *exact* keyword match still wins, because at that point the user has typed the whole word.
+        var exact = SuggestionRanker.Rank([Keyword("order"), Table("orders")], "order");
+        Assert.Equal("order", exact[0].DisplayText);
+    }
 }

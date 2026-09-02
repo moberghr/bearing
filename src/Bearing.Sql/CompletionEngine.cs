@@ -16,6 +16,12 @@ public sealed partial class CompletionEngine : ICompletionEngine
     {
         caretOffset = Math.Clamp(caretOffset, 0, sql.Length);
 
+        // Nothing in the catalog or the grammar belongs inside 'text' — it is data, and a popup over it is
+        // noise you have to dismiss. Double-quoted spans are deliberately still completed: those are quoted
+        // *identifiers*, which is precisely where a table or column name goes.
+        if (SqlStringLiterals.Contains(sql, caretOffset))
+            return new CompletionResult(Array.Empty<Suggestion>(), caretOffset, 0);
+
         var parsed = PgParsing.Create(sql);
         parsed.Tokens.Fill();
         var caret = ResolveCaret(parsed.Tokens, caretOffset);
@@ -38,7 +44,11 @@ public sealed partial class CompletionEngine : ICompletionEngine
         // A half-typed alias is a name the user is inventing — nothing in the catalog or the grammar
         // belongs there, and whatever sat under Enter would overwrite it. An *empty* alias slot still
         // gets keywords (as / join / where), which is what actually follows a named source.
-        if (aliasSlot && caret.ReplacementLength > 0)
+        // …unless the caret is at the start of a line, where the more likely reading is a new statement being
+        // typed rather than an alias for the relation on the line above (#68). The alias rule keys off the
+        // previous meaningful token, which does not care that a newline came between.
+        var statementStart = StatementStartHint.AtLineStart(sql, caretOffset);
+        if (aliasSlot && !statementStart && caret.ReplacementLength > 0)
             return new CompletionResult(Array.Empty<Suggestion>(), caret.ReplacementStart, caret.ReplacementLength);
 
         var suggestions = new List<Suggestion>();
@@ -70,8 +80,11 @@ public sealed partial class CompletionEngine : ICompletionEngine
             {
                 suggestions.AddRange(TableSuggestions(schema, sources));
                 suggestions.AddRange(SchemaSuggestions(schema));
-                if (sources.Count > 0)
-                    suggestions.AddRange(JoinSuggestions(schema, sources));
+                // Only where a join can actually attach, and carrying whatever keyword the caret is still
+                // missing — accepting one after a bare source used to emit `from users u orders o on …`.
+                if (sources.Count > 0
+                    && JoinKeywordPrefix(parsed.Tokens.GetTokens(), caret.TokenIndex) is { } joinPrefix)
+                    suggestions.AddRange(JoinSuggestions(schema, sources, joinPrefix));
             }
 
             if (intents.Contains(CompletionIntent.ColumnPosition))
@@ -88,6 +101,30 @@ public sealed partial class CompletionEngine : ICompletionEngine
                         Kind = SuggestionKind.Keyword,
                         Priority = 1,
                     });
+            }
+
+            // At a line start, add the keywords that could open a statement. Added rather than substituted:
+            // a line holding one bare word is genuinely ambiguous — `where` continuing the query above and
+            // `select` starting a new one are both plausible — so replacing the scope with the current line,
+            // as #68 first proposed, would have traded one missing answer for the other. The grammar's own
+            // candidates keep the higher priority, and the typed fragment narrows both (SuggestionRanker).
+            if (statementStart)
+            {
+                var already = suggestions
+                    .Where(s => s.Kind == SuggestionKind.Keyword)
+                    .Select(s => s.DisplayText)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                foreach (var kw in StatementSplitter.StatementStarters)
+                {
+                    if (!already.Add(kw)) continue;
+                    suggestions.Add(new Suggestion
+                    {
+                        DisplayText = kw,
+                        ReplacementText = kw,
+                        Kind = SuggestionKind.Keyword,
+                        Priority = 0,
+                    });
+                }
             }
         }
 
@@ -268,7 +305,46 @@ public sealed partial class CompletionEngine : ICompletionEngine
 
     // ---- FK-driven smart joins (bidirectional) -----------------------------------------------
 
-    private static IEnumerable<Suggestion> JoinSuggestions(ISchemaSnapshot schema, IReadOnlyList<TableRef> sources)
+    /// <summary>
+    /// What an FK-join insertion has to type for the user at this caret, or null when a join suggestion does
+    /// not belong here at all. The engine offered these on any table position with a source in scope and
+    /// never inspected the token before the caret, so accepting one directly after a completed source
+    /// produced <c>from users u orders o on …</c> — no <c>join</c>, invalid SQL (#75).
+    /// <list type="bullet">
+    /// <item><c>… join |</c> → <c>""</c>: the keyword is already there.</item>
+    /// <item><c>… left |</c>, <c>… left outer |</c>, <c>inner</c>, <c>full</c> → <c>"join "</c>: the
+    /// qualifier is typed and only the keyword is missing.</item>
+    /// <item><c>… cross |</c>, <c>… natural |</c> → null: those joins take no <c>on</c> clause, so an
+    /// FK-equality suggestion has no valid shape to be inserted in.</item>
+    /// <item><c>… users u |</c> → <c>"join "</c>: a completed source, which is the reported case.</item>
+    /// <item><c>… users u, |</c> → null: a comma-separated source cannot carry an <c>on</c> clause, and the
+    /// predicate belongs in the WHERE. Offering a join here has no correct insertion.</item>
+    /// </list>
+    /// Keyed off the token before the caret rather than the parse tree, like every other caret-context check
+    /// in this file, so it survives the half-typed SQL completion actually runs against.
+    /// </summary>
+    private static string? JoinKeywordPrefix(IList<Antlr4.Runtime.IToken> toks, int caretTokenIndex)
+    {
+        var i = PrevMeaningful(toks, caretTokenIndex - 1);
+        if (i < 0) return null;
+
+        return toks[i].Type switch
+        {
+            PostgreSQLParser.JOIN => "",
+            PostgreSQLParser.LEFT or PostgreSQLParser.RIGHT or PostgreSQLParser.FULL
+                or PostgreSQLParser.INNER_P or PostgreSQLParser.OUTER_P => "join ",
+            // CROSS JOIN and NATURAL JOIN take no ON clause at all, so an FK-equality suggestion has no
+            // valid shape here — `cross join orders o on …` is a syntax error, not a missing keyword.
+            PostgreSQLParser.CROSS or PostgreSQLParser.NATURAL => null,
+            PostgreSQLParser.COMMA => null,
+            _ => IsNameToken(toks[i]) ? "join " : null,
+        };
+    }
+
+    /// <param name="joinPrefix">The keyword the caret is missing — see <see cref="JoinKeywordPrefix"/>.
+    /// Empty when the user has already typed <c>join</c>.</param>
+    private static IEnumerable<Suggestion> JoinSuggestions(
+        ISchemaSnapshot schema, IReadOnlyList<TableRef> sources, string joinPrefix)
     {
         var existing = ExistingAliases(sources);
 
@@ -308,7 +384,7 @@ public sealed partial class CompletionEngine : ICompletionEngine
                     FilterText = other.Name,
                     DetailText = $"join → {SourceLabel(src)}",
                     TrailingText = predicate,
-                    ReplacementText = $"{Q(other.Name)} {alias} on {predicate}",
+                    ReplacementText = $"{joinPrefix}{Q(other.Name)} {alias} on {predicate}",
                     Kind = SuggestionKind.Join,
                     Priority = 20,
                     Description = $"FK {fk.Name}: {other.Schema}.{other.Name} ⋈ {SourceLabel(src)}",

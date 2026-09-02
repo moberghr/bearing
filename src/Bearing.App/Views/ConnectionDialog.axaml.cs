@@ -29,13 +29,19 @@ public sealed record ConnectionDialogResult(ConnectionInfo Connection, string Pa
 /// <see cref="CredentialKindOptions"/>. All of the deciding — which fields exist, what they default to,
 /// what a provider switch keeps, what is invalid, and how any of it maps to
 /// <see cref="ConnectionInfo"/> and its <see cref="ConnectionInfo.Options"/> — lives in
-/// <see cref="ConnectionFieldModel"/>, because none of it can be tested from here (§0.5, §2.3, §2.5, §4.3).
+/// <see cref="ConnectionFieldModel"/>, because none of it can be tested from here (§0.5, §2.3, §2.5).
 /// What is left in this file is labels, boxes and visibility.
 /// </para>
 /// </summary>
 public partial class ConnectionDialog : Window
 {
     private readonly Guid _id;
+
+    /// <summary>The connection being edited, or null for a new one. Held so <see cref="BuildConnection"/>
+    /// can carry forward the fields this dialog does not show — the folder it is filed in (#80). It builds
+    /// a fresh record, so anything not re-stated is silently dropped on save.</summary>
+    private readonly ConnectionInfo? _existing;
+
     private readonly Func<ConnectionInfo, string?, CancellationToken, Task<bool>> _test;
     private readonly SecretStoragePosture _storage;
     private readonly List<IDbProvider> _providers;
@@ -62,6 +68,7 @@ public partial class ConnectionDialog : Window
     {
         InitializeComponent();
         _test = test;
+        _existing = existing;
         _id = existing?.Id ?? Guid.NewGuid();
         _storage = storage ?? SecretStoragePosture.Keychain;
         // The designer and the no-argument path get the default registry; every real caller passes the
@@ -94,6 +101,10 @@ public partial class ConnectionDialog : Window
         }
 
         RenderFields();
+        // Resolve rather than read the field: a project written before the field existed, or a DBeaver
+        // import, still carries the mode in the options bag (#23). A new connection's default is computed
+        // from the host the provider declared, not from a hardcoded "localhost".
+        InitTls(existing is not null ? TlsPolicy.Resolve(existing) : TlsPolicy.DefaultFor(HostValue()));
         // With nowhere to keep a password, a new connection starts on "prompt each time" rather than on a
         // stored password it would silently fail to store. An edited one keeps whatever it was saved as.
         RebuildCredentialKinds(existing?.CredentialKind
@@ -130,10 +141,7 @@ public partial class ConnectionDialog : Window
     {
         FieldsHost.Children.Clear();
 
-        var grid = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("90,*"),
-        };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("90,*") };
         for (var i = 0; i < _model.Fields.Count; i++)
         {
             var field = _model.Fields[i];
@@ -143,9 +151,9 @@ public partial class ConnectionDialog : Window
             Grid.SetRow(editor, i);
 
             // A checkbox carries its own label as Content and spans both columns, the way this dialog's
-            // hand-written ConfirmWritesBox does. It must not sit in the 90px label column: "Encrypt
-            // connection" and "Trust server certificate" are both far wider than that, so a separate label
-            // was clipped mid-word with the box overlapping it.
+            // hand-written ConfirmWritesBox does. It must not sit in the 90px label column: a label like
+            // "Trust server certificate" is far wider than that, so a separate label was clipped mid-word
+            // with the box overlapping it.
             if (field.Kind == ConnectionFieldKind.Boolean)
             {
                 Grid.SetColumn(editor, 0);
@@ -190,6 +198,7 @@ public partial class ConnectionDialog : Window
         {
             var check = new CheckBox
             {
+                Name = field.Key + "Box",
                 // The label is the checkbox's Content, not a separate cell — see RenderFields.
                 Content = field.Label,
                 IsChecked = string.Equals(field.Value.Trim(), "true", StringComparison.OrdinalIgnoreCase),
@@ -205,16 +214,47 @@ public partial class ConnectionDialog : Window
 
         var box = new TextBox
         {
+            // Named as the hand-written rows were ("Host" -> HostBox), so a headless UI test can still find
+            // this box by name (§4.5) and so the code-built rows are no less discoverable than the XAML
+            // ones they replaced.
+            Name = field.Key + "Box",
             Text = field.Value,
             Margin = new Thickness(0, 6, 0, 0),
             PlaceholderText = field.Field.Default ?? "",
         };
+        var isHost = string.Equals(field.Key, "Host", StringComparison.OrdinalIgnoreCase);
         box.TextChanged += (_, _) =>
         {
             field.Value = box.Text ?? "";
             RefreshValidation();
+            // A new connection's encryption default follows the host as it is typed (#23). The host is a
+            // provider-declared field now, so this hangs off its editor rather than off a named HostBox.
+            if (isHost && _existing is null && !_tlsChosen) SelectTls(TlsPolicy.DefaultFor(field.Value));
         };
         return box;
+    }
+
+    /// <summary>The host as the model currently holds it — what the encryption default is computed from.</summary>
+    private string HostValue()
+        => _model.Fields
+            .FirstOrDefault(f => string.Equals(f.Key, "Host", StringComparison.OrdinalIgnoreCase))
+            ?.Value ?? "";
+
+    /// <summary>
+    /// Show, live, which of the selected provider's required fields are still empty (and which numbers
+    /// don't parse). Advisory only — <see cref="OnSaveClick"/> does not consult it.
+    /// <para>
+    /// It is not a gate because this dialog is the only way to edit a connection that already exists, and a
+    /// connection saved before these fields were validated at all may be missing one. Blocking Save would
+    /// make those uneditable — you could not even correct the field being complained about without first
+    /// filling in every other one. So it warns while you type and clears as you fill it in.
+    /// </para>
+    /// </summary>
+    private void RefreshValidation()
+    {
+        var problems = _model.Validate(SelectedCredentialKind());
+        ValidationHint.Text = problems.Count > 0 ? "⚠ " + string.Join(" ", problems) : "";
+        ValidationHint.IsVisible = problems.Count > 0;
     }
 
     // ---- Credential kind -------------------------------------------------------------------------
@@ -224,37 +264,34 @@ public partial class ConnectionDialog : Window
     /// selected has to land somewhere, and the stored password is the kind every engine has.</summary>
     private void RebuildCredentialKinds(CredentialKind preferred)
     {
-        _credentialKinds = CredentialKindOptions.For(_model.Provider);
-        var index = _credentialKinds.ToList().FindIndex(o => o.Kind == preferred);
-
+        _credentialKinds = CredentialKindOptions.For(_providers[Math.Max(0, ProviderBox.SelectedIndex)]);
         _loading = true;
-        CredentialKindBox.Items.Clear();
-        foreach (var option in _credentialKinds)
-            CredentialKindBox.Items.Add(new ComboBoxItem { Content = option.Label });
-        CredentialKindBox.SelectedIndex = index >= 0 ? index : 0;
-        _loading = false;
-
+        try
+        {
+            CredentialKindBox.Items.Clear();
+            foreach (var option in _credentialKinds)
+                CredentialKindBox.Items.Add(new ComboBoxItem { Content = option.Label });
+            var index = _credentialKinds.ToList().FindIndex(o => o.Kind == preferred);
+            CredentialKindBox.SelectedIndex = index >= 0 ? index : 0;
+        }
+        finally { _loading = false; }
         UpdateCredentialVisibility();
     }
 
     private CredentialKind SelectedCredentialKind()
-    {
-        var i = CredentialKindBox.SelectedIndex;
-        return i >= 0 && i < _credentialKinds.Count ? _credentialKinds[i].Kind : CredentialKind.StoredPassword;
-    }
+        => CredentialKindBox.SelectedIndex >= 0 && CredentialKindBox.SelectedIndex < _credentialKinds.Count
+            ? _credentialKinds[CredentialKindBox.SelectedIndex].Kind
+            : CredentialKind.StoredPassword;
 
     private void OnCredentialKindChanged(object? sender, SelectionChangedEventArgs e)
     {
-        if (_loading) return;
-        UpdateCredentialVisibility();
+        if (!_loading) UpdateCredentialVisibility();
     }
 
-    /// <summary>Only the stored-password kind shows the password box + the no-keychain warning; prompt,
-    /// Entra and integrated authentication never persist a secret (nothing to store), so warning any of
-    /// them about an unreachable keychain would be warning about something they do not touch — integrated
-    /// authentication reads no secret at all. Entra and integrated each show their own hint instead. With no
-    /// reachable keychain a password can't be saved at all: the warning says so and, where the probe's
-    /// reason allows, what to do about it.</summary>
+    /// <summary>Only the stored-password kind shows the password box + the no-keychain warning; prompt, Entra
+    /// and integrated authentication never persist a secret, and integrated authentication reads no secret at
+    /// all. Entra and integrated each show their own hint instead. With no reachable keychain a password
+    /// can't be saved at all: the warning says so and, where the probe's reason allows, what to do about it.</summary>
     private void UpdateCredentialVisibility()
     {
         var kind = SelectedCredentialKind();
@@ -271,43 +308,144 @@ public partial class ConnectionDialog : Window
         RefreshValidation();
     }
 
+    // ---- Transport security (#23) ----------------------------------------------------------------
+
+    /// <summary>
+    /// Fill the encryption picker, strongest first, and show what the current choice leaves open.
+    /// <para>
+    /// Strongest first on purpose: listed in the enum's own order the safe choice sits at the bottom under the
+    /// familiar default, and the default is the one that silently may or may not encrypt.
+    /// </para>
+    /// </summary>
+    private void InitTls(TlsMode mode)
+    {
+        TlsBox.ItemsSource = TlsPolicy.Choices.Select(TlsPolicy.Label).ToList();
+        SelectTls(mode);
+    }
+
+    private TlsMode SelectedTls()
+        => TlsBox.SelectedIndex >= 0 && TlsBox.SelectedIndex < TlsPolicy.Choices.Count
+            ? TlsPolicy.Choices[TlsBox.SelectedIndex]
+            : TlsPolicy.Default;
+
+    /// <summary>
+    /// Whether the user has chosen an encryption mode themselves. Until they have, a new connection's mode
+    /// follows the host as it is typed — the default is only defensible if it is computed from the host that
+    /// ends up in the record, not from the "localhost" the box is pre-filled with.
+    /// </summary>
+    private bool _tlsChosen;
+
+    /// <summary>Set while the picker is being moved by code, so that does not count as a choice.</summary>
+    private bool _settingTls;
+
+    private void OnTlsChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (!_settingTls) _tlsChosen = true;
+        UpdateTlsWarning();
+    }
+
+    private void SelectTls(TlsMode mode)
+    {
+        _settingTls = true;
+        try { TlsBox.SelectedIndex = Math.Max(0, TlsPolicy.Choices.ToList().IndexOf(mode)); }
+        finally { _settingTls = false; }
+        UpdateTlsWarning();
+    }
+
+    private void UpdateTlsWarning()
+    {
+        var mode = SelectedTls();
+        TlsWarning.IsVisible = TlsPolicy.NeedsWarning(mode);
+        TlsWarningText.Text = TlsPolicy.Advice(mode);
+    }
+
     // ---- Environment -----------------------------------------------------------------------------
+
+    /// <summary>The preset buttons' own labels — the set this dialog considers its own to overwrite.</summary>
+    private static readonly string[] PresetLabels = ["local", "staging", "production"];
 
     private void OnPresetColorClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button { Tag: string hex } b)
+        if (sender is not Button { Tag: string hex } b) return;
+
+        EnvColorBox.Text = hex;
+        var label = b.Content?.ToString()?.ToLowerInvariant();
+        // Re-label when the box is empty or still holds another preset's label — clicking Local and then
+        // Production has to end up saying "production". A hand-typed label ("staging-eu") is the user's, and
+        // survives.
+        var current = EnvBox.Text?.Trim() ?? "";
+        if (current.Length == 0 ||
+            Array.Exists(PresetLabels, l => string.Equals(l, current, StringComparison.OrdinalIgnoreCase)))
         {
-            EnvColorBox.Text = hex;
-            var label = b.Content?.ToString()?.ToLowerInvariant();
-            if (string.IsNullOrWhiteSpace(EnvBox.Text)) EnvBox.Text = label;
-            // Production defaults to guarded; the user can still uncheck it.
-            if (label == "production") ConfirmWritesBox.IsChecked = true;
+            EnvBox.Text = label;
         }
+        // Production defaults to guarded; the user can still uncheck it. Deliberately not unset when moving
+        // back to a lesser preset — dropping a write guard is the user's call, not a side effect of a click.
+        if (label == "production") ConfirmWritesBox.IsChecked = true;
     }
 
-    // ---- Save / test / delete --------------------------------------------------------------------
+    // The hex box is what gets saved; the picker is a second way to fill it. Each pushes into the other, so
+    // the guard is what stops a round trip from re-entering and overwriting what the user is typing.
+    private bool _syncingColor;
 
+    private void OnEnvColorTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (_syncingColor) return;
+        if (Color.TryParse(EnvColorBox.Text, out var color)) SyncPickerColor(color);
+    }
+
+    private void OnEnvColorPicked(object? sender, ColorChangedEventArgs e)
+    {
+        if (_syncingColor) return;
+        _syncingColor = true;
+        // #RRGGBB: alpha is off on the picker, and an environment colour is a hue, not a translucency.
+        try { EnvColorBox.Text = $"#{e.NewColor.R:X2}{e.NewColor.G:X2}{e.NewColor.B:X2}"; }
+        finally { _syncingColor = false; }
+    }
+
+    private void SyncPickerColor(Color color)
+    {
+        _syncingColor = true;
+        try { EnvColorPicker.Color = color; }
+        finally { _syncingColor = false; }
+    }
+
+    // ---- Result ----------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The edited record. The engine-declared half — provider id, host, port, database, user and the driver
+    /// options — is the model's (<see cref="ConnectionFieldModel.Apply"/>, which also carries forward the
+    /// options this dialog does not show). Everything else is this dialog's own boxes, or is carried from
+    /// the record being edited.
+    /// </summary>
     private ConnectionInfo BuildConnection() => _model.Apply(new ConnectionInfo
     {
         Id = _id,
         Name = string.IsNullOrWhiteSpace(NameBox.Text) ? BuildFallbackName() : NameBox.Text!.Trim(),
+        // Restated because the record requires it; the model sets the real value.
         ProviderId = _model.ProviderId,
         Environment = string.IsNullOrWhiteSpace(EnvBox.Text) ? null : EnvBox.Text!.Trim(),
         EnvironmentColor = string.IsNullOrWhiteSpace(EnvColorBox.Text) ? null : EnvColorBox.Text!.Trim(),
         RequireWriteConfirmation = ConfirmWritesBox.IsChecked == true,
         CredentialKind = SelectedCredentialKind(),
+        Tls = SelectedTls(),
+        // Not editable here, so carried rather than rebuilt: filing lives in the tree. Omitting it would
+        // quietly discard it on every save.
+        Folder = _existing?.Folder,
     });
 
     /// <summary>The password to persist: the typed value for a stored-password connection, or empty for
     /// prompt / Entra / integrated (nothing is stored — an empty value deletes any existing secret on
     /// save).</summary>
     private string SecretToStore()
-        => CredentialKindOptions.KeepsAStoredPassword(SelectedCredentialKind()) ? (PasswordBox.Text ?? "") : "";
+        => SelectedCredentialKind() == CredentialKind.StoredPassword ? (PasswordBox.Text ?? "") : "";
 
     private string BuildFallbackName()
     {
-        var db = (_model.Get("Database") ?? "").Trim();
-        var host = (_model.Get("Host") ?? "").Trim();
+        var host = HostValue().Trim();
+        var db = (_model.Fields
+            .FirstOrDefault(f => string.Equals(f.Key, "Database", StringComparison.OrdinalIgnoreCase))
+            ?.Value ?? "").Trim();
         return string.IsNullOrEmpty(db) ? (string.IsNullOrEmpty(host) ? "Connection" : host) : $"{host}/{db}";
     }
 
@@ -326,23 +464,6 @@ public partial class ConnectionDialog : Window
             // and connect paths — this one was missed.
             TestResult.Text = "✗ " + SafeErrorText.Of(ex);
         }
-    }
-
-    /// <summary>
-    /// Show, live, which of the selected provider's required fields are still empty (and which numbers
-    /// don't parse). Advisory only — <see cref="OnSaveClick"/> does not consult it.
-    /// <para>
-    /// It is not a gate because this dialog is the only way to edit a connection that already exists, and a
-    /// connection saved before these fields were validated at all may be missing one. Blocking Save would
-    /// make those uneditable — you could not even correct the field being complained about without first
-    /// filling in every other one. So it warns while you type and clears as you fill it in.
-    /// </para>
-    /// </summary>
-    private void RefreshValidation()
-    {
-        var problems = _model.Validate(SelectedCredentialKind());
-        ValidationHint.Text = problems.Count > 0 ? "⚠ " + string.Join(" ", problems) : "";
-        ValidationHint.IsVisible = problems.Count > 0;
     }
 
     private void OnSaveClick(object? sender, RoutedEventArgs e)

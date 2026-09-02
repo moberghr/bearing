@@ -149,8 +149,29 @@ public class SettingsCatalogTests
         BoolSetting b => !(bool)b.Default!,
         IntSetting i => (int)i.Default! == i.Min ? i.Min + 1 : i.Min,
         EnumSetting e => e.Options.First(o => o.Value != (string)e.Default!).Value,
+        // A value the descriptor's own validator accepts — a StringSetting refuses what it cannot use, so an
+        // arbitrary string would be written and read back as the default, which is not the round trip this
+        // is checking.
+        StringSetting str => AcceptableAlternative(str),
         _ => throw new NotSupportedException($"Unhandled setting kind {descriptor.GetType().Name}"),
     };
+
+    /// <summary>
+    /// A different-but-valid value for a free-text setting. Drawn from its own suggestion list where it has
+    /// one, so the test does not have to know what kind of identifier the setting holds.
+    /// </summary>
+    private static object AcceptableAlternative(StringSetting setting)
+    {
+        var current = (string)setting.Default!;
+        var offered = setting.Suggestions?.Invoke() ?? [];
+        var other = offered.FirstOrDefault(v => v != current);
+        if (other is not null) return other;
+
+        // No picker: anything the validator takes will do.
+        foreach (var candidate in new[] { current + "-alt", "alternative", "system" })
+            if (setting.IsValid?.Invoke(candidate) ?? true) return candidate;
+        throw new NotSupportedException($"No acceptable alternative for {setting.Key}");
+    }
 
     /// <summary>The <see cref="AppSettings"/> property a descriptor actually reads, discovered by writing
     /// a distinct value and seeing which property moved. Keeps the coverage test honest without making

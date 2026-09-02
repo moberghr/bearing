@@ -18,7 +18,8 @@ public sealed class PostgresProvider : IDbProvider
         new ConnectionField("Database", "Database", ConnectionFieldKind.Text, Required: true),
         new ConnectionField("User", "User", ConnectionFieldKind.Text, Required: true),
         new ConnectionField("Password", "Password", ConnectionFieldKind.Password, Required: false),
-        new ConnectionField("sslmode", "SSL Mode", ConnectionFieldKind.Choice, Required: false, Default: "Prefer"),
+        // No sslmode field: transport security is ConnectionInfo.Tls now (#23), and a generic bag-backed
+        // control for it would be a control that does nothing — Build reserves the key.
     };
 
     /// <summary>No integrated auth: Npgsql authenticates with a password (or a token used as one), and

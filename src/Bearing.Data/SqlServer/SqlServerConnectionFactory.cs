@@ -52,6 +52,10 @@ public sealed class SqlServerConnectionFactory : IDbConnectionFactory
         "database", "initial catalog", "db",
         // Whether we authenticate as the OS identity — CredentialKind.Integrated decides that.
         "integrated security", "trusted_connection", "trusted connection",
+        // Transport security is ConnectionInfo.Tls now, not an Options entry. Blocked here for the
+        // same reason the credentials are: a bag that travels in a shared project.json is the wrong
+        // place for a security setting, and two sources of truth is how one of them gets ignored.
+        "encrypt", "trustservercertificate", "trust server certificate",
     };
 
     public SqlServerConnectionFactory(ConnectionInfo info, string? password)
@@ -63,6 +67,15 @@ public sealed class SqlServerConnectionFactory : IDbConnectionFactory
             ApplicationName = "bearing",
             MaxPoolSize = DefaultMaxPoolSize,
         };
+
+        // Transport security comes from the typed field, resolved (not read raw) so an older project or an
+        // import that still carries the mode in its options bag keeps working (#23).
+        ApplyTls(csb, TlsPolicy.Resolve(info));
+
+        // No command timeout. SqlClient defaults to 30 seconds, which kills any query that takes longer —
+        // the same default #93 removed for Npgsql, and the same reason: a slow query is the user's business,
+        // and Esc is how they stop one. Overridable through Options ("Command Timeout"), like MaxPoolSize.
+        csb.CommandTimeout = 0;
 
         if (info.CredentialKind == CredentialKind.Integrated)
         {
@@ -97,10 +110,10 @@ public sealed class SqlServerConnectionFactory : IDbConnectionFactory
                     break;
                 default:
                     // A real SqlClient keyword: apply it, and let a bad *value* still throw — that's a typo
-                    // worth surfacing, unlike an unknown key. This is also how `Encrypt` and
-                    // `TrustServerCertificate` arrive (see SqlServerProvider.ConnectionFields): both are the
-                    // user's explicit opt-in, and the driver's own defaults stand when they are absent, so
-                    // nothing here disables TLS or certificate validation on its own (§1.4).
+                    // worth surfacing, unlike an unknown key. Note this runs *after* ApplyTls, so a
+                    // genuine keyword can still tune the connection (Command Timeout, Max Pool Size,
+                    // Connect Timeout) — but not the two TLS keywords, which Reserved blocks above so the
+                    // typed field stays the single source of truth for transport security (§1.4).
                     csb[key] = value;
                     break;
             }
@@ -125,6 +138,43 @@ public sealed class SqlServerConnectionFactory : IDbConnectionFactory
     /// this class (§1.1) — so nothing is traded away by making it reachable. Asserting "the constructor
     /// did not throw" left both rules free to regress: swapping the comma for a colon, or dropping the
     /// named-instance branch, kept the whole suite green.</remarks>
+    /// <summary>
+    /// A <see cref="TlsMode"/> as SqlClient expresses it. Two keywords rather than one, because the mode
+    /// says two separate things and SqlClient splits them the same way: <c>Encrypt</c> decides whether the
+    /// transport is encrypted, <c>TrustServerCertificate</c> decides whether the server's identity is
+    /// checked.
+    /// <para>
+    /// <b>One honest approximation.</b> SqlClient has no chain-only validation, so
+    /// <see cref="TlsMode.VerifyCa"/> and <see cref="TlsMode.VerifyFull"/> both come out as full validation
+    /// — chain <em>and</em> host name. VerifyCa therefore gets a stricter connection than it asked for,
+    /// which is the safe direction to be wrong in: it can refuse a certificate Postgres would have taken,
+    /// and it can never accept one Postgres would have refused.
+    /// </para>
+    /// </summary>
+    private static void ApplyTls(SqlConnectionStringBuilder csb, TlsMode mode)
+    {
+        switch (mode)
+        {
+            case TlsMode.Disable:
+            case TlsMode.Prefer:
+                // Optional is SqlClient's "encrypt only if the server insists" — the closest it has to
+                // either of these, and what its own pre-4.0 default was.
+                csb.Encrypt = SqlConnectionEncryptOption.Optional;
+                csb.TrustServerCertificate = true;
+                break;
+            case TlsMode.Require:
+                // Encrypt, and accept any certificate: stops an eavesdropper, stops nobody impersonating
+                // the server. That is exactly what Require means, and why TlsPolicy warns about it.
+                csb.Encrypt = SqlConnectionEncryptOption.Mandatory;
+                csb.TrustServerCertificate = true;
+                break;
+            default:
+                csb.Encrypt = SqlConnectionEncryptOption.Mandatory;
+                csb.TrustServerCertificate = false;
+                break;
+        }
+    }
+
     internal static string DataSourceFor(ConnectionInfo info)
     {
         var host = info.Host.Trim();

@@ -33,7 +33,7 @@ public class PostgresWriteTests
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        await PgTestServer.RequireAsync(factory);
+        await PgTestServer.RequireWritableAsync(factory);
 
         var exec = provider.CreateQueryExecutor(factory);
         const string tbl = "bearing_write_test";
@@ -83,7 +83,7 @@ public class PostgresWriteTests
     {
         var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
-        await PgTestServer.RequireAsync(factory);
+        await PgTestServer.RequireWritableAsync(factory);
 
         var exec = provider.CreateQueryExecutor(factory);
         const string tbl = "bearing_write_rollback";

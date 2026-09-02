@@ -44,7 +44,15 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         _autosave.FileCreated += _scripts.RefreshScripts;
         // Re-raise the binding notification when the selection changes underneath us (the context is the
         // single owner; the connections concern also listens to the same event).
-        _ctx.SelectedTabChanged += () => OnPropertyChanged(nameof(SelectedTab));
+        _ctx.SelectedTabChanged += () =>
+        {
+            OnPropertyChanged(nameof(SelectedTab));
+            OnPropertyChanged(nameof(SelectionIsPinned));
+        };
+        // Hooked once here rather than called at each Tabs mutation: opening, closing, restoring and a
+        // project switch all move tabs, and a split that has to be remembered at five call sites is a split
+        // that will be forgotten at the sixth.
+        ((System.Collections.Specialized.INotifyCollectionChanged)Tabs).CollectionChanged += (_, _) => ResplitTabs();
     }
 
     /// <summary>The autosave coordinator. Also reached by the execution concern through
@@ -86,9 +94,12 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     /// The <c>Scratch N</c> placeholder is only minted for a tab that has no file to be named after, so the
     /// counter no longer skips numbers every time a saved script is opened.
     /// </para></summary>
-    public EditorTabViewModel NewTab(string text = "", string? scriptPath = null)
+    /// <param name="connectionId">Point the new tab at this connection instead of inheriting one (#57 —
+    /// "new script using this connection"). Inheritance is still the default: a tab opened from the editor
+    /// keeps working against whatever the last one did.</param>
+    public EditorTabViewModel NewTab(string text = "", string? scriptPath = null, Guid? connectionId = null)
     {
-        var inherit = SelectedTab?.ConnectionId ?? _ctx.DefaultConnectionId;
+        var inherit = connectionId ?? SelectedTab?.ConnectionId ?? _ctx.DefaultConnectionId;
         var isScratch = scriptPath is null || ScratchNaming.IsUnderScratch(scriptPath, _ctx.Project?.ScratchDirectory);
         var label = scriptPath is null
             ? $"Scratch {++_scratchCounter}"
@@ -175,14 +186,75 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     }
 
     /// <summary>Remove the tab and settle the selection. The workspace always keeps at least one tab.</summary>
+    /// <summary>
+    /// Drop a tab and land the selection on its left-hand neighbour (its right-hand one when it was the
+    /// leftmost). Closing a run of tabs then keeps walking left, instead of stopping dead the moment the
+    /// selection reaches the end of the strip.
+    /// <para>
+    /// Whether the closing tab was selected is read <b>before</b> it leaves the list, not after (#87).
+    /// <see cref="SelectedTab"/> is bound two-way to the tab strip's <c>SelectedItem</c>, so removing the
+    /// item makes the control fix up its own selection and write that back through the binding — by the time
+    /// the old check ran, <c>SelectedTab</c> was already whatever the control had picked, the guard was
+    /// false, and the workspace never chose a replacement at all. It read as correct with no view attached,
+    /// which is exactly why it shipped, so the test below fakes a control that does the same write.
+    /// </para>
+    /// </summary>
     private void Remove(EditorTabViewModel tab)
     {
         var index = Tabs.IndexOf(tab);
         if (index < 0) return;
+
+        var wasSelected = ReferenceEquals(SelectedTab, tab);
         Tabs.Remove(tab);
         if (Tabs.Count == 0) { NewTab(); return; }
-        if (ReferenceEquals(SelectedTab, tab) || SelectedTab is null)
-            SelectedTab = Tabs[Math.Min(index, Tabs.Count - 1)];
+
+        // Also re-selects when the control left SelectedTab on a tab that is no longer in the list.
+        if (wasSelected || SelectedTab is null || !Tabs.Contains(SelectedTab))
+            SelectedTab = Tabs[Math.Max(0, index - 1)];
+    }
+
+    /// <summary>
+    /// The pinned tabs and the rest, in <see cref="Tabs"/> order — two live views over the one source, so the
+    /// strip can render pinned tabs in their own row (#67) while every index-based rule keeps reading
+    /// <see cref="Tabs"/>.
+    /// <para>
+    /// Kept in step by minimal edits rather than rebuilt: the strips bind their selection two-way, so a
+    /// <c>Clear()</c> would make the control fix up its own selection and write that back — the shape of
+    /// #87, and the reason these are patched in place.
+    /// </para>
+    /// </summary>
+    public ObservableCollection<EditorTabViewModel> PinnedTabs { get; } = new();
+
+    /// <inheritdoc cref="PinnedTabs"/>
+    public ObservableCollection<EditorTabViewModel> UnpinnedTabs { get; } = new();
+
+    /// <summary>
+    /// Whether the selected tab is in the pinned row. The strips read this to decide which of them draws a
+    /// selection at all: a <c>TabStrip</c> is always-selected, so the row that does not hold the selected tab
+    /// still has one of its own, and without this both rows would look selected (#67).
+    /// </summary>
+    public bool SelectionIsPinned => SelectedTab?.IsPinned == true;
+
+    /// <summary>True while any tab is pinned — the pinned row is hidden entirely when none is, rather than
+    /// sitting there as an empty strip.</summary>
+    public bool HasPinnedTabs => PinnedTabs.Count > 0;
+
+    /// <summary>Pin or unpin, and re-split the views. Public because the context menu, the command and the
+    /// session restore all reach for it.</summary>
+    public void SetPinned(EditorTabViewModel tab, bool pinned)
+    {
+        if (!Tabs.Contains(tab) || tab.IsPinned == pinned) return;
+        tab.IsPinned = pinned;
+        ResplitTabs();
+    }
+
+    /// <summary>Re-derive <see cref="PinnedTabs"/> and <see cref="UnpinnedTabs"/> from <see cref="Tabs"/>.</summary>
+    private void ResplitTabs()
+    {
+        TabViewSync.Apply(PinnedTabs, Tabs.Where(t => t.IsPinned).ToList());
+        TabViewSync.Apply(UnpinnedTabs, Tabs.Where(t => !t.IsPinned).ToList());
+        OnPropertyChanged(nameof(HasPinnedTabs));
+        OnPropertyChanged(nameof(SelectionIsPinned));
     }
 
     public async Task RestoreTabsAsync(SessionState? session)
@@ -222,11 +294,13 @@ public sealed partial class WorkspaceViewModel : ObservableObject
                 }
             }
             tab.ConnectionId = e.ConnectionId ?? _ctx.DefaultConnectionId;
+            tab.IsPinned = e.Pinned;
         }
 
         if (Tabs.Count == 0)
             NewTab();
 
+        ResplitTabs();
         var idx = session?.SelectedEditorIndex ?? 0;
         SelectedTab = Tabs[Math.Clamp(idx, 0, Tabs.Count - 1)];
     }

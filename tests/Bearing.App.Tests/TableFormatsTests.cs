@@ -448,4 +448,72 @@ public class TableFormatsTests
             RowCount: 1, TimeSpan.Zero, null, null, false);
         return new ResultSetViewModel(result, "select id, flag from t", pageable: false);
     }
+
+    // ---- escaping ---------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A timestamp's offset keeps its <c>+</c>, and an accented name keeps its letters.
+    /// <para>
+    /// System.Text.Json's default encoder escapes anything that could be unsafe inside an HTML document, so
+    /// a copied <c>timestamptz</c> arrived as <c>2026-07-16 14:16:49\u002B00:00</c> and an accented name as a
+    /// run of <c>\uXXXX</c>. Reported from a real copy. This is clipboard text: the consumer is whatever the
+    /// user pastes into, and an escape there is noise they have to undo by hand.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Json_leaves_a_plus_and_an_accent_alone()
+    {
+        var result = Result(
+            [("created_time", "text", typeof(string)), ("name", "text", typeof(string))],
+            ["2026-07-16 14:16:49.688644+00:00", "Čevapčići"]);
+
+        var json = TableFormats.Json(TableBlock.ForResult(result));
+
+        Assert.Contains("+00:00", json);
+        Assert.DoesNotContain("u002B", json);
+        Assert.Contains("Čevapčići", json);
+    }
+
+    /// <summary>
+    /// …and everything JSON itself requires is still escaped.
+    /// <para>
+    /// The relaxed encoder relaxes HTML-safety, not JSON validity. A raw quote or backslash would produce a
+    /// document no parser accepts — a far worse bug than a stray escape — so the real assertion is that it
+    /// round-trips through a parser.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Json_still_escapes_what_json_requires()
+    {
+        const string awkward = "she said QUOTEhiQUOTE BSLASH then leftNEWLINEnext";
+        var value = awkward.Replace("QUOTE", "STRQ").Replace("BSLASH", "STRB").Replace("NEWLINE", "STRN")
+            .Replace("STRQ", "\"").Replace("STRB", "\\").Replace("STRN", "\n");
+
+        var result = Result([("note", "text", typeof(string))], [value]);
+
+        var json = TableFormats.Json(TableBlock.ForResult(result));
+
+        using var parsed = System.Text.Json.JsonDocument.Parse(json);
+        Assert.Equal(value, parsed.RootElement[0].GetProperty("note").GetString());
+    }
+
+    /// <summary>
+    /// The HTML flavour keeps escaping markup, because that one really is markup.
+    /// <para>
+    /// Relaxing the JSON encoder is only safe while this holds: the two formats are separate methods with
+    /// separate escaping, and the HTML one is what travels to Teams and Outlook.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Html_still_escapes_markup()
+    {
+        var result = Result([("note", "text", typeof(string))], ["<script>alert(1)</script> & co"]);
+
+        var html = TableFormats.Html(TableBlock.ForResult(result));
+
+        Assert.DoesNotContain("<script>", html);
+        Assert.Contains("&lt;script&gt;", html);
+        Assert.Contains("&amp;", html);
+
+    }
 }

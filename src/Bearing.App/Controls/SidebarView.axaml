@@ -15,20 +15,75 @@
           <!-- ===== Connections / servers panel (connection → databases → objects tree) ===== -->
           <DockPanel Margin="8,8,6,6"
                      IsVisible="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=Schema}">
-            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="2,0,2,6">
-              <TextBlock Grid.Column="0" Text="CONNECTIONS" FontSize="11" FontWeight="Bold"
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" Margin="2,0,2,6">
+              <TextBlock Grid.Column="0" Text="CONNECTIONS" FontSize="{DynamicResource Font.Small}" FontWeight="Bold"
                          Foreground="{DynamicResource Text.Dim}" VerticalAlignment="Center"/>
-              <Button Grid.Column="1" Content="＋" Padding="6,0" Click="OnAddConnectionClick"
+              <Button Grid.Column="1" Classes="rail" Theme="{StaticResource RailButton}" Width="26" Height="26"
+                      Click="OnNewConnectionFolderClick" ToolTip.Tip="New folder">
+                <controls:LineIcon Data="{StaticResource Icon.Folder}" Width="20" Height="20"/>
+              </Button>
+              <Button Grid.Column="2" Content="＋" Padding="6,0" Click="OnAddConnectionClick"
                       ToolTip.Tip="Add connection"/>
             </Grid>
+            <!-- Narrows the panel to matching connections (name, host:port, database, user, environment).
+                 Distinct from the type-ahead below and deliberately so: this box says which *servers* are on
+                 screen, the type-ahead jumps between matches *inside* what is expanded. Substring, not fuzzy
+                 — see ConnectionSearch. -->
+            <TextBox DockPanel.Dock="Top" Text="{Binding Connections.ConnectionFilter, Mode=TwoWay}"
+                     PlaceholderText="Filter name, host or environment…" Margin="0,0,0,6"/>
             <!-- Type-ahead fuzzy jump: letters/digits build a search, matches are tinted, Down/Up cycle
                  between them, Esc/Backspace unwind it (code-behind OnSchemaTreeTextInput/KeyDown).
                  Landing on a match moves keyboard *focus* too, so Right/Enter act on the match and not on
                  whichever row happened to hold focus, and it opens the Views/Functions bucket around it. -->
             <!-- KeyDown is hooked in the tunnel phase (code-behind) so Up/Down can pre-empt the tree's
                  own node navigation and cycle matches instead. -->
+            <!-- Drag a connection (or a folder) onto a folder row to file it there; dropping anywhere else
+                 in the tree means the root. As in the Scripts tree, the root drop is marked by *nothing*
+                 being highlighted — an outline round the whole pane read as noise there and would here. -->
+            <!-- First run: an empty tree says nothing about what to do next, and importing is the fastest
+                 way in for anyone arriving from DBeaver (#72). Docked below the tree rather than layered
+                 over it — folders can exist before any connection does, and an overlay hid them. -->
+            <StackPanel DockPanel.Dock="Bottom" Margin="4,10,4,2" Spacing="8"
+                        IsVisible="{Binding Connections.IsEmpty}">
+              <TextBlock Text="No connections yet." Foreground="{DynamicResource Text.Dim}"
+                         TextWrapping="Wrap" FontSize="{DynamicResource Font.Body}"/>
+              <Button Content="Add a connection…" HorizontalAlignment="Stretch"
+                      HorizontalContentAlignment="Center" Click="OnAddConnectionClick"/>
+              <!-- Drops the same source list the context menu and File carry, so all three agree and a
+                   second importer is one more MenuItem rather than a rename. -->
+              <!-- The discoverable way into demo mode (#64). An environment variable helps nobody who is
+                   evaluating the tool, and this is exactly where a new user is standing. -->
+              <Button Content="Explore demo data" HorizontalAlignment="Stretch"
+                      HorizontalContentAlignment="Center" Click="OnExploreDemoClick"
+                      ToolTip.Tip="Restart with fixed sample data — no database, and nothing saved outside the session"/>
+              <Button Content="Import connections…" HorizontalAlignment="Stretch"
+                      HorizontalContentAlignment="Center">
+                <Button.Flyout>
+                  <MenuFlyout Placement="Bottom">
+                    <MenuItem Header="From DBeaver…" Click="OnImportConnectionsClick"/>
+                  </MenuFlyout>
+                </Button.Flyout>
+              </Button>
+            </StackPanel>
             <TreeView x:Name="SchemaTree" ItemsSource="{Binding Connections.ServerNodes}" Background="Transparent"
-                      TextInput="OnSchemaTreeTextInput">
+                      TextInput="OnSchemaTreeTextInput" DragDrop.AllowDrop="True"
+                      DragDrop.DragOver="OnConnectionDragOver" DragDrop.DragLeave="OnConnectionDragLeave"
+                      DragDrop.Drop="OnConnectionDropOnRoot" KeyDown="OnConnectionTreeKeyDown">
+              <!-- Right-clicking blank space in the panel. The row templates carry their own menus, which
+                   win over this one; this is the "nothing in particular is selected" case, and the only
+                   place Import is reliably discoverable — the File menu is hidden unless the user turns
+                   it on in Settings. -->
+              <TreeView.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="New connection…" Click="OnAddConnectionClick"/>
+                  <MenuItem Header="New folder…" Click="OnNewConnectionFolderClick"/>
+                  <MenuItem Header="Paste connection" Click="OnPasteConnectionAtRootClick"/>
+                  <Separator/>
+                  <MenuItem Header="Import connections">
+                    <MenuItem Header="From DBeaver…" Click="OnImportConnectionsClick"/>
+                  </MenuItem>
+                </ContextMenu>
+              </TreeView.ContextMenu>
               <TreeView.Styles>
                 <!-- Two-way bind each item's expansion to its node so children load lazily on first expand.
                      The row's environment wash lives here rather than in the template so it covers the whole
@@ -40,18 +95,92 @@
                   <Setter Property="Background"
                           Value="{ReflectionBinding RowAccentColor, Converter={StaticResource HexBrush}, ConverterParameter=0.16}"/>
                 </Style>
+                <!-- The row being dragged fades, the way a cut item does: the "something is in flight, and
+                     it's this" half of the drag feedback. -->
+                <!-- Two selectors because the two row shapes differ: server rows are a DockPanel (the
+                     beacon docks right), folder rows a Border (the drop highlight is a padded chip). -->
+                <Style Selector="DockPanel.dragging">
+                  <Setter Property="Opacity" Value="0.4"/>
+                </Style>
+                <Style Selector="Border.dragging">
+                  <Setter Property="Opacity" Value="0.4"/>
+                </Style>
               </TreeView.Styles>
               <TreeView.DataTemplates>
-                <!-- One template for every node type: matched by the base type, so subclasses share it.
-                     Leaves have no children, so no expander is shown. -->
+                <!-- Folder rows (#80) come FIRST: templates resolve in order and the generic one below
+                     matches every node, so a more specific template placed after it would never be reached.
+                     A folder is organisation, not schema — no beacon, no environment wash, and its own
+                     context menu. -->
+                <TreeDataTemplate DataType="vm:ConnectionFolderNodeViewModel" ItemsSource="{Binding Children}">
+                  <!-- A Border, not a bare Grid, so the drop highlight is a padded chip rather than a filled
+                       row: the padding is what makes it read as a zone the connection goes *into*. Applied
+                       always, target or not, so the row doesn't jump when the tint appears. -->
+                  <Border Background="{Binding IsDropTarget, Converter={StaticResource DropTarget}}"
+                          CornerRadius="6" Margin="0,1,10,1" Padding="6,3"
+                          Classes.dragging="{Binding IsDragging}"
+                          DragDrop.AllowDrop="True" DragDrop.DragOver="OnConnectionDragOver"
+                          DragDrop.Drop="OnConnectionDropOnFolder"
+                          PointerPressed="OnConnectionNodePointerPressed"
+                          PointerMoved="OnConnectionNodePointerMoved">
+                    <Border.ContextMenu>
+                      <ContextMenu>
+                        <MenuItem Header="New connection here…" Click="OnAddConnectionInFolderClick"/>
+                        <MenuItem Header="New subfolder…" Click="OnNewConnectionSubfolderClick"/>
+                        <MenuItem Header="Paste connection here" Click="OnPasteConnectionIntoFolderClick"/>
+                        <Separator/>
+                        <MenuItem Header="Rename" Click="OnRenameConnectionFolderClick"/>
+                        <!-- Says what it does: the folder goes, the connections in it do not. Deleting a
+                             container must never delete what was in it. -->
+                        <MenuItem Header="Delete folder (keeps connections)" Click="OnDeleteConnectionFolderClick"/>
+                      </ContextMenu>
+                    </Border.ContextMenu>
+                    <Grid ColumnDefinitions="Auto,*,Auto">
+                      <Path Grid.Column="0" Data="{StaticResource Icon.Folder}" Stroke="#E3B457"
+                            StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round" Stretch="Uniform"
+                            Width="15" Height="15" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                      <!-- Renaming swaps the label for a box in place (#39): Enter commits, Esc cancels,
+                           clicking away commits. Both live in the tree; only one is visible. -->
+                      <TextBlock Grid.Column="1" Text="{Binding Title}" VerticalAlignment="Center"
+                                 Foreground="{DynamicResource Text.Primary}"
+                                 IsVisible="{Binding !IsRenaming}"/>
+                      <TextBox Grid.Column="1" Classes="inline" Text="{Binding RenameDraft, Mode=TwoWay}"
+                               IsVisible="{Binding IsRenaming}" MinWidth="90" VerticalAlignment="Center"
+                               KeyDown="OnConnectionFolderRenameKeyDown"
+                               LostFocus="OnConnectionFolderRenameLostFocus"/>
+                      <!-- Recursive count, so a collapsed folder still says how much it is hiding. -->
+                      <TextBlock Grid.Column="2" Text="{Binding Count}" VerticalAlignment="Center"
+                                 IsVisible="{Binding HasConnections}"
+                                 FontSize="{DynamicResource Font.Small}" Margin="6,0,4,0" Foreground="{DynamicResource Text.Faint}"/>
+                    </Grid>
+                  </Border>
+                </TreeDataTemplate>
+                <!-- One template for every other node type: matched by the base type, so subclasses share
+                     it. Leaves have no children, so no expander is shown. -->
                 <TreeDataTemplate DataType="vm:SchemaNodeViewModel" ItemsSource="{Binding Children}">
                   <DockPanel LastChildFill="True" Background="Transparent"
-                             DoubleTapped="OnSchemaNodeDoubleTapped">
+                             Classes.dragging="{Binding IsDragging}"
+                             DoubleTapped="OnSchemaNodeDoubleTapped"
+                             PointerPressed="OnConnectionNodePointerPressed"
+                             PointerMoved="OnConnectionNodePointerMoved">
                     <DockPanel.ContextMenu>
                       <ContextMenu>
+                        <MenuItem Header="New script using this connection" Click="OnNewScriptForConnection"
+                                  IsVisible="{Binding IsServer}"/>
                         <MenuItem Header="Use in current tab" Click="OnUseConnectionInTab" IsVisible="{Binding IsServer}"/>
-                        <MenuItem Header="Refresh metadata" Click="OnRefreshServer" IsVisible="{Binding IsServer}"/>
+                        <Separator IsVisible="{Binding IsServer}"/>
+                        <MenuItem Header="Rename" Click="OnRenameConnectionClick" IsVisible="{Binding IsServer}"/>
+                        <MenuItem Header="Duplicate" Click="OnDuplicateConnectionClick" IsVisible="{Binding IsServer}"/>
+                        <MenuItem Header="Copy" Click="OnCopyConnectionClick" IsVisible="{Binding IsServer}"/>
+                        <MenuItem Header="Move to root" Click="OnMoveConnectionToRoot" IsVisible="{Binding IsServer}"/>
                         <MenuItem Header="Edit…" Click="OnEditServer" IsVisible="{Binding IsServer}"/>
+                        <MenuItem Header="Refresh metadata" Click="OnRefreshServer" IsVisible="{Binding IsServer}"/>
+                        <!-- "Which table is eating the disk" is the question a tree sorted by name cannot
+                             answer (#76). On a database row only. -->
+                        <MenuItem Header="Sort tables by size" Click="OnSortRelationsBySize"
+                                  IsVisible="{Binding IsDatabase}"/>
+                        <MenuItem Header="Sort tables by name" Click="OnSortRelationsByName"
+                                  IsVisible="{Binding IsDatabase}"/>
+                        <Separator IsVisible="{Binding IsDatabase}"/>
                         <MenuItem Header="Show definition" Click="OnShowDefinition" IsVisible="{Binding CanShowDefinition}"/>
                         <MenuItem Header="Copy name" Click="OnCopyNodeName"/>
                         <Separator IsVisible="{Binding IsServer}"/>
@@ -84,12 +213,19 @@
                          isn't a match) and the negative margin cancels them, so the highlight bleeds outside
                          the text without the row reflowing as you type. -->
                     <Border BorderThickness="1" CornerRadius="3" Padding="4,1" Margin="-4,-1"
+                            IsVisible="{Binding !IsRenaming}"
                             Background="{Binding IsMatch, Converter={StaticResource MatchHighlight}}"
                             BorderBrush="{Binding IsMatch, Converter={StaticResource MatchHighlight}, ConverterParameter=Border}">
                       <TextBlock Text="{Binding Title}" VerticalAlignment="Center"
                                  Foreground="{DynamicResource Text.Primary}"/>
                     </Border>
-                    <TextBlock Text="{Binding Detail}" VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource Text.Dim}"/>
+                    <!-- Renaming a connection swaps the label for a box in place (#39, #56): Enter commits,
+                         Esc cancels, clicking away commits. Only a server row ever sets IsRenaming — the
+                         state is on the base node so this one template can bind it. -->
+                    <TextBox Classes="inline" Text="{Binding RenameDraft, Mode=TwoWay}"
+                             IsVisible="{Binding IsRenaming}" MinWidth="90" VerticalAlignment="Center"
+                             KeyDown="OnConnectionRenameKeyDown" LostFocus="OnConnectionRenameLostFocus"/>
+                    <TextBlock Text="{Binding Detail}" VerticalAlignment="Center" FontSize="{DynamicResource Font.Small}" Foreground="{DynamicResource Text.Dim}"/>
                     </StackPanel>
                   </DockPanel>
                 </TreeDataTemplate>
@@ -101,7 +237,7 @@
           <DockPanel Margin="8,8,6,6"
                      IsVisible="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=Scripts}">
             <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" Margin="2,0,2,6">
-              <TextBlock Grid.Column="0" Text="SCRIPTS" FontSize="11" FontWeight="Bold"
+              <TextBlock Grid.Column="0" Text="SCRIPTS" FontSize="{DynamicResource Font.Small}" FontWeight="Bold"
                          Foreground="{DynamicResource Text.Dim}" VerticalAlignment="Center"/>
               <Button Grid.Column="1" Classes="rail" Theme="{StaticResource RailButton}" Width="26" Height="26"
                       Click="OnNewScriptFolderClick" ToolTip.Tip="New folder">
@@ -173,11 +309,11 @@
                                  Foreground="{DynamicResource Text.Primary}"/>
                       <Border IsVisible="{Binding IsScratch}" VerticalAlignment="Center"
                               Background="{DynamicResource Bg.TileActive}" CornerRadius="3" Padding="4,0">
-                        <TextBlock Text="auto" FontSize="10" Foreground="{DynamicResource Text.Dim}"/>
+                        <TextBlock Text="auto" FontSize="{DynamicResource Font.Caption}" Foreground="{DynamicResource Text.Dim}"/>
                       </Border>
                     </StackPanel>
                     <TextBlock Grid.Column="2" Text="{Binding Count}" VerticalAlignment="Center"
-                               FontSize="11" Margin="6,0,4,0" Foreground="{DynamicResource Text.Faint}"/>
+                               FontSize="{DynamicResource Font.Small}" Margin="6,0,4,0" Foreground="{DynamicResource Text.Faint}"/>
                   </Grid>
                   </Border>
                 </TreeDataTemplate>
@@ -209,7 +345,7 @@
                       <TextBox Classes="inline" Text="{Binding RenameDraft, Mode=TwoWay}"
                                IsVisible="{Binding IsRenaming}" MinWidth="90" VerticalAlignment="Center"
                                KeyDown="OnScriptRenameKeyDown" LostFocus="OnScriptRenameLostFocus"/>
-                      <TextBlock Text="●" FontSize="11" VerticalAlignment="Center"
+                      <TextBlock Text="●" FontSize="{DynamicResource Font.Small}" VerticalAlignment="Center"
                                  Foreground="{DynamicResource Accent.Brand}" ToolTip.Tip="Unsaved changes"
                                  IsVisible="{Binding IsUnsaved}"/>
                     </StackPanel>
@@ -217,7 +353,7 @@
                          Absent (and the row is a single line, as before) for a name hit. -->
                     <TextBlock Text="{Binding MatchLine}" Margin="20,0,0,2"
                                IsVisible="{Binding MatchLine, Converter={x:Static ObjectConverters.IsNotNull}}"
-                               FontFamily="{StaticResource MonoFontFamily}" FontSize="10"
+                               FontFamily="{StaticResource MonoFontFamily}" FontSize="{DynamicResource Font.Caption}"
                                Foreground="{DynamicResource Text.Faint}" TextTrimming="CharacterEllipsis"
                                ToolTip.Tip="{Binding MatchLine}"/>
                   </StackPanel>
@@ -229,7 +365,7 @@
           <!-- ===== History panel (design §4): day-grouped, filterable ===== -->
           <DockPanel Margin="8,8,6,6"
                      IsVisible="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=History}">
-            <TextBlock DockPanel.Dock="Top" Text="HISTORY" FontSize="11" FontWeight="Bold"
+            <TextBlock DockPanel.Dock="Top" Text="HISTORY" FontSize="{DynamicResource Font.Small}" FontWeight="Bold"
                        Foreground="{DynamicResource Text.Dim}" Margin="2,0,2,6"/>
             <TextBox DockPanel.Dock="Top" Text="{Binding History.SearchText, Mode=TwoWay}"
                      PlaceholderText="Search history…" KeyDown="OnHistorySearchKeyDown" Margin="0,0,0,6"/>
@@ -241,7 +377,7 @@
               <RadioButton Theme="{StaticResource PillToggle}" GroupName="histfilter" Content="✕ error"
                            IsChecked="{Binding History.Filter, Converter={StaticResource EnumToBool}, ConverterParameter=Error, Mode=TwoWay}"/>
             </StackPanel>
-            <TextBlock DockPanel.Dock="Bottom" Text="{Binding History.Status}" FontSize="11"
+            <TextBlock DockPanel.Dock="Bottom" Text="{Binding History.Status}" FontSize="{DynamicResource Font.Small}"
                        Foreground="{DynamicResource Text.Faint}" Margin="2,4,2,0"/>
             <!-- List (fills) · drag splitter · query preview (resizable, hidden until a row is selected).
                  HistoryPreviewRow is a real pixel row so the GridSplitter actually resizes the pane;
@@ -257,7 +393,7 @@
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="vm:HistoryDayGroup">
                     <StackPanel Margin="0,0,0,8">
-                      <TextBlock Text="{Binding Caption}" FontSize="10" FontWeight="Bold"
+                      <TextBlock Text="{Binding Caption}" FontSize="{DynamicResource Font.Caption}" FontWeight="Bold"
                                  Foreground="{DynamicResource Text.Faint}" Margin="2,2,2,3"/>
                       <!-- One SelectedRow, one ListBox per day: bound *one-way*, plus an explicit write from
                            the SelectionChanged handler. Two-way made the day-A list write its own
@@ -275,10 +411,10 @@
                                       VerticalAlignment="Center" Margin="0,0,6,0"
                                       Background="{Binding ConnectionColor, Converter={StaticResource HexBrush}}"/>
                               <TextBlock Grid.Column="1" Text="{Binding DisplayQuery}" TextTrimming="CharacterEllipsis"
-                                         FontFamily="{StaticResource MonoFontFamily}" FontSize="12"
+                                         FontFamily="{StaticResource MonoFontFamily}" FontSize="{DynamicResource Font.Body}"
                                          VerticalAlignment="Center"
                                          Foreground="{Binding QueryColorHex, Converter={StaticResource HexBrush}}"/>
-                              <TextBlock Grid.Column="2" Text="{Binding Time}" FontSize="11" Margin="8,0,0,0"
+                              <TextBlock Grid.Column="2" Text="{Binding Time}" FontSize="{DynamicResource Font.Small}" Margin="8,0,0,0"
                                          VerticalAlignment="Center" Foreground="{DynamicResource Text.Faint}"/>
                             </Grid>
                           </DataTemplate>
@@ -296,13 +432,13 @@
                     BorderThickness="1" CornerRadius="6"
                     IsVisible="{Binding History.SelectedRow, Converter={x:Static ObjectConverters.IsNotNull}}">
               <DockPanel Margin="6">
-                <TextBlock DockPanel.Dock="Top" Text="PREVIEW" FontSize="10" FontWeight="Bold"
+                <TextBlock DockPanel.Dock="Top" Text="PREVIEW" FontSize="{DynamicResource Font.Caption}" FontWeight="Bold"
                            Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,4"/>
                 <!-- The read-only SQL viewer (#48), not a TextBox: syntax-highlighted like every other SQL
                      surface, still selectable — the preview is the read-and-copy path for a past query.
                      Text and the (once-per-control) highlight install are driven from code-behind, where
                      the show/collapse of this row already lives. -->
-                <ae:TextEditor x:Name="HistoryPreview" FontSize="12" BorderThickness="0"/>
+                <ae:TextEditor x:Name="HistoryPreview" FontSize="{DynamicResource Font.Body}" BorderThickness="0"/>
               </DockPanel>
             </Border>
             </Grid>

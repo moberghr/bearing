@@ -3,6 +3,7 @@
     <Project Path="src/Bearing.App/Bearing.App.csproj" />
     <Project Path="src/Bearing.Core/Bearing.Core.csproj" />
     <Project Path="src/Bearing.Data/Bearing.Data.csproj" />
+    <Project Path="src/Bearing.Demo/Bearing.Demo.csproj" />
     <Project Path="src/Bearing.Desktop/Bearing.Desktop.csproj" />
     <Project Path="src/Bearing.Persistence/Bearing.Persistence.csproj" />
     <Project Path="src/Bearing.Sql/Bearing.Sql.csproj" />

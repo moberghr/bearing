@@ -36,13 +36,15 @@ public sealed partial class ShellViewModel
         // The active project's tabs are in the live list; every other open project's are parked. Each save
         // is independently best-effort (§5.2) so one unwritable project can't skip the rest.
         Save(_project, BuildSession(_project, _workspace.Tabs, IndexOf(_workspace.SelectedTab),
-            _ctx.DefaultConnectionId, SidePaneOpen, SidePaneWidth, ResultsViewMode));
+            _ctx.DefaultConnectionId, SidePaneOpen, SidePaneWidth, ResultsViewMode,
+            _ctx.CurrentWorkspace?.CollapsedConnectionFolders));
 
         foreach (var parked in _ctx.OpenProjects)
         {
             if (ReferenceEquals(parked.Project, _project)) continue;
             Save(parked.Project, BuildSession(parked.Project, parked.ParkedTabs, parked.SelectedIndex,
-                parked.DefaultConnectionId, parked.SidePaneOpen, parked.SidePaneWidth, parked.ResultsViewMode));
+                parked.DefaultConnectionId, parked.SidePaneOpen, parked.SidePaneWidth, parked.ResultsViewMode,
+                parked.CollapsedConnectionFolders));
         }
 
         void Save(Project project, SessionState state)
@@ -62,7 +64,8 @@ public sealed partial class ShellViewModel
         Guid? defaultConnectionId,
         bool sidePaneOpen,
         double sidePaneWidth,
-        ResultsViewMode resultsViewMode)
+        ResultsViewMode resultsViewMode,
+        IEnumerable<string>? collapsedConnectionFolders)
     {
         var editors = tabs.Select(t => new OpenEditor
         {
@@ -73,6 +76,7 @@ public sealed partial class ShellViewModel
             ScratchName = t.ScriptPath is null && t.IsUserNamed ? t.DisplayName : null,
             CaretOffset = t.CaretOffset,
             ConnectionId = t.ConnectionId,
+            Pinned = t.IsPinned,
         }).ToList();
 
         var selected = selectedIndex >= 0 && selectedIndex < tabs.Count ? tabs[selectedIndex] : null;
@@ -86,6 +90,7 @@ public sealed partial class ShellViewModel
             SidePaneOpen = sidePaneOpen,
             SidePaneWidth = sidePaneWidth,
             ResultsViewMode = resultsViewMode,
+            CollapsedConnectionFolders = collapsedConnectionFolders?.ToList() ?? new List<string>(),
         };
     }
 

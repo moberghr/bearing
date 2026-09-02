@@ -93,6 +93,22 @@ public sealed class DialogService : IDialogService
         return files.Count > 0 ? files[0].TryGetLocalPath() : null;
     }
 
+    public async Task<string?> PickImportFileAsync(string? startDir)
+    {
+        if (Owner is not { } window) return null;
+        var files = await window.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Import connections from data-sources.json",
+            AllowMultiple = false,
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("DBeaver connections") { Patterns = new[] { "*.json" } },
+            },
+            SuggestedStartLocation = await StartFolder(window, startDir),
+        });
+        return files.Count > 0 ? files[0].TryGetLocalPath() : null;
+    }
+
     public async Task<string?> PickSaveScriptAsync(string suggestedName, string? startDir)
     {
         if (Owner is not { } window) return null;

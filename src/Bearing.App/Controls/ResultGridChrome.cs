@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -22,10 +23,53 @@ namespace Bearing.App.Controls;
 /// </summary>
 public static class ResultGridChrome
 {
-    /// <summary>Data font size. Monospace so columns line up; set here rather than in a global
-    /// <c>DataGrid</c> style because <see cref="ColumnWidths"/> has to measure a character at exactly this
-    /// size while the columns are being built — before the grid is attached and app styles have applied.</summary>
-    public const double FontSize = 13;
+    /// <summary>
+    /// Font size of the row-number gutter, and the grid-level default everything else overrides. Unchanged
+    /// at 13: <c>DataGridRowHeader</c> has no theme <c>FontSize</c> setter, so the gutter is the one part
+    /// that really does inherit this — and <see cref="GutterWidth"/> is only 46px, sized for five digits at
+    /// exactly this size.
+    /// </summary>
+    /// <summary>
+    /// The grid's own type size, from the <c>Font.Grid</c> token so the setting reaches it (#52). A property
+    /// rather than a const because it moves at runtime; the fallback is what the const used to be, for a
+    /// caller with no application (a unit test, the designer).
+    /// </summary>
+    public static double FontSize => Theming.FontScale.Get("Font.Grid", 13);
+
+    /// <summary>
+    /// What a value cell renders at, pinned in <see cref="StyleGridChrome"/> and measured with in
+    /// <see cref="MeasureText"/>. Those two have to be the same number: a column sized for one size and drawn
+    /// at another is #73 — <c>grid.FontSize</c> never reached the cells, because the Fluent theme sets
+    /// <c>FontSize</c> on <c>DataGridCell</c> and a setter on the descendant outranks an inherited value, so
+    /// every column was measured at 13 and drawn at 15 and came out ~15% narrow.
+    /// <para>
+    /// 13 is the size this file has asked for since #30 and never got: the theme was handing the cells 15,
+    /// so the grid rendered a size larger than the design's while every column was measured for the smaller
+    /// one. Pinning it makes the intent effective. Row height is unaffected — the 26px floor is well clear
+    /// of either size — and the widths follow automatically, since this is the number they are measured with.
+    /// </para>
+    /// <para>
+    /// <see cref="HeaderFontSize"/> is left at the theme's own 12. The design named a data font size, not a
+    /// header one, and unifying them would widen every column with a real name.
+    /// </para>
+    /// </summary>
+    public static double CellFontSize => FontSize;
+
+    /// <summary>What a column header renders at, and is measured at. The Fluent theme gives headers 12 —
+    /// three points smaller than the cells beneath them, which is deliberate in that theme and is what has
+    /// been shipping. Pinned for the same reason as <see cref="CellFontSize"/>, and emphatically not unified
+    /// with it: measuring headers at 15 would widen every column with a real name and push the neighbours
+    /// off screen, which is the thing #30's sizing exists to prevent.</summary>
+    public static double HeaderFontSize => Theming.FontScale.Get("Font.GridHeader", 12);
+
+    /// <summary>Floor for a data row and its cells, tightening the Fluent theme's tall default. Named because
+    /// the stacked layout sizes itself in rows (<see cref="Results.ResultStackWeights"/>): a set's floor is its
+    /// chrome plus a couple of these, and a literal here would have made that arithmetic a guess.</summary>
+    public static double RowMinHeight => Theming.FontScale.Get("Height.GridRow", 26);
+
+    /// <summary>What a column header is drawn at (<see cref="StyleGridChrome"/>), and so what it must be
+    /// measured at.</summary>
+    public const FontWeight HeaderFontWeight = FontWeight.SemiBold;
 
     /// <summary>Gap between a value cell's edge and its text (the display TextBlock's margin in
     /// <see cref="ResultCellFactory"/>).</summary>
@@ -46,8 +90,11 @@ public static class ResultGridChrome
     /// design's <c>#</c> column (RESULTS_GRID §3), and with the padding below leaves room for 5 digits.</summary>
     public const double GutterWidth = 46;
 
-    /// <summary>Non-text pixels in a column header: its padding both sides plus the 1px column divider.</summary>
-    private const double HeaderExtra = HeaderPadding * 2 + 1;
+    /// <summary>Non-text pixels in a column header: its padding both sides, the 1px column divider, and the
+    /// same deliberate slack a value cell reserves (<c>ResultCellFactory.TextSlack</c>). A header measured to
+    /// exactly its own width is arranged at exactly that width, with nothing left for a rounding difference
+    /// or a differently-resolved mono face — the same knife edge the values were on before #73.</summary>
+    private const double HeaderExtra = HeaderPadding * 2 + 1 + ResultCellFactory.TextSlack;
 
     /// <summary>Width of a row's left status bar (teal edited / green new / red deleted — see
     /// <see cref="ResultRowPainter"/>). Reserved on every row, dirty or not, as the row's
@@ -72,25 +119,30 @@ public static class ResultGridChrome
         StyleGridChrome(grid);
     }
 
-    /// <summary>Width of one character at the grid's font — the unit <see cref="ColumnWidths"/> counts in.
-    /// Measured through Avalonia's text stack (the mono stack in <c>App.axaml</c> resolves to whichever
-    /// family is actually installed, and their advances differ by ~20%), cached because the font is fixed
-    /// for the app's lifetime and every column asks.</summary>
-    public static double CharAdvance
+    /// <summary>Width of a string at the grid's font, through the same text stack that will render it (the
+    /// mono stack in <c>App.axaml</c> resolves to whichever family is actually installed, and their advances
+    /// differ by ~20%). Rounded up, because a column short by a fraction of a pixel ellipsizes exactly as
+    /// badly as one short by five.
+    /// <para>
+    /// This replaced a cached single-character advance that <see cref="ColumnWidths"/> multiplied by a
+    /// character count. Shaped text is not <c>N ×</c> the mean advance — side bearings and per-glyph widths
+    /// differ — and the reconstruction ran short, which is what clipped <c>110122</c> to <c>1101…</c> (#73).
+    /// One measurement per column, at column-build time, so nothing measures per cell.
+    /// </para></summary>
+    /// <param name="fontSize">The size the text will be drawn at — <see cref="CellFontSize"/> for a value,
+    /// <see cref="HeaderFontSize"/> for a column name. Passing the wrong one reintroduces #73.</param>
+    /// <param name="weight">The weight it will be drawn at. Headers are <see cref="FontWeight.SemiBold"/>
+    /// (see <see cref="StyleGridChrome"/>) and a semibold mono face is a few percent wider, which on the
+    /// header side is more than the slack reserved for it.</param>
+    public static double MeasureText(string text, double fontSize, FontWeight weight = FontWeight.Normal)
     {
-        get
-        {
-            if (_advance is { } cached) return cached;
-            const string probe = "0000000000";
-            var text = new FormattedText(probe, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                new Typeface(MonoFont), FontSize, Brushes.Black);
-            var measured = text.Width / probe.Length;
-            // A family that resolved to nothing measurable would otherwise collapse every column onto
-            // ColumnWidths.Min; 0.6em is the advance of a typical mono face.
-            return (_advance = double.IsFinite(measured) && measured > 0 ? measured : FontSize * 0.6).Value;
-        }
+        if (text.Length == 0) return 0;
+        var measured = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+            new Typeface(MonoFont, weight: weight), fontSize, Brushes.Black).Width;
+        // A family that resolved to nothing measurable would otherwise collapse every column onto
+        // ColumnWidths.Min; 0.6em is the advance of a typical mono face.
+        return Math.Ceiling(double.IsFinite(measured) && measured > 0 ? measured : text.Length * fontSize * 0.6);
     }
-    private static double? _advance;
 
     /// <summary>Pixels a header costs beyond its text: our padding, the divider, and each inline type badge
     /// (9px bold text in a padded chip with a 5px gap — see <see cref="ResultChrome.Badge"/>).</summary>
@@ -133,7 +185,7 @@ public static class ResultGridChrome
         // Tighter data rows: lower the row floor and zero the cell's vertical padding so a single
         // line of text no longer sits in a tall box.
         var row = new Style(x => x.OfType<DataGridRow>());
-        row.Setters.Add(new Setter(Layoutable.MinHeightProperty, 26.0));
+        row.Setters.Add(new Setter(Layoutable.MinHeightProperty, RowMinHeight));
         // The status-bar lane, reserved for every row so a row doesn't shift when it goes dirty; only the
         // colour is per-row (ResultRowPainter). Matched by the corner header's margin below.
         row.Setters.Add(new Setter(TemplatedControl.BorderThicknessProperty,
@@ -150,7 +202,11 @@ public static class ResultGridChrome
 
         var cell = new Style(x => x.OfType<DataGridCell>());
         cell.Setters.Add(new Setter(TemplatedControl.PaddingProperty, new Thickness(0)));
-        cell.Setters.Add(new Setter(Layoutable.MinHeightProperty, 26.0));
+        cell.Setters.Add(new Setter(Layoutable.MinHeightProperty, RowMinHeight));
+        // Pinned, not inherited from the grid: the Fluent theme sets FontSize on DataGridCell, and that
+        // setter outranks grid.FontSize, so the cells rendered at the theme's size while ColumnWidths sized
+        // them for ours (#73). Whatever FontSize says, this is what makes it true of the pixels.
+        cell.Setters.Add(new Setter(TemplatedControl.FontSizeProperty, CellFontSize));
         grid.Styles.Add(cell);
 
         // Column headers (design §Results grid): bg.window fill, text.dim, 600 weight, border dividers —
@@ -162,7 +218,8 @@ public static class ResultGridChrome
         // (see HeaderPadding) — plus, the initial width being computed rather than measured, a value
         // ColumnWidths can rely on instead of guessing (#30).
         colHeader.Setters.Add(new Setter(TemplatedControl.PaddingProperty, new Thickness(HeaderPadding, 0)));
-        colHeader.Setters.Add(new Setter(TemplatedControl.FontWeightProperty, FontWeight.SemiBold));
+        colHeader.Setters.Add(new Setter(TemplatedControl.FontWeightProperty, HeaderFontWeight));
+        colHeader.Setters.Add(new Setter(TemplatedControl.FontSizeProperty, HeaderFontSize)); // as the cells
         colHeader.Setters.Add(new Setter(DataGridColumnHeader.SeparatorBrushProperty, SeparatorBrush));
         grid.Styles.Add(colHeader);
 

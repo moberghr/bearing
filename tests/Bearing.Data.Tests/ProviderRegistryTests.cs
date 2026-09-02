@@ -101,10 +101,11 @@ public class ProviderRegistryTests
         var fields = new PostgresProvider().ConnectionFields;
 
         Assert.Equal(
-            new[] { "Host", "Port", "Database", "User", "Password", "sslmode" },
+            new[] { "Host", "Port", "Database", "User", "Password" },
             fields.Select(f => f.Key));
         Assert.Equal("5432", fields.Single(f => f.Key == "Port").Default);
-        Assert.Equal("Prefer", fields.Single(f => f.Key == "sslmode").Default);
+        // sslmode is no longer a declared field: transport security is the typed ConnectionInfo.Tls (#23).
+        Assert.DoesNotContain("sslmode", fields.Select(f => f.Key));
     }
 
     [Fact]
@@ -113,9 +114,12 @@ public class ProviderRegistryTests
         var fields = new SqlServerProvider().ConnectionFields;
 
         Assert.Equal(
-            new[] { "Host", "Port", "Database", "User", "Password", "Encrypt", "TrustServerCertificate" },
+            new[] { "Host", "Port", "Database", "User", "Password" },
             fields.Select(f => f.Key));
         Assert.Equal("1433", fields.Single(f => f.Key == "Port").Default);
-        Assert.Equal(ConnectionFieldKind.Boolean, fields.Single(f => f.Key == "Encrypt").Kind);
+        // Encrypt/TrustServerCertificate followed sslmode onto the typed field, for the same reason: a
+        // security setting does not belong in an options bag that travels in a shared project file (#23).
+        Assert.DoesNotContain("Encrypt", fields.Select(f => f.Key));
+        Assert.DoesNotContain("TrustServerCertificate", fields.Select(f => f.Key));
     }
 }

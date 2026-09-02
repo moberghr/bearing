@@ -27,7 +27,7 @@
 
 - **Active stack:** dotnet (.NET 10, `Nullable` enabled, `ImplicitUsings` on, central package versions)
 - **Build command:** `dotnet build`
-- **Test command:** `dotnet test` — no env vars needed; the defaults point at the `squirrel-pg-test` container on **5434** (`tests/Shared/PgTestServer.cs`). Postgres integration tests skip cleanly without a DB, and the skip message names the endpoint and the reason. Override with `BEARING_TEST_PG_{HOST,PORT,DB,USER,PASSWORD}`.
+- **Test command:** `dotnet test` — no env vars needed; the defaults point at the `squirrel-pg-test` container on **55434** (`tests/Shared/PgTestServer.cs`), which `./build/test-db.sh` creates. Postgres integration tests skip cleanly without a DB, and the skip message names the endpoint and the reason. Override with `BEARING_TEST_PG_{HOST,PORT,DB,USER,PASSWORD}`.
 - **Format:** `dotnet format --verbosity quiet`
 
 For framework-specific guidance, see `.claude/skills/tech-stack-dotnet/SKILL.md`.
@@ -39,7 +39,7 @@ For framework-specific guidance, see `.claude/skills/tech-stack-dotnet/SKILL.md`
 Highest-impact rules — most damaging when broken. Full standards live in `.claude/rules/`.
 
 - **§0.1 — IMPORTANT: NEVER add a package or project reference to `Bearing.Core`.** It is dependency-free abstractions (interfaces + records) only; every other project depends on it, not the reverse. (§2.1)
-- **§0.2 — IMPORTANT: NEVER claim UI or visual behavior is verified.** Wayland blocks headless GUI testing here — `dotnet build` + `dotnet test` is the ceiling for automated evidence; visual changes need the user's eyeball QA. (§4.3)
+- **§0.2 — IMPORTANT: NEVER claim UI or visual behavior is verified.** Headless UI tests exist now (`tests/Bearing.App.Tests/Ui/`, #62) and can assert a property, offset or measurement on a realized control — they cannot say it *looks right*. Report what was asserted; visual changes still need the user's eyeball QA. (§4.3, §4.5)
 - **§0.3 — NEVER log passwords or weaken the secret-store / `WriteGuard` posture without explicit approval.** (§1.1)
 - **§0.4 — WHEN adding UI code, DO NOT re-grow `MainWindow.*.cs` or `ResultView.*.cs`.** All three god objects were decomposed (2026-08-10): `ResultView` 1,902 → ~500 and `MainWindow` 1,167 → ~820, joining `ShellViewModel`. Both are now composition roots — extract new behavior into a View/Control, a coordinator, or a pure helper under `Results/` or `Input/` rather than appending. (§9.1)
 - **§0.5 — WHEN code touches a DB, connection, or SQL, DO NOT place it in a View or code-behind.** Logic belongs in a ViewModel or the `Core`/`Sql`/`Data` layers. (§2.2)
@@ -75,6 +75,6 @@ Full reference docs (read on-demand by skills and review agents):
 - **Data layer:** raw ADO.NET — Npgsql (Postgres targets), Microsoft.Data.Sqlite (local query log + workspace). **No ORM.**
 - **DI:** manual composition root in `src/Bearing.App/App.axaml.cs` (no container)
 - **Database targets:** PostgreSQL
-- **Test stack:** xUnit + `Xunit.SkippableFact`, hand-rolled fakes (`tests/**/Fakes.cs`), no Moq/NSubstitute, no EF InMemory
+- **Test stack:** xUnit v2 + `Xunit.SkippableFact`, hand-rolled fakes (`tests/**/Fakes.cs`), no Moq/NSubstitute, no EF InMemory. Headless UI tests in `tests/Bearing.App.Tests/Ui/` on `Avalonia.Headless` (§4.5)
 - **Layout:** `src/Bearing.{Core,Sql,Data,Persistence,Updates,App,Desktop}` — dependency-free `Core` ← `Sql`/`Data`/`Persistence`/`Updates` ← `App` ← `Desktop`
 - **Distribution:** Velopack installers + delta auto-update, published to this repo's GitHub Releases by `build/velopack.sh` (see `docs/RELEASING.md`). `build/release.sh` is the older archive path, kept.

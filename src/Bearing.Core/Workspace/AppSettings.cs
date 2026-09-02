@@ -24,11 +24,30 @@ public sealed record AppSettings
     /// </summary>
     public int QueryLogRetentionDays { get; init; } = 180;
 
+    /// <summary>
+    /// Replace literal values in logged SQL with placeholders (#22). Off by default: a redacted statement
+    /// cannot be re-run from the history panel, and silently rewriting the user's own record of what they did
+    /// is not a decision to make on their behalf. On, the log becomes a record of what you ran rather than of
+    /// the data you ran it against.
+    /// </summary>
+    public bool QueryLogRedactLiterals { get; init; }
+
     /// <summary>When editor buffers are written to disk without an explicit Save. See <see cref="Workspace.AutosaveMode"/>.</summary>
     public AutosaveMode AutosaveMode { get; init; } = AutosaveMode.OnEdit;
 
     /// <summary>Base point size of the SQL editor text.</summary>
     public int EditorFontSize { get; init; } = 14;
+
+    /// <summary>
+    /// Whether typing <c>'</c>, <c>"</c> or <c>(</c> brings its closer along, with the caret between the two
+    /// (#70). Also governs stepping over a closer you type yourself, Backspace taking a whole empty pair,
+    /// wrapping a selection, and Enter jumping past the closer.
+    /// <para>
+    /// A setting because auto-close is divisive — some people find the paired insert faster and some find it
+    /// a fight — and because the cost of offering the choice here is one flag.
+    /// </para>
+    /// </summary>
+    public bool AutoCloseBrackets { get; init; } = true;
 
     /// <summary>Whether closing a tab that holds unsaved work asks first. Off means a close discards it
     /// silently — which is why the default is on, autosave or not.</summary>
@@ -44,6 +63,27 @@ public sealed record AppSettings
     /// <summary>Base point size of the cell inspector's value text. Ctrl+wheel in the inspector writes
     /// here, so a zoom made while reading one value is the size the next one opens at.</summary>
     public int InspectorFontSize { get; init; } = 13;
+
+    /// <summary>
+    /// Type size for the results grid (#52). Its own dial rather than sharing the chrome's: the grid is the
+    /// surface you stare at longest, and the row height follows this rather than being a second setting that
+    /// fights it (#30).
+    /// </summary>
+    public int GridFontSize { get; init; } = 13;
+
+    /// <summary>
+    /// Type size for the app's chrome — panels, tab strip, status bar, result meta rows (#52). One dial
+    /// covering all of it, with the smaller sizes staying proportionally smaller, so raising it keeps the
+    /// hierarchy instead of flattening it.
+    /// </summary>
+    public int UiFontSize { get; init; } = 12;
+
+    /// <summary>
+    /// The zone <c>timestamptz</c> values are displayed in (#77). <c>UTC</c> by default, which keeps every
+    /// existing display identical — the same instant, now with its offset shown — and <c>system</c> for the
+    /// machine's own zone. An id the machine cannot resolve falls back to UTC rather than to a guess.
+    /// </summary>
+    public string DisplayTimeZone { get; init; } = "UTC";
 
     /// <summary>
     /// Where "Fetch all rows" stops. It streams the result to the end, so without a ceiling a mistyped query

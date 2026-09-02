@@ -38,6 +38,18 @@ public sealed class TabAutosave : IDisposable
     private readonly Func<DateOnly> _today;
     private readonly Dictionary<EditorTabViewModel, CancellationTokenSource> _pending = new();
     private readonly HashSet<EditorTabViewModel> _watched = new();
+
+    /// <summary>
+    /// Guards <see cref="_pending"/> and <see cref="_watched"/>. Both are reached from whatever thread
+    /// raised the event that got here — a tab's PropertyChanged, the tabs collection changing, a flush on
+    /// the shutdown path — and a Dictionary or HashSet torn by two of those at once loses entries silently.
+    /// The visible symptom is a tab that was never subscribed, so typing in it never schedules a write.
+    /// <para>
+    /// Held only around the collection work, never across a file write.
+    /// </para>
+    /// </summary>
+    private readonly object _gate = new();
+
     private bool _disposed;
 
     public TabAutosave(WorkspaceContext ctx, TimeSpan? debounce = null, Func<DateOnly>? today = null)
@@ -69,14 +81,21 @@ public sealed class TabAutosave : IDisposable
 
     private void Watch(EditorTabViewModel tab)
     {
-        if (_watched.Add(tab)) tab.PropertyChanged += OnTabPropertyChanged;
+        bool added;
+        lock (_gate) added = _watched.Add(tab);
+        if (added) tab.PropertyChanged += OnTabPropertyChanged;
     }
 
     private void Unwatch(EditorTabViewModel tab)
     {
-        if (!_watched.Remove(tab)) return;
+        CancellationTokenSource? cts;
+        lock (_gate)
+        {
+            if (!_watched.Remove(tab)) return;
+            _pending.Remove(tab, out cts);
+        }
         tab.PropertyChanged -= OnTabPropertyChanged;
-        if (_pending.Remove(tab, out var cts)) { cts.Cancel(); cts.Dispose(); }
+        if (cts is not null) { cts.Cancel(); cts.Dispose(); }
     }
 
     private void OnTabPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -89,11 +108,23 @@ public sealed class TabAutosave : IDisposable
     private void Schedule(EditorTabViewModel tab)
     {
         if (_disposed) return;
-        if (_pending.Remove(tab, out var prior)) { prior.Cancel(); prior.Dispose(); }
 
         var cts = new CancellationTokenSource();
-        _pending[tab] = cts;
+        CancellationTokenSource? prior;
+        lock (_gate)
+        {
+            _pending.Remove(tab, out prior);
+            _pending[tab] = cts;
+        }
+        if (prior is not null) { prior.Cancel(); prior.Dispose(); }
         _ = DebouncedSaveAsync(tab, cts.Token);
+    }
+
+    /// <summary>Take a tab's pending write off the books, returning it so the caller can cancel it outside
+    /// the lock.</summary>
+    private CancellationTokenSource? TakePending(EditorTabViewModel tab)
+    {
+        lock (_gate) return _pending.Remove(tab, out var cts) ? cts : null;
     }
 
     private async Task DebouncedSaveAsync(EditorTabViewModel tab, CancellationToken ct)
@@ -114,7 +145,7 @@ public sealed class TabAutosave : IDisposable
     /// </summary>
     public async Task FlushAsync(EditorTabViewModel tab)
     {
-        if (_pending.Remove(tab, out var cts)) { cts.Cancel(); cts.Dispose(); }
+        if (TakePending(tab) is { } cts) { cts.Cancel(); cts.Dispose(); }
         if (!tab.IsScratch && Mode == AutosaveMode.Off) return;
         await SaveAsync(tab);
     }
@@ -126,13 +157,13 @@ public sealed class TabAutosave : IDisposable
     /// </summary>
     public void Discard(EditorTabViewModel tab)
     {
-        if (_pending.Remove(tab, out var cts)) { cts.Cancel(); cts.Dispose(); }
+        if (TakePending(tab) is { } cts) { cts.Cancel(); cts.Dispose(); }
     }
 
     /// <summary>Flush every watched tab (project switch).</summary>
     public async Task FlushAllAsync()
     {
-        foreach (var tab in _watched.ToList()) await FlushAsync(tab);
+        foreach (var tab in Watched()) await FlushAsync(tab);
     }
 
     /// <summary>The tab just ran its SQL — the write point for <see cref="AutosaveMode.OnExecute"/>.</summary>
@@ -149,7 +180,7 @@ public sealed class TabAutosave : IDisposable
     /// </summary>
     public void FlushExistingBlocking()
     {
-        foreach (var tab in _watched.ToList())
+        foreach (var tab in Watched())
         {
             if (!tab.IsScratch && Mode == AutosaveMode.Off) continue;
             if (tab.ScriptPath is not { } path || tab.Text.Trim().Length == 0) continue;
@@ -158,6 +189,20 @@ public sealed class TabAutosave : IDisposable
             catch { /* best-effort on shutdown (§5.2) */ }
         }
     }
+
+    /// <summary>A snapshot of the watched tabs, taken under the lock so an enumeration can't run while
+    /// another thread is adding one.</summary>
+    private List<EditorTabViewModel> Watched()
+    {
+        lock (_gate) return _watched.ToList();
+    }
+
+    /// <summary>How many times a failed write is retried, and how long between attempts. A lock is usually
+    /// somebody else's momentary business — antivirus reading the file, a sync client replacing it, another
+    /// editor holding it open — and it is gone within a second. Bounded and short so a genuinely
+    /// unwritable path still reaches the status bar promptly rather than retrying forever.</summary>
+    private const int WriteAttempts = 4;
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(150);
 
     private async Task SaveAsync(EditorTabViewModel tab)
     {
@@ -169,24 +214,39 @@ public sealed class TabAutosave : IDisposable
         var owner = _ctx.ProjectOf(tab) ?? _ctx.Project;
         if (tab.IsScratch && owner is null) return;                          // nowhere to put a scratch file
 
-        try
+        var path = tab.ScriptPath ?? CreatePath(tab, owner!);
+        var isNew = tab.ScriptPath is null;
+
+        for (var attempt = 1; ; attempt++)
         {
-            var path = tab.ScriptPath ?? CreatePath(tab, owner!);
-            await _ctx.ScriptStore.WriteTextAsync(path, tab.Text, CancellationToken.None);
-            var isNew = tab.ScriptPath is null;
-            tab.ScriptPath = path;
-            // Creating the file settles what the tab is: a user-named buffer lands outside the scratch
-            // folder, which promotes it. Anything that repoints ScriptPath has to re-derive this.
-            if (isNew) tab.IsScratch = ScratchNaming.IsUnderScratch(path, owner!.ScratchDirectory);
-            tab.MarkSaved(tab.Text);
-            if (isNew) FileCreated?.Invoke();      // a new file changes the tree; an update doesn't
-        }
-        catch (Exception ex)
-        {
-            // Best-effort (§5.2): never take the buffer down with the write. For scratch, HasUnsavedWork
-            // still reports true while ScriptPath is null; for a named script IsDirty stays true. Either
-            // way the close prompt remains the backstop.
-            _ctx.SetStatus($"Could not autosave {tab.Header}: {ex.Message}");
+            try
+            {
+                await _ctx.ScriptStore.WriteTextAsync(path, tab.Text, CancellationToken.None);
+                tab.ScriptPath = path;
+                // Creating the file settles what the tab is: a user-named buffer lands outside the scratch
+                // folder, which promotes it. Anything that repoints ScriptPath has to re-derive this.
+                if (isNew) tab.IsScratch = ScratchNaming.IsUnderScratch(path, owner!.ScratchDirectory);
+                tab.MarkSaved(tab.Text);
+                if (isNew) FileCreated?.Invoke();  // a new file changes the tree; an update doesn't
+                return;
+            }
+            catch (IOException ex) when (attempt < WriteAttempts)
+            {
+                // Somebody else has the file for a moment. Retrying is the difference between a hiccup and
+                // autosave silently stopping for this buffer: the debounce is already spent by the time we
+                // get here, so giving up meant nothing wrote it again until the next keystroke — and if the
+                // user then moved to another tab, never (#83).
+                _ctx.SetStatus($"Retrying autosave of {tab.Header}… ({ex.Message})");
+                await Task.Delay(RetryDelay).ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                // Best-effort (§5.2): never take the buffer down with the write. For scratch, HasUnsavedWork
+                // still reports true while ScriptPath is null; for a named script IsDirty stays true. Either
+                // way the close prompt remains the backstop.
+                _ctx.SetStatus($"Could not autosave {tab.Header}: {ex.Message}");
+                return;
+            }
         }
     }
 
@@ -231,6 +291,6 @@ public sealed class TabAutosave : IDisposable
         if (_disposed) return;
         _disposed = true;
         _ctx.Tabs.CollectionChanged -= OnTabsChanged;
-        foreach (var tab in _watched.ToList()) Unwatch(tab);
+        foreach (var tab in Watched()) Unwatch(tab);
     }
 }

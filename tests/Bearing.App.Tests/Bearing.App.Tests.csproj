@@ -22,6 +22,9 @@
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="Xunit.SkippableFact" />
+    <!-- Headless UI tests (#62): substitutes the windowing platform in-process, so real controls can be
+         realized and driven without a display server. Not the .XUnit shim — see Directory.Packages.props. -->
+    <PackageReference Include="Avalonia.Headless" />
   </ItemGroup>
 
 </Project>

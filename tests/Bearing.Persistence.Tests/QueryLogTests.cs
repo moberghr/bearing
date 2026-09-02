@@ -27,6 +27,58 @@ public class QueryLogTests : IDisposable
         ScriptPath = script,
     };
 
+    [Fact]
+    public async Task Appended_fires_only_once_the_row_can_be_read()
+    {
+        // The whole point of the event (#78): Append hands the entry to a background writer and returns, so
+        // a listener that reloads on Append races the insert. By the time this fires, the row is there.
+        await using var log = new SqliteQueryLog(_dir);
+        var seen = new TaskCompletionSource<QueryLogEntry>(TaskCreationOptions.RunContinuationsAsynchronously);
+        IReadOnlyList<QueryLogEntry> atNotification = [];
+        log.Appended += async e =>
+        {
+            atNotification = await log.SearchAsync(new QueryLogQuery(), CancellationToken.None);
+            seen.TrySetResult(e);
+        };
+
+        log.Append(Entry("select 1 from readable_now"));
+
+        var entry = await seen.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal("select 1 from readable_now", entry.SqlText);
+        Assert.Contains(atNotification, e => e.SqlText == "select 1 from readable_now");
+    }
+
+    [Fact]
+    public async Task Appended_fires_once_per_entry()
+    {
+        await using var log = new SqliteQueryLog(_dir);
+        var count = 0;
+        var all = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        log.Appended += _ => { if (Interlocked.Increment(ref count) == 3) all.TrySetResult(); };
+
+        log.Append(Entry("select 1"));
+        log.Append(Entry("select 2"));
+        log.Append(Entry("select 3"));
+
+        await all.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(3, Volatile.Read(ref count));
+    }
+
+    [Fact]
+    public async Task A_throwing_listener_does_not_stop_the_log()
+    {
+        // A listener's problem must not take the writer down: the log would then silently stop recording,
+        // and nothing would report it.
+        await using var log = new SqliteQueryLog(_dir);
+        log.Appended += _ => throw new InvalidOperationException("listener is broken");
+
+        log.Append(Entry("select 1 from before"));
+        log.Append(Entry("select 2 from after"));
+
+        var found = await SearchUntil(log, new QueryLogQuery(), 2);
+        Assert.Equal(2, found.Count);
+    }
+
     private static async Task<IReadOnlyList<QueryLogEntry>> SearchUntil(
         IQueryLog log, QueryLogQuery q, int expected)
     {

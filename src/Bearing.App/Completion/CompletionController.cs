@@ -31,6 +31,10 @@ internal sealed class CompletionController
     private readonly DispatcherTimer _debounce;
     private CompletionWindow? _window;
 
+    /// <summary>Whether the popup currently has the keyboard. Read by <c>EditorAutoClose</c>, which must lose
+    /// Enter to it: while a suggestion is selected, Enter means "accept that", not "escape the bracket".</summary>
+    public bool IsOpen => _window is not null;
+
     /// <summary>The engine's full answer for the open window — narrowing re-ranks from this, never from
     /// the already-narrowed list, so deleting a character brings the dropped rows back.</summary>
     private IReadOnlyList<Suggestion> _suggestions = Array.Empty<Suggestion>();

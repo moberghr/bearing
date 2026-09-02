@@ -120,6 +120,10 @@ public sealed class WorkspaceContext
     }
 
     /// <summary>The already-open project rooted at <paramref name="directory"/>, or null.</summary>
+    /// <summary>Per-project state for whatever is on screen (null when no project is open). Registers the
+    /// project on first ask, the same as <see cref="GetOrAdd"/>.</summary>
+    public ProjectWorkspace? CurrentWorkspace => Project is null ? null : GetOrAdd(Project);
+
     public ProjectWorkspace? Find(string directory)
         => _open.TryGetValue(Key(directory), out var w) ? w : null;
 

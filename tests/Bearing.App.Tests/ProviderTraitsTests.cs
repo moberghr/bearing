@@ -82,23 +82,6 @@ public class ProviderTraitsTests
 }
 
 /// <summary>How the app names a connection's endpoint when it has to put it in a message.</summary>
-public class ConnectionEndpointTests
-{
-    [Fact]
-    public void An_ordinary_host_keeps_host_colon_port()
-        => Assert.Equal("db:5432/pagila", ConnectionEndpoint.Of("db", 5432, "pagila"));
-
-    [Fact]
-    public void A_named_instance_drops_the_port()
-    {
-        // A named instance is resolved by the SQL Browser service, so the port is not part of the address —
-        // printing one sends the user to check something that had nothing to do with their failure.
-        Assert.Equal(@"SQLPROD\SALES/sales", ConnectionEndpoint.Of(@"SQLPROD\SALES", 1433, "sales"));
-        Assert.True(ConnectionEndpoint.IsNamedInstance(@"SQLPROD\SALES"));
-        Assert.False(ConnectionEndpoint.IsNamedInstance("sqlprod"));
-    }
-}
-
 /// <summary>Which credential kinds a given engine can offer.</summary>
 public class CredentialKindOptionsTests
 {

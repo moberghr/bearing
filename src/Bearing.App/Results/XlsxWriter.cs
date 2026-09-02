@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Text;
 
 namespace Bearing.App.Results;
@@ -10,8 +12,8 @@ namespace Bearing.App.Results;
 /// Writes a <see cref="TableBlock"/> as a minimal <c>.xlsx</c> workbook, by hand.
 /// <para>
 /// <b>Why no library.</b> An xlsx is a zip of a handful of XML parts, and everything this app needs from one
-/// is a single sheet: a bold frozen header, typed cells, and dates that arrive as dates rather than as text.
-/// That is the ~150 lines below, against a multi-megabyte dependency (ClosedXML/NPOI/OpenXml SDK) whose
+/// is a sheet per result set: a bold frozen header, typed cells, and dates that arrive as dates rather than as
+/// text. That is the ~200 lines below, against a multi-megabyte dependency (ClosedXML/NPOI/OpenXml SDK) whose
 /// styling, formula and pivot machinery would go unused. It also matches how the rest of the repo is built —
 /// raw ADO instead of an ORM, hand-rolled fakes instead of a mocking framework.
 /// </para>
@@ -44,15 +46,33 @@ public static class XlsxWriter
 
     /// <summary>Write <paramref name="block"/> to <paramref name="output"/> as a one-sheet workbook.</summary>
     public static void Write(Stream output, TableBlock block, string sheetName)
+        => Write(output, [new Sheet(block, sheetName)]);
+
+    /// <summary>
+    /// Write a workbook with one sheet per entry, in order (#12).
+    /// <para>
+    /// Sheet names are sanitized and then de-duplicated (<see cref="SheetNames.Unique"/>), in that order:
+    /// Excel refuses a workbook with two sheets of the same name, and sanitizing can <i>create</i> a
+    /// collision by truncating two long names to the same 31 characters — quite apart from the ordinary case
+    /// of two result sets from the same table.
+    /// </para>
+    /// </summary>
+    public static void Write(Stream output, IReadOnlyList<Sheet> sheets)
     {
+        if (sheets.Count == 0) throw new ArgumentException("a workbook needs at least one sheet", nameof(sheets));
+
+        var names = SheetNames.Unique(sheets.Select(s => s.Name));
         using var zip = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true);
-        Put(zip, "[Content_Types].xml", ContentTypes);
+        Put(zip, "[Content_Types].xml", ContentTypes(sheets.Count));
         Put(zip, "_rels/.rels", RootRels);
-        Put(zip, "xl/workbook.xml", Workbook(SafeSheetName(sheetName)));
-        Put(zip, "xl/_rels/workbook.xml.rels", WorkbookRels);
+        Put(zip, "xl/workbook.xml", Workbook(names));
+        Put(zip, "xl/_rels/workbook.xml.rels", WorkbookRels(sheets.Count));
         Put(zip, "xl/styles.xml", Styles);
-        WriteSheet(zip, block);
+        for (var i = 0; i < sheets.Count; i++) WriteSheet(zip, sheets[i].Block, i + 1);
     }
+
+    /// <summary>One sheet of a workbook: a block of rows and the name to file it under.</summary>
+    public sealed record Sheet(TableBlock Block, string Name);
 
     private static void Put(ZipArchive zip, string path, string content)
     {
@@ -61,9 +81,9 @@ public static class XlsxWriter
         writer.Write(content);
     }
 
-    private static void WriteSheet(ZipArchive zip, TableBlock block)
+    private static void WriteSheet(ZipArchive zip, TableBlock block, int number)
     {
-        using var stream = zip.CreateEntry("xl/worksheets/sheet1.xml", CompressionLevel.Optimal).Open();
+        using var stream = zip.CreateEntry(SheetPath(number), CompressionLevel.Optimal).Open();
         using var w = new StreamWriter(stream, new UTF8Encoding(false));
         w.Write($"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="{Main}">""");
 
@@ -121,6 +141,13 @@ public static class XlsxWriter
             case byte or sbyte or short or ushort or int or uint or long or ulong or decimal or float or double:
                 w.Write($"""<c r="{reference}"><v>{Number(value)}</v></c>""");
                 return;
+            // A timestamptz arrives as Kind=Utc. Excel has no offset type at all, so the zone cannot survive
+            // as a date either way — but the *number* can at least be the one the user was looking at, so it
+            // is converted to the display zone first (#77). Exporting 15:00 UTC while the grid said 18:00
+            // would make the file disagree with the app that produced it.
+            case DateTime { Kind: DateTimeKind.Utc } utc when Serial(InDisplayZone(utc)) is { } utcSerial:
+                w.Write($"""<c r="{reference}" s="{StyleDateTime}"><v>{Text(utcSerial)}</v></c>""");
+                return;
             case DateTime dt when Serial(dt) is { } serial:
                 var style = dt.TimeOfDay == TimeSpan.Zero ? StyleDate : StyleDateTime;
                 w.Write($"""<c r="{reference}" s="{style}"><v>{Text(serial)}</v></c>""");
@@ -138,6 +165,14 @@ public static class XlsxWriter
                 return;
         }
     }
+
+    /// <summary>
+    /// An instant as a wall time in the display zone. Excel stores no offset, so a zone-aware value has to
+    /// become <i>some</i> wall time; the one the user saw in the grid is the only defensible choice.
+    /// </summary>
+    private static DateTime InDisplayZone(DateTime utc)
+        => DateTime.SpecifyKind(
+            TimeZoneInfo.ConvertTimeFromUtc(utc, Formatting.CellFormat.Zone), DateTimeKind.Unspecified);
 
     /// <summary>Days since Excel's epoch, or null for a date outside what Excel can represent (its serial
     /// numbering starts at 1900 and has no room for anything earlier).</summary>
@@ -204,16 +239,25 @@ public static class XlsxWriter
 
     // ---- static parts ----------------------------------------------------------------------------
 
-    private const string ContentTypes = $"""
-        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-        <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-        <Default Extension="xml" ContentType="application/xml"/>
-        <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-        <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-        <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
-        </Types>
-        """;
+    /// <summary>The zip path of sheet <paramref name="number"/> (1-based), which four parts have to agree on:
+    /// this entry, its content type, its relationship, and the workbook's sheet list.</summary>
+    private static string SheetPath(int number) => $"xl/worksheets/sheet{number}.xml";
+
+    private static string ContentTypes(int sheets)
+    {
+        var overrides = string.Concat(Enumerable.Range(1, sheets).Select(n =>
+            $"""<Override PartName="/{SheetPath(n)}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"""));
+        return $"""
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+            <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+            <Default Extension="xml" ContentType="application/xml"/>
+            <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+            {overrides}
+            <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+            </Types>
+            """;
+    }
 
     private const string RootRels = $"""
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -222,20 +266,34 @@ public static class XlsxWriter
         </Relationships>
         """;
 
-    private const string WorkbookRels = $"""
-        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Relationships xmlns="{PkgRel}">
-        <Relationship Id="rId1" Type="{RelNs}/worksheet" Target="worksheets/sheet1.xml"/>
-        <Relationship Id="rId2" Type="{RelNs}/styles" Target="styles.xml"/>
-        </Relationships>
-        """;
+    /// <summary>
+    /// One relationship per sheet, then styles. The sheets take rId1..rIdN so styles lands on rId(N+1) —
+    /// the ids are the workbook's own references and only have to be internally consistent, not stable.
+    /// </summary>
+    private static string WorkbookRels(int sheets)
+    {
+        var parts = string.Concat(Enumerable.Range(1, sheets).Select(n =>
+            $"""<Relationship Id="rId{n}" Type="{RelNs}/worksheet" Target="worksheets/sheet{n}.xml"/>"""));
+        return $"""
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <Relationships xmlns="{PkgRel}">
+            {parts}
+            <Relationship Id="rId{sheets + 1}" Type="{RelNs}/styles" Target="styles.xml"/>
+            </Relationships>
+            """;
+    }
 
-    private static string Workbook(string sheetName) => $"""
-        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <workbook xmlns="{Main}" xmlns:r="{RelNs}">
-        <sheets><sheet name="{Escape(sheetName)}" sheetId="1" r:id="rId1"/></sheets>
-        </workbook>
-        """;
+    private static string Workbook(IReadOnlyList<string> sheetNames)
+    {
+        var sheets = string.Concat(sheetNames.Select((name, i) =>
+            $"""<sheet name="{Escape(name)}" sheetId="{i + 1}" r:id="rId{i + 1}"/>"""));
+        return $"""
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <workbook xmlns="{Main}" xmlns:r="{RelNs}">
+            <sheets>{sheets}</sheets>
+            </workbook>
+            """;
+    }
 
     // numFmtId 164+ is the custom range. The three formats mirror CellFormat's ISO display, so a value looks
     // the same in Excel as it did in the grid.

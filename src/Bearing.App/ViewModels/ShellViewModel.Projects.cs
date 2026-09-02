@@ -33,10 +33,14 @@ public sealed partial class ShellViewModel
             await _recentProjects.AddAsync(_project.Directory, CancellationToken.None);
             await RefreshRecentAsync();
 
+            // Loaded before the first RefreshConnections so the tree is built with the user's folders
+            // already in the state they left them, rather than flashing open and then closing.
+            var session = await _sessionStore.LoadAsync(_project.Directory, CancellationToken.None);
+            Connections.RestoreCollapsedFolders(session?.CollapsedConnectionFolders);
+
             RefreshConnections();
             RefreshScripts();
 
-            var session = await _sessionStore.LoadAsync(_project.Directory, CancellationToken.None);
             SidePaneOpen = session?.SidePaneOpen ?? true;
             SidePaneWidth = session?.SidePaneWidth ?? 260;
             ResultsViewMode = session?.ResultsViewMode ?? Bearing.Core.Workspace.ResultsViewMode.Stacked;
@@ -112,6 +116,34 @@ public sealed partial class ShellViewModel
         if (_ctx.Find(projectDirectory) is { } known) await ActivateAsync(known);
         else await InitializeAsync(projectDirectory);
     }
+
+    /// <summary>
+    /// Open a demo session: the demo project, its one connection, and a starter script (#64).
+    /// <para>
+    /// The script arrives as a <b>new tab</b> rather than as text assigned to the tab already on screen,
+    /// because the editor loads a tab's text when that tab becomes selected — writing to the selected tab's
+    /// <c>Text</c> after the fact left the editor empty, which a render capture caught and no assertion here
+    /// would have. Creating a tab selects it, so the load happens for free; the empty scratch tab the restore
+    /// left behind is then closed.
+    /// </para>
+    /// </summary>
+    public async Task StartDemoAsync(string projectDirectory, string welcomeScript)
+    {
+        await OpenProjectAsync(projectDirectory);
+        await Connections.AddDemoConnectionAsync();
+
+        var stale = Workspace.Tabs
+            .Where(t => t.IsScratch && string.IsNullOrWhiteSpace(t.Text))
+            .ToList();
+        // Named, because the scratch counter has already used "Scratch 1" on the tab the restore made and
+        // being handed a lone tab called "Scratch 2" reads as though one went missing.
+        Workspace.NewTab(welcomeScript).DisplayName = "Demo";
+        foreach (var tab in stale) await Workspace.CloseTabAsync(tab);
+
+        StatusText = "Demo data — no database is involved, and nothing is saved outside this session. "
+                   + "Press F5 to run.";
+    }
+
 
     /// <summary>Bring an already-open project back on screen from its parked state. Deliberately does not
     /// touch <c>session.json</c>: the in-memory tabs are newer than anything on disk (unsaved buffer edits

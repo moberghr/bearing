@@ -47,9 +47,17 @@ public sealed partial class HistoryPanelViewModel : ObservableObject
         var text = string.IsNullOrWhiteSpace(SearchText) ? null : SearchText;
         try
         {
-            _entries = await _search(text, ct);
+            var found = await _search(text, ct);
+            // A superseded reload must not land: the caller cancels the previous one for each new query in
+            // a run, and applying a stale answer after a newer one would leave the panel behind the log.
+            ct.ThrowIfCancellationRequested();
+            _entries = found;
             Regroup(DateTimeOffset.Now);
             Status = _entries.Count == 0 ? "No matching queries." : $"{_entries.Count} quer{(_entries.Count == 1 ? "y" : "ies")}.";
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded, not failed — the newer reload owns the panel and will set the status.
         }
         catch (Exception ex)
         {
@@ -72,16 +80,29 @@ public sealed partial class HistoryPanelViewModel : ObservableObject
                 g.Select(x => new HistoryRowViewModel(x.entry, _colorForConnection(x.entry.ConnectionName))).ToList()))
             .ToList();
 
+        var selected = SelectedRow?.Entry;
+
         Groups.Clear();
         foreach (var g in rows) Groups.Add(g);
 
-        // Row objects are rebuilt wholesale, so a selection made before this call now points at a row that
-        // is in no list. Dropping it here is what collapses the preview after a reload or a filter switch;
-        // the view no longer does it (the per-day lists are bound one-way precisely so they can't — #43),
-        // and leaving it would keep a query on screen with nothing selected to explain where it came from.
-        if (SelectedRow is not null && !Groups.Any(g => g.Rows.Contains(SelectedRow)))
-            SelectedRow = null;
+        // Row objects are rebuilt wholesale, so a selection made before this call points at a row that is in
+        // no list. It is re-found by the entry behind it, not dropped: since #78 this runs every time a query
+        // lands in the log, so dropping it would clear the user's selection — and collapse the preview it
+        // drives — under them, every time a query finished. When the entry really is gone (a filter switch,
+        // a search that no longer matches it) there is nothing to re-find and the preview does close, which
+        // is the behaviour this replaced and still the right one there.
+        SelectedRow = selected is null
+            ? null
+            : Groups.SelectMany(g => g.Rows).FirstOrDefault(r => IsSameEntry(r.Entry, selected));
     }
+
+    /// <summary>Whether two projections are of the same logged row. By <see cref="QueryLogEntry.Id"/> where
+    /// the log assigned one; a not-yet-persisted entry has Id 0, so those fall back to the fields that
+    /// identify a single execution.</summary>
+    private static bool IsSameEntry(QueryLogEntry a, QueryLogEntry b)
+        => a.Id != 0 || b.Id != 0
+            ? a.Id == b.Id
+            : a.ExecutedAt == b.ExecutedAt && a.SqlText == b.SqlText;
 
     private bool Matches(QueryLogEntry e) => Filter switch
     {
@@ -107,6 +128,7 @@ public sealed class HistoryRowViewModel
 {
     public HistoryRowViewModel(QueryLogEntry entry, string? connectionColor)
     {
+        Entry = entry;
         Sql = entry.SqlText;
         ConnectionColor = connectionColor;
         IsError = !entry.Success;
@@ -115,6 +137,10 @@ public sealed class HistoryRowViewModel
         Detail = $"{entry.ExecutedAt.LocalDateTime:dd.MM.yyyy HH:mm:ss} · {entry.ConnectionName} · {entry.RowCount} row(s) · {(long)entry.Duration.TotalMilliseconds} ms"
                  + (entry.Success ? "" : $"  ⚠ {entry.ErrorMessage}");
     }
+
+    /// <summary>The logged row behind this projection. Kept so a rebuild can find the row the user had
+    /// selected — the projections themselves are new objects every time (see <c>Regroup</c>).</summary>
+    public QueryLogEntry Entry { get; }
 
     public string Sql { get; }
     public string? ConnectionColor { get; }

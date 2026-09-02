@@ -17,11 +17,13 @@ public sealed partial class ResultView
     private Control BuildResultSet(ResultSetViewModel result, out DataGrid? grid)
     {
         grid = null;
+        // A result with no grid is one line of text, so it is styled as text rather than left at whatever
+        // font size it inherits — it sat two sizes above the meta row naming it, unpadded against the frame.
         if (!result.Success)
-            return new TextBlock { Text = $"Error: {result.Error?.Message}", Margin = new Thickness(8), TextWrapping = TextWrapping.Wrap };
+            return ResultChrome.ResultText($"Error: {result.Error?.Message}", Res("Error.Red"), wrap: true);
 
         if (result.Columns.Count == 0)
-            return new TextBlock { Text = result.Message ?? "Statement executed.", Margin = new Thickness(8) };
+            return ResultChrome.ResultText(result.Message ?? "Statement executed.", Res("Text.Code"));
 
         grid = BuildGrid(result);
         // Any cell is selectable; the stats bar surfaces itself only when ≥2 selected cells are numeric.
@@ -114,9 +116,10 @@ public sealed partial class ResultView
         grid.GotFocus += (_, _) => { if (_selection.NeedsSeed(result)) _selection.SeedActive(grid, result); };
     }
 
-    /// <summary>A press the cells didn't take: the row-number gutter selects the whole row and a column
-    /// header its whole column (#6); anything else — the scrollbar, the corner, empty space below the last
-    /// row — clears the selection, which is the click-away this handler replaced.
+    /// <summary>A press the cells didn't take: the row-number gutter selects the whole row, a column header
+    /// its whole column (#6), and the corner above the gutter the whole result (#55); anything else — the
+    /// scrollbar, empty space below the last row — clears the selection, which is the click-away this
+    /// handler replaced.
     /// <para>
     /// A cell press has already selected itself by now (this runs after the cell's own handler, being further
     /// up the tree), so the one thing left to do for it is the checkbox gesture: a click that landed on a bool
@@ -134,6 +137,7 @@ public sealed partial class ResultView
                 _selection.TryToggleBoolAtPointer(grid, result, e);
                 return;
             case GridPressTarget.RowHeader:
+            case GridPressTarget.Corner:
                 return;
             case GridPressTarget.ColumnHeader:
                 if (result is { IsPageable: true, HasMore: true })
@@ -155,6 +159,15 @@ public sealed partial class ResultView
             if (e.Row.DataContext is not object?[] row || e.Column.Tag is not int idx) return;
             if (e.EditingElement is TextBox tb) result.SetCell(row, idx, tb.Text);
             ResultRowPainter.ApplyRowStatus(e.Row, result); // tint + status bar on the edited row immediately
+
+            // The same corrective the click path has (ResultCellFactory.KeepClickedCellInView), for the same
+            // reason: whatever moved the viewport while the editor tore down — the grid re-adopting a current
+            // cell, the row re-tinting, the cell's content swapping — the cell you just edited ends up
+            // visible again (#60). A no-op when nothing moved, and posted because the layout pass that could
+            // move it happens after this returns.
+            var column = e.Column;
+            Avalonia.Threading.Dispatcher.UIThread.Post(
+                () => grid.ScrollIntoView(row, column), Avalonia.Threading.DispatcherPriority.Loaded);
         };
     }
 
