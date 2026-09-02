@@ -6,9 +6,9 @@ using Bearing.App.ViewModels;
 namespace Bearing.App.Input;
 
 /// <summary>
-/// Tab switching: visual-order stepping (Ctrl+PageUp/Down), go-to-tab-N, and the held-modifier
-/// most-recently-used cycle (Ctrl+Tab). Owns the MRU list and the in-flight cycle flag — the three fields
-/// <c>MainWindow</c> used to keep for this, which had to be read from four unrelated handlers
+/// Tab switching: visual-order stepping (Ctrl+PageUp/Down, and the wheel over the strip), go-to-tab-N, and
+/// the held-modifier most-recently-used cycle (Ctrl+Tab). Owns the MRU list and the in-flight cycle flag —
+/// the three fields <c>MainWindow</c> used to keep for this, which had to be read from four unrelated handlers
 /// (<c>OnKeyUp</c>, the selected-tab property change, and both cycle commands).
 /// <para>
 /// The index arithmetic is exposed as statics so the wrap and clamp rules are testable.
@@ -46,6 +46,26 @@ public sealed class TabNavigator
         if (order.Count == 0) return;
         var i = workspace.SelectedTab is { } t ? Math.Max(0, order.IndexOf(t)) : 0;
         workspace.SelectedTab = order[AdjacentIndex(order.Count, i, dir)];
+    }
+
+    /// <summary>
+    /// The wheel over a tab strip: move one tab along the drawn order, and say whether it moved.
+    /// <para>
+    /// Deliberately <b>not</b> wrapping, unlike <see cref="SelectAdjacent"/>. A keystroke is one discrete
+    /// press, so wrapping off the end is a shortcut; a wheel is a continuous gesture that overshoots, and
+    /// wrapping there teleports you to the other end of the strip while you are still turning it — which is
+    /// how you lose the tab you were looking for. Stopping at the end is what a scroll means everywhere else.
+    /// </para>
+    /// </summary>
+    public bool StepSelection(WorkspaceViewModel workspace, int dir)
+    {
+        var order = VisualOrder(workspace);
+        if (order.Count == 0) return false;
+        var i = workspace.SelectedTab is { } t ? Math.Max(0, order.IndexOf(t)) : 0;
+        var next = order[SteppedIndex(order.Count, i, dir)];
+        if (ReferenceEquals(next, workspace.SelectedTab)) return false;
+        workspace.SelectedTab = next;
+        return true;
     }
 
     /// <summary>The tabs in the order they are drawn: the pinned row first, then the strip, each keeping its
@@ -99,6 +119,11 @@ public sealed class TabNavigator
     /// directions.</summary>
     public static int AdjacentIndex(int count, int current, int dir)
         => (current + dir + count) % count;
+
+    /// <summary>The index one step from <paramref name="current"/>, clamped at both ends — the wheel's rule
+    /// (see <see cref="StepSelection"/>), where <see cref="AdjacentIndex"/>'s wrap would overshoot.</summary>
+    public static int SteppedIndex(int count, int current, int dir)
+        => Math.Clamp(current + dir, 0, count - 1);
 
     /// <summary>The 0-based index for a 1-based "go to tab n" request; n≥9 means the last tab, and anything
     /// past the end clamps to it.</summary>

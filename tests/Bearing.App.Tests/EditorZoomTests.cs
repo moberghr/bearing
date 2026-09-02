@@ -1,4 +1,5 @@
 using Bearing.App.Editing;
+using Bearing.App.Input;
 using Bearing.App.ViewModels;
 using Xunit;
 
@@ -70,7 +71,7 @@ public class EditorZoomTests
     [Fact]
     public void A_mouse_notch_spends_immediately()
     {
-        var wheel = new WheelZoomAccumulator();
+        var wheel = new WheelNotches();
         Assert.Equal(1, wheel.Add(1));
         Assert.Equal(-1, wheel.Add(-1));
         Assert.Equal(0, wheel.Add(0));
@@ -80,7 +81,7 @@ public class EditorZoomTests
     public void Trackpad_fractions_bank_until_they_make_a_whole_step()
     {
         // Ten 0.2 deltas — one swipe — must be two points, not ten.
-        var wheel = new WheelZoomAccumulator();
+        var wheel = new WheelNotches();
         var steps = 0;
         for (var i = 0; i < 10; i++) steps += wheel.Add(0.2);
         Assert.Equal(2, steps);
@@ -89,7 +90,7 @@ public class EditorZoomTests
     [Fact]
     public void A_fast_gesture_releases_every_notch_it_carried()
     {
-        var wheel = new WheelZoomAccumulator();
+        var wheel = new WheelNotches();
         Assert.Equal(3, wheel.Add(3.4));   // and 0.4 stays banked
         Assert.Equal(1, wheel.Add(0.7));
     }
@@ -98,7 +99,7 @@ public class EditorZoomTests
     public void Reversing_direction_drops_what_was_banked_the_other_way()
     {
         // Otherwise a flick back has to pay off the previous swipe's remainder before anything moves.
-        var wheel = new WheelZoomAccumulator();
+        var wheel = new WheelNotches();
         Assert.Equal(0, wheel.Add(0.9));
         Assert.Equal(-1, wheel.Add(-1));
     }

@@ -483,9 +483,10 @@
                   <Setter Property="Opacity" Value="0.8"/>
                 </Style>
             </DockPanel.Styles>
-            <!-- Scrollbars Hidden, not Auto: the strip still scrolls (wheel, and keyboard switching brings
-                 the selection into view), but on a row this short the bar was a thin target that said "there
-                 is more" without saying more of *what*. The chevron says which tabs, and is the affordance. -->
+            <!-- Scrollbars Hidden, not Auto: the strip still scrolls (Shift+wheel, and every switch brings
+                 the selection into view — a plain wheel here switches tabs), but on a row this short the bar
+                 was a thin target that said "there is more" without saying more of *what*. The chevron says
+                 which tabs, and is the affordance. -->
             <ScrollViewer x:Name="PinnedTabScroll" DockPanel.Dock="Top"
                           IsVisible="{Binding Workspace.HasPinnedTabs}"
                           HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
@@ -21,8 +22,9 @@ namespace Bearing.App.Tests.Ui;
 /// measures at infinite width, so the overflow was laid out and clipped with nothing to scroll it — no
 /// scrollbar, no wheel, no chevron, and the <c>+</c> button pushed out of reach with the tabs. The scrollbar
 /// was the first fix and the wrong one — on a strip this short it is a thin target, and it says "there is
-/// more" without saying more of *what*. The strip now scrolls by wheel, keeps the selection in view, and
-/// reports how many tabs are off the edge so the chevron can name them.
+/// more" without saying more of *what*. The strip keeps the selection in view and reports how many tabs are
+/// off the edge so the chevron can name them; the wheel switches tabs (and the selection then brings itself
+/// into view, which is what moves the strip), with Shift+wheel left as the pan.
 /// <para>
 /// The strip is assembled here the way the XAML assembles it (a ScrollViewer around a TabStrip), because the
 /// behaviour under test is the scroller's, not the window's.
@@ -77,27 +79,118 @@ public class TabStripScrollerTests
         window.Close();
     });
 
-    /// <summary>The wheel scrolls sideways: there is nothing to scroll vertically, and a vertical wheel over
-    /// a horizontal strip still means "move along it".</summary>
+    /// <summary>
+    /// The wheel over the strip switches tabs — down/away is the next one, up is the previous. This is what a
+    /// vertical wheel over a horizontal strip means now; panning it moved to Shift+wheel below.
+    /// </summary>
     [Fact]
-    public Task The_wheel_scrolls_the_strip_sideways() => _ui.Run(() =>
+    public Task The_wheel_steps_the_selection() => _ui.Run(() =>
+    {
+        var (window, scroller, strip, s) = Strip(tabs: 30);
+        var steps = new List<int>();
+        // The window supplies the real step (TabNavigator.StepSelection across both rows); the scroller only
+        // knows it asked for ±1, which is the part under test here.
+        s.SelectionStep = dir => { steps.Add(dir); strip.SelectedIndex += dir; return true; };
+        var point = Middle(window, scroller);
+
+        window.MouseMove(point);
+        window.MouseWheel(point, new Vector(0, -1));
+        window.MouseWheel(point, new Vector(0, 1));
+        window.UpdateLayout();
+
+        Assert.Equal([+1, -1], steps);
+        window.Close();
+    });
+
+    /// <summary>The selection moving is what scrolls the strip, so the wheel must not also pan it — two
+    /// movements from one notch reads as the strip sliding out from under the pointer.</summary>
+    [Fact]
+    public Task The_wheel_does_not_pan_the_strip_as_well() => _ui.Run(() =>
+    {
+        var (window, scroller, _, s) = Strip(tabs: 30);
+        s.SelectionStep = _ => true;   // consumed, but nothing selected: the strip must stay put
+        var point = Middle(window, scroller);
+
+        window.MouseMove(point);
+        window.MouseWheel(point, new Vector(0, -1));
+        window.UpdateLayout();
+
+        Assert.Equal(0, scroller.Offset.X);
+        window.Close();
+    });
+
+    /// <summary>
+    /// A trackpad's fractions are banked toward a whole notch, so one swipe is a couple of tabs rather than
+    /// thirty — and they are swallowed while they bank, or the strip would drift sideways under a gesture
+    /// that means "switch tabs".
+    /// </summary>
+    [Fact]
+    public Task Trackpad_fractions_bank_into_whole_tabs_and_never_pan() => _ui.Run(() =>
+    {
+        var (window, scroller, _, s) = Strip(tabs: 30);
+        var steps = 0;
+        s.SelectionStep = _ => { steps++; return true; };
+        var point = Middle(window, scroller);
+        window.MouseMove(point);
+
+        // Five fifths of a notch: four banked, the fifth spends one tab.
+        for (var i = 0; i < 5; i++) window.MouseWheel(point, new Vector(0, -0.2));
+        window.UpdateLayout();
+
+        Assert.Equal(1, steps);
+        Assert.Equal(0, scroller.Offset.X);
+        window.Close();
+    });
+
+    /// <summary>
+    /// Shift+wheel still pans, without moving the selection: reading along a long strip should not drag the
+    /// editor, the results and the connection to another tab on the way past.
+    /// </summary>
+    [Fact]
+    public Task Shift_wheel_pans_the_strip_instead_of_switching() => _ui.Run(() =>
+    {
+        var (window, scroller, _, s) = Strip(tabs: 30);
+        var steps = 0;
+        s.SelectionStep = _ => { steps++; return true; };
+        var point = Middle(window, scroller);
+
+        window.MouseMove(point);
+        window.MouseWheel(point, new Vector(0, -1), RawInputModifiers.Shift);
+        window.UpdateLayout();
+
+        Assert.Equal(0, steps);
+        Assert.True(scroller.Offset.X > 0, $"Shift+wheel left the strip at {scroller.Offset.X}");
+
+        var scrolled = scroller.Offset.X;
+        window.MouseWheel(point, new Vector(0, 1), RawInputModifiers.Shift);
+        window.UpdateLayout();
+        Assert.True(scroller.Offset.X < scrolled, "Shift+wheel does not pan back");
+        window.Close();
+    });
+
+    /// <summary>With no step wired — the strip alone, as the bare fixtures here are — the wheel falls back to
+    /// panning, which is what keeps the gesture alive on a strip nobody has given a selection rule.</summary>
+    [Fact]
+    public Task Without_a_selection_step_the_wheel_pans() => _ui.Run(() =>
     {
         var (window, scroller, _, _) = Strip(tabs: 30);
-        var point = scroller.TranslatePoint(new Point(scroller.Bounds.Width / 2, scroller.Bounds.Height / 2), window);
-        Assert.NotNull(point);
+        var point = Middle(window, scroller);
 
-        window.MouseMove(point!.Value);
-        window.MouseWheel(point.Value, new Vector(0, -1));
+        window.MouseMove(point);
+        window.MouseWheel(point, new Vector(0, -1));
         window.UpdateLayout();
 
         Assert.True(scroller.Offset.X > 0, $"the wheel left the strip at {scroller.Offset.X}");
-
-        var scrolled = scroller.Offset.X;
-        window.MouseWheel(point.Value, new Vector(0, 1));
-        window.UpdateLayout();
-        Assert.True(scroller.Offset.X < scrolled, "the wheel does not scroll back");
         window.Close();
     });
+
+    private static Point Middle(Window window, ScrollViewer scroller)
+    {
+        var point = scroller.TranslatePoint(
+            new Point(scroller.Bounds.Width / 2, scroller.Bounds.Height / 2), window);
+        Assert.NotNull(point);
+        return point!.Value;
+    }
 
     /// <summary>A wheel that cannot scroll is left for someone else. The handler runs in the tunnel phase,
     /// so marking it handled anyway would kill the gesture over a strip that already fits — dead rather than

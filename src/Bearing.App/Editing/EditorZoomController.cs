@@ -2,6 +2,7 @@ using System;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using AvaloniaEdit;
+using Bearing.App.Input;
 using Bearing.App.ViewModels;
 
 namespace Bearing.App.Editing;
@@ -28,7 +29,7 @@ internal sealed class EditorZoomController
     private readonly TextEditor _editor;
     private readonly Func<double> _baseSize;   // Settings ▸ Editor ▸ font size, mirrored on the shell
     private readonly Action<double>? _report;  // says what happened; a one-point change is easy to miss
-    private readonly WheelZoomAccumulator _wheel = new();
+    private readonly WheelNotches _wheel = new();
     private EditorTabViewModel? _tab;
 
     /// <param name="report">Called with the new size after any zoom the user asked for (not on tab switch —
