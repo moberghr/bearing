@@ -18,6 +18,13 @@ public static class PostgresConnectionString
     public const int DefaultMaxPoolSize = 10;
 
     /// <summary>
+    /// Seconds between Npgsql's own keepalive messages. Present because <c>CommandTimeout</c> is 0: something
+    /// has to notice a dead connection, and a keepalive can tell "the link is gone" from "the query is slow",
+    /// which a command timeout cannot.
+    /// </summary>
+    public const int DefaultKeepAliveSeconds = 30;
+
+    /// <summary>
     /// Connection-string keywords <see cref="ConnectionInfo.Options"/> is not allowed to set: identity,
     /// credentials and the transport's security come from the connection record plus the secret store, never
     /// from an option bag that travels in the shared project.json.
@@ -55,6 +62,17 @@ public static class PostgresConnectionString
             ApplicationName = "bearing",
             MaxPoolSize = DefaultMaxPoolSize,
             SslMode = SslModeOf(TlsPolicy.Resolve(info)),
+            // No command timeout. Npgsql defaults to 30 seconds, which killed any query that took longer and
+            // reported it as "Exception while reading from stream" — a message about the driver's plumbing,
+            // for a query that was working. Running a slow analytical query is the point of the tool, and
+            // Esc already cancels one, so a clock we impose can only get in the way. Override per connection
+            // with a "CommandTimeout" entry in its options, the same way MaxPoolSize is overridable.
+            CommandTimeout = 0,
+            // What makes an unlimited command timeout safe rather than reckless: with no clock on the
+            // command, a genuinely dead socket would otherwise be waited on forever. Npgsql sends its own
+            // keepalive on this interval and fails the connection when one goes unanswered, so a broken
+            // link is still noticed — by the thing that can actually tell the difference.
+            KeepAlive = DefaultKeepAliveSeconds,
         };
 
         foreach (var (key, value) in info.Options)

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Bearing.App.Formatting;
 
@@ -99,7 +100,20 @@ public static class TableFormats
     {
         var names = UniqueNames(block);
         using var buffer = new MemoryStream();
-        using (var w = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true }))
+        using (var w = new Utf8JsonWriter(buffer, new JsonWriterOptions
+        {
+            Indented = true,
+            // The relaxed encoder, or System.Text.Json's default escapes anything that could be unsafe in
+            // an HTML document — which turned the "+" of a timestamp's offset into "\u002B", so a copied
+            // timestamptz read 2026-07-16 14:16:49\u002B00:00. It does the same to non-ASCII, so a name
+            // with an accent came out as a run of escapes too. This is clipboard text, not markup: the only
+            // consumer is whatever the user pastes into, and an escape there is noise they have to undo.
+            //
+            // Safe because the HTML flavour is a different method with its own HtmlEscape — nothing built
+            // here is ever interpolated into a document by us. Same encoder JsonText already uses for the
+            // cell inspector, so the inspector and the clipboard agree about the same value.
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        }))
         {
             w.WriteStartArray();
             for (var r = 0; r < block.Rows.Count; r++)
