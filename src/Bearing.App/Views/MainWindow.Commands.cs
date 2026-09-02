@@ -87,6 +87,12 @@ public partial class MainWindow
         r.Register(new KeyCommand(CommandIds.ConnectionImportDBeaver, "Import connections: from DBeaver…",
             KeyScope.Global, "Connection", async () => await ImportFromDBeaverAsync()));
         r.Register(new KeyCommand(CommandIds.QueryRunAll, "Run entire script", KeyScope.Global, "Query", async () => await RunAllAsync()));
+        r.Register(KeyCommand.Sync(CommandIds.QueryCancel, "Cancel running query", KeyScope.Global, "Query",
+            () => Vm?.Execution.CancelExecution()));
+        r.Register(new KeyCommand(CommandIds.QueryExplain, "Explain statement", KeyScope.Global, "Query",
+            async () => await ExplainAsync(analyze: false)));
+        r.Register(new KeyCommand(CommandIds.QueryExplainAnalyze, "Explain and analyse statement (runs it)",
+            KeyScope.Global, "Query", async () => await ExplainAsync(analyze: true)));
         r.Register(new KeyCommand(CommandIds.SettingsKeybindings, "Keyboard shortcuts…", KeyScope.Global, "View", async () => await EditKeybindingsAsync()));
         r.Register(new KeyCommand(CommandIds.SettingsOpen, "Settings…", KeyScope.Global, "View", async () => await OpenSettingsAsync()));
 
@@ -348,6 +354,30 @@ public partial class MainWindow
         var ran = Vm.Workspace.SelectedTab;
         await Vm.Execution.ExecuteAsync(_text.SqlToRun());
         if (ReferenceEquals(ran, Vm.Workspace.SelectedTab)) RebuildResults(ran);
+    }
+
+    /// <summary>
+    /// query.explain / query.explainAnalyze: plan the statement under the caret and show the tree.
+    /// <para>
+    /// The same text Run would execute (<c>SqlToRun</c>), so the plan is for the statement the user is
+    /// looking at rather than the whole buffer. The title label says which form ran, because the measured
+    /// one really executes the statement.
+    /// </para>
+    /// </summary>
+    internal async Task ExplainFromChromeAsync(bool analyze) => await ExplainAsync(analyze);
+
+    private async Task ExplainAsync(bool analyze)
+    {
+        if (Vm is null) return;
+        var sql = _text.SqlToRun();
+        if (string.IsNullOrWhiteSpace(sql)) { Vm.StatusText = "Nothing to explain."; return; }
+
+        var plan = await Vm.Execution.ExplainAsync(sql, analyze);
+        if (plan is null) return;   // ExplainAsync has already put the reason in the status bar
+
+        // Owned by this window so it centres on it and closes with it, like the other dialogs.
+        var window = new ExplainPlanWindow(plan, sql);
+        await window.ShowDialog(this);
     }
 
     /// <summary>query.runAll: run the entire buffer as a batch, ignoring caret/selection.</summary>

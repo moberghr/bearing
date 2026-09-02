@@ -12,6 +12,7 @@ using Bearing.App.Results;
 using Bearing.App.Services;
 using Bearing.App.Workspace;
 using Bearing.Core.Data;
+using Bearing.Core.Explain;
 using Bearing.Core.Logging;
 using Bearing.Core.Schema;
 using Bearing.Sql;
@@ -368,6 +369,72 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// <returns>True when the result is fully loaded (or was already) — false if the fetch was cancelled,
     /// failed, or stopped at the row ceiling. Callers that follow a fetch with something else (Export) use
     /// this to avoid acting on half a result.</returns>
+    /// <summary>
+    /// Explain the statement under the caret, and hand back the parsed plan (null when there isn't one).
+    /// <para>
+    /// <paramref name="analyze"/> false asks the planner and runs nothing. True <b>runs the statement</b> —
+    /// that is what ANALYZE means — inside a transaction <see cref="ExplainSql.Measured"/> rolls back, so a
+    /// plan can be measured for an UPDATE without the UPDATE landing.
+    /// </para>
+    /// <para>
+    /// The write guard still applies to the measured form on a guarded connection. A rollback makes the
+    /// statement harmless to the data, not harmless to the server: it takes the same locks and does the same
+    /// work, and someone explaining a DELETE against production should be told they are about to run it.
+    /// Plain EXPLAIN executes nothing and is never confirmed.
+    /// </para>
+    /// </summary>
+    public async Task<ExplainPlan?> ExplainAsync(string sql, bool analyze)
+    {
+        if (string.IsNullOrWhiteSpace(sql)) return null;
+        var tab = Selected;
+        if (tab is null) { _ctx.SetStatus("No editor."); return null; }
+        if (tab.IsRunning) return null;
+        if (tab.ConnectionId is null) { _ctx.SetStatus("This tab has no connection — pick one."); return null; }
+        var info = _ctx.EffectiveConnection(tab);
+        if (info is null) { _ctx.SetStatus("Connection no longer exists."); return null; }
+
+        var request = analyze ? ExplainSql.Measured(sql) : ExplainSql.Plan(sql);
+
+        if (analyze && info.RequireWriteConfirmation && _dialogs is { } dialogs)
+        {
+            var statements = WriteGuard.Describe(sql);
+            if (statements.Any(s => s.IsRisky)
+                && !await dialogs.ConfirmWriteAsync(WriteConfirmation.ForBatch(info, statements)))
+            {
+                _ctx.SetStatus("Cancelled — EXPLAIN ANALYZE runs the statement, and it wasn't confirmed.");
+                return null;
+            }
+        }
+
+        using var lease = ResolveLiveLease();
+        if (lease is null) return null;
+        var session = lease.Session;
+
+        ExplainPlan? plan = null;
+        await RunExclusiveAsync(tab, async ct =>
+        {
+            var results = await session.Executor.ExecuteAsync(request.Sql, new QueryOptions(), ct);
+
+            // BEGIN and ROLLBACK produce no rows, so the one result that has any is the plan. An error
+            // anywhere in the batch arrives as a failed result rather than a throw, and its message is worth
+            // more to the user than "no plan".
+            if (results.FirstOrDefault(r => r.Error is not null)?.Error is { } error)
+            {
+                _ctx.SetStatus($"EXPLAIN failed: {error.Message}");
+                return;
+            }
+
+            var json = results.FirstOrDefault(r => r.Rows.Count > 0)?.Rows[0][0]?.ToString();
+            plan = ExplainPlanParser.Parse(json, request.Analyzed, request.RolledBack);
+            if (plan is null)
+                _ctx.SetStatus("The server did not return a query plan.");
+        },
+        cancelled: "EXPLAIN cancelled.",
+        failed: "EXPLAIN failed.");
+
+        return plan;
+    }
+
     public async Task<bool> FetchAllAsync(ResultSetViewModel rs)
     {
         var tab = Selected;

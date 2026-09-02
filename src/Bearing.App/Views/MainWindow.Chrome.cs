@@ -391,6 +391,15 @@ public partial class MainWindow
 
     // ---- run / open / save / history ----
 
+    /// <summary>The toolbar button and the Query menu: plan the statement, running nothing.</summary>
+    private async void OnExplainClick(object? sender, RoutedEventArgs e) => await ExplainFromChromeAsync(analyze: false);
+
+    /// <summary>The measured form. Deliberately not the button's click — it executes the statement.</summary>
+    private async void OnExplainAnalyzeClick(object? sender, RoutedEventArgs e) => await ExplainFromChromeAsync(analyze: true);
+
+    /// <summary>Cancel the running query, so the gesture has a menu entry as well as Esc and the Run button.</summary>
+    private void OnCancelQueryClick(object? sender, RoutedEventArgs e) => Vm?.Execution.CancelExecution();
+
     private async void OnRunClick(object? sender, RoutedEventArgs e)
     {
         if (Vm?.Execution.IsBusy == true) { Vm.Execution.CancelExecution(); return; }
