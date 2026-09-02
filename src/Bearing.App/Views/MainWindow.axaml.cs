@@ -459,6 +459,13 @@ public partial class MainWindow : Window
         _zoom.Bind(tab);         // …and that tab's own font zoom
         RebuildResults(tab);
         _text.UpdateStatementHighlight();
+        // Rebuild the folds for the buffer that is now loaded, explicitly — like the highlight above, and
+        // unlike the side effect this used to rely on. Refresh is wired to Editor.TextChanged, so after
+        // Reset() cleared the sections the only thing that rebuilt them was that event firing during Bind.
+        // Every other piece of per-buffer state here is rebuilt by name; folding was the one that depended
+        // on an event, and an event that does not fire leaves the gutter empty with nothing to say so.
+        // Refresh is idempotent (UpdateFoldings keeps unchanged regions), so doing it twice costs nothing.
+        _folding.Refresh();
     }
 
     private void SyncProjectCombo()

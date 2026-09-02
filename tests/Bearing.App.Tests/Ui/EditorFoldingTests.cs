@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.VisualTree;
+using Avalonia.Threading;
 using AvaloniaEdit;
 using AvaloniaEdit.Folding;
 using Avalonia.Media;
@@ -325,4 +327,65 @@ public class EditorFoldingTests
         Assert.True(f.CaretHasVisualLine);
         f.Window.Close();
     });
+
+    /// <summary>
+    /// A CRLF buffer gets clickable fold markers, not merely fold sections.
+    /// <para>
+    /// This is the test that had to exist at this layer. <c>SqlFolding</c> reported the right number of
+    /// regions for a CRLF file all along, and its own unit tests agreed with it — the region simply began one
+    /// character too far along, inside the CRLF pair. A document line ends at the CR, so the fold margin could
+    /// not match the folding to any line and built no marker: sections present, gutter empty, no error
+    /// anywhere, and the keyboard fold commands still working perfectly. Counting sections is precisely the
+    /// assertion that would have passed while the feature was unusable with a mouse.
+    /// </para>
+    /// <para>So the claim asserted here is the realized visual, which is what §4.5 says a UI test is for.</para>
+    /// </summary>
+    [Fact]
+    public Task A_crlf_buffer_gets_clickable_markers_and_not_just_sections() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(A_crlf_buffer_gets_clickable_markers_and_not_just_sections));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+
+        var crlf = string.Join(CrLf + CrLf, new[]
+        {
+            "select a," + CrLf + "       b" + CrLf + "from t" + CrLf + "where id = 1;",
+            "select c" + CrLf + "from u" + CrLf + "where id = 2;",
+            "update v" + CrLf + "   set d = 1" + CrLf + "where id = 3;",
+        });
+        workspace.SelectedTab = workspace.NewTab(crlf);
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        var margin = FoldMargin(shell);
+
+        Assert.Equal(3, margin.FoldingManager?.AllFoldings.Count());
+        // The half that was broken: a marker is the control you click, and there were none of them.
+        Assert.Equal(3, margin.GetVisualChildren().Count());
+    });
+
+    [Fact]
+    public Task An_lf_buffer_keeps_its_markers_too() => _ui.Run(async () =>
+    {
+        // The other side of the same coin: the fix steps back over a CR, and must move nothing under LF.
+        using var shell = await ShellHarness.ShowAsync(nameof(An_lf_buffer_keeps_its_markers_too));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        workspace.SelectedTab = workspace.NewTab("select a,\n       b\nfrom t;\n\nselect c\nfrom u;");
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        var margin = FoldMargin(shell);
+
+        Assert.Equal(2, margin.FoldingManager?.AllFoldings.Count());
+        Assert.Equal(2, margin.GetVisualChildren().Count());
+    });
+
+    private const string CrLf = "\r\n";
+
+    private static FoldingMargin FoldMargin(ShellHarness shell)
+        => shell.Window.GetVisualDescendants().OfType<TextEditor>().First(e => e.Name == "Editor")
+            .TextArea.LeftMargins.OfType<FoldingMargin>().First();
 }
