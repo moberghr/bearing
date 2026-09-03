@@ -76,8 +76,9 @@ public static class CommandIds
     public const string GridFetchAll = "grid.fetchAll";
 
     /// <summary>Copy the selection in one of the alternative formats: <c>grid.copyAs.csv</c>,
-    /// <c>.markdown</c>, <c>.json</c>, <c>.html</c>, <c>.sqlInsert</c>. All ship unbound (Ctrl+C is TSV) and
-    /// are reachable from the palette, the grid's context menu, or a user binding.</summary>
+    /// <c>.markdown</c>, <c>.json</c>, <c>.html</c>, <c>.htmlWithQuery</c>, <c>.sqlInsert</c>. All ship
+    /// unbound (Ctrl+C is TSV) and are reachable from the palette, the grid's context menu, or a user
+    /// binding.</summary>
     public static string GridCopyAs(CopyFormat format) => "grid.copyAs." + Lower(format.ToString());
 
     /// <summary>Export the whole result set: <c>grid.export.csv</c> / <c>grid.export.xlsx</c>.</summary>

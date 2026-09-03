@@ -7,6 +7,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.VisualTree;
 using Bearing.App.Formatting;
+using Bearing.App.Input;
 using Bearing.App.Results;
 using Bearing.App.Services;
 using Bearing.App.ViewModels;
@@ -452,8 +453,9 @@ public sealed class GridSelectionController
     /// a rich table / SQL / an IN list instead of TSV. The tabular ones carry a header row (unlike plain
     /// Copy), since a bare grid of values is of little use in those formats.
     /// <para>
-    /// The table format is the one that isn't just text: it goes on the clipboard as the platform's HTML
-    /// flavour (with TSV as the plain-text alternative) so Teams and Word paste a table instead of markup.
+    /// The two table formats are the ones that aren't just text: they go on the clipboard as the platform's
+    /// HTML flavour (with a plain-text alternative alongside) so Teams and Word paste a table instead of
+    /// markup. One of them carries the statement that produced the rows across the top.
     /// </para>
     /// </summary>
     public void CopyAs(ResultSetViewModel result, CopyFormat format)
@@ -463,11 +465,12 @@ public sealed class GridSelectionController
 
         var block = TableBlock.ForSelection(result, Model.Cells);
         var text = CopyRenderer.Render(result, block, format);
-        if (format == CopyFormat.Html)
+        if (CopyRenderer.IsRichHtml(format))
         {
+            var plain = CopyRenderer.PlainAlternative(result, GridSelectionOps.Tsv(result, Model.Cells), format);
             CrashReporter.Observe(
-                HtmlClipboard.SetAsync(TopLevel.GetTopLevel(_owner), text, GridSelectionOps.Tsv(result, Model.Cells)),
-                "grid.copyAs.html");
+                HtmlClipboard.SetAsync(TopLevel.GetTopLevel(_owner), text, plain),
+                CommandIds.GridCopyAs(format));
             return;
         }
         TopLevel.GetTopLevel(_owner)?.Clipboard?.SetTextAsync(text);

@@ -4,6 +4,7 @@ using System.Linq;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
+using Bearing.Sql;
 
 namespace Bearing.App.Results;
 
@@ -19,14 +20,15 @@ internal static class ResultSetBuilder
         IReadOnlyList<QueryResult> results, string sql, ISchemaSnapshot? snapshot)
     {
         var pageable = results.Count == 1 && results[0].Success && results[0].Columns.Count > 0;
+        var statements = StatementsBehind(results, sql);
         return results
-            .Select(r =>
+            .Select((r, i) =>
             {
                 // Resolve editability (with a lock reason) only for row-returning results with a schema.
                 var (target, reason) = snapshot is null || r.Columns.Count == 0
                     ? (null, null)
                     : EditabilityResolver.ResolveWithReason(snapshot, r.Columns);
-                var vm = new ResultSetViewModel(r, sql, pageable)
+                var vm = new ResultSetViewModel(r, statements?[i] ?? sql, pageable)
                 {
                     ForeignKeyColumns = DetectForeignKeyColumns(snapshot, r.Columns),
                     PrimaryKeyColumns = DetectPrimaryKeyColumns(snapshot, r.Columns),
@@ -37,6 +39,38 @@ internal static class ResultSetBuilder
                 return vm;
             })
             .ToList();
+    }
+
+    /// <summary>
+    /// The statement behind each result set, positionally — or null when the run's own text is the honest
+    /// answer for all of them (the caller then uses it for every set).
+    /// <para>
+    /// Two conditions have to hold, and both are checks rather than assumptions. The provider must have
+    /// proven the mapping (<see cref="QueryResult.StatementIndex"/> — for Postgres, as many result sets as
+    /// the driver parsed statements, so nothing was skipped), and our own split of the buffer must find the
+    /// same number of statements. Then index <c>i</c> means the same statement to both, and the text is
+    /// exact. If either check fails the whole batch is the answer: broad, but never the wrong statement.
+    /// </para>
+    /// <para>
+    /// A single-set run is <b>excluded on purpose</b> even though its mapping is trivially provable. That is
+    /// the one case <c>FirstPageLimiter</c> rewrites, so the statement that reached the server ends in a
+    /// <c>limit 501</c> we appended — ours, not the user's, and pasting it into a report would misdescribe
+    /// the result. The run's text is both correct and what the user typed there. (A batch is never
+    /// rewritten: the limiter only touches a lone statement.)
+    /// </para>
+    /// </summary>
+    internal static IReadOnlyList<string>? StatementsBehind(IReadOnlyList<QueryResult> results, string? sql)
+    {
+        if (results.Count < 2 || string.IsNullOrWhiteSpace(sql)) return null;
+        if (results.Any(r => r.StatementIndex is null)) return null;
+
+        var spans = StatementSplitter.Split(sql);
+        if (spans.Count != results.Count) return null;
+
+        // Index by the provider's statement number, not by position in the list: they agree here (that is
+        // what the checks above establish), and reading it off the result is what would keep this honest if
+        // a provider ever reported a sparser mapping.
+        return results.Select(r => spans[r.StatementIndex!.Value].Text.Trim()).ToList();
     }
 
     /// <summary>Result-column indices that are the primary key of their base table (for the PK badge).</summary>

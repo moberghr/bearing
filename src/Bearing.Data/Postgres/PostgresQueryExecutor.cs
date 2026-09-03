@@ -42,7 +42,7 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
             }
             while (await reader.NextResultAsync(ct).ConfigureAwait(false));
 
-            return results;
+            return Attributed(results, reader);
         }
         catch (PostgresException pg)
         {
@@ -185,6 +185,45 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
             sw.Stop();
             return new[] { Failure(sw.Elapsed, new QueryError(PostgresErrorText.Explain(ex), null, null)) };
         }
+    }
+
+    /// <summary>
+    /// Tell each result set which statement of the batch it came from
+    /// (<see cref="QueryResult.StatementIndex"/>) — but only when the batch left no room for doubt.
+    /// <para>
+    /// <b>The walk is not one set per statement.</b> <c>NextResult</c> skips a statement that returned no
+    /// rows, so <c>select …; insert …; select …</c> is three statements and two result sets, and the second
+    /// set is statement 2 rather than statement 1. Measured, not assumed: a 13-statement probe against
+    /// PostgreSQL 18 walked 8 sets.
+    /// </para>
+    /// <para>
+    /// Which ones were skipped is not answerable through Npgsql's public surface. Only a statement's
+    /// RowDescription distinguishes them, and it is internal; <c>StatementType</c> is not a substitute —
+    /// <c>explain</c> and <c>analyze</c> are both <c>Other</c> though only the first returns rows, and
+    /// <c>create table as</c> reports as <c>Select</c> and returns none. (Nor is the per-statement text
+    /// public: every entry's <c>CommandText</c> is the whole batch, and the split text is on the internal
+    /// <c>FinalCommandText</c>.)
+    /// </para>
+    /// <para>
+    /// So the mapping is claimed on the one condition that <i>proves</i> it: as many result sets as the
+    /// driver parsed statements means nothing was skipped, and set <c>k</c> is statement <c>k</c>. That is
+    /// the ordinary multi-select batch. Anything else reports null — an honest "can't say", which the caller
+    /// answers with the whole run's text (see <c>ResultSetBuilder.StatementBehind</c>). Guessing here would
+    /// caption a grid with a neighbouring statement, which is worse than captioning it with all of them.
+    /// </para>
+    /// </summary>
+    private static List<QueryResult> Attributed(List<QueryResult> results, NpgsqlDataReader reader)
+    {
+        // Obsoleted in favour of the DbBatch API, which is the right advice for code that *builds* a batch
+        // and no help to code asking what the driver made of one string of user-typed SQL. Nothing
+        // non-obsolete reports it, and the read is one count.
+#pragma warning disable CS0618
+        var parsed = reader.Statements.Count;
+#pragma warning restore CS0618
+        if (parsed != results.Count) return results;
+
+        for (var i = 0; i < results.Count; i++) results[i] = results[i] with { StatementIndex = i };
+        return results;
     }
 
     private static string StripTrailingSemicolon(string sql)

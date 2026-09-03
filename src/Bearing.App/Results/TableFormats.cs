@@ -157,6 +157,10 @@ public static class TableFormats
 
     // ---- HTML ------------------------------------------------------------------------------------
 
+    /// <summary>Border and padding for every cell of the copied table, header row and query row alike, so
+    /// the three don't drift apart. Inline on each element by necessity — see <see cref="Html"/>.</summary>
+    private const string CellStyle = "border:1px solid #d0d0d0;padding:4px 8px;";
+
     /// <summary>
     /// A <c>&lt;table&gt;</c> fragment for pasting into Teams, Outlook, Word or Excel — which is why it is
     /// styled and why the styling is <b>inline</b>: those editors run the pasted markup through a sanitiser
@@ -168,27 +172,54 @@ public static class TableFormats
     /// reaching the clipboard as the platform's HTML flavour — see <c>Services/HtmlClipboard</c>.
     /// </para>
     /// </summary>
-    public static string Html(TableBlock block)
+    /// <param name="sql">The statement that produced the data, rendered as one full-width row above the
+    /// column headers so the pasted table says where its numbers came from. Omitted when null or blank — a
+    /// table captioned with nothing reads worse than an uncaptioned one.</param>
+    public static string Html(TableBlock block, string? sql = null)
     {
-        const string cell = "border:1px solid #d0d0d0;padding:4px 8px;";
         var sb = new StringBuilder();
         sb.Append("<table border=\"1\" cellspacing=\"0\" cellpadding=\"4\" ")
           .Append("style=\"border-collapse:collapse;font-family:sans-serif;font-size:10pt;\">\n");
-        sb.Append("  <thead>\n    <tr>");
+        sb.Append("  <thead>\n");
+        if (QueryRow(block.Columns.Count, sql) is { } queryRow) sb.Append(queryRow);
+        sb.Append("    <tr>");
         foreach (var col in block.Columns)
-            sb.Append("<th style=\"").Append(cell).Append("text-align:left;background:#f2f2f2;\">")
+            sb.Append("<th style=\"").Append(CellStyle).Append("text-align:left;background:#f2f2f2;\">")
               .Append(HtmlEscape(col.Name)).Append("</th>");
         sb.Append("</tr>\n  </thead>\n  <tbody>\n");
         for (var r = 0; r < block.Rows.Count; r++)
         {
             sb.Append("    <tr>");
             for (var c = 0; c < block.Columns.Count; c++)
-                sb.Append("<td style=\"").Append(cell).Append("\">")
+                sb.Append("<td style=\"").Append(CellStyle).Append("\">")
                   .Append(HtmlEscape(Text(block.Value(r, c)) ?? "")).Append("</td>");
             sb.Append("</tr>\n");
         }
         sb.Append("  </tbody>\n</table>");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The query row: one monospaced cell spanning the whole table, above the column headers. Null when
+    /// there is no query to show, or no columns for it to span.
+    /// <para>
+    /// Line breaks become <c>&lt;br&gt;</c> rather than staying newlines inside the <c>&lt;pre&gt;</c>,
+    /// for the same reason the rest of this method is styled inline: what makes a bare newline visible is a
+    /// <c>white-space</c> rule, and CSS is exactly what the Teams / Outlook / Word sanitisers drop — so a
+    /// multi-line statement would paste as one long line. A <c>&lt;br&gt;</c> is structure and survives.
+    /// <c>pre-wrap</c> is asked for anyway, so where the styling does survive a long line wraps instead of
+    /// stretching the table past the width of the page.
+    /// </para>
+    /// </summary>
+    private static string? QueryRow(int columnCount, string? sql)
+    {
+        if (columnCount == 0 || string.IsNullOrWhiteSpace(sql)) return null;
+        var text = HtmlEscape(sql.Trim())
+            .Replace("\r\n", "<br>").Replace("\n", "<br>").Replace("\r", "<br>");
+        return "    <tr><th colspan=\"" + columnCount.ToString(CultureInfo.InvariantCulture) + "\" style=\""
+             + CellStyle + "text-align:left;background:#f2f2f2;font-weight:normal;\">"
+             + "<pre style=\"margin:0;font-family:monospace;font-size:9pt;white-space:pre-wrap;\">"
+             + text + "</pre></th></tr>\n";
     }
 
     private static string HtmlEscape(string value) => value
