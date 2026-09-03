@@ -53,8 +53,8 @@ run.
 
 `build/release.sh` remains as the no-updater alternative: a single-file `.tar.gz` (Linux, with a per-user
 installer and `.desktop` entry) or `.zip` (Windows, with PowerShell install/uninstall scripts). Updating one
-of those means downloading the next one. Cutting a release is `build/velopack.sh` — see
-[docs/RELEASING.md](docs/RELEASING.md).
+of those means downloading the next one. Cutting a release is publishing a GitHub Release: CI takes the
+version from the tag and builds both platforms — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Build & run
 

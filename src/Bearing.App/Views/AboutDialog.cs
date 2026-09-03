@@ -7,7 +7,7 @@ namespace Bearing.App.Views;
 
 /// <summary>
 /// Small "About" window: app name, tagline, and the build version (from the assembly's
-/// informational version, which is fed by <c>&lt;Version&gt;</c> in Directory.Build.props).
+/// informational version, which comes from the release tag — or <c>0.0.0-dev</c> in a build from source).
 /// One at a time so repeated menu clicks can't stack windows.
 /// </summary>
 public sealed class AboutDialog : Window

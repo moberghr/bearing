@@ -9,6 +9,9 @@ obj/
 artifacts/
 dist/
 
+# Local tool installs (the release workflow puts vpk here rather than trusting a global tools PATH)
+.tools/
+
 # Antlr4BuildTasks downloads a JRE + antlr tool jar into these caches
 .antlr/
 **/fetched-*/
