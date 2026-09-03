@@ -327,6 +327,80 @@ public class SqlServerExecutorTests
     }
 
     /// <summary>
+    /// Paging and counting a <b>CTE</b> query, which is the one shape in this dialect whose SQL was
+    /// reasoned rather than observed. A CTE cannot sit inside a derived table (Msg 156), so the wrap hoists
+    /// the <c>WITH</c> list over it and puts only the body in the subquery — legal because a
+    /// statement-level CTE is in scope throughout the statement, subqueries included. That sentence is a
+    /// documented rule, not a measurement, and the dialect tests can only assert the text it produces;
+    /// this is where a server says whether the text is accepted and answers correctly.
+    /// <para>
+    /// Three shapes, because they take three different paths: the body with no order (hoist + wrap), the
+    /// body with its own <c>ORDER BY</c> (hoist + wrap + the Msg 1033 <c>offset 0 rows</c> repair, the
+    /// combination nothing else in the suite reaches), and the same query paged by the suffix instead —
+    /// which is what the caller actually prefers, and the only one of the three whose window is
+    /// deterministic enough to name the rows in it.
+    /// </para>
+    /// </summary>
+    [SkippableFact]
+    public async Task Paging_a_cte_hoists_the_with_list_and_the_server_accepts_it()
+    {
+        var provider = Provider();
+        await using var factory = provider.CreateConnectionFactory(Info(), Password);
+        await MsSqlTestServer.RequireAsync(factory);
+
+        var executor = provider.CreateQueryExecutor(factory);
+        await CreateNumbersAsync(executor);
+        try
+        {
+            const string body = "select id from c";
+            var cte = $"with c as (select id from {NumbersTable} where id <= 100) {body}";
+
+            // ---- The count, hoisted. Non-null is half the assertion: before the hoist the dialect
+            // refused this shape outright and the UI showed no total at all.
+            var countSql = CountSql(cte);
+            Assert.StartsWith("with c as", countSql);
+            Assert.Equal(100, await executor.CountAsync(countSql, CancellationToken.None));
+
+            // ---- The wrap. No ORDER BY anywhere, so what is asserted is the size of the window and that
+            // the server took the SQL — not which rows, because nothing promised any particular ones.
+            var wrapped = SqlServerDialect.Instance.Wrap(cte, offset: 10, limit: 25)!;
+            var page = await executor.ExecutePageAsync(wrapped, CancellationToken.None);
+            Assert.True(page.Success, page.Error?.Message);
+            Assert.Equal(25, page.RowCount);
+            var ids = page.Rows.Select(r => Convert.ToInt32(r[0])).ToList();
+            Assert.Equal(25, ids.Distinct().Count());
+            Assert.All(ids, id => Assert.InRange(id, 1, 100));
+
+            // ---- The hoist *plus* the inner-ORDER BY repair: the body brings an order the derived table
+            // may not carry, so `offset 0 rows` is appended inside. Two clauses that each need the other
+            // to be legal, and the shape the dialect's own tests can only check as a string.
+            var sorted = $"{cte} order by id";
+            var sortedCount = CountSql(sorted);
+            Assert.Contains("offset 0 rows", sortedCount);
+            Assert.Equal(100, await executor.CountAsync(sortedCount, CancellationToken.None));
+
+            var sortedWrap = SqlServerDialect.Instance.Wrap(sorted, offset: 10, limit: 25)!;
+            var sortedPage = await executor.ExecutePageAsync(sortedWrap, CancellationToken.None);
+            Assert.True(sortedPage.Success, sortedPage.Error?.Message);
+            Assert.Equal(25, sortedPage.RowCount);
+
+            // ---- And what the caller actually uses for that query: the suffix, which rides the query's
+            // own ORDER BY and leaves the CTE where it is. This one owes us exact rows.
+            var suffixed = PageSql.Page(SqlServerDialect.Instance, sorted, offset: 10, limit: 25)!;
+            Assert.DoesNotContain("_sq", suffixed);
+            var suffixPage = await executor.ExecutePageAsync(suffixed, CancellationToken.None);
+            Assert.True(suffixPage.Success, suffixPage.Error?.Message);
+            Assert.Equal(
+                Enumerable.Range(11, 25),
+                suffixPage.Rows.Select(r => Convert.ToInt32(r[0])));
+        }
+        finally
+        {
+            await DropAsync(executor, NumbersTable);
+        }
+    }
+
+    /// <summary>
     /// The read behind "Fetch all rows": one execution, streamed in batches. Same three things the Postgres
     /// suite pins — every row in order from a single pass, a cap that stops the read, and the difference
     /// between "the cap cut this" and "the result ended", which is what the UI reports.

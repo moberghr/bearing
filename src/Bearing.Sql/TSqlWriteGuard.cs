@@ -14,8 +14,11 @@ namespace Bearing.Sql;
 /// <b>Conservative by construction.</b> It classifies on bare words only, so a table called
 /// <c>[delete]</c>, a string containing <c>'drop table'</c> or a variable named <c>@update</c> cannot trip
 /// it; and anything it cannot classify counts as risky, never as safe. It is still not a parser — the
-/// T-SQL grammar is Phase 2 — so it deliberately errs the way the Postgres guard does: a preamble is
-/// scanned through, and a shape it does not recognise is confirmed rather than waved past.
+/// vendored T-SQL grammar exists now but is not used here, deliberately: a guard that needs a successful
+/// parse has a failure mode where it cannot answer, and the answer §1.2 wants in that case is "risky",
+/// which a token scan gives without the round trip (see <see cref="TSqlScanner"/>). So it errs the way the
+/// Postgres guard does: a preamble is scanned through, and a shape it does not recognise is confirmed
+/// rather than waved past.
 /// </para>
 /// </summary>
 public static class TSqlWriteGuard

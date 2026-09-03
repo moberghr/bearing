@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Antlr4.Runtime;
 
 namespace Bearing.Sql;
@@ -15,7 +16,7 @@ namespace Bearing.Sql;
 /// the only two that need to change.
 /// </para>
 /// </summary>
-public sealed class PgParseRules : ISqlParseRules
+public sealed partial class PgParseRules : ISqlParseRules
 {
     /// <summary>The shared instance. Stateless, so one is enough.</summary>
     public static PgParseRules Instance { get; } = new();
@@ -53,6 +54,23 @@ public sealed class PgParseRules : ISqlParseRules
 
     public bool IsIdentifier(int tokenType)
         => tokenType is PostgreSQLParser.Identifier or PostgreSQLParser.QuotedIdentifier;
+
+    public string Unquote(string identifier) => PgIdentifier.Unquote(identifier);
+
+    /// <summary>
+    /// Moved here from <see cref="CompletionEngine"/> unchanged, pattern included: a bare name or a
+    /// <c>"quoted"</c> one, then the dot, then whatever of the next name has been typed (possibly
+    /// nothing, possibly an unterminated quote). Postgres' delimiters are the only ones it knows, which
+    /// is exactly why it had to stop being the engine's own private regex.
+    /// </summary>
+    public string? QualifierBefore(string sql, int caret)
+    {
+        var m = AliasDotRegex().Match(sql[..caret]);
+        return m.Success ? PgIdentifier.Unquote(m.Groups[1].Value) : null;
+    }
+
+    [GeneratedRegex(@"(""(?:[^""]|"""")*""|[A-Za-z_][A-Za-z0-9_$]*)\s*\.\s*(?:""(?:[^""]|"""")*|[A-Za-z0-9_$]*)$")]
+    private static partial Regex AliasDotRegex();
 
     public IReadOnlySet<int> JoinQualifiers { get; } = new HashSet<int>
     {

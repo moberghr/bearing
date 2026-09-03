@@ -3,9 +3,10 @@ using Microsoft.Data.SqlClient;
 
 namespace Bearing.Data.SqlServer;
 
-/// <summary>The Microsoft SQL Server engine provider. Phase 1: connections, metadata, execution and error
-/// classification. The SQL text belongs to <c>Bearing.Sql</c>'s <c>SqlServerDialect</c>, which the App layer
-/// shares this provider's <see cref="Id"/> so the App layer can pair the two.</summary>
+/// <summary>The Microsoft SQL Server engine provider: connections, metadata, execution, error
+/// classification, and which credential kinds this engine can authenticate with. The SQL text belongs to
+/// <c>Bearing.Sql</c>'s <c>SqlServerDialect</c>, which shares this provider's <see cref="Id"/> so the App
+/// layer can pair the two.</summary>
 public sealed class SqlServerProvider : IDbProvider
 {
     public const string ProviderId = "sqlserver";
@@ -34,11 +35,13 @@ public sealed class SqlServerProvider : IDbProvider
     /// <c>Integrated Security=true</c>, no secret resolved and no prompt).</summary>
     public bool SupportsIntegratedAuth => true;
 
-    /// <summary>False in Phase 1. SqlClient accepts an access token only via
-    /// <c>SqlConnection.AccessToken</c> or an <c>Authentication=Active Directory…</c> mode — never as a
-    /// password keyword — and the factory has no such path yet, so handing it the token would produce a
-    /// login failure the dropdown had promised would work. Wiring AccessToken is what flips this.</summary>
-    public bool SupportsEntraToken => false;
+    /// <summary>True. SqlClient accepts an access token only via <c>SqlConnection.AccessToken</c>, never as
+    /// a password keyword — so unlike Postgres this needed a path of its own, and
+    /// <see cref="SqlServerConnectionFactory.CreateConnection"/> is it: the token is held apart from the
+    /// connection string and attached to every connection the factory opens (§1.1). The audience is Azure
+    /// SQL's, which the App layer supplies (<c>ProviderTraits.SqlServer.EntraResource</c>) — a token minted
+    /// for Azure Database for PostgreSQL is refused by Azure SQL and vice versa.</summary>
+    public bool SupportsEntraToken => true;
 
     public DbErrorKind Classify(QueryError error)
         => int.TryParse(error.SqlState, out var number) ? FromNumber(number) : DbErrorKind.Unknown;

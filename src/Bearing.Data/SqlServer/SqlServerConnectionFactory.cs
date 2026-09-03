@@ -13,10 +13,31 @@ namespace Bearing.Data.SqlServer;
 /// shape the Npgsql factory gets from <c>NpgsqlDataSource</c>. That string holds the password, so it never
 /// leaves this object (§1.1).
 /// </para>
+/// <para>
+/// <b>An Entra token is the one credential that is not in that string</b>, because SqlClient will not take
+/// it there: it goes on each <see cref="SqlConnection"/> as <see cref="SqlConnection.AccessToken"/>. See
+/// <see cref="_accessToken"/> and <see cref="CreateConnection"/>.
+/// </para>
 /// </summary>
 public sealed class SqlServerConnectionFactory : IDbConnectionFactory
 {
     private readonly string _connectionString;
+
+    /// <summary>
+    /// The Entra access token for a <see cref="CredentialKind.EntraToken"/> connection, or null for every
+    /// other kind. Held apart from <see cref="_connectionString"/> because SqlClient takes it only on the
+    /// connection object — there is no <c>AccessToken</c> keyword — and because §1.1 wants a bearer token in
+    /// exactly one place: never in the string, which is what a <c>SqlException</c> message and a
+    /// <c>SqlConnectionStringBuilder</c> dump can both quote.
+    /// <para>
+    /// Null for an Entra connection whose credential has not been resolved yet is a legal state, not a bug:
+    /// the connection then goes out with no credential at all and the server refuses it, which is exactly
+    /// what a Prompt connection does before its password is in hand. Better than throwing here, because the
+    /// failure the user needs to see is a login failure they can retry (<c>DbErrorKind.Authentication</c>),
+    /// not a construction error from a factory.
+    /// </para>
+    /// </summary>
+    private readonly string? _accessToken;
 
     /// <summary>Pooled connections per (connection, database), capped for the same reason Npgsql's is
     /// (§5.3): a pool exists per database rather than per connection (#54), so SqlClient's default of 100
@@ -83,13 +104,27 @@ public sealed class SqlServerConnectionFactory : IDbConnectionFactory
             // and a user name alongside it would be ignored at best and contradictory at worst.
             csb.IntegratedSecurity = true;
         }
+        else if (info.CredentialKind == CredentialKind.EntraToken)
+        {
+            // The token arrives here as `password` (CredentialResolver mints it through az and hands it over
+            // as the connection's secret, the same slot every other kind uses), but it must not be written
+            // into the string: SqlClient has no AccessToken keyword, and putting a bearer token where the
+            // driver, its exceptions and any builder round-trip can quote it is precisely what §1.1 forbids.
+            // It is kept for CreateConnection to attach instead.
+            _accessToken = string.IsNullOrEmpty(password) ? null : password;
+
+            // And deliberately *no* User ID, no Password, no Integrated Security: SqlClient refuses an
+            // access token alongside any of them (InvalidOperationException from the AccessToken setter, not
+            // a login failure at connect time). An Entra login is the token's own identity, so the User box
+            // — which the dialog still shows, because it names the login for every other kind — has nothing
+            // to contribute here. That refusal is also what the tests lean on: a CreateConnection that
+            // succeeds in attaching the token is proof the string carries neither credential.
+        }
         else
         {
             // SqlClient's string setters reject null (Npgsql's accept it), so an unresolved secret leaves
             // the keyword off entirely — which is what a Prompt connection looks like before the password
-            // is in hand. An EntraToken connection reaches here with the token as `password`; SqlClient
-            // wants an access token on the connection object rather than in the string, so Entra against
-            // Azure SQL is an App-layer follow-up (spec 4d) and not something this factory can fake.
+            // is in hand.
             if (!string.IsNullOrEmpty(info.User)) csb.UserID = info.User;
             if (!string.IsNullOrEmpty(password)) csb.Password = password;
         }
@@ -182,10 +217,33 @@ public sealed class SqlServerConnectionFactory : IDbConnectionFactory
         return info.Port > 0 ? $"{host},{info.Port}" : host;
     }
 
+    /// <summary>
+    /// A connection built from these settings, credential attached, <b>not yet opened</b> — the one place a
+    /// <see cref="SqlConnection"/> for this factory is constructed, so nothing can acquire one that skipped
+    /// the Entra token.
+    /// </summary>
+    /// <remarks>
+    /// Internal, not private, for the reason <see cref="DataSourceFor"/> is: it is the only seam that can
+    /// assert the §1.1 rule without exposing the connection string. A test asks it two things — is the
+    /// token on the object, and is it absent from the string — and gets a third for free, because SqlClient
+    /// refuses an access token whenever the string carries a user, a password or integrated security: this
+    /// method not throwing <em>is</em> the proof that the factory wrote none of the three. Exposing the
+    /// string instead would have been the weaker assertion and the worse trade.
+    /// </remarks>
+    internal SqlConnection CreateConnection()
+    {
+        var conn = new SqlConnection(_connectionString);
+        // Only when there is one. A null assignment would be a no-op at best, and this way the property is
+        // left untouched for every other credential kind rather than being written to and then read back as
+        // null — which is what the tests distinguish.
+        if (_accessToken is not null) conn.AccessToken = _accessToken;
+        return conn;
+    }
+
     /// <summary>Opens a pooled connection. Internal: the driver type stops at this project's edge (§2.1).</summary>
     internal async Task<SqlConnection> OpenConnectionAsync(CancellationToken ct)
     {
-        var conn = new SqlConnection(_connectionString);
+        var conn = CreateConnection();
         try
         {
             await conn.OpenAsync(ct).ConfigureAwait(false);
@@ -218,10 +276,19 @@ public sealed class SqlServerConnectionFactory : IDbConnectionFactory
     /// are not killed: <c>ClearPool</c> marks them stale so they are discarded on close rather than reused,
     /// which is what a lease-holding read needs.
     /// </para>
+    /// <para>
+    /// The probe goes through <see cref="CreateConnection"/> rather than building a bare connection from the
+    /// string, so an Entra connection's token is on it. Whether SqlClient's pool identity includes the access
+    /// token is not asserted here (it is driver-internal and this branch has no SQL Server to observe it
+    /// against) — the point is that going through the one constructor is right either way: if the token is
+    /// part of the key, a token-less probe would name an empty pool group and clear nothing, leaving the
+    /// sockets to hold server sessions for their idle lifetime; if it is not, the two probes are the same
+    /// key and nothing changes.
+    /// </para>
     /// </summary>
     public ValueTask DisposeAsync()
     {
-        using var conn = new SqlConnection(_connectionString);
+        using var conn = CreateConnection();
         SqlConnection.ClearPool(conn);
         return ValueTask.CompletedTask;
     }

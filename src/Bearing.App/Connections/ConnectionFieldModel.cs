@@ -33,6 +33,43 @@ public sealed class ConnectionFieldState
     /// port the user actually typed.</summary>
     public bool IsDefault
         => string.Equals(Value.Trim(), (Field.Default ?? "").Trim(), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The values a <see cref="ConnectionFieldKind.Choice"/> dropdown should list: the provider's own
+    /// <see cref="ConnectionField.Choices"/>, plus <see cref="Value"/> when it is set and is not one of
+    /// them. Empty for every other kind, and for a Choice field the provider gave no candidates — the
+    /// dialog reads emptiness as "render a text box".
+    /// <para>
+    /// The extra entry is why this is a decision rather than a pass-through of the declared list, and it is
+    /// the same rule <c>_carried</c> follows for undeclared option keys: a value that arrived on the edited
+    /// connection — hand-written into project.json, set by an older build, or imported from another tool —
+    /// must survive being looked at. A dropdown that simply cannot represent it would blank it on the next
+    /// save, and silently.
+    /// </para>
+    /// <para>
+    /// Computed on read, not cached: <see cref="Value"/> is mutable, so a snapshot taken at construction
+    /// would offer the wrong extra entry after a provider switch carried a value in.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> Candidates
+    {
+        get
+        {
+            if (Kind != ConnectionFieldKind.Choice || Field.Choices is not { Count: > 0 } declared)
+                return Array.Empty<string>();
+
+            var current = Value.Trim();
+            if (current.Length == 0
+                || declared.Any(c => string.Equals(c, current, StringComparison.OrdinalIgnoreCase)))
+                return declared;
+
+            // Ahead of the declared values: it is the one the connection actually holds, so it is what the
+            // box has to show, and appending it would put it out of sight in a long list.
+            var withCurrent = new List<string>(declared.Count + 1) { current };
+            withCurrent.AddRange(declared);
+            return withCurrent;
+        }
+    }
 }
 
 /// <summary>
@@ -41,9 +78,13 @@ public sealed class ConnectionFieldState
 /// <see cref="ConnectionInfo.Options"/>).
 /// <para>
 /// It lives here rather than in <c>Views/ConnectionDialog.axaml.cs</c> because all of it is decisions, and
-/// the dialog cannot be driven headlessly (§4.3) — extracted, this is unit-tested; in the code-behind it
-/// would be untestable by construction (§0.5, §2.3, §2.5). The code-behind's remaining job is to build a
-/// row per <see cref="Fields"/> entry and copy text in and out of <see cref="ConnectionFieldState.Value"/>.
+/// a decision belongs in a pure helper where it can be tested by itself (§0.5, §2.3, §2.5). Not because
+/// the dialog is untestable — since #62 it can be realized headlessly and is
+/// (<c>Ui/ConnectionEditorTests</c>, <c>Ui/ChoiceFieldTests</c>) — but a UI test that had to spell out
+/// every field, default, carry-over and validation rule through a control tree would be slower, serialized
+/// and worse at saying which rule broke (§4.3/§4.5). The code-behind's remaining job is to build a row per
+/// <see cref="Fields"/> entry and copy text in and out of <see cref="ConnectionFieldState.Value"/>; the UI
+/// tests assert that it does, and this file's tests assert what it copies.
 /// </para>
 /// <para>
 /// <b>Four of the keys are not options.</b> <c>Host</c>, <c>Port</c>, <c>Database</c> and <c>User</c> are

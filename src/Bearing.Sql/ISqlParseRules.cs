@@ -114,10 +114,34 @@ public interface ISqlParseRules
     /// <summary>
     /// True for the token types that name a relation, a column or an alias — the bare and the delimited
     /// form both. It is a predicate rather than a pair of constants because the count is grammar's
-    /// business: PostgreSQL has two (<c>Identifier</c>, <c>QuotedIdentifier</c>) and T-SQL has a third
-    /// for <c>[bracketed]</c> names.
+    /// business: PostgreSQL has two (<c>Identifier</c>, <c>QuotedIdentifier</c>) and T-SQL has four
+    /// (<c>ID</c>, <c>TEMP_ID</c>, <c>DOUBLE_QUOTE_ID</c>, <c>SQUARE_BRACKET_ID</c>).
     /// </summary>
     bool IsIdentifier(int tokenType);
+
+    /// <summary>
+    /// Strip the delimiters an identifier token of this grammar carries, so a name read out of the
+    /// buffer can be matched against the catalog. Lives here rather than being taken from
+    /// <see cref="ISqlDialect.Unquote"/> because <see cref="FromClauseExtractor"/> is handed rules and
+    /// no dialect — deliberately, so the FROM scan is testable against a grammar alone — and reading
+    /// <c>[Order Details]</c> with Postgres' unquoting is how <c>dbo.[Order Details]</c> came to resolve
+    /// as a relation literally named <c>[Order Details]</c>, i.e. as nothing at all.
+    /// </summary>
+    string Unquote(string identifier);
+
+    /// <summary>
+    /// The qualifier the caret sits immediately after — the <c>o</c> of <c>… where o.id|</c> — unquoted,
+    /// or null when the caret is not after a <c>name.</c> at all. A partially-typed suffix counts (that
+    /// is the whole point: the popup opens while the column is being typed), and so does an unterminated
+    /// delimiter, which the lexer still hands back as one token.
+    /// <para>
+    /// It is a lexical question, which is why the grammar answers it: the delimiters differ. Postgres has
+    /// <c>"quoted"</c> only; T-SQL adds <c>[bracketed]</c> and admits <c>@</c>, <c>$</c> and <c>#</c>
+    /// inside a bare name. Reading a T-SQL buffer with Postgres' rule found no qualifier after
+    /// <c>[Order Details].</c> and so offered nothing.
+    /// </para>
+    /// </summary>
+    string? QualifierBefore(string sql, int caret);
 
     /// <summary>
     /// Words that qualify a <c>JOIN</c> and still take an <c>ON</c> clause (<c>left</c>, <c>inner</c>,

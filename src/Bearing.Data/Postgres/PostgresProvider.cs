@@ -3,7 +3,8 @@ using Npgsql;
 
 namespace Bearing.Data.Postgres;
 
-/// <summary>The PostgreSQL engine provider — the only implementation in v1.</summary>
+/// <summary>The PostgreSQL engine provider, and the registry's first entry — the engine every existing
+/// project file names. No longer the only one: <c>SqlServerProvider</c> is the second.</summary>
 public sealed class PostgresProvider : IDbProvider
 {
     public const string ProviderId = "postgres";

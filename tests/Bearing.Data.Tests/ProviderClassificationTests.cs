@@ -96,12 +96,14 @@ public class ProviderClassificationTests
     }
 
     [Fact]
-    public void Only_postgres_can_authenticate_with_an_entra_token()
+    public void Both_engines_can_authenticate_with_an_entra_token()
     {
-        // The mirror of the flag above, and the reason it is a second flag: Npgsql takes the token as the
-        // password, SqlClient needs SqlConnection.AccessToken and has no path for it yet. The dropdown reads
-        // this so it cannot offer a credential kind the factory would fail to honour.
+        // Still a separate flag from the one above, and still not a formality: the two drivers want the
+        // token in different places (Npgsql as the password, SqlClient on SqlConnection.AccessToken), so
+        // "the engine's cloud supports Entra" and "this factory can honour the credential kind" are
+        // different questions. The dropdown reads this one. What the flag being true actually buys on SQL
+        // Server is asserted in SqlServerEntraTests.
         Assert.True(new PostgresProvider().SupportsEntraToken);
-        Assert.False(new SqlServerProvider().SupportsEntraToken);
+        Assert.True(new SqlServerProvider().SupportsEntraToken);
     }
 }

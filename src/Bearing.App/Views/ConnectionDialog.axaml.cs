@@ -29,8 +29,10 @@ public sealed record ConnectionDialogResult(ConnectionInfo Connection, string Pa
 /// <see cref="CredentialKindOptions"/>. All of the deciding — which fields exist, what they default to,
 /// what a provider switch keeps, what is invalid, and how any of it maps to
 /// <see cref="ConnectionInfo"/> and its <see cref="ConnectionInfo.Options"/> — lives in
-/// <see cref="ConnectionFieldModel"/>, because none of it can be tested from here (§0.5, §2.3, §2.5).
-/// What is left in this file is labels, boxes and visibility.
+/// <see cref="ConnectionFieldModel"/> and <see cref="CredentialKindOptions"/>, where it is tested as pure
+/// logic rather than through a control tree (§0.5, §2.3, §2.5). What is left in this file is labels, boxes
+/// and visibility — and that the wiring between the two really is attached is what
+/// <c>Ui/ConnectionEditorTests</c> holds.
 /// </para>
 /// </summary>
 public partial class ConnectionDialog : Window
@@ -187,13 +189,38 @@ public partial class ConnectionDialog : Window
         // kind as well as on the provider), and every path here ends up calling it.
     }
 
-    /// <summary>The control for one field. A Boolean is a checkbox; everything else is a text box.
-    /// <see cref="ConnectionFieldKind.Choice"/> included: <see cref="ConnectionField"/> carries no candidate
-    /// list, so there is nothing to populate a dropdown with — the declared default becomes the placeholder
-    /// instead of a fake set of options. Passwords never reach here (the model excludes them; the dialog's
-    /// own box owns the secret).</summary>
+    /// <summary>The control for one field: a Boolean is a checkbox, a
+    /// <see cref="ConnectionFieldKind.Choice"/> with candidates is a dropdown, everything else — a
+    /// candidate-less Choice included — is a text box, with the declared default as its placeholder.
+    /// Which values the dropdown lists is <see cref="ConnectionFieldState.Candidates"/>' decision, not this
+    /// method's (§2.3). Passwords never reach here (the model excludes them; the dialog's own box owns the
+    /// secret).</summary>
     private Control Editor(ConnectionFieldState field)
     {
+        if (field.Kind == ConnectionFieldKind.Choice && field.Candidates is { Count: > 0 } candidates)
+        {
+            var combo = new ComboBox
+            {
+                // Same {Key}Box naming as the boxes below, for the same reason: it is what makes a
+                // code-built row findable from a headless UI test (§4.5).
+                Name = field.Key + "Box",
+                ItemsSource = candidates,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                Margin = new Thickness(0, 6, 0, 0),
+            };
+            // Candidates always contains the current value when there is one (it prepends it if the provider
+            // did not declare it), so this only fails to find a match when the field is genuinely unset —
+            // which leaves the box empty rather than silently adopting the first option as the user's choice.
+            combo.SelectedIndex = IndexOf(candidates, field.Value);
+            combo.SelectionChanged += (_, _) =>
+            {
+                if (combo.SelectedIndex < 0 || combo.SelectedIndex >= candidates.Count) return;
+                field.Value = candidates[combo.SelectedIndex];
+                RefreshValidation();
+            };
+            return combo;
+        }
+
         if (field.Kind == ConnectionFieldKind.Boolean)
         {
             var check = new CheckBox
@@ -232,6 +259,19 @@ public partial class ConnectionDialog : Window
             if (isHost && _existing is null && !_tlsChosen) SelectTls(TlsPolicy.DefaultFor(field.Value));
         };
         return box;
+    }
+
+    /// <summary>Where <paramref name="value"/> sits in <paramref name="candidates"/>, or -1. Trimmed and
+    /// case-insensitive, matching how <see cref="ConnectionFieldState.Candidates"/> decides a value is
+    /// already among the declared ones — the two must agree, or a value it judged present would select
+    /// nothing here.</summary>
+    private static int IndexOf(IReadOnlyList<string> candidates, string value)
+    {
+        var wanted = value.Trim();
+        if (wanted.Length == 0) return -1;
+        for (var i = 0; i < candidates.Count; i++)
+            if (string.Equals(candidates[i], wanted, StringComparison.OrdinalIgnoreCase)) return i;
+        return -1;
     }
 
     /// <summary>The host as the model currently holds it — what the encryption default is computed from.</summary>

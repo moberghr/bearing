@@ -61,6 +61,52 @@ public class ConnectionFieldModelTests
 
     private static readonly OptionProvider Opt = new();
 
+    /// <summary>
+    /// A provider declaring the two shapes of <see cref="ConnectionFieldKind.Choice"/>: one with candidates
+    /// and one without.
+    /// <para>
+    /// Hand-rolled because <b>no shipped provider declares a Choice field</b> — sslmode and
+    /// Encrypt/TrustServerCertificate all became the typed <see cref="ConnectionInfo.Tls"/> (#23), so the
+    /// kind has no production user. Inventing one on a real engine to justify the capability would be
+    /// worse than testing it here: it would put a second source of truth for a setting next to the typed
+    /// field that owns it, which is exactly what #23 removed.
+    /// </para>
+    /// </summary>
+    private sealed class ChoiceProvider : IDbProvider
+    {
+        public string Id => "choicetest";
+        public string DisplayName => "Choice Test";
+        public bool SupportsIntegratedAuth => false;
+        public bool SupportsEntraToken => false;
+        public DbErrorKind Classify(QueryError error) => DbErrorKind.Unknown;
+        public DbErrorKind ClassifyException(Exception exception) => DbErrorKind.Unknown;
+
+        public IReadOnlyList<ConnectionField> ConnectionFields { get; } = new[]
+        {
+            new ConnectionField("Host", "Host", ConnectionFieldKind.Text, Required: true, Default: "localhost"),
+            new ConnectionField("Port", "Port", ConnectionFieldKind.Number, Required: true, Default: "1234"),
+            new ConnectionField("Database", "Database", ConnectionFieldKind.Text, Required: true),
+            new ConnectionField("User", "User", ConnectionFieldKind.Text, Required: true),
+            new ConnectionField("mode", "Mode", ConnectionFieldKind.Choice, Required: false, Default: "fast",
+                Choices: new[] { "fast", "safe", "paranoid" }),
+            // The degenerate case a provider can still write, and the reason the dialog keeps its text-box
+            // fallback: a Choice with nothing to choose from.
+            new ConnectionField("flavour", "Flavour", ConnectionFieldKind.Choice, Required: false),
+        };
+
+        public IDbConnectionFactory CreateConnectionFactory(ConnectionInfo info, string? password)
+            => throw new NotSupportedException("declares fields only");
+        public IMetadataReader CreateMetadataReader(IDbConnectionFactory factory)
+            => throw new NotSupportedException("declares fields only");
+        public IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory)
+            => throw new NotSupportedException("declares fields only");
+    }
+
+    private static readonly ChoiceProvider Choice = new();
+
+    private static ConnectionFieldState Field(ConnectionFieldModel model, string key)
+        => model.Fields.Single(f => f.Key == key);
+
     private static ConnectionInfo Blank => new()
     {
         Id = Guid.NewGuid(),
@@ -295,5 +341,95 @@ public class ConnectionFieldModelTests
         // A named instance makes the Port box a no-op, which the user has no way of knowing.
         Assert.Contains("named instance", ConnectionFieldModel.For(Ms).EndpointHint);
         Assert.Null(ConnectionFieldModel.For(Pg).EndpointHint);
+    }
+
+    // ---- Choice fields ---------------------------------------------------------------------------
+
+    [Fact]
+    public void A_choice_field_offers_the_providers_declared_candidates_in_order()
+    {
+        var model = ConnectionFieldModel.For(Choice);
+
+        Assert.Equal(new[] { "fast", "safe", "paranoid" }, Field(model, "mode").Candidates);
+        // And the default is one of them, so the dropdown opens on a real selection rather than blank.
+        Assert.Equal("fast", model.Get("mode"));
+    }
+
+    [Fact]
+    public void A_choice_field_with_no_candidates_offers_none()
+    {
+        // Emptiness is the signal, not a special kind: it is what makes the dialog fall back to a text box
+        // instead of rendering a dropdown the user cannot pick anything from.
+        Assert.Empty(Field(ConnectionFieldModel.For(Choice), "flavour").Candidates);
+    }
+
+    [Fact]
+    public void Only_a_choice_field_offers_candidates()
+    {
+        // A Text or Number field must not acquire a dropdown because someone passed Choices by mistake —
+        // the Kind decides the control, and this keeps the two from disagreeing.
+        var model = ConnectionFieldModel.For(Choice);
+        Assert.Empty(Field(model, "Host").Candidates);
+        Assert.Empty(Field(model, "Port").Candidates);
+    }
+
+    [Fact]
+    public void A_value_the_provider_never_declared_is_still_offered_first()
+    {
+        // Hand-written into project.json, set by an older build, or imported from another tool. A dropdown
+        // that cannot represent it would blank it on the next save, silently — the same loss _carried
+        // exists to prevent for undeclared option keys.
+        var existing = Blank with
+        {
+            ProviderId = "choicetest",
+            Options = new Dictionary<string, string> { ["mode"] = "reckless" },
+        };
+
+        var field = Field(ConnectionFieldModel.For(Choice, existing), "mode");
+
+        // First, not appended: it is the value the connection actually holds, so it must be visible without
+        // scrolling a long list.
+        Assert.Equal(new[] { "reckless", "fast", "safe", "paranoid" }, field.Candidates);
+    }
+
+    [Fact]
+    public void A_declared_value_is_not_duplicated_however_it_is_cased()
+    {
+        // The dialog matches the selection case-insensitively, so a second entry differing only in case
+        // would be an option that looks distinct and selects the same thing.
+        var existing = Blank with
+        {
+            ProviderId = "choicetest",
+            Options = new Dictionary<string, string> { ["mode"] = "  SAFE  " },
+        };
+
+        Assert.Equal(new[] { "fast", "safe", "paranoid" },
+            Field(ConnectionFieldModel.For(Choice, existing), "mode").Candidates);
+    }
+
+    [Fact]
+    public void A_chosen_value_round_trips_through_options()
+    {
+        // A Choice field is not intrinsic, so it travels in Options like every other declared field — and,
+        // like them, a value still at the declared default is not written back.
+        var model = ConnectionFieldModel.For(Choice);
+        model.Set("mode", "paranoid");
+        Assert.Equal("paranoid", model.Apply(Blank).Options["mode"]);
+
+        model.Set("mode", "fast");
+        Assert.DoesNotContain("mode", model.Apply(Blank).Options.Keys);
+    }
+
+    [Fact]
+    public void Candidates_follow_the_value_rather_than_being_fixed_at_construction()
+    {
+        // The dropdown is rebuilt per render, and Value is mutable — a snapshot taken in the constructor
+        // would offer the wrong extra entry after a provider switch carried a value in.
+        var field = Field(ConnectionFieldModel.For(Choice), "mode");
+        Assert.Equal(3, field.Candidates.Count);
+
+        field.Value = "reckless";
+        Assert.Equal("reckless", field.Candidates[0]);
+        Assert.Equal(4, field.Candidates.Count);
     }
 }

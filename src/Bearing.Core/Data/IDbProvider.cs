@@ -25,11 +25,12 @@ public interface IDbProvider
     /// token (<see cref="CredentialKind.EntraToken"/>) — that is, whether the token has somewhere to go.
     /// <para>
     /// A separate flag from <see cref="SupportsIntegratedAuth"/> for the same reason that one exists: the
-    /// dialog must not offer a credential kind the factory cannot honour. Postgres takes the token as the
-    /// password, so it simply works. SQL Server does not — SqlClient accepts a token only through
-    /// <c>SqlConnection.AccessToken</c> or an <c>Authentication=Active Directory…</c> mode, never as a
-    /// password keyword — so until that path is wired the entry must not appear, rather than appearing and
-    /// failing at login.
+    /// dialog must not offer a credential kind the factory cannot honour, rather than offering it and
+    /// failing at login. What the flag asks is not "does this engine's cloud support Entra" but "does this
+    /// factory put the token somewhere the driver will read it", and the two drivers differ: Npgsql takes it
+    /// as the password, so Postgres needed no code at all, while SqlClient takes it only on the connection
+    /// object and so needed a path of its own. Both are true today; a third engine's driver may want a
+    /// third arrangement, or none.
     /// </para>
     /// </summary>
     bool SupportsEntraToken { get; }

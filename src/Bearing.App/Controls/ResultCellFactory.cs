@@ -106,7 +106,8 @@ public sealed class ResultCellFactory
         var badges = new List<(string, string)>(2);
         if (result.PrimaryKeyColumns.Contains(index)) badges.Add(("PK", "Accent.Brand"));
         if (result.ForeignKeyColumns.Contains(index)) badges.Add(("FK", "Syntax.Keyword"));
-        var type = result.Columns[index].DataTypeName;
+        var column = result.Columns[index];
+        var type = column.DataTypeName;
         if (ColumnKinds.IsDocument(type)) badges.Add((type.ToLowerInvariant(), "Syntax.Table"));
         // A timestamp *without* zone, said as the consequence rather than as the type name (#77). "timestamp"
         // would be consistent with the json badge, but json's badge exists to separate json from jsonb, where
@@ -114,7 +115,10 @@ public sealed class ResultCellFactory
         // "timestamp" does not answer it for anyone who does not already know Postgres draws the line there.
         // On the header, never in the cell: anything appended inside CellFormat.Display travels into the
         // clipboard, the exports and the edit round-trip.
-        if (ColumnKinds.IsTimestampWithoutZone(type)) badges.Add(("no tz", "Warn.Amber"));
+        //
+        // The whole column, not just its type name: SQL Server's `timestamp` is rowversion, an 8-byte
+        // counter, and badging that "no tz" answers a question its values cannot raise. See ColumnKinds.
+        if (ColumnKinds.IsTimestampWithoutZone(column)) badges.Add(("no tz", "Warn.Amber"));
         return badges;
     }
 

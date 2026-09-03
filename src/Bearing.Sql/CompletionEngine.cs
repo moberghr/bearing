@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Antlr4.Runtime.Tree;
 using Antlr4CodeCompletion.Core.CodeCompletion;
 using Bearing.Core.Completion;
@@ -10,7 +9,7 @@ namespace Bearing.Sql;
 /// Schema-aware SQL completion built on ANTLR + antlr4-c3. Pure and synchronous: given the SQL
 /// text, caret offset, and a schema snapshot, returns ranked suggestions and the span they replace.
 /// </summary>
-public sealed partial class CompletionEngine : ICompletionEngine
+public sealed class CompletionEngine : ICompletionEngine
 {
     private readonly Func<ISqlDialect> _dialect;
 
@@ -34,8 +33,10 @@ public sealed partial class CompletionEngine : ICompletionEngine
             return new CompletionResult(Array.Empty<Suggestion>(), caretOffset, 0);
 
         // The one place the engine learns which grammar it is reading. Everything below works in terms
-        // of roles and intents, which is what lets one engine answer for both dialects.
-        var rules = _dialect().ParseRules;
+        // of roles and intents, which is what lets one engine answer for both dialects. The dialect
+        // itself is kept, not just its rules: how a name is *quoted* on the way out is its business too.
+        var dialect = _dialect();
+        var rules = dialect.ParseRules;
 
         var parsed = rules.Parse(sql);
         parsed.Tokens.Fill();
@@ -65,7 +66,7 @@ public sealed partial class CompletionEngine : ICompletionEngine
             return new CompletionResult(Array.Empty<Suggestion>(), caret.ReplacementStart, caret.ReplacementLength);
 
         var suggestions = new List<Suggestion>();
-        var qualifier = AliasQualifierBefore(sql, caretOffset);
+        var qualifier = rules.QualifierBefore(sql, caretOffset);
 
         if (qualifier is not null && IsResolvedSource(sources, qualifier))
         {
@@ -73,15 +74,15 @@ public sealed partial class CompletionEngine : ICompletionEngine
             // FK equality joining it to an in-scope table) make sense — never tables/joins/keywords,
             // regardless of how c3 classifies the caret in the surrounding (often broken) SQL.
             if (FkPredicateFits(rules, parsed.Tokens.GetTokens(), caret.TokenIndex))
-                suggestions.AddRange(FkPredicateSuggestions(schema, sources, qualifier));
-            suggestions.AddRange(ColumnSuggestions(schema, sources, qualifier));
+                suggestions.AddRange(FkPredicateSuggestions(dialect, schema, sources, qualifier));
+            suggestions.AddRange(ColumnSuggestions(dialect, schema, sources, qualifier));
         }
         else if (qualifier is not null && SchemaNamed(schema, qualifier) is { } qualifierSchema)
         {
             // "public." is a schema qualifier, not an alias — an in-scope alias of the same name wins
             // (checked above), otherwise the only sensible answer is that schema's relations. This
             // branch used to fall through to the column path and produce an empty popup.
-            suggestions.AddRange(TableSuggestions(schema, sources, onlySchema: qualifierSchema));
+            suggestions.AddRange(TableSuggestions(dialect, schema, sources, onlySchema: qualifierSchema));
         }
         else if (qualifier is null)
         {
@@ -91,17 +92,17 @@ public sealed partial class CompletionEngine : ICompletionEngine
             // come through, which is what actually follows a named source (as / join / where).
             if (intents.Contains(CompletionIntent.TablePosition) && !aliasSlot)
             {
-                suggestions.AddRange(TableSuggestions(schema, sources));
-                suggestions.AddRange(SchemaSuggestions(schema));
+                suggestions.AddRange(TableSuggestions(dialect, schema, sources));
+                suggestions.AddRange(SchemaSuggestions(dialect, schema));
                 // Only where a join can actually attach, and carrying whatever keyword the caret is still
                 // missing — accepting one after a bare source used to emit `from users u orders o on …`.
                 if (sources.Count > 0
                     && JoinKeywordPrefix(rules, parsed.Tokens.GetTokens(), caret.TokenIndex) is { } joinPrefix)
-                    suggestions.AddRange(JoinSuggestions(schema, sources, joinPrefix));
+                    suggestions.AddRange(JoinSuggestions(dialect, schema, sources, joinPrefix));
             }
 
             if (intents.Contains(CompletionIntent.ColumnPosition))
-                suggestions.AddRange(ColumnSuggestions(schema, sources, qualifier: null));
+                suggestions.AddRange(ColumnSuggestions(dialect, schema, sources, qualifier: null));
 
             foreach (var tokenType in candidates.Tokens.Keys)
             {
@@ -170,7 +171,8 @@ public sealed partial class CompletionEngine : ICompletionEngine
     /// <param name="onlySchema">When set, only that schema's relations, and inserted bare — the caret
     /// already sits after <c>schema.</c>.</param>
     private static IEnumerable<Suggestion> TableSuggestions(
-        ISchemaSnapshot schema, IReadOnlyList<TableRef> sources, string? onlySchema = null)
+        ISqlDialect dialect, ISchemaSnapshot schema, IReadOnlyList<TableRef> sources,
+        string? onlySchema = null)
     {
         var existing = ExistingAliases(sources);
         foreach (var t in schema.Tables)
@@ -182,8 +184,8 @@ public sealed partial class CompletionEngine : ICompletionEngine
             // A relation outside search_path (or shadowed by a same-named one earlier in it) does not
             // resolve bare, so the insertion carries its schema even though the label doesn't.
             var name = onlySchema is null && !ResolvesUnqualified(schema, t)
-                ? $"{Q(t.Schema)}.{Q(t.Name)}"
-                : Q(t.Name);
+                ? $"{Q(dialect, t.Schema)}.{Q(dialect, t.Name)}"
+                : Q(dialect, t.Name);
             yield return new Suggestion
             {
                 DisplayText = t.Name,
@@ -201,7 +203,7 @@ public sealed partial class CompletionEngine : ICompletionEngine
     /// Schema names at a table position, so <c>audit.</c> is reachable without knowing what's in it.
     /// Ranked below relations: the common case is picking a table, not narrowing to a schema first.
     /// </summary>
-    private static IEnumerable<Suggestion> SchemaSuggestions(ISchemaSnapshot schema)
+    private static IEnumerable<Suggestion> SchemaSuggestions(ISqlDialect dialect, ISchemaSnapshot schema)
     {
         var reachable = new HashSet<string>(schema.SearchPath, StringComparer.OrdinalIgnoreCase);
         foreach (var name in schema.Schemas)
@@ -211,7 +213,7 @@ public sealed partial class CompletionEngine : ICompletionEngine
                 FilterText = name,
                 DetailText = "schema",
                 // The trailing dot leaves the caret where the relation list continues.
-                ReplacementText = $"{Q(name)}.",
+                ReplacementText = $"{Q(dialect, name)}.",
                 Kind = SuggestionKind.Schema,
                 Priority = 5,
                 Description = reachable.Contains(name)
@@ -294,8 +296,8 @@ public sealed partial class CompletionEngine : ICompletionEngine
               || opener == rules.Lateral))
             return false;
 
-        var relation = PgIdentifier.Unquote(parts[^1]);
-        var schemaName = parts.Count >= 2 ? PgIdentifier.Unquote(parts[^2]) : null;
+        var relation = rules.Unquote(parts[^1]);
+        var schemaName = parts.Count >= 2 ? rules.Unquote(parts[^2]) : null;
         return schema.ResolveTable(schemaName, relation) is not null;
     }
 
@@ -360,7 +362,7 @@ public sealed partial class CompletionEngine : ICompletionEngine
     /// <param name="joinPrefix">The keyword the caret is missing — see <see cref="JoinKeywordPrefix"/>.
     /// Empty when the user has already typed <c>join</c>.</param>
     private static IEnumerable<Suggestion> JoinSuggestions(
-        ISchemaSnapshot schema, IReadOnlyList<TableRef> sources, string joinPrefix)
+        ISqlDialect dialect, ISchemaSnapshot schema, IReadOnlyList<TableRef> sources, string joinPrefix)
     {
         var existing = ExistingAliases(sources);
 
@@ -391,7 +393,8 @@ public sealed partial class CompletionEngine : ICompletionEngine
                 var alias = AliasResolver.Determine(other, existing);
                 var preds = new List<string>();
                 for (var i = 0; i < Math.Min(srcCols.Count, otherCols.Count); i++)
-                    preds.Add($"{alias}.{Q(ColumnName(schema, otherOid, otherCols[i]))} = {srcAlias}.{Q(ColumnName(schema, srcOid, srcCols[i]))}");
+                    preds.Add($"{alias}.{Q(dialect, ColumnName(schema, otherOid, otherCols[i]))}"
+                              + $" = {srcAlias}.{Q(dialect, ColumnName(schema, srcOid, srcCols[i]))}");
                 var predicate = string.Join(" and ", preds);
 
                 yield return new Suggestion
@@ -400,7 +403,7 @@ public sealed partial class CompletionEngine : ICompletionEngine
                     FilterText = other.Name,
                     DetailText = $"join → {SourceLabel(src)}",
                     TrailingText = predicate,
-                    ReplacementText = $"{joinPrefix}{Q(other.Name)} {alias} on {predicate}",
+                    ReplacementText = $"{joinPrefix}{Q(dialect, other.Name)} {alias} on {predicate}",
                     Kind = SuggestionKind.Join,
                     Priority = 20,
                     Description = $"FK {fk.Name}: {other.Schema}.{other.Name} ⋈ {SourceLabel(src)}",
@@ -417,7 +420,7 @@ public sealed partial class CompletionEngine : ICompletionEngine
     /// so a correlated WHERE/ON predicate completes in one keystroke.
     /// </summary>
     private static IEnumerable<Suggestion> FkPredicateSuggestions(
-        ISchemaSnapshot schema, IReadOnlyList<TableRef> sources, string qualifier)
+        ISqlDialect dialect, ISchemaSnapshot schema, IReadOnlyList<TableRef> sources, string qualifier)
     {
         var owner = sources.FirstOrDefault(s =>
             string.Equals(s.EffectiveName, qualifier, StringComparison.OrdinalIgnoreCase));
@@ -441,7 +444,8 @@ public sealed partial class CompletionEngine : ICompletionEngine
 
                 var preds = new List<string>();
                 for (var i = 0; i < Math.Min(ownerCols.Count, otherCols.Count); i++)
-                    preds.Add($"{Q(ColumnName(schema, ownerOid, ownerCols[i]))} = {other.EffectiveRef}.{Q(ColumnName(schema, otherOid, otherCols[i]))}");
+                    preds.Add($"{Q(dialect, ColumnName(schema, ownerOid, ownerCols[i]))}"
+                              + $" = {other.EffectiveRef}.{Q(dialect, ColumnName(schema, otherOid, otherCols[i]))}");
                 if (preds.Count == 0) continue;
                 var predicate = string.Join(" and ", preds);
 
@@ -462,7 +466,7 @@ public sealed partial class CompletionEngine : ICompletionEngine
     // ---- Column suggestions (alias-aware) ----------------------------------------------------
 
     private static IEnumerable<Suggestion> ColumnSuggestions(
-        ISchemaSnapshot schema, IReadOnlyList<TableRef> sources, string? qualifier)
+        ISqlDialect dialect, ISchemaSnapshot schema, IReadOnlyList<TableRef> sources, string? qualifier)
     {
         if (qualifier is not null)
         {
@@ -470,7 +474,7 @@ public sealed partial class CompletionEngine : ICompletionEngine
                 string.Equals(s.EffectiveName, qualifier, StringComparison.OrdinalIgnoreCase));
             if (owner?.Resolved is null) yield break;
             foreach (var c in schema.ColumnsOf(owner.Resolved.Id))
-                yield return ColumnSuggestion(c, owner.EffectiveName);
+                yield return ColumnSuggestion(dialect, c, owner.EffectiveName);
             yield break;
         }
 
@@ -482,7 +486,7 @@ public sealed partial class CompletionEngine : ICompletionEngine
                     // An aliased source qualifies its columns on insertion: in a select list, ORDER BY or
                     // WHERE, a bare `id` is ambiguous the moment a second source joins in, and the alias
                     // is what the rest of the statement refers to it by.
-                    yield return ColumnSuggestion(c, src.EffectiveName,
+                    yield return ColumnSuggestion(dialect, c, src.EffectiveName,
                         qualifier: src.Alias is not null ? src.EffectiveRef : null);
             yield break;
         }
@@ -490,32 +494,36 @@ public sealed partial class CompletionEngine : ICompletionEngine
         // No FROM yet: offer every column (M3 fallback).
         foreach (var t in schema.Tables)
             foreach (var c in schema.ColumnsOf(t.Id))
-                yield return ColumnSuggestion(c, t.Name);
+                yield return ColumnSuggestion(dialect, c, t.Name);
     }
 
     /// <param name="qualifier">Prefix for the inserted text (<c>f.id</c>); null inserts the bare column,
     /// which is what the <c>alias.</c> path needs — the qualifier is already typed there.</param>
-    private static Suggestion ColumnSuggestion(ColumnInfo c, string owner, string? qualifier = null) => new()
-    {
-        DisplayText = c.Name,
-        FilterText = c.Name,
-        DetailText = owner,
-        ReplacementText = qualifier is null ? Q(c.Name) : $"{qualifier}.{Q(c.Name)}",
-        Kind = SuggestionKind.Column,
-        Priority = c.IsPrimaryKey ? 9 : 8,
-        Description = $"{owner}.{c.Name} : {c.DataType}",
-    };
+    private static Suggestion ColumnSuggestion(
+        ISqlDialect dialect, ColumnInfo c, string owner, string? qualifier = null) => new()
+        {
+            DisplayText = c.Name,
+            FilterText = c.Name,
+            DetailText = owner,
+            ReplacementText = qualifier is null ? Q(dialect, c.Name) : $"{qualifier}.{Q(dialect, c.Name)}",
+            Kind = SuggestionKind.Column,
+            Priority = c.IsPrimaryKey ? 9 : 8,
+            Description = $"{owner}.{c.Name} : {c.DataType}",
+        };
 
     /// <summary>Quote a catalog name for insertion when the bare form wouldn't round-trip
-    /// (<c>__MigrationHistory</c>, <c>order</c>); ordinary lower-case names stay bare so the
+    /// (<c>__MigrationHistory</c>, <c>order</c>); a name that already means itself stays bare so the
     /// completed SQL reads the way it would if it were typed by hand.
     /// <para>
-    /// Still Postgres' rule, and the last thing in this file that is: the dialect is now in reach
-    /// (<c>_dialect().QuoteIfNeeded</c>), but routing this through it changes what SQL Server completion
-    /// <em>emits</em> — <c>Customers</c> rather than <c>"Customers"</c> — and that belongs with
-    /// the batch that gives T-SQL a parse to be quoted for, not with the seam that makes it possible.
+    /// <b>The selected connection's rule, not Postgres'.</b> The two engines disagree about the common
+    /// case rather than an edge of it: Postgres folds an unquoted name to lower case, so anything not
+    /// already lower case has to be quoted, while SQL Server preserves case. Running T-SQL through the
+    /// Postgres rule therefore quoted <em>every PascalCase name in the catalog</em> — and PascalCase is
+    /// T-SQL's own convention, so completion emitted <c>"Customers"</c> where the user wanted
+    /// <c>Customers</c>, and <c>"Order Details"</c> where T-SQL needs <c>[Order Details]</c>. The first
+    /// is merely unreadable; the second is a syntax error.
     /// </para></summary>
-    private static string Q(string identifier) => PgIdentifier.QuoteIfNeeded(identifier);
+    private static string Q(ISqlDialect dialect, string identifier) => dialect.QuoteIfNeeded(identifier);
 
     /// <summary>
     /// How a hint names a source: the relation plus the alias the query gave it (<c>film f</c>). The alias
@@ -535,21 +543,6 @@ public sealed partial class CompletionEngine : ICompletionEngine
         => sources.Select(s => s.EffectiveName).Where(a => !string.IsNullOrEmpty(a)).ToList();
 
     // ---- Caret + token helpers ---------------------------------------------------------------
-
-    /// <summary>
-    /// If the caret sits just after "&lt;identifier&gt;.", returns that identifier (the alias),
-    /// unquoted — a quoted qualifier (<c>"__MigrationHistory".</c>) is the same source as the bare
-    /// one, and every match downstream is against unquoted names.
-    /// </summary>
-    private static string? AliasQualifierBefore(string sql, int caret)
-    {
-        var prefix = sql[..caret];
-        var m = AliasDotRegex().Match(prefix);
-        return m.Success ? PgIdentifier.Unquote(m.Groups[1].Value) : null;
-    }
-
-    [GeneratedRegex(@"(""(?:[^""]|"""")*""|[A-Za-z_][A-Za-z0-9_$]*)\s*\.\s*(?:""(?:[^""]|"""")*|[A-Za-z0-9_$]*)$")]
-    private static partial Regex AliasDotRegex();
 
     private static string? KeywordText(Antlr4.Runtime.IVocabulary vocab, int tokenType)
     {

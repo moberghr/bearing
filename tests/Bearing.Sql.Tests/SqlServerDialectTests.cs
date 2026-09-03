@@ -7,7 +7,9 @@ namespace Bearing.Sql.Tests;
 /// <summary>
 /// The generated-text half of SQL Server support. Everything here is a string assertion — no server is
 /// involved and none is reachable on this box, so these prove the <em>shape</em> of the SQL, not that a
-/// server accepts it. Batch 5's integration tests are what would make that claim.
+/// server accepts it. <c>Bearing.Data.Tests.SqlServerExecutorTests</c> is where that claim is made, and
+/// it skips without a server (§4.2) — so on a box with no SQL Server, which is every box that has built
+/// this branch, the shape is all that has actually been checked.
 /// </summary>
 public class SqlServerDialectTests
 {
@@ -150,8 +152,6 @@ public class SqlServerDialectTests
     // behaviour: FOR XML legalises an ORDER BY *in place*, but the clause itself is illegal in a subquery.
 
     [Theory]
-    [InlineData("with c as (select 1 as x) select * from c")]               // a CTE must lead a statement
-    [InlineData("with c as (select 1 as x) select * from c order by x")]
     [InlineData("select * from Orders order by OrderId for xml auto")]      // FOR XML yields a stream
     [InlineData("select * from Orders for json path")]
     [InlineData("select * from Orders order by OrderId option (recompile)")] // hints are statement-level
@@ -161,23 +161,10 @@ public class SqlServerDialectTests
         Assert.Null(Ss.CountWrap(sql));
     }
 
-    [Fact]
-    public void A_cte_with_no_order_by_cannot_be_paged_at_all()
-        // No ORDER BY, so no suffix; and a CTE cannot be a derived table, so no wrap. This is the shape
-        // that makes the caller retire paging rather than retry a doomed page on every scroll.
-        => Assert.Null(PageSql.Page(Ss, "with c as (select 1 as x) select * from c", offset: 0, limit: 10));
-
-    [Fact]
-    public void A_cte_that_orders_itself_still_pages_through_the_suffix()
-    {
-        // The refusal is about the WRAP, not about CTEs as such: `with … select … order by x offset …
-        // fetch next …` is perfectly legal, because the CTE stays at statement level and the page clause
-        // rides the ORDER BY. Refusing to page this would have been a needless regression.
-        const string sql = "with c as (select 1 as x) select * from c order by x";
-        Assert.Equal(
-            sql + "\noffset 0 rows fetch next 10 rows only",
-            PageSql.Page(Ss, sql, offset: 0, limit: 10));
-    }
+    // A CTE used to belong to the set above — it cannot be a derived table either (Msg 156) — and is
+    // hoisted over one now instead of refused, so both its cases moved to TSqlCtePagingTests along with
+    // the boundary tests they depend on. What is left here is the pair that has no such repair: OPTION
+    // and FOR are clauses *of* the query being wrapped, not a preamble that can step outside it.
 
     [Fact]
     public void Postgres_wraps_every_one_of_those_shapes_without_complaint()

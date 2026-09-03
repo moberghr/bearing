@@ -30,10 +30,12 @@ public sealed record WriteStatement(string Kind, string Sql, bool IsRisky);
 /// <param name="GuardIsDialectAware">
 /// False when <see cref="Bearing.Sql.WriteGuard"/> could not read this engine's grammar
 /// (<see cref="Bearing.Sql.ISqlDialect.HasDialectAwareGuard"/>) and therefore reported every statement as
-/// risky rather than guess. It changes what the prompt may claim: without it, a guarded SQL Server
-/// connection confirms on every run and the user reads the standard wording as "your SELECT is
-/// destructive", which is both untrue and the fastest way to teach someone to click through the guard.
-/// Defaults to true so the Postgres path — and every existing caller — is untouched.
+/// risky rather than guess. It changes what the prompt may claim: without it, every run of a guarded
+/// connection confirms and the user reads the standard wording as "your SELECT is destructive", which is
+/// both untrue and the fastest way to teach someone to click through the guard. That was SQL Server's
+/// situation until its guard learned to read T-SQL; both shipped dialects report true now, so this arm is
+/// what the next engine gets before its own scanner exists. Defaults to true so the Postgres path — and
+/// every existing caller — is untouched.
 /// </param>
 public sealed record WriteConfirmation(
     ConnectionInfo Connection,

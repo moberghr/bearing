@@ -74,7 +74,7 @@ public static class FromClauseExtractor
                     alias = toks[k].Text; k += 1; // a bare identifier after the name is the alias
                 }
 
-                var (schemaName, name) = SplitQualified(nameParts);
+                var (schemaName, name) = SplitQualified(rules, nameParts);
 
                 // Same span ResolveCaret treats as the word to overwrite: inside the name, or just
                 // after its last character — but not immediately before it, which is an insertion
@@ -87,7 +87,7 @@ public static class FromClauseExtractor
                     {
                         Schema = schemaName,
                         RawName = name,
-                        Alias = Unquote(alias),
+                        Alias = Unquote(rules, alias),
                         // Quoting is kept here (and only here) so generated predicates can spell the
                         // qualifier the way the query does — `"__MigrationHistory".id`, not `.id` folded.
                         ReferenceText = alias ?? nameParts[^1],
@@ -102,10 +102,11 @@ public static class FromClauseExtractor
         return Dedupe(refs);
     }
 
-    private static (string? schema, string name) SplitQualified(IReadOnlyList<string> parts)
+    private static (string? schema, string name) SplitQualified(
+        ISqlParseRules rules, IReadOnlyList<string> parts)
     {
-        var name = Unquote(parts[^1]) ?? "";
-        var schema = parts.Count >= 2 ? Unquote(parts[^2]) : null;
+        var name = Unquote(rules, parts[^1]) ?? "";
+        var schema = parts.Count >= 2 ? Unquote(rules, parts[^2]) : null;
         return (schema, name);
     }
 
@@ -119,7 +120,11 @@ public static class FromClauseExtractor
         return result;
     }
 
-    /// <summary>Still Postgres' unquoting, like <c>CompletionEngine.Q</c> — changing it changes what
-    /// T-SQL resolves, which is the next batch's business, not the seam's.</summary>
-    private static string? Unquote(string? s) => s is null ? null : PgIdentifier.Unquote(s);
+    /// <summary>
+    /// Whichever grammar lexed the buffer strips its own delimiters. This is where
+    /// <c>from dbo.[Order Details] as od</c> used to go wrong: read with Postgres unquoting, the relation
+    /// came back literally named <c>[Order Details]</c>, resolved to nothing, and <c>od.</c> therefore
+    /// offered no columns — while <c>dbo</c>, the schema, was the only part that looked like a name.
+    /// </summary>
+    private static string? Unquote(ISqlParseRules rules, string? s) => s is null ? null : rules.Unquote(s);
 }

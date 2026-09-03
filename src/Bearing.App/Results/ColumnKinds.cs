@@ -40,6 +40,20 @@ public static class ColumnKinds
     /// the inspector renders it as text. Conflating the two would have made "does this get a badge?" and
     /// "does this parse as JSON?" the same question, which they stopped being when a second engine arrived.
     /// </para>
+    /// <para>
+    /// <b>T-SQL's other unusual types are deliberately not here</b>, having been considered and declined:
+    /// <list type="bullet">
+    ///   <item><c>uniqueidentifier</c> is a scalar, and one that already renders and round-trips correctly
+    ///     — <c>CellFormat.Display</c> prints a <see cref="Guid"/> in its canonical form, <c>SqlValue</c>
+    ///     quotes it, and <c>ResultEditModel.Coerce</c> parses it back. There is no decision left to
+    ///     make, so there is nothing to add.</item>
+    ///   <item><c>hierarchyid</c>, <c>geography</c> and <c>geometry</c> are opaque: the value is a
+    ///     serialized CLR UDT, and its text in a cell is not its meaning in any rendering. A badge would
+    ///     be a promise the inspector cannot keep — it would open on the same bytes, one line lower —
+    ///     which is why "unusual type" is not the test this predicate applies. The test is "is the value a
+    ///     document a reader would want more room for", and these are not.</item>
+    /// </list>
+    /// </para>
     /// </summary>
     public static bool IsDocument(string dataTypeName)
         => IsJson(dataTypeName)
@@ -63,6 +77,37 @@ public static class ColumnKinds
         return type.StartsWith("timestamp", StringComparison.OrdinalIgnoreCase)
             && !type.Contains("with time zone", StringComparison.OrdinalIgnoreCase)
             && !type.EndsWith("tz", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The same question of a whole column, and the overload the grid must use: a declared type name that
+    /// <em>reads</em> like a zone-less timestamp, carrying values that actually are one.
+    /// <para>
+    /// <b>SQL Server has a type literally named <c>timestamp</c>, and it is not a timestamp.</b> It is the
+    /// legacy spelling of <c>rowversion</c> — an opaque 8-byte row-change counter — so
+    /// <c>GetDataTypeName</c> returns "timestamp" for a column whose values are <c>byte[]</c>. The
+    /// name-only predicate above says "no tz" about it, which is worse than saying nothing: the badge's
+    /// whole job is to answer "can I trust this instant", and there is no instant to distrust.
+    /// </para>
+    /// <para>
+    /// The CLR type is the discriminator rather than the connection's dialect, because it is exact and
+    /// costs no plumbing: every Postgres <c>timestamp</c>/<c>timestamp without time zone</c> arrives as a
+    /// <see cref="DateTime"/> (or an array of them), and a rowversion can never be one. Asking the dialect
+    /// instead would thread a <c>ProviderTraits</c> through the header builder to answer a question the
+    /// column already carries the answer to.
+    /// </para>
+    /// </summary>
+    public static bool IsTimestampWithoutZone(ColumnDescriptor column)
+        => IsTimestampWithoutZone(column.DataTypeName) && IsClrTimestamp(column.ClrType);
+
+    /// <summary>Whether a column's values are date/time instants at all. Unwraps an array (a Postgres
+    /// <c>timestamp[]</c> is a <c>DateTime[]</c>) and a nullable before deciding.</summary>
+    private static bool IsClrTimestamp(Type clrType)
+    {
+        var type = clrType;
+        if (type.IsArray) type = type.GetElementType() ?? type;
+        type = Nullable.GetUnderlyingType(type) ?? type;
+        return type == typeof(DateTime) || type == typeof(DateTimeOffset);
     }
 
     /// <summary>A column's element type: its own, with any array suffix removed.</summary>

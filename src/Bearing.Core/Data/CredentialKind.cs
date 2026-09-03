@@ -12,8 +12,10 @@ public enum CredentialKind
     /// never written to the secret store; re-prompted after restart / eviction / rejection.</summary>
     Prompt = 1,
 
-    /// <summary>Obtain a short-lived Microsoft Entra access token (used as the Postgres password) and
-    /// refresh it when it nears expiry.</summary>
+    /// <summary>Obtain a short-lived Microsoft Entra access token and refresh it when it nears expiry. How
+    /// the token reaches the server is the driver's business, not this enum's — Npgsql takes it as the
+    /// password, SqlClient on the connection object — which is what
+    /// <see cref="IDbProvider.SupportsEntraToken"/> answers per engine.</summary>
     EntraToken = 2,
 
     /// <summary>The OS identity of the running process (Windows / integrated authentication). There is

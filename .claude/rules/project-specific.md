@@ -131,9 +131,37 @@ away a working pool, its TLS handshake, and all its server-side state (#54, fixe
   per connection; Npgsql's default 100 would have been an N x 100 ceiling. `ConnectionInfo.Options` can
   still override it.
 
-## §9.5 — antlr4-c3 completion
-- The vendored `antlr4-c3` `CodeCompletionCore` is used for SQL completion. There is a known gotcha noted in
-  project memory — verify completion behavior against the existing `CompletionEngine` tests when touching it.
+## §9.5 — antlr4-c3 completion, and how to choose a preferred rule
+The vendored `antlr4-c3` `CodeCompletionCore` drives SQL completion for **both** grammars, through
+`ISqlParseRules` (`PgParseRules` / `TSqlParseRules`): one engine, two rule sets, the dialect handing over
+its own (`ISqlDialect.ParseRules`).
+
+**The preferred set is the quality of completion on a big grammar, and it cannot be read off the grammar
+text.** c3 reports only the **outermost** preferred rule on each path, and everything it did not stop at it
+enumerates as raw token candidates. So the choice trades two things at once, and both were measured on
+T-SQL (~700 rules) rather than reasoned:
+
+- **Prefer the rule that *contains* the name.** With `expression` preferred, a caret after `where` offers
+  7 suggestions (3 columns, 4 predicate keywords) and after `order by` exactly 3. Remove it and leave
+  `full_column_name` carrying the column intent alone: the columns still come back — 235 and 231
+  suggestions later, behind the keyword flood. Nothing is *wrong* in that state, it is merely unusable,
+  which is why an intent assertion cannot catch it and
+  `TSqlCompletionTests.A_predicate_popup_is_short_and_column_led` asserts the popup's size instead.
+- **A container does not reach every caret, so an inner rule can still be load-bearing.** Drop
+  `full_column_name` and `update T set |` reports *no intent at all* and zero columns (933 keyword
+  candidates): `update_elem : (full_column_name | LOCAL_ID) …` has no enclosing `expression`. Both entries
+  stay for that one caret. `Every_expression_position_is_a_column_position` is the set that notices.
+- **A rule that only ever appears under another preferred rule is a dead entry** — T-SQL's `function_call`
+  sits under `expression`, so it never surfaces and `CompletionIntent.FunctionCall` never arises there.
+- **The known "gotcha" from project memory is real in the vendored source but was mis-described in this
+  branch's first pass**, so treat any claim of the form "adding rule X silenced rule Y" as unverified until
+  it is probed. What the source does say (`CodeCompletionCore.CollectFollowSets`, `seen` is one
+  `HashSet<ATNState>` per `DetermineFollowSets` call) is that a state reached once is not explored again.
+  The specific consequence written into `TSqlParseRules` at first — that `full_column_name` reported
+  nothing because `function_call` reached the shared `id_` states first — **did not reproduce** when
+  re-measured across all six carets; the comment now carries the corrected version.
+- WHEN touching either rule set, probe real carets and keep the probe. Postgres' numbers are pinned
+  (`PgCompletionRules` + its tests) and a grammar regeneration that shifts them is otherwise silent.
 
 ## §9.7 — Demo mode is a whole session, decided once
 `--demo` / `BEARING_DEMO` (or the Connections empty state's "Explore demo data") starts a session served from

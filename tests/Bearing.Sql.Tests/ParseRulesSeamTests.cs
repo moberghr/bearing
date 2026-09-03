@@ -9,14 +9,14 @@ namespace Bearing.Sql.Tests;
 /// <list type="bullet">
 /// <item>a pinning half — <see cref="PgParseRules"/>'s token roles are the grammar's own constants, so
 /// the move from inline <c>PostgreSQLParser.DOT</c> to <c>rules.Dot</c> cannot have re-chosen one;</item>
-/// <item>a freezing half — completion's answer is identical whether the engine is handed no dialect, the
-/// Postgres one, or the SQL Server one. The third is the interesting case: <c>SqlServerDialect</c>
-/// deliberately returns Postgres' rules until a <c>TSqlParseRules</c> exists, so <b>these assertions are
-/// meant to change</b> in the batch that adds it. They are here to say that this batch changed nothing.
-/// </item>
+/// <item>a freezing half — completion's answer is identical whether the engine is handed no dialect or
+/// the Postgres one. It was once identical for the SQL Server one too, because that dialect stood in
+/// Postgres' rules while the seam was being introduced; <see cref="TSqlParseRules"/> replaced them, so
+/// what is asserted here now is that the two dialects <em>diverge</em>, and
+/// <see cref="TSqlCompletionTests"/> says how.</item>
 /// </list>
 /// The rest of this project's completion tests are the real regression net: they all run through the
-/// default constructor, i.e. through the new seam.
+/// default constructor, i.e. through the seam.
 /// </summary>
 public class ParseRulesSeamTests
 {
@@ -116,23 +116,33 @@ public class ParseRulesSeamTests
         AssertSameAnswer(withoutDialect, withDialect);
     }
 
-    [Theory]
-    [MemberData(nameof(Carets))]
-    public void The_sql_server_dialect_still_answers_as_postgres_does(string sql, int caret)
+    [Fact]
+    public void The_sql_server_dialect_no_longer_answers_as_postgres_does()
     {
-        var pg = new CompletionEngine(() => PostgresDialect.Instance).Complete(sql, caret, Schema);
-        var ss = new CompletionEngine(() => SqlServerDialect.Instance).Complete(sql, caret, Schema);
+        // Asserted on this fixture, rather than only on the T-SQL one, so the divergence is visible in
+        // the file that used to freeze it: two of these relations need quoting on both engines, and the
+        // engines spell that differently. What each dialect does with a real T-SQL catalog — bare
+        // PascalCase, bracketed sources resolving — is TSqlCompletionTests.
+        const string sql = "select * from ";
 
-        AssertSameAnswer(pg, ss);
+        var pg = new CompletionEngine(() => PostgresDialect.Instance).Complete(sql, sql.Length, Schema);
+        var ss = new CompletionEngine(() => SqlServerDialect.Instance).Complete(sql, sql.Length, Schema);
+
+        Assert.Equal("\"__MigrationHistory\" mh", Insertion(pg, "__MigrationHistory"));
+        Assert.Equal("__MigrationHistory mh", Insertion(ss, "__MigrationHistory"));
+        Assert.Equal("\"order\" o", Insertion(pg, "order"));
+        Assert.Equal("[order] o", Insertion(ss, "order"));
     }
 
     [Fact]
-    public void Both_shipped_dialects_hand_back_the_same_rules_for_now()
+    public void Each_dialect_hands_back_its_own_grammars_rules()
     {
-        // Stated as an assertion rather than a comment because it is the whole reason this batch is a
-        // no-op: the T-SQL rules replace this, and this test is the one that should then fail.
-        Assert.Same(PostgresDialect.Instance.ParseRules, SqlServerDialect.Instance.ParseRules);
+        Assert.Same(PgParseRules.Instance, PostgresDialect.Instance.ParseRules);
+        Assert.Same(TSqlParseRules.Instance, SqlServerDialect.Instance.ParseRules);
     }
+
+    private static string? Insertion(CompletionResult result, string display)
+        => result.Suggestions.First(s => s.DisplayText == display).ReplacementText;
 
     [Fact]
     public void The_dialect_is_asked_again_on_every_request()

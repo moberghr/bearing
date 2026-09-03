@@ -17,8 +17,9 @@ namespace Bearing.Sql;
 /// The editor's statement boundaries came off the PG lexer too (<see cref="SplitStatements"/>): the
 /// statement-at-caret Run executes, the highlight margin, folding and completion's statement scope all
 /// ask this dialect now, so a <c>GO</c>-separated batch runs one batch at a time instead of the whole
-/// buffer. What remains on the PostgreSQL grammar is completion's own parse — the suggestions and how
-/// they are quoted — because that is ANTLR-driven and the T-SQL grammar is not wired to it yet.
+/// buffer. Completion's own parse is the last piece and is no longer an exception either — see
+/// <see cref="ParseRules"/>, which hands the one <see cref="CompletionEngine"/> the vendored T-SQL
+/// grammar rather than the PostgreSQL one.
 /// </para>
 /// </summary>
 public sealed class SqlServerDialect : ISqlDialect
@@ -123,10 +124,16 @@ public sealed class SqlServerDialect : ISqlDialect
     /// </para>
     /// </summary>
     public string? Wrap(string sql, int offset, int limit)
-        => CannotSitInDerivedTable(sql)
+    {
+        if (HoistableCte(sql) is { } cte)
+            return $"{cte.With}\nselect * from (\n{MakeInnerOrderByLegal(cte.Body)}\n) as _sq"
+                   + $" order by (select null) offset {offset} rows fetch next {limit} rows only";
+
+        return CannotSitInDerivedTable(sql)
             ? null
             : $"select * from (\n{MakeInnerOrderByLegal(StripTrailingSemicolon(sql))}\n) as _sq"
               + $" order by (select null) offset {offset} rows fetch next {limit} rows only";
+    }
 
     /// <summary>Total rows of an arbitrary query, with the same inner-ORDER BY repair as
     /// <see cref="Wrap"/>.</summary>
@@ -143,26 +150,49 @@ public sealed class SqlServerDialect : ISqlDialect
         => StatementSplitter.SplitWithTSqlScanner(sql);
 
     /// <summary>
-    /// <b>Still PostgreSQL's grammar, on purpose, and only for now.</b> The seam is here so completion
-    /// can be handed a T-SQL parse without a second engine; the T-SQL side of it — a
-    /// <c>TSqlParseRules</c> over the vendored <c>TSqlParser</c> — is the next batch's work, and
-    /// returning Postgres' rules until then is what makes introducing the seam a no-op rather than a
-    /// behaviour change nobody asked for.
-    /// <para>
-    /// What that costs today, unchanged from before this property existed: a bracketed source
-    /// (<c>from [Order Details] o</c>) does not resolve, because the PG lexer has no delimited-identifier
-    /// token and the FROM scan finds no name; and every suggestion is quoted the Postgres way, so a
-    /// PascalCase name — T-SQL's own convention — comes back as <c>"Customers"</c> instead of
-    /// bare. Both are read-side, so they cost a missing or ugly suggestion rather than wrong SQL reaching
-    /// the server.
-    /// </para>
+    /// The vendored T-SQL grammar, through <see cref="TSqlParseRules"/> — which is what closed the last
+    /// two places this dialect was still being read as Postgres. A bracketed source
+    /// (<c>from [Order Details] o</c>) now resolves, because <c>SQUARE_BRACKET_ID</c> is a token the
+    /// grammar has and the FROM scan can see; and a suggestion is quoted by <see cref="QuoteIfNeeded"/>
+    /// above rather than Postgres', so a PascalCase name — T-SQL's own convention — comes back bare
+    /// instead of as <c>"Customers"</c>.
     /// </summary>
-    public ISqlParseRules ParseRules => PgParseRules.Instance;
+    public ISqlParseRules ParseRules => TSqlParseRules.Instance;
 
     public string? CountWrap(string sql)
-        => CannotSitInDerivedTable(sql)
+    {
+        if (HoistableCte(sql) is { } cte)
+            return $"{cte.With}\nselect count(*) from (\n{MakeInnerOrderByLegal(cte.Body)}\n) as _sq";
+
+        return CannotSitInDerivedTable(sql)
             ? null
             : $"select count(*) from (\n{MakeInnerOrderByLegal(StripTrailingSemicolon(sql))}\n) as _sq";
+    }
+
+    /// <summary>
+    /// A CTE statement whose preamble can be lifted clear of the derived table, with the body already
+    /// stripped of its trailing semicolon — or null, which puts the statement back on the ordinary
+    /// refusal path.
+    /// <para>
+    /// A CTE cannot sit inside <c>from (…)</c> (Msg 156), but it can stay exactly where it is while the
+    /// <em>body</em> goes in the derived table, because a statement-level CTE is in scope throughout the
+    /// statement, subqueries included. Before this, a CTE query ran unbounded and retired paging: the
+    /// user got the whole result set streamed once and no way to scroll it. The boundary comes from the
+    /// grammar (<see cref="TSqlCteSplitter"/>) rather than a keyword scan, and anything it will not vouch
+    /// for is refused — a mis-cut here is a wrong answer, not a failed query.
+    /// </para>
+    /// <para>
+    /// The body still has to be a legal derived table in its own right: <c>OPTION</c> and
+    /// <c>FOR JSON</c>/<c>XML</c> are as illegal after the hoist as before it, so they are re-checked
+    /// against the body rather than assumed away with the <c>WITH</c>.
+    /// </para>
+    /// </summary>
+    private static TSqlCteSplit? HoistableCte(string sql)
+    {
+        if (TSqlCteSplitter.Split(sql) is not { } split) return null;
+        var body = StripTrailingSemicolon(split.Body);
+        return CannotSitInDerivedTable(body) ? null : split with { Body = body };
+    }
 
     // A derived table is a query *expression*, and T-SQL admits less there than at statement level. Each
     // of these parses fine on its own and is a syntax error the moment it is wrapped:
@@ -172,6 +202,11 @@ public sealed class SqlServerDialect : ISqlDialect
     // Postgres accepts all three in a subquery, which is why this refusal is the T-SQL dialect's alone.
     // Refusing beats emitting: the caller retires paging and says so, where before the first page
     // succeeded and then load-more died on a server error while [Count] silently showed no total.
+    //
+    // WITH is the one of the three that has a repair rather than only a refusal — the CTEs are hoisted
+    // over the derived table instead (see HoistableCte), so this set is reached for a CTE only when the
+    // grammar declines to locate the boundary. OPTION and FOR have no such move: they are clauses of the
+    // query being wrapped, not a preamble that can step outside it.
     private static readonly HashSet<string> CteStarts =
         new(StringComparer.OrdinalIgnoreCase) { "WITH" };
 
@@ -192,9 +227,11 @@ public sealed class SqlServerDialect : ISqlDialect
     /// that legalise the order, since a second OFFSET — or anything at all after FOR XML — is itself a
     /// syntax error.
     /// <para>
-    /// Asserted as text by the dialect tests, not against a live server: this box has no SQL Server, so
-    /// the shape is reasoned from the documented rule rather than observed. Batch 5's integration tests
-    /// are what would make it proven.
+    /// Reasoned from the documented rule rather than observed here, and worth knowing which: no box that
+    /// has built this branch has a SQL Server on it, so the dialect tests assert the text and nothing has
+    /// run it. <c>SqlServerExecutorTests.Paging_a_cte_hoists_the_with_list_and_the_server_accepts_it</c>
+    /// and <c>Count_wraps_a_query_that_carries_its_own_order_by</c> are the tests that would settle it;
+    /// they skip without a server (§4.2), so they are a standing offer rather than evidence.
     /// </para>
     /// </summary>
     private static string MakeInnerOrderByLegal(string sql)
@@ -225,19 +262,24 @@ public sealed class SqlServerDialect : ISqlDialect
             : $"insert into {qualifiedTable} ({columnList}) values ({valueList})";
 
     /// <summary>
-    /// False in Phase 1, and the security-relevant part of this class: with no T-SQL grammar the guard
-    /// cannot read a T-SQL batch, so it reports every statement as risky rather than guessing (§1.2).
-    /// A guarded SQL Server connection therefore confirms on every run, reads included — each statement
-    /// is labelled with why, so the prompt can explain itself instead of implying the SELECT writes.
+    /// True, and the security-relevant part of this class. It says the guard can read a T-SQL batch for
+    /// itself: <see cref="DescribeStatements"/> splits and classifies with <see cref="TSqlWriteGuard"/>
+    /// over the T-SQL scanner, so a <c>SELECT</c> is reported as a read rather than as "I could not tell".
+    /// <para>
+    /// It was false while the only lexer here was Postgres', and the cost was concrete: a guarded SQL
+    /// Server connection confirmed on <em>every</em> run, reads included, which is the fastest way to
+    /// teach someone to click through the guard. Flipping it back is a §1.2 decision, not a tidy-up — it
+    /// may only be true for an engine whose statements the guard's own lexer can split and classify.
+    /// </para>
     /// </summary>
     public bool HasDialectAwareGuard => true;
 
     /// <summary>
-    /// The Postgres set plus T-SQL's own write verbs. Kept complete even though
-    /// <see cref="HasDialectAwareGuard"/> currently makes the set moot for confirmation: it is what
-    /// <see cref="TryAppendPage"/> reads to refuse reshaping a write today, and it is what has to be
-    /// right on the day Phase 2 turns the flag on. Superset, never subset — the guard is not allowed to
-    /// be narrower for any dialect.
+    /// The Postgres set plus T-SQL's own write verbs. This is the list the confirmation actually runs on
+    /// now that <see cref="HasDialectAwareGuard"/> is true — a verb missing from here is a write that
+    /// reaches a guarded server unprompted — and it is also what <see cref="TryAppendPage"/> reads to
+    /// refuse reshaping a write. Superset, never subset: the guard is not allowed to be narrower for any
+    /// dialect (§1.2).
     /// </summary>
     public IReadOnlySet<string> RiskyVerbs { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {

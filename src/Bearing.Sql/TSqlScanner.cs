@@ -44,13 +44,25 @@ public sealed record TSqlStatement(string Text, IReadOnlyList<TSqlToken> Tokens,
 /// tokens are here, which are bare words, and where does each statement end?" — enough for the write guard
 /// and the paging rules, and nothing more.
 /// <para>
-/// <b>Why not the ANTLR grammar.</b> This project vendors a <em>PostgreSQL</em> grammar, and using it on
-/// T-SQL is how a table called <c>[Order Details]</c> came to read as a query with a top-level
-/// <c>ORDER BY</c>: the PG lexer has no delimited-identifier concept, so it emitted the words inside the
-/// brackets as ordinary tokens. Every rule that asks a <em>positive</em> question of the token stream — "is
-/// this a write?", "may I append a page clause?" — is wrong in a way that reaches the server when the
-/// lexer cannot read the dialect. A T-SQL ANTLR grammar is the Phase 2 answer; this is what makes Phase 1
-/// honest without one.
+/// <b>Why this and not the ANTLR grammar.</b> The reason it was written still holds: reading T-SQL with the
+/// vendored <em>PostgreSQL</em> grammar is how a table called <c>[Order Details]</c> came to look like a
+/// query with a top-level <c>ORDER BY</c> — the PG lexer has no delimited-identifier concept, so it emitted
+/// the words inside the brackets as ordinary tokens, and every rule that asks a <em>positive</em> question
+/// of the token stream ("is this a write?", "may I append a page clause?") was wrong in a way that reached
+/// the server.
+/// </para>
+/// <para>
+/// A vendored T-SQL grammar <b>now exists</b> and drives completion (<see cref="TSqlParseRules"/>), so
+/// this is no longer a stand-in for one. It is kept because the two answer different questions well, not
+/// because the grammar cannot split a batch — it has a <c>go_statement</c> rule and could. What it cannot
+/// do is be cheap and unfailing, and both matter here: the statement split runs on every keystroke (the
+/// margin, the statement-at-caret Run, folding), a T-SQL parse of the whole buffer costs tens of
+/// milliseconds against a ~700-rule grammar, and a parse of half-typed text can simply not produce a tree
+/// — while §1.2 needs an answer from the guard every time. So the token scan does the lexical questions
+/// ("where does this statement end?", "is this word a verb or a delimited name?"), and the grammar is
+/// asked where the question is structural: the CTE boundary (<see cref="TSqlCteSplitter"/>), where a wrong
+/// answer would silently reshape a result set, and completion, where there is nothing to answer without a
+/// tree.
 /// </para>
 /// <para>
 /// <b>What it handles</b>, because each one silently breaks a keyword scan otherwise: <c>[delimited]</c> and

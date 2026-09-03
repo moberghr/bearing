@@ -109,14 +109,15 @@ public class CredentialKindOptionsTests
     }
 
     [Fact]
-    public void Entra_is_offered_only_where_the_driver_will_take_the_token_as_a_password()
+    public void Entra_is_offered_wherever_the_driver_has_somewhere_to_put_the_token()
     {
-        // Npgsql takes an Entra token as the password, so Postgres offers it. SqlClient does not — it wants
-        // SqlConnection.AccessToken — and the factory has no such path in Phase 1, so offering the entry
-        // would be promising a login that cannot succeed. Same gate that already governs Integrated.
+        // Npgsql takes it as the password; SqlClient takes it on SqlConnection.AccessToken, which
+        // SqlServerConnectionFactory now sets. Both offer the entry, by two different mechanisms — the gate
+        // is "can the factory honour this", not "does the engine's cloud speak Entra", which is why it stays
+        // a provider flag rather than becoming a constant here.
         Assert.Contains(CredentialKind.EntraToken,
             CredentialKindOptions.For(new PostgresProvider()).Select(o => o.Kind));
-        Assert.DoesNotContain(CredentialKind.EntraToken,
+        Assert.Contains(CredentialKind.EntraToken,
             CredentialKindOptions.For(new SqlServerProvider()).Select(o => o.Kind));
     }
 
