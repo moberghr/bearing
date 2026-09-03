@@ -199,6 +199,82 @@ public class TableFormatsTests
         // Legacy attributes too — some sanitisers keep these after stripping the CSS.
         Assert.Contains("border=\"1\"", html);
         Assert.Contains("cellspacing=\"0\"", html);
+        // Plain Html carries no query row: only the with-query format volunteers the statement.
+        Assert.DoesNotContain("<pre", html);
+        Assert.DoesNotContain("colspan", html);
+    }
+
+    /// <summary>
+    /// The with-query table puts the statement in one full-width row above the headers, so a table pasted
+    /// into a chat or a report says where its numbers came from (what DBeaver's Copy as HTML does).
+    /// </summary>
+    [Fact]
+    public void Html_can_carry_the_query_that_produced_the_rows()
+    {
+        var rs = Sample();
+        var block = TableBlock.ForResult(rs);
+
+        var html = TableFormats.Html(block, "select id, name\nfrom t\nwhere name <> 'a & b'");
+
+        // One cell spanning every column, above the header row.
+        Assert.Contains("<th colspan=\"4\"", html);
+        Assert.True(html.IndexOf("colspan", StringComparison.Ordinal)
+                  < html.IndexOf(">price<", StringComparison.Ordinal), "query row must precede the headers");
+        Assert.Equal(1, html.Split("colspan").Length - 1);       // one query row, not one per column
+        // Monospaced and escaped like any other cell — the statement is text here, not markup.
+        Assert.Contains("<pre style=\"margin:0;font-family:monospace", html);
+        Assert.Contains("where name &lt;&gt; 'a &amp; b'", html);
+        // Line breaks as <br>, not as newlines inside the <pre>: the white-space rule that would render
+        // those is CSS, which is exactly what the Teams / Outlook / Word sanitisers drop.
+        Assert.Contains("select id, name<br>from t<br>where", html);
+    }
+
+    [Fact]
+    public void The_query_row_is_omitted_rather_than_left_empty_when_there_is_no_query()
+    {
+        var block = TableBlock.ForResult(Sample());
+
+        foreach (var nothing in new[] { null, "", "   \n\t " })
+            Assert.DoesNotContain("colspan", TableFormats.Html(block, nothing));
+
+        // And the surrounding whitespace of a real statement doesn't reach the clipboard either — the
+        // statement under the caret arrives with the newlines that separated it from its neighbours.
+        Assert.Contains("<pre style=\"margin:0;font-family:monospace;font-size:9pt;white-space:pre-wrap;\">select 1</pre>",
+            TableFormats.Html(block, "\n  select 1  \n\n"));
+    }
+
+    /// <summary>
+    /// The statement travels on the result set, not on the copy call, so it is available for every result —
+    /// a write or one set of a batch included, where <see cref="ResultSetViewModel.SourceSql"/> is null
+    /// because there is nothing to page.
+    /// </summary>
+    [Fact]
+    public void The_executed_statement_is_kept_even_where_paging_is_impossible()
+    {
+        var rs = Result([("id", "int4", typeof(int))], [1]);       // pageable: false — see the helper
+
+        Assert.Null(rs.SourceSql);
+        Assert.Equal("select * from t", rs.ExecutedSql);
+        Assert.Contains("select * from t", CopyRenderer.Render(rs, TableBlock.ForResult(rs), CopyFormat.HtmlWithQuery));
+        Assert.DoesNotContain("select * from t", CopyRenderer.Render(rs, TableBlock.ForResult(rs), CopyFormat.Html));
+    }
+
+    /// <summary>
+    /// Both table formats ride the platform's HTML flavour, and the plain-text alternative that goes with
+    /// them keeps the query when the user asked for it — losing the half they chose the format for would be
+    /// the worse failure of the two.
+    /// </summary>
+    [Fact]
+    public void The_rich_formats_and_their_plain_text_alternative_agree_about_the_query()
+    {
+        var rs = Sample();
+
+        Assert.True(CopyRenderer.IsRichHtml(CopyFormat.Html));
+        Assert.True(CopyRenderer.IsRichHtml(CopyFormat.HtmlWithQuery));
+        Assert.False(CopyRenderer.IsRichHtml(CopyFormat.Csv));
+
+        Assert.Equal("1\t2", CopyRenderer.PlainAlternative(rs, "1\t2", CopyFormat.Html));
+        Assert.Equal("select * from t\n\n1\t2", CopyRenderer.PlainAlternative(rs, "1\t2", CopyFormat.HtmlWithQuery));
     }
 
     [Fact]

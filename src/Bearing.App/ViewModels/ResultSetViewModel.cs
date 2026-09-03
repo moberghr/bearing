@@ -17,6 +17,9 @@ namespace Bearing.App.ViewModels;
 /// </summary>
 public sealed partial class ResultSetViewModel : ObservableObject
 {
+    /// <param name="sourceSql">The statement behind this set: the exact SELECT to page/count against when
+    /// <paramref name="pageable"/>, and what <see cref="ExecutedSql"/> reports either way. For one set of a
+    /// batch the caller resolves it to that set's own statement — see <c>ResultSetBuilder</c>.</param>
     /// <param name="pageable">True only for a single-statement, row-returning result — then
     /// <paramref name="sourceSql"/> is the exact SELECT to page/count against.</param>
     public ResultSetViewModel(QueryResult result, string? sourceSql, bool pageable)
@@ -30,6 +33,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
         Success = result.Success;
         IsPageable = pageable;
         SourceSql = pageable ? sourceSql : null;
+        ExecutedSql = string.IsNullOrWhiteSpace(sourceSql) ? null : sourceSql.Trim();
         _hasMore = pageable && result.Truncated;
     }
 
@@ -52,6 +56,25 @@ public sealed partial class ResultSetViewModel : ObservableObject
 
     /// <summary>The exact SELECT that produced this set (for paging/count); null unless pageable.</summary>
     public string? SourceSql { get; }
+
+    /// <summary>
+    /// The statement text this set came from, for showing alongside the data (Copy as ▸ table with the
+    /// query). Trimmed, or null when there was nothing to record. Unlike <see cref="SourceSql"/> it is kept
+    /// for every result — a write, an error, one set of a batch — because "what produced this" is a question
+    /// worth answering even where paging is impossible.
+    /// <para>
+    /// For one set out of a multi-statement run this is <b>that set's own statement</b> wherever the mapping
+    /// can be proven, and the whole batch where it can't — <c>ResultSetBuilder.StatementsBehind</c> owns
+    /// that decision, resolving <see cref="QueryResult.StatementIndex"/> against a lexer split of the
+    /// buffer. It never reports a statement it isn't sure of.
+    /// </para>
+    /// <para>
+    /// It is the statement the <i>user</i> ran, not quite what went over the wire: the first-page LIMIT the
+    /// run injects (<c>FirstPageLimiter</c>) is our business, and pasting it into a report would misdescribe
+    /// where the numbers came from.
+    /// </para>
+    /// </summary>
+    public string? ExecutedSql { get; }
 
     /// <summary>Column indices that are foreign keys (rendered clickable → navigate to the referenced row).
     /// Computed by the shell from the schema snapshot; empty when the connection has no snapshot yet.</summary>
