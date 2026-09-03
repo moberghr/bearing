@@ -140,6 +140,14 @@ public sealed class SqlServerDialect : ISqlDialect
     /// <summary>Split and classify a batch with <see cref="TSqlWriteGuard"/> — T-SQL's own lexical
     /// rules, so a delimited name, a keyword inside a string literal and an @-prefixed variable
     /// cannot trip the guard, while a GO-separated batch splits correctly.</summary>
+    /// <summary>Answered from <see cref="TSqlLiterals"/> over the T-SQL scanner. Both were measurably
+    /// wrong while the PostgreSQL lexer answered them on this dialect — see that type for what each
+    /// cost.</summary>
+    public bool InStringLiteral(string sql, int offset) => TSqlLiterals.Contains(sql, offset);
+
+    /// <inheritdoc cref="InStringLiteral"/>
+    public string RedactLiterals(string? sql) => TSqlLiterals.RedactLiterals(sql);
+
     public IReadOnlyList<StatementRisk> DescribeStatements(string sql)
         => TSqlWriteGuard.Describe(sql, RiskyVerbs);
 

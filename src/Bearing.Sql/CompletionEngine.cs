@@ -26,17 +26,24 @@ public sealed class CompletionEngine : ICompletionEngine
     {
         caretOffset = Math.Clamp(caretOffset, 0, sql.Length);
 
+        // The one place the engine learns which grammar it is reading, asked once per request and reused:
+        // the selected tab's engine changes under a single long-lived CompletionEngine, so this cannot be
+        // captured at construction — but asking twice within one request could also answer twice
+        // differently. Everything below works in terms of roles and intents, which is what lets one engine
+        // answer for both dialects. The dialect itself is kept, not just its rules: how a name is *quoted*
+        // on the way out is its business too.
+        var dialect = _dialect();
+        var rules = dialect.ParseRules;
+
         // Nothing in the catalog or the grammar belongs inside 'text' — it is data, and a popup over it is
         // noise you have to dismiss. Double-quoted spans are deliberately still completed: those are quoted
         // *identifiers*, which is precisely where a table or column name goes.
-        if (SqlStringLiterals.Contains(sql, caretOffset))
+        //
+        // Asked of the connection's dialect, and it has to be: this is the first question of the request, so
+        // a false positive suppresses completion for the whole rest of the buffer. Answered with the
+        // Postgres lexer, the apostrophe in a T-SQL `[O'Donnell]` opened a string that never closed.
+        if (dialect.InStringLiteral(sql, caretOffset))
             return new CompletionResult(Array.Empty<Suggestion>(), caretOffset, 0);
-
-        // The one place the engine learns which grammar it is reading. Everything below works in terms
-        // of roles and intents, which is what lets one engine answer for both dialects. The dialect
-        // itself is kept, not just its rules: how a name is *quoted* on the way out is its business too.
-        var dialect = _dialect();
-        var rules = dialect.ParseRules;
 
         var parsed = rules.Parse(sql);
         parsed.Tokens.Fill();

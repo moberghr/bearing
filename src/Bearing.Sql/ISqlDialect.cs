@@ -126,6 +126,26 @@ public interface ISqlDialect
     /// </summary>
     IReadOnlyList<StatementSpan> SplitStatements(string sql);
 
+    /// <summary>
+    /// Whether <paramref name="offset"/> sits inside a character literal, in this engine's lexical
+    /// rules. The completion engine asks this <em>first</em> — a caret inside a string gets no
+    /// suggestions — which is what made getting it wrong so total: while this was answered with the
+    /// PostgreSQL lexer on every dialect, the apostrophe in a T-SQL <c>[O'Donnell]</c> opened a string
+    /// that never closed, and completion returned nothing for the rest of the buffer.
+    /// </summary>
+    bool InStringLiteral(string sql, int offset);
+
+    /// <summary>
+    /// <paramref name="sql"/> with its literal <em>values</em> replaced by <c>?</c>, keeping the shape
+    /// of the statement — what the query log stores when <c>QueryLogRedactLiterals</c> is on (#22, §1.3).
+    /// <para>
+    /// Per-dialect because a literal is a lexical fact: read with the wrong lexer, T-SQL's
+    /// <c>0xDEADBEEF</c> came out as <c>?xDEADBEEF</c> — the <c>0</c> redacted as a number and the rest
+    /// kept as an identifier — so the bytes survived in a log the setting promised to strip.
+    /// </para>
+    /// </summary>
+    string RedactLiterals(string? sql);
+
     // ---- Completion ----
 
     /// <summary>

@@ -45,6 +45,13 @@ public sealed class PostgresDialect : ISqlDialect
 
     /// <summary>The vendored PostgreSQL lexer, which reads this engine for real — unchanged from
     /// before a second dialect existed.</summary>
+    /// <summary>The vendored PostgreSQL lexer, which is what these two have always used — so neither
+    /// answer changes for this engine by the questions becoming per-dialect.</summary>
+    public bool InStringLiteral(string sql, int offset) => SqlStringLiterals.Contains(sql, offset);
+
+    /// <inheritdoc cref="InStringLiteral"/>
+    public string RedactLiterals(string? sql) => SqlRedactor.Redact(sql);
+
     public IReadOnlyList<StatementRisk> DescribeStatements(string sql)
         => WriteGuard.DescribeWithPostgresLexer(sql, RiskyVerbs);
 

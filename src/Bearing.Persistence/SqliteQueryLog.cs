@@ -15,15 +15,22 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
     private readonly Channel<QueryLogEntry> _channel;
     private readonly SqliteConnection _writeConnection;
     private readonly Task _writerLoop;
-    private readonly Func<string, string>? _redact;
+    private readonly Func<string, string, string>? _redact;
 
     /// <param name="redactSql">
     /// Applied to every entry's SQL before it is written (#22), or null to store it verbatim. A delegate
     /// rather than a call into the redactor, because that lives in <c>Bearing.Sql</c> and this project depends
-    /// on <c>Core</c> alone (§2.2) — and because what counts as a literal is a dialect question, not a storage
-    /// one.
+    /// on <c>Core</c> alone (§2.2).
+    /// <para>
+    /// It takes the entry's <see cref="QueryLogEntry.ProviderId"/> as well as the SQL, because what counts
+    /// as a literal is a <em>dialect</em> question and this store cannot answer it. That was not always
+    /// threaded: while one engine's lexer redacted every engine's SQL, T-SQL's <c>0xDEADBEEF</c> was
+    /// stored as <c>?xDEADBEEF</c> — the leading <c>0</c> taken for a number and the bytes kept as an
+    /// identifier — so the value survived in a log the setting promised to strip (§1.3).
+    /// </para>
     /// </param>
-    public SqliteQueryLog(string? dbPath = null, int retentionDays = 0, Func<string, string>? redactSql = null)
+    public SqliteQueryLog(
+        string? dbPath = null, int retentionDays = 0, Func<string, string, string>? redactSql = null)
     {
         dbPath ??= Path.Combine(BearingPaths.DataDir, "query-log.sqlite");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
@@ -122,7 +129,7 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
     /// </summary>
     private QueryLogEntry Redacted(QueryLogEntry entry)
     {
-        try { return entry with { SqlText = _redact!(entry.SqlText) }; }
+        try { return entry with { SqlText = _redact!(entry.ProviderId, entry.SqlText) }; }
         // A redactor that throws must not put the verbatim SQL in the log instead — that is the one outcome
         // this feature exists to prevent. Store the shape of the statement and nothing else.
         catch (Exception) { return entry with { SqlText = "(redaction failed)" }; }
