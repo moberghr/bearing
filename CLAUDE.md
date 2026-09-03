@@ -77,4 +77,4 @@ Full reference docs (read on-demand by skills and review agents):
 - **Database targets:** PostgreSQL
 - **Test stack:** xUnit v2 + `Xunit.SkippableFact`, hand-rolled fakes (`tests/**/Fakes.cs`), no Moq/NSubstitute, no EF InMemory. Headless UI tests in `tests/Bearing.App.Tests/Ui/` on `Avalonia.Headless` (§4.5)
 - **Layout:** `src/Bearing.{Core,Sql,Data,Persistence,Updates,App,Desktop}` — dependency-free `Core` ← `Sql`/`Data`/`Persistence`/`Updates` ← `App` ← `Desktop`
-- **Distribution:** Velopack installers + delta auto-update, published to this repo's GitHub Releases by `build/velopack.sh` (see `docs/RELEASING.md`). `build/release.sh` is the older archive path, kept.
+- **Distribution:** Velopack installers + delta auto-update on this repo's GitHub Releases. **Cutting a release is publishing a GitHub Release** — `.github/workflows/release.yml` takes the version from the tag and runs `build/velopack.sh` per platform, so nothing in the tree is bumped (`<Version>` is the `0.0.0-dev` placeholder, §9.6a). See `docs/RELEASING.md`. `build/release.sh` is the older archive path, kept.

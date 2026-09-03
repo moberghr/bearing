@@ -3,9 +3,14 @@ using System.Reflection;
 namespace Bearing.App;
 
 /// <summary>
-/// The running build's version, read once from the assembly's informational version — which is fed by
-/// <c>&lt;Version&gt;</c> in Directory.Build.props and is the same string the release feed compares against
-/// (see docs/RELEASING.md).
+/// The running build's version, read once from the assembly's informational version.
+/// <para>
+/// For a release that string comes from the git tag: publishing a GitHub Release triggers
+/// <c>.github/workflows/release.yml</c>, which passes the tag to <c>dotnet publish -p:Version=</c>, so it is
+/// the same string the release feed compares against by construction rather than by discipline. A build from
+/// source instead reports <c>&lt;Version&gt;</c> from Directory.Build.props, which is the placeholder
+/// <c>0.0.0-dev</c> — a local build is not a release and should not claim to be one. See docs/RELEASING.md.
+/// </para>
 /// <para>
 /// One source of truth for every surface that shows it: the About dialog, the status bar, and anything that
 /// comes later. Static data, so chrome binds it with <c>{x:Static}</c> rather than routing it through a

@@ -19,6 +19,23 @@
 #   PUBLISH=1 build/velopack.sh                # ...and upload to GitHub Releases (needs gh auth)
 #   SKIP_TESTS=1 build/velopack.sh             # skip the test run
 #   ALLOW_UNTAGGED=1 build/velopack.sh         # build a version HEAD isn't tagged for (local testing)
+#   VERSION=0.5.5 build/velopack.sh            # pack that version rather than the props placeholder
+#
+# Normally you do not run this by hand at all: publishing a GitHub Release triggers
+# .github/workflows/release.yml, which runs this script once per platform with VERSION taken from the
+# release tag. See docs/RELEASING.md. The knobs that workflow uses, and nothing else does:
+#
+#   VERSION=<x.y.z>            the version to pack. Outranks Directory.Build.props, which carries a
+#                              0.0.0-dev placeholder — the tag is what names a release, not the tree.
+#   RELEASE_NOTES_FILE=<path>  notes to pack and publish, outranking docs/release-notes/<version>.md.
+#   KEEP_RELEASE_BODY=1        don't rewrite the GitHub release description. It is where the notes came
+#                              from, so rewriting it could only mangle what a human typed.
+#   RELEASE_NAME=<title>       the release's title. Passed back as the one it already has when merging into
+#                              a release a human named, so `vpk upload` cannot rename it out from under them.
+#   PRERELEASE=1               mark the release a pre-release (`vpk upload --pre`). That flag is what
+#                              keeps the updater and Help ▸ What's New from offering the build — both
+#                              filter pre-releases out — so it is load-bearing, not a label.
+#   GH_TOKEN / GITHUB_TOKEN    read before `gh auth token`, so CI needs no interactive login.
 #
 # Requires: dotnet, vpk (dotnet tool install -g vpk), and gh for the GitHub steps.
 #
@@ -70,10 +87,27 @@ if ! command -v vpk >/dev/null 2>&1; then
   exit 2
 fi
 
-# --- Version: Directory.Build.props is the single source of truth -------------
-VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' Directory.Build.props | head -1)"
+# --- Version: the release tag is the single source of truth -------------------
+# Nothing in the tree names a release any more. Directory.Build.props carries 0.0.0-dev, which a build from
+# source reports honestly, and CI passes VERSION from the tag of the release being published — so cutting a
+# release needs no version bump, no commit and no PR. The props value stays the fallback, which is what
+# keeps a bare `ALLOW_UNTAGGED=1 build/velopack.sh` working for a throwaway local package.
+VERSION_SOURCE="\$VERSION"
+if [[ -z "${VERSION:-}" ]]; then
+  VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' Directory.Build.props | head -1)"
+  VERSION_SOURCE="Directory.Build.props"
+fi
+VERSION="${VERSION#v}"   # a tag is v0.5.5; a version is 0.5.5
 if [[ -z "$VERSION" ]]; then
-  echo "ERROR: couldn't read <Version> from Directory.Build.props." >&2
+  echo "ERROR: no version — pass VERSION=x.y.z, or set <Version> in Directory.Build.props." >&2
+  exit 1
+fi
+
+# Checked here rather than left to vpk, which rejects a 4-part version *after* the test run and the publish
+# — a long walk to be told the tag was malformed. The workflow's only input is a tag a human typed.
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "ERROR: '$VERSION' (from $VERSION_SOURCE) is not the 3-part semver2 Velopack requires." >&2
+  echo "       Use x.y.z or x.y.z-prerelease — 0.5.5, 0.5.5-beta.1. Not 0.5.5.1, not 0.5." >&2
   exit 1
 fi
 
@@ -85,7 +119,8 @@ if [[ "$HEAD_TAG" != "$TAG" ]]; then
     echo "WARNING: HEAD is not tagged $TAG (ALLOW_UNTAGGED=1) — do not publish this build."
   else
     echo "ERROR: HEAD is not tagged $TAG (found: ${HEAD_TAG:-none})." >&2
-    echo "       Bump <Version> in Directory.Build.props, commit, then:  git tag $TAG" >&2
+    echo "       A release is cut by publishing a GitHub Release, which creates the tag and lets CI" >&2
+    echo "       build it (docs/RELEASING.md). To build $TAG here by hand instead:  git tag $TAG" >&2
     echo "       Or set ALLOW_UNTAGGED=1 to build a throwaway package locally." >&2
     exit 1
   fi
@@ -131,7 +166,7 @@ PUBDIR="$ROOT/artifacts/velopack/$RID"
 RELEASE_DIR="$ROOT/dist/velopack/$CHANNEL"
 
 echo "==> Bearing release (Velopack)"
-echo "    version : $VERSION   (tag $TAG$TAG_STATUS)"
+echo "    version : $VERSION   (from $VERSION_SOURCE; tag $TAG$TAG_STATUS)"
 echo "    runtime : $RID   channel $CHANNEL"
 echo "    packId  : $PACK_ID"
 echo "    output  : $RELEASE_DIR"
@@ -179,7 +214,10 @@ mkdir -p "$RELEASE_DIR"
 # to stay clear of the 60/hr anonymous API rate limit. Optional by design either way: the first release has
 # nothing to diff against, and a failure here must not block building a package — it only costs users a full
 # download instead of a delta.
-TOKEN="$(gh auth token 2>/dev/null || true)"
+# GH_TOKEN/GITHUB_TOKEN first: in a workflow the token is already an environment variable, and asking the
+# gh CLI for it there is a subprocess that can only agree. Locally neither is set and `gh auth token` answers.
+TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+[[ -z "$TOKEN" ]] && TOKEN="$(gh auth token 2>/dev/null || true)"
 echo "==> Fetching the previous $CHANNEL release (for the delta)"
 DOWNLOAD_ARGS=(--repoUrl "$REPO_URL" --channel "$CHANNEL" --outputDir "$RELEASE_DIR")
 [[ -n "$TOKEN" ]] && DOWNLOAD_ARGS+=(--token "$TOKEN")
@@ -188,11 +226,15 @@ vpk download github "${DOWNLOAD_ARGS[@]}" \
 echo
 
 # --- Release notes ------------------------------------------------------------
-# A hand-written docs/release-notes/<version>.md wins; otherwise they are derived from the commit subjects
-# since the previous tag. Those subjects already carry "(#nn)" refs, which GitHub renders as issue links, so
-# the generated notes link back to the issues each release closed without any extra bookkeeping.
-NOTES="$ROOT/docs/release-notes/$VERSION.md"
-if [[ -f "$NOTES" ]]; then
+# Three sources, most specific first: RELEASE_NOTES_FILE — CI passes the GitHub release's own description,
+# which is what the person cutting the release typed — then a hand-written docs/release-notes/<version>.md,
+# then the commit subjects since the previous tag. Those subjects carry "(#nn)" refs, which GitHub renders as
+# issue links, so even the generated notes link back to what the release closed with no extra bookkeeping.
+if [[ -n "${RELEASE_NOTES_FILE:-}" && -s "${RELEASE_NOTES_FILE:-}" ]]; then
+  NOTES="$RELEASE_NOTES_FILE"
+  echo "==> Release notes: $RELEASE_NOTES_FILE"
+elif [[ -f "$ROOT/docs/release-notes/$VERSION.md" ]]; then
+  NOTES="$ROOT/docs/release-notes/$VERSION.md"
   echo "==> Release notes: docs/release-notes/$VERSION.md"
 else
   NOTES="$ROOT/artifacts/velopack/release-notes-$VERSION.md"
@@ -256,17 +298,25 @@ if [[ "${PUBLISH:-0}" == "1" ]]; then
     exit 1
   fi
   echo "==> Publishing to GitHub Releases ($TAG)"
+  UPLOAD_ARGS=()
+  if [[ "${PRERELEASE:-0}" == "1" ]]; then
+    UPLOAD_ARGS+=(--pre)
+    echo "    as a pre-release"
+  fi
   # --merge so the other platform's channel can land on the same release: win and linux each carry
   # their own releases.<channel>.json, and the app only ever reads its own.
   vpk upload github \
     --repoUrl "$REPO_URL" --token "$TOKEN" \
     --channel "$CHANNEL" --outputDir "$RELEASE_DIR" \
-    --publish --merge \
-    --releaseName "Bearing $VERSION" --tag "$TAG"
+    --publish --merge "${UPLOAD_ARGS[@]}" \
+    --releaseName "${RELEASE_NAME:-Bearing $VERSION}" --tag "$TAG"
 
   # vpk carries the notes inside the package but leaves the GitHub release body to us. Set it here rather
   # than at pack time so it is the same text either platform run produces — last writer wins, same content.
-  if command -v gh >/dev/null 2>&1; then
+  if [[ "${KEEP_RELEASE_BODY:-0}" == "1" ]]; then
+    echo
+    echo "==> Leaving the release description alone (KEEP_RELEASE_BODY=1 — the notes came from it)"
+  elif command -v gh >/dev/null 2>&1; then
     echo
     echo "==> Setting the release description"
     gh release edit "$TAG" --notes-file "$NOTES" >/dev/null \

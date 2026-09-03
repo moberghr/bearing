@@ -7,8 +7,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <AccelerateBuildsInVisualStudio>true</AccelerateBuildsInVisualStudio>
-    <!-- Single source of truth for the app version; surfaced in Help ▸ About. -->
-    <Version>0.5.4</Version>
+    <!-- Placeholder, and deliberately not a real version: a release is named by its git tag, and
+         .github/workflows/release.yml passes that to `dotnet publish -p:Version=` (docs/RELEASING.md).
+         So nothing here needs bumping to cut a release, and a build from source says what it is rather
+         than claiming to be whatever shipped last. Help ▸ About reads it via AppVersion. -->
+    <Version>0.0.0-dev</Version>
     <!-- Bearing: a fast SQL query tool & script manager. See plans/i-want-to-create-bubbly-sunset.md -->
   </PropertyGroup>
 

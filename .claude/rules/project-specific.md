@@ -45,6 +45,26 @@ binary name.
 - Applying an update goes through the ordinary window close (`UpdateCoordinator.RestartToApply`), never
   `ApplyUpdatesAndRestart` from under the UI — the shutdown pipeline is what saves the session.
 
+## §9.6a — The release version comes from the git tag, not from the tree
+A release is cut by **publishing a GitHub Release** — nothing else. `.github/workflows/release.yml` fires on
+`release: published`, takes the version from the tag, and runs `build/velopack.sh` once per platform with
+`VERSION=<tag minus v>` (docs/RELEASING.md).
+
+- `<Version>` in `Directory.Build.props` is the placeholder **`0.0.0-dev`**, and is not a version to bump.
+  DO NOT "bump the version" there for a release, and do not restore a real number to it: CI overrides it via
+  `dotnet publish -p:Version=`, and a real number there would only be a second answer to a question the tag
+  already settles — which is the drift the props/tag equality check in `velopack.sh` used to police by hand.
+  A build from source reporting `0.0.0-dev` in `Help ▸ About` is correct; it is not a release.
+- Release notes are the **GitHub release description**. `.github/scripts/pack-and-publish.sh` reads it back
+  off the API (never out of `github.event.release.body`, which spliced into a shell script is an injection
+  hole on a public repo) and passes it as `RELEASE_NOTES_FILE`, with `KEEP_RELEASE_BODY=1` so the text is not
+  round-tripped back over what a human typed. `docs/release-notes/<version>.md` is now only the fallback.
+- The two platform jobs are **sequential, under a `concurrency` lock**, because both `vpk upload --merge`
+  into the one release: run them in parallel and a release comes out missing a channel's `releases.json`.
+- A failed build **drafts the release again** (`draft-on-failure`). Publishing is the trigger, so the
+  alternative is a visible release with no installers — a version `Help ▸ What's New` lists (it reads every
+  non-draft release) and nobody can install.
+
 ## §9.2 — Input goes through the unified pipeline
 - Keyboard handling flows through `src/Bearing.App/Input/` (`Gesture`/`GestureParser`, `Keymap`,
   `CommandRegistry`/`KeyCommand`, `KeyDispatcher`, `CommandIds`, `KeyScope`). Views call `TryHandle(e, scope)`.

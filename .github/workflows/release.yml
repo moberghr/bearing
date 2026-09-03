@@ -1,0 +1,184 @@
+# Cutting a release is publishing a GitHub Release. Nothing else.
+#
+# No version bump, no commit, no PR, no local build: the tag names the version, and this workflow passes it
+# to `dotnet publish -p:Version=`, so <Version> in Directory.Build.props stays the 0.0.0-dev placeholder it
+# now is. Write the release description in the GitHub UI and it becomes the notes everywhere — packed into
+# the Velopack feed, and read back by Help ▸ What's New, which already sources them from the Releases API.
+#
+# GitHub only ever runs the `release` and `workflow_dispatch` triggers from the **default branch's** copy of
+# a workflow, so editing this file on a branch changes nothing until it lands on main — a branch push cannot
+# be used to try it out, and neither can a release cut while the change is still unmerged.
+#
+# See docs/RELEASING.md. Closes the packaging half of #24.
+name: release
+
+on:
+  release:
+    types: [published]
+  # For re-running a release whose build failed, or building a tag that exists without one.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and publish, e.g. v0.5.5"
+        required: true
+        type: string
+      skip_tests:
+        description: "Skip the test run (only to unblock a release)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write # vpk uploads the assets onto the release, and gh may set its description
+
+# One release at a time. Both platform jobs land on the *same* GitHub release via `vpk upload --merge`, so
+# two runs merging into it concurrently is how you get a release missing one channel's releases.json.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: "true"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
+  VPK_VERSION: "1.2.0"
+
+jobs:
+  # Resolve the tag once, so the jobs below cannot disagree about what is being released.
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+    steps:
+      - id: resolve
+        # Through env, not a `${{ }}` interpolation inside the script body: a tag is attacker-suppliable
+        # text on a public repo, and interpolation splices it into the shell rather than passing it.
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          PRERELEASE: ${{ github.event.release.prerelease || false }}
+        run: |
+          set -euo pipefail
+          [[ -n "${TAG:-}" ]] || { echo "::error::no tag on the event and none given"; exit 1; }
+          version="${TAG#v}"
+          # The same shape build/velopack.sh enforces, checked here too so a mistyped tag fails in seconds
+          # rather than after a full test run.
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::$TAG is not a 3-part semver2 tag (v0.5.5, v0.5.5-beta.1) — Velopack rejects it."
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "### Releasing $version from $TAG" >> "$GITHUB_STEP_SUMMARY"
+
+  # The only gate on a release, since there is still no CI on push (#24). On Linux with a real PostgreSQL,
+  # because the data-layer suites are SkippableFacts: they go quiet without a server, so a green run full of
+  # skips is not evidence the catalog reads, the TLS behaviour or the temporal mappings work (§4.2).
+  test:
+    needs: meta
+    if: ${{ inputs.skip_tests != true && vars.RELEASE_SKIP_TESTS != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.meta.outputs.tag }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      # The provisioning script rather than a `services:` block, deliberately: it is what pins the pagila
+      # ref and the Postgres major, and it writes the bearing_test_marker row the DDL tests look for before
+      # they create or drop anything. A hand-rolled service container would reproduce three of those four
+      # things and silently skip the suites that need the fourth.
+      - name: Provision PostgreSQL + pagila
+        run: bash build/test-db.sh
+      - name: Test
+        run: dotnet test Bearing.slnx -c Release
+
+  # Windows first, then Linux, never in parallel: both `vpk upload --merge` into the one release.
+  #
+  # Each platform packs on the runner it targets rather than cross-building, so the Setup.exe and the
+  # AppImage are each produced by their own toolchain.
+  windows:
+    needs: [meta, test]
+    if: ${{ always() && needs.meta.result == 'success' && needs.test.result != 'failure' && needs.test.result != 'cancelled' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.meta.outputs.tag }}
+          fetch-depth: 0 # velopack.sh verifies the tag against HEAD, and derives notes from the log
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Install the Velopack CLI
+        shell: bash
+        run: dotnet tool install vpk --version "$VPK_VERSION" --tool-path .tools
+      - name: Pack and publish (win-x64)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          RID: win-x64
+          PRERELEASE: ${{ needs.meta.outputs.prerelease == 'true' && '1' || '0' }}
+        run: bash .github/scripts/pack-and-publish.sh
+
+  linux:
+    needs: [meta, windows]
+    if: ${{ needs.windows.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.meta.outputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Install the Velopack CLI
+        run: dotnet tool install vpk --version "$VPK_VERSION" --tool-path .tools
+      - name: Pack and publish (linux-x64)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          RID: linux-x64
+          PRERELEASE: ${{ needs.meta.outputs.prerelease == 'true' && '1' || '0' }}
+        run: bash .github/scripts/pack-and-publish.sh
+
+  # Belt and braces on the prerelease flag. `vpk upload --pre` is passed for one (PRERELEASE=1 above), but
+  # what `--merge` does to the flag of a release that already exists is not something to assume: that flag
+  # is what keeps the updater and Help ▸ What's New from offering the build (both filter prereleases out),
+  # so losing it silently would push a beta at every user.
+  keep-prerelease:
+    needs: [meta, linux]
+    if: ${{ needs.linux.result == 'success' && needs.meta.outputs.prerelease == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease
+
+  # Publishing is the trigger, so a failed build would otherwise leave a release visible with no installers
+  # — and Help ▸ What's New lists every non-draft release, so users would be shown a version they cannot
+  # get. Back to draft instead. Re-publishing it re-runs this workflow, so the retry is one click.
+  draft-on-failure:
+    needs: [meta, test, windows, linux]
+    if: ${{ always() && github.event_name == 'release' && contains(needs.*.result, 'failure') }}
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.meta.outputs.tag || github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft; then
+            echo "::warning::The build failed, so $TAG is a draft again. Fix it, then publish it once more."
+            echo "**$TAG is a draft again** — the build failed, so nothing shipped. Publish it again to retry." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::Build failed AND $TAG could not be drafted — it is published with no assets."
+            exit 1
+          fi
