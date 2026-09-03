@@ -14,9 +14,11 @@ namespace Bearing.Sql;
 /// clause?") is wrong in a way that reaches the server when the lexer cannot read the dialect.
 /// </para>
 /// <para>
-/// What is still degraded in Phase 1: completion, folding and the editor's statement-at-caret run on the
-/// PG grammar, because those are ANTLR-driven and a T-SQL grammar is Phase 2. Those are read-side
-/// conveniences — a mis-parse costs a poor suggestion, not a wrong statement.
+/// The editor's statement boundaries came off the PG lexer too (<see cref="SplitStatements"/>): the
+/// statement-at-caret Run executes, the highlight margin, folding and completion's statement scope all
+/// ask this dialect now, so a <c>GO</c>-separated batch runs one batch at a time instead of the whole
+/// buffer. What remains on the PostgreSQL grammar is completion's own parse — the suggestions and how
+/// they are quoted — because that is ANTLR-driven and the T-SQL grammar is not wired to it yet.
 /// </para>
 /// </summary>
 public sealed class SqlServerDialect : ISqlDialect
@@ -133,6 +135,29 @@ public sealed class SqlServerDialect : ISqlDialect
     /// cannot trip the guard, while a GO-separated batch splits correctly.</summary>
     public IReadOnlyList<StatementRisk> DescribeStatements(string sql)
         => TSqlWriteGuard.Describe(sql, RiskyVerbs);
+
+    /// <summary>Split with <see cref="TSqlScanner"/> as well, so the editor sees the same statements the
+    /// guard does: <c>GO</c> ends a batch, and a <c>;</c> inside <c>[a;b]</c> or a string does not. Run
+    /// executes what this returns, which is why it cannot be left on the PostgreSQL lexer.</summary>
+    public IReadOnlyList<StatementSpan> SplitStatements(string sql)
+        => StatementSplitter.SplitWithTSqlScanner(sql);
+
+    /// <summary>
+    /// <b>Still PostgreSQL's grammar, on purpose, and only for now.</b> The seam is here so completion
+    /// can be handed a T-SQL parse without a second engine; the T-SQL side of it — a
+    /// <c>TSqlParseRules</c> over the vendored <c>TSqlParser</c> — is the next batch's work, and
+    /// returning Postgres' rules until then is what makes introducing the seam a no-op rather than a
+    /// behaviour change nobody asked for.
+    /// <para>
+    /// What that costs today, unchanged from before this property existed: a bracketed source
+    /// (<c>from [Order Details] o</c>) does not resolve, because the PG lexer has no delimited-identifier
+    /// token and the FROM scan finds no name; and every suggestion is quoted the Postgres way, so a
+    /// PascalCase name — T-SQL's own convention — comes back as <c>"Customers"</c> instead of
+    /// bare. Both are read-side, so they cost a missing or ugly suggestion rather than wrong SQL reaching
+    /// the server.
+    /// </para>
+    /// </summary>
+    public ISqlParseRules ParseRules => PgParseRules.Instance;
 
     public string? CountWrap(string sql)
         => CannotSitInDerivedTable(sql)

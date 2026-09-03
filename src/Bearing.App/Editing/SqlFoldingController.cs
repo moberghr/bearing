@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using AvaloniaEdit;
@@ -33,10 +34,15 @@ internal sealed class SqlFoldingController
 {
     private readonly TextEditor _editor;
     private readonly FoldingManager _manager;
+    private readonly Func<ISqlDialect> _dialect;
 
-    public SqlFoldingController(TextEditor editor)
+    /// <summary><paramref name="dialect"/> is the selected tab's engine, asked per rebuild: the regions are
+    /// statement boundaries, and those are lexical (a T-SQL buffer folds per <c>GO</c>-separated batch).
+    /// One editor serves every tab, so the engine can change under a live fold margin.</summary>
+    public SqlFoldingController(TextEditor editor, Func<ISqlDialect> dialect)
     {
         _editor = editor;
+        _dialect = dialect;
         _manager = FoldingManager.Install(editor.TextArea); // adds the clickable [-]/[+] margin
     }
 
@@ -54,7 +60,7 @@ internal sealed class SqlFoldingController
         foreach (var section in _manager.AllFoldings.ToList())
             if (section.IsFolded && !SpansText(section)) section.IsFolded = false;
 
-        var foldings = SqlFolding.ComputeFoldRegions(_editor.Text)
+        var foldings = SqlFolding.ComputeFoldRegions(_dialect(), _editor.Text)
             .Select(r => new NewFolding(r.Start, r.End));
         _manager.UpdateFoldings(foldings, -1);
 
@@ -86,7 +92,8 @@ internal sealed class SqlFoldingController
 
     private void SetCurrent(bool folded)
     {
-        if (StatementSplitter.StatementAt(_editor.Text, _editor.CaretOffset) is not { } stmt) return;
+        if (StatementSplitter.StatementAt(_dialect(), _editor.Text, _editor.CaretOffset) is not { } stmt)
+            return;
         // The fold section owned by this statement is the one whose header line sits within its span.
         var section = _manager.AllFoldings.FirstOrDefault(f => f.StartOffset >= stmt.Start && f.StartOffset < stmt.End);
         if (section is null || (folded && !SpansText(section))) return;

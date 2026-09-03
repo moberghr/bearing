@@ -34,7 +34,10 @@ public enum TSqlTokenKind
 /// <summary>One statement of a batch, as the scanner split it.</summary>
 /// <param name="Text">The statement as written, trimmed. Comments and formatting intact.</param>
 /// <param name="Tokens">Its tokens, in order, comments and whitespace already dropped.</param>
-public sealed record TSqlStatement(string Text, IReadOnlyList<TSqlToken> Tokens);
+/// <param name="Start">Character offset of <c>Text</c>'s first character in the buffer that was scanned.
+/// Carried so the editor can map a statement back to the text the user is looking at — highlighting it,
+/// putting the caret in it, folding it — without re-lexing to find it again.</param>
+public sealed record TSqlStatement(string Text, IReadOnlyList<TSqlToken> Tokens, int Start);
 
 /// <summary>
 /// A hand-rolled T-SQL lexer and batch splitter. Small, deliberately, and not a parser: it answers "what
@@ -223,9 +226,14 @@ public static class TSqlScanner
 
         void Flush(int end)
         {
-            var text = end > from ? sql[from..end].Trim() : "";
+            var raw = end > from ? sql[from..end] : "";
+            var text = raw.Trim();
             if (current.Count > 0 && text.Length > 0)
-                statements.Add(new TSqlStatement(text, current.ToList()));
+                // Start is where the *trimmed* text begins, so Start + Text.Length is its end: the two
+                // together are a span in the original buffer, which is what StatementSplitter hands the
+                // editor. Leading whitespace is left out of the statement rather than owned by it.
+                statements.Add(new TSqlStatement(
+                    text, current.ToList(), from + (raw.Length - raw.TrimStart().Length)));
             current.Clear();
         }
 

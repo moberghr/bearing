@@ -117,6 +117,8 @@ public class DialectWriteGuardTests
         public bool HasDialectAwareGuard => false;
         public IReadOnlySet<string> RiskyVerbs => Ss.RiskyVerbs;
         public IReadOnlyList<StatementRisk> DescribeStatements(string sql) => Ss.DescribeStatements(sql);
+        public IReadOnlyList<StatementSpan> SplitStatements(string sql) => Ss.SplitStatements(sql);
+        public ISqlParseRules ParseRules => Ss.ParseRules;
 
         public string Quote(string i) => Ss.Quote(i);
         public string QuoteIfNeeded(string i) => Ss.QuoteIfNeeded(i);

@@ -15,14 +15,40 @@ public sealed record StatementSpan(int Start, int End, string Text)
 }
 
 /// <summary>
-/// Splits a SQL buffer into top-level statements on unquoted semicolons — using the PostgreSQL
-/// lexer, so semicolons inside strings, comments, or dollar-quoted bodies never split — and
-/// locates the statement under a caret. Powers "run the statement at the caret" and scopes
-/// completion to the current statement instead of the whole buffer.
+/// Splits a SQL buffer into top-level statements and locates the statement under a caret. Powers "run the
+/// statement at the caret", the statement-highlight margin, folding, and scoping completion to the current
+/// statement instead of the whole buffer.
+/// <para>
+/// <b>Which lexer reads the buffer is the engine's call</b>, through
+/// <see cref="ISqlDialect.SplitStatements"/>. It has to be: <c>GO</c> is a statement boundary in T-SQL and
+/// nothing at all in Postgres, a <c>;</c> inside <c>[a;b]</c> is a boundary to the PostgreSQL lexer and a
+/// name to T-SQL's — so a buffer read with the wrong lexer offers Run the wrong text. The dialect-less
+/// overloads are the Postgres-bound entry points and behave exactly as they always have, matching the
+/// pattern <see cref="WriteGuard"/> and <see cref="PageSql"/> already use.
+/// </para>
 /// </summary>
 public static class StatementSplitter
 {
+    /// <summary>Top-level statements of <paramref name="sql"/>, read with the PostgreSQL lexer.</summary>
     public static IReadOnlyList<StatementSpan> Split(string sql)
+        => Split(PostgresDialect.Instance, sql);
+
+    /// <summary>Top-level statements of <paramref name="sql"/>, read in <paramref name="dialect"/>'s own
+    /// lexical rules. Spans are ordered and never overlap, but they do not necessarily tile the buffer —
+    /// see <see cref="SplitWithTSqlScanner"/>.</summary>
+    public static IReadOnlyList<StatementSpan> Split(ISqlDialect dialect, string sql)
+        => dialect.SplitStatements(sql);
+
+    /// <summary>
+    /// The PostgreSQL split: semicolons and blank lines read with the vendored PostgreSQL lexer, so a
+    /// semicolon inside a string, a comment or a dollar-quoted body never splits.
+    /// <para>
+    /// <see cref="PostgresDialect"/> is the only caller, the same arrangement
+    /// <c>WriteGuard.DescribeWithPostgresLexer</c> has: the dialect delegates here so there is one
+    /// implementation of the Postgres rules, not two.
+    /// </para>
+    /// </summary>
+    internal static IReadOnlyList<StatementSpan> SplitWithPostgresLexer(string sql)
     {
         var spans = new List<StatementSpan>();
         if (string.IsNullOrEmpty(sql)) return spans;
@@ -98,6 +124,28 @@ public static class StatementSplitter
         return spans;
     }
 
+    /// <summary>
+    /// The T-SQL split. <see cref="TSqlScanner"/> does the lexing — it is the only scanner here that knows
+    /// <c>[delimited names]</c>, nestable block comments, <c>@variables</c> and the <c>GO</c> batch
+    /// separator — and this maps its statements onto spans in the original buffer.
+    /// <para>
+    /// Unlike the Postgres split these spans do <b>not</b> tile the buffer: they leave a gap wherever a
+    /// <c>GO</c> or the whitespace around it sat. That is the point of splitting with the right lexer.
+    /// <c>GO</c> is a client-side directive, not T-SQL — SqlClient cannot send it — so a span that
+    /// swallowed one would hand the server a token it rejects the moment the user ran the statement under
+    /// the caret. <see cref="StatementAt"/> reads a caret in such a gap as belonging to the statement
+    /// before it, which is the answer tiling gave anyway.
+    /// </para>
+    /// </summary>
+    internal static IReadOnlyList<StatementSpan> SplitWithTSqlScanner(string sql)
+    {
+        var spans = new List<StatementSpan>();
+        foreach (var statement in TSqlScanner.Split(sql))
+            spans.Add(new StatementSpan(
+                statement.Start, statement.Start + statement.Text.Length, statement.Text));
+        return spans;
+    }
+
     /// <summary>True for a line (<c>--</c>) or block (<c>/* */</c>) comment token.</summary>
     private static bool IsComment(IToken t)
         => t.Text is { } text && (text.StartsWith("--") || text.StartsWith("/*"));
@@ -140,7 +188,18 @@ public static class StatementSplitter
                || text.Equals("except", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Whether the last token of <paramref name="fragment"/> is a line comment (<c>-- …</c>),
-    /// which runs to end of line and would swallow a <c>;</c> appended on the same line.</summary>
+    /// which runs to end of line and would swallow a <c>;</c> appended on the same line.
+    /// <para>
+    /// The PostgreSQL lexer answers this for every dialect, which is the one place here that does not
+    /// pick a lexer per engine — deliberately, because <c>-- to end of line</c> and <c>'…'</c> literals are
+    /// the same lexical forms in both dialects, so both lexers give the same answer to this question. Where
+    /// they could differ is a T-SQL-only form (<c>[a--b]</c>), and there the PG lexer answers "yes" where
+    /// T-SQL would say "no": the <c>;</c> goes on its own line and the SQL is still correct. That is the
+    /// safe direction, and unlike the positive questions <see cref="TSqlScanner"/> exists to protect
+    /// (is this a write? may I append a page clause?) a wrong answer here costs a newline, not a
+    /// statement.
+    /// </para>
+    /// </summary>
     private static bool EndsWithLineComment(string fragment)
     {
         IToken? last = null;
@@ -172,8 +231,13 @@ public static class StatementSplitter
     /// that statement's first character. Null when the buffer has nothing runnable.
     /// </summary>
     public static StatementSpan? StatementAt(string sql, int caret)
+        => StatementAt(PostgresDialect.Instance, sql, caret);
+
+    /// <summary>The statement the caret sits in, read in <paramref name="dialect"/>'s lexical rules —
+    /// see <see cref="StatementAt(string,int)"/> for how a caret is attributed.</summary>
+    public static StatementSpan? StatementAt(ISqlDialect dialect, string sql, int caret)
     {
-        var spans = Split(sql);
+        var spans = Split(dialect, sql);
         if (spans.Count == 0) return null;
         caret = Math.Clamp(caret, 0, sql.Length);
 
@@ -195,8 +259,22 @@ public static class StatementSplitter
     /// returned unchanged (no semicolon forced onto a lone run-at-caret).
     /// </summary>
     public static string EnsureSeparated(string sql)
+        => EnsureSeparated(PostgresDialect.Instance, sql);
+
+    /// <summary>
+    /// <see cref="EnsureSeparated(string)"/> in <paramref name="dialect"/>'s lexical rules.
+    /// <para>
+    /// On T-SQL this also turns a <c>GO</c>-separated batch into a <c>;</c>-separated one, which is the
+    /// only form SqlClient can send: <c>GO</c> is a client directive the server has never heard of, so
+    /// leaving it in the text is a guaranteed <i>"could not find stored procedure 'GO'"</i>. The statements
+    /// that genuinely require a batch of their own (<c>CREATE PROCEDURE</c>, <c>CREATE VIEW</c>, …) still
+    /// cannot be run several-at-once this way — the server rejects them for not being first in the batch —
+    /// but that is a smaller loss than every GO-separated run failing.
+    /// </para>
+    /// </summary>
+    public static string EnsureSeparated(ISqlDialect dialect, string sql)
     {
-        var spans = Split(sql);
+        var spans = Split(dialect, sql);
         if (spans.Count <= 1) return sql;
 
         var parts = new List<string>();

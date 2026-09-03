@@ -48,6 +48,16 @@ public sealed class PostgresDialect : ISqlDialect
     public IReadOnlyList<StatementRisk> DescribeStatements(string sql)
         => WriteGuard.DescribeWithPostgresLexer(sql, RiskyVerbs);
 
+    /// <summary>The same lexer again, and the same split the editor has always had: semicolons and blank
+    /// lines, with dollar-quoted bodies and comments read for what they are.</summary>
+    public IReadOnlyList<StatementSpan> SplitStatements(string sql)
+        => StatementSplitter.SplitWithPostgresLexer(sql);
+
+    /// <summary>The vendored PostgreSQL grammar, behind the same forwarding arrangement as everything
+    /// else here: <see cref="PgParseRules"/> holds no rules of its own, it points at
+    /// <see cref="PgCompletionRules"/> and <see cref="PgParsing"/>.</summary>
+    public ISqlParseRules ParseRules => PgParseRules.Instance;
+
     /// <summary>
     /// The verbs the guard has always treated as writes. Deliberately unchanged by the arrival of a
     /// second engine: T-SQL's extra verbs live on <see cref="SqlServerDialect"/>, because adding them

@@ -5,7 +5,8 @@ namespace Bearing.Sql;
 /// and a row count are expressed, how an INSERT asks for the row it just wrote, and how far the write
 /// guard can be trusted.
 /// <para>
-/// Deliberately text-only — no connection, no driver types, no <c>Bearing.Data</c> — so
+/// Deliberately text-only — no connection, no driver types, no <c>Bearing.Data</c>; the lone
+/// exception is <see cref="ParseRules"/>, which hands out this engine's grammar and says why — so
 /// <c>Bearing.Sql</c> keeps depending on <c>Core</c> alone (§2.2) and every rule here is unit-testable
 /// as a string. The engine-facing half of the same split lives behind <c>IDbProvider</c>; a provider and
 /// its dialect share an <see cref="Id"/> so the App layer can pair them and the *selected connection's*
@@ -106,4 +107,37 @@ public interface ISqlDialect
     /// </para>
     /// </summary>
     IReadOnlyList<StatementRisk> DescribeStatements(string sql);
+
+    // ---- Statement splitting ----
+
+    /// <summary>
+    /// Split a buffer into top-level statement spans, in <b>this engine's</b> lexical rules — what "run
+    /// the statement at the caret", the statement-highlight margin, folding and statement-scoped
+    /// completion are all built on. Same reasoning as <see cref="DescribeStatements"/>: the lexing is the
+    /// whole ballgame. A lexer that does not know the engine's batch separator reads a <c>GO</c>-separated
+    /// batch as one statement, so "run current statement" runs the whole buffer; one that cannot see a
+    /// delimited identifier splits inside <c>[a;b]</c> and offers Run half a name.
+    /// <para>
+    /// This is a read-side question, so a mis-split costs the wrong statement being <em>offered</em> rather
+    /// than a write being mis-classified — but Run sends what is offered, so it reaches the server all the
+    /// same. Spans are ordered and never overlap; they need not tile the buffer (T-SQL's leave the
+    /// <c>GO</c> out, since the server cannot parse it).
+    /// </para>
+    /// </summary>
+    IReadOnlyList<StatementSpan> SplitStatements(string sql);
+
+    // ---- Completion ----
+
+    /// <summary>
+    /// This engine's grammar, as much of it as completion needs. One <see cref="CompletionEngine"/>
+    /// serves every dialect; what changes between them is the parse, which is why this is a handle on a
+    /// grammar rather than a second engine.
+    /// <para>
+    /// Unlike the rest of this interface it is not text-only: an <see cref="ISqlParseRules"/> hands out
+    /// ANTLR lexers, parsers and token types. That stays inside <c>Bearing.Sql</c>, which is where the
+    /// vendored grammars already live, so the layering is unchanged (§2.2) and nothing in
+    /// <c>Core</c> or above ever sees an ANTLR type.
+    /// </para>
+    /// </summary>
+    ISqlParseRules ParseRules { get; }
 }

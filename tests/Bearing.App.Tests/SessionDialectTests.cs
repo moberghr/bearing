@@ -135,6 +135,24 @@ public class SessionDialectTests : IDisposable
     }
 
     [Fact]
+    public async Task The_editor_reads_the_buffer_with_the_tabs_own_dialect()
+    {
+        // The same resolution the generated SQL above uses, exposed for the editor: Run's
+        // statement-at-caret, the highlight margin, folding and completion's statement scope all lex the
+        // buffer, and until they asked the connection they lexed T-SQL with the PostgreSQL lexer.
+        var pg = await RunOnce("postgres", "select 1");
+        Assert.Same(Bearing.Sql.PostgresDialect.Instance, pg.Exec.DialectForSelectedTab());
+
+        var ms = await RunOnce(SqlServerProvider.ProviderId, "select 1");
+        Assert.Same(Bearing.Sql.SqlServerDialect.Instance, ms.Exec.DialectForSelectedTab());
+
+        // What that buys: a GO-separated batch is two statements to the tab's dialect and one to Postgres',
+        // which is why "run current statement" used to send the whole buffer — GO included.
+        Assert.Equal(2, Bearing.Sql.StatementSplitter
+            .Split(ms.Exec.DialectForSelectedTab(), "select 1\nGO\nselect 2").Count);
+    }
+
+    [Fact]
     public async Task Fetch_all_asks_for_its_window_in_the_connections_dialect()
     {
         var h = await RunOnce(SqlServerProvider.ProviderId, "select n from t order by n");

@@ -1,17 +1,6 @@
 namespace Bearing.Sql;
 
 /// <summary>
-/// What the caret position means semantically, derived from the ANTLR rule c3 reports there.
-/// </summary>
-public enum CompletionIntent
-{
-    TablePosition,
-    ColumnPosition,
-    FunctionCall,
-    Keyword,
-}
-
-/// <summary>
 /// THE single place that knows PostgreSQL grammar rule/token numbers. antlr4-c3 hands back
 /// candidate *rule indices* and *token types*; this maps the interesting ones to intent.
 ///

@@ -13,17 +13,27 @@ namespace Bearing.App.Editing;
 /// disagree — they come from the same <see cref="StatementSplitter"/> call here. Extracted from
 /// <c>MainWindow</c>: the window now only maps keystrokes onto these.
 /// </para>
+/// <para>
+/// Every one of those questions is asked of the <b>selected tab's</b> dialect, resolved per call. A
+/// T-SQL buffer's statements end at a <c>GO</c> and not at a <c>;</c> inside <c>[a;b]</c>, so read with
+/// the PostgreSQL lexer a GO-separated batch is one statement and "run current statement" runs the whole
+/// buffer. The tab can change engine under a live editor (switch tabs, re-point a tab's connection),
+/// which is why this is a callback and not a constructor value.
+/// </para>
 /// </summary>
 public sealed class EditorTextCommands
 {
     private readonly TextEditor _editor;
+    private readonly Func<ISqlDialect> _dialect;
     private readonly StatementMargin _highlight = new();
 
     /// <summary>Wraps <paramref name="editor"/> and installs the statement-highlight margin in its own
-    /// column, right of the line numbers.</summary>
-    public EditorTextCommands(TextEditor editor)
+    /// column, right of the line numbers. <paramref name="dialect"/> supplies the engine whose lexical
+    /// rules decide where the statements in the buffer are.</summary>
+    public EditorTextCommands(TextEditor editor, Func<ISqlDialect> dialect)
     {
         _editor = editor;
+        _dialect = dialect;
         _editor.TextArea.LeftMargins.Add(_highlight);
     }
 
@@ -36,13 +46,13 @@ public sealed class EditorTextCommands
     {
         var selected = _editor.SelectedText;
         var sql = string.IsNullOrWhiteSpace(selected)
-            ? StatementSplitter.StatementAt(_editor.Text, _editor.CaretOffset)?.Text ?? _editor.Text
+            ? StatementSplitter.StatementAt(_dialect(), _editor.Text, _editor.CaretOffset)?.Text ?? _editor.Text
             : selected;
-        return StatementSplitter.EnsureSeparated(sql);
+        return StatementSplitter.EnsureSeparated(_dialect(), sql);
     }
 
     /// <summary>query.runAll: the entire buffer as a batch, ignoring caret and selection.</summary>
-    public string SqlToRunAll() => StatementSplitter.EnsureSeparated(_editor.Text);
+    public string SqlToRunAll() => StatementSplitter.EnsureSeparated(_dialect(), _editor.Text);
 
     // ---- statement highlight -----------------------------------------------------------------
 
@@ -53,7 +63,7 @@ public sealed class EditorTextCommands
     {
         if (!string.IsNullOrEmpty(_editor.SelectedText))
             _highlight.SetSpan(-1, -1);
-        else if (StatementSplitter.StatementAt(_editor.Text, _editor.CaretOffset) is { } stmt)
+        else if (StatementSplitter.StatementAt(_dialect(), _editor.Text, _editor.CaretOffset) is { } stmt)
             _highlight.SetSpan(stmt.TrimmedStart, stmt.TrimmedEnd);
         else
             _highlight.SetSpan(-1, -1);
@@ -65,10 +75,11 @@ public sealed class EditorTextCommands
     public void MoveToAdjacentStatement(int direction)
     {
         var text = _editor.Text;
-        var spans = StatementSplitter.Split(text).Where(s => !string.IsNullOrWhiteSpace(s.Text)).ToList();
+        var spans = StatementSplitter.Split(_dialect(), text)
+            .Where(s => !string.IsNullOrWhiteSpace(s.Text)).ToList();
         if (spans.Count == 0) return;
 
-        var current = StatementSplitter.StatementAt(text, _editor.CaretOffset);
+        var current = StatementSplitter.StatementAt(_dialect(), text, _editor.CaretOffset);
         var idx = current is null ? 0 : spans.FindIndex(s => s.Start == current.Start);
         if (idx < 0) idx = 0;
 
@@ -80,7 +91,7 @@ public sealed class EditorTextCommands
     /// <summary>Ctrl+Shift+A: select the whole statement the caret sits in.</summary>
     public void SelectCurrentStatement()
     {
-        if (StatementSplitter.StatementAt(_editor.Text, _editor.CaretOffset) is not { } stmt) return;
+        if (StatementSplitter.StatementAt(_dialect(), _editor.Text, _editor.CaretOffset) is not { } stmt) return;
         _editor.SelectionStart = stmt.TrimmedStart;
         _editor.SelectionLength = stmt.TrimmedEnd - stmt.TrimmedStart;
         _editor.CaretOffset = stmt.TrimmedEnd;

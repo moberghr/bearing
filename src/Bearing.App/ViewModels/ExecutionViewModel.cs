@@ -727,6 +727,19 @@ public sealed partial class ExecutionViewModel : ObservableObject
             .ToList();
 
     /// <summary>
+    /// The dialect of the selected tab's connection — what the editor must read the buffer with to know
+    /// where a statement ends (Run's statement-at-caret, the highlight margin, folding, completion's
+    /// statement scope). The sibling of <see cref="SnapshotForSelectedTab"/>, and asked per keystroke for
+    /// the same reason: one editor serves every tab, so the engine changes as the selection does.
+    /// <para>
+    /// Never null — <see cref="ProviderTraits.For(ConnectionInfo?)"/> answers Postgres for a tab with no
+    /// connection, which is what the editor did before there was a second engine.
+    /// </para>
+    /// </summary>
+    public ISqlDialect DialectForSelectedTab()
+        => ProviderTraits.For(Selected is { } tab ? _ctx.EffectiveConnection(tab) : null).Dialect;
+
+    /// <summary>
     /// Schema for the selected tab's connection + database (drives completion); null only when it has never
     /// been read. Falls back to the snapshot cache when no session is live: completion needs the catalog, not
     /// the connection, so a disconnect / credential expiry / idle sweep must not silently switch it off.
