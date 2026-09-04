@@ -52,7 +52,9 @@ public partial class MainWindow
         // As in SidebarView's edit path: a new connection's default credential kind depends on whether a
         // password can be stored, so ask again before deciding it from a probe that ran at startup.
         await Vm.RefreshSecretStorageAsync();
-        var result = await _dialogs.ShowConnectionDialogAsync(null, null, (i, p, ct) => Vm.Connections.TestConnectionAsync(i, p, ct), Vm.SecretStorage);
+        var result = await _dialogs.ShowConnectionDialogAsync(
+            null, null, (i, p, ct) => Vm.Connections.TestConnectionAsync(i, p, ct),
+            Vm.SecretStorage, Vm.Connections.Providers);
         if (result is not { Delete: false }) return;
         var connection = folder is null ? result.Connection : result.Connection with { Folder = folder };
         await Vm.Connections.AddOrUpdateConnectionAsync(connection, result.Password);

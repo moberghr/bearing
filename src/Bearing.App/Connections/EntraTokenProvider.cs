@@ -12,26 +12,37 @@ namespace Bearing.App.Connections;
 /// <summary>
 /// Obtains an Entra access token by shelling out to the Azure CLI
 /// (<c>az account get-access-token --resource &lt;resource&gt; --output json</c>). No Azure SDK dependency —
-/// it reuses the user's existing <c>az login</c>. The token becomes the Postgres password; its expiry is
+/// it reuses the user's existing <c>az login</c>. The token becomes the connection's password; its expiry is
 /// carried on the <see cref="Credential"/> so the session manager can disconnect before it goes stale.
+/// <para>
+/// The <em>resource</em> the token is minted for is per engine: Azure Database for PostgreSQL and Azure SQL
+/// are separate audiences, and a token for one is rejected by the other. It therefore comes from
+/// <see cref="ProviderTraits.EntraResource"/> keyed by the connection's provider — the Postgres value is
+/// unchanged, so an existing Entra connection keeps minting exactly the token it minted before.
+/// </para>
 /// </summary>
 public sealed class EntraTokenProvider : IEntraTokenProvider
 {
-    /// <summary>Default AAD resource/scope for Azure Database for PostgreSQL.</summary>
+    /// <summary>Default AAD resource/scope for Azure Database for PostgreSQL. Kept as the name every
+    /// caller and test knew; <see cref="ResourceFor"/> is what actually decides per connection.</summary>
     public const string DefaultResource = "https://ossrdbms-aad.database.windows.net";
 
-    /// <summary>Per-connection <see cref="ConnectionInfo.Options"/> key to override the resource above.</summary>
+    /// <summary>Per-connection <see cref="ConnectionInfo.Options"/> key to override the resource
+    /// entirely — still the last word, so a non-public cloud or a preview audience needs no code change.</summary>
     public const string ResourceOptionKey = "entra.resource";
+
+    /// <summary>The resource to mint for: the connection's explicit override, else its engine's audience.
+    /// Pure, so the per-engine choice is testable without invoking az.</summary>
+    public static string ResourceFor(ConnectionInfo info)
+        => info.Options.TryGetValue(ResourceOptionKey, out var r) && !string.IsNullOrWhiteSpace(r)
+            ? r.Trim()
+            : ProviderTraits.For(info).EntraResource;
 
     private static readonly TimeSpan RunTimeout = TimeSpan.FromSeconds(30);
 
     public async Task<Credential> GetTokenAsync(ConnectionInfo info, CancellationToken ct)
     {
-        var resource = info.Options.TryGetValue(ResourceOptionKey, out var r) && !string.IsNullOrWhiteSpace(r)
-            ? r.Trim()
-            : DefaultResource;
-
-        var (exit, stdout, stderr) = await RunAzAsync(resource, ct);
+        var (exit, stdout, stderr) = await RunAzAsync(ResourceFor(info), ct);
         if (exit != 0)
             throw new InvalidOperationException(FormatAzError(exit, stderr));
 

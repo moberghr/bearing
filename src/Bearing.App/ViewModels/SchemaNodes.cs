@@ -297,7 +297,7 @@ public sealed partial class ServerNodeViewModel : SchemaNodeViewModel
     public override bool IsServer => true;
     public override string? RowAccentColor => Connection.EnvironmentColor;
     public override bool ShowsConnectionState => true;
-    public override string? IconKey => "Icon.Connections"; // server / postgres
+    public override string? IconKey => "Icon.Connections"; // a server, whichever engine it runs
     public override string IconColorHex => "#6FA6E2";
 
     protected override async Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync()
@@ -699,7 +699,10 @@ public sealed class RelationNodeViewModel : SchemaNodeViewModel
         {
             details = TableDetails.Empty;
         }
-        var ddl = TableDdlGenerator.CreateTable(_table, _snapshot, details);
+        // Rendered in the connection's own dialect: DDL shown as `create table "public"."t"` for a SQL
+        // Server table would be DDL the user cannot paste back into the server it came from.
+        var ddl = TableDdlGenerator.CreateTable(
+            ProviderTraits.For(_connection).Dialect, _table, _snapshot, details);
         // The fuller breakdown goes here rather than on the row: heap / indexes / toast / rows has room in a
         // definition view and would not fit on one tight tree line (#71, #76).
         return Size is { } size ? ddl + "\n" + SchemaObjectLabel.SizeBreakdown(size) : ddl;

@@ -168,13 +168,20 @@ public sealed partial class ExecutionViewModel : ObservableObject
         if (tab.ConnectionId is null) { _ctx.SetStatus("This tab has no connection — pick one."); return; }
         var info = _ctx.EffectiveConnection(tab);
         if (info is null) { _ctx.SetStatus("Connection no longer exists."); return; }
+        // Everything text-shaped below — the write guard, the first-page limit, the page suffix — is the
+        // selected connection's, resolved here rather than defaulted: a tab on SQL Server paged with
+        // Postgres' `limit/offset` is the bug this resolution exists to make impossible.
+        var traits = ProviderTraits.For(info);
 
         // Production write-guard: confirm before writing data / altering schema on a guarded connection.
         // Describe (not FindRiskyStatements) so the prompt can list the statements it is about to run — the
         // verbs alone can't answer "what exactly lands on prod".
         if (info.RequireWriteConfirmation && _dialogs is { } dialogs)
         {
-            var statements = WriteGuard.Describe(sql);
+            // The connection's dialect, not a Postgres default: the guard's verdict depends on whether it
+            // can read this engine at all, and an engine it cannot read has every statement confirmed with
+            // a label saying why (§1.2 — never narrower for any dialect).
+            var statements = WriteGuard.Describe(traits.Dialect, sql);
             if (statements.Any(s => s.IsRisky)
                 && !await dialogs.ConfirmWriteAsync(WriteConfirmation.ForBatch(info, statements)))
             {
@@ -195,7 +202,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // executor's Truncated flag still signals "more rows exist". Writes / multi-statement /
             // already-limited queries return null here and run unbounded (capped client-side). The set
             // still pages/counts against the original sql, so SourceSql is unchanged.
-            var fetchSql = FirstPageLimiter.TryAppendLimit(sql, PageSize + 1) ?? sql;
+            var fetchSql = FirstPageLimiter.TryAppendLimit(traits.Dialect, sql, PageSize + 1) ?? sql;
 
             // Prompt / Entra credentials can go stale (expired token, or a wrong password typed once): run,
             // and on an auth failure refresh the credential and retry exactly once. A stored password that
@@ -228,7 +235,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
         try { lease = await _ctx.Sessions.AcquireAsync(info, ct); }
         catch (ConnectionFailedException ex)
         {
-            if (!final && LooksLikeAuthFailure(ex)) return RunOutcome.AuthFailed;
+            if (!final && Classify(info, ex) == DbErrorKind.Authentication) return RunOutcome.AuthFailed;
             _ctx.IsConnected = false;
             RunFinished(tab, ex.Message);
             return RunOutcome.Failed;
@@ -248,7 +255,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
             // Auth rejected on open (stale token) comes back as a QueryError; retry before binding/logging.
             if (!final && !ct.IsCancellationRequested
-                && results.Any(r => r.Error is { } e && IsAuthFailure(e.SqlState)))
+                && results.Any(r => r.Error is { } e && Classify(info, e) == DbErrorKind.Authentication))
                 return RunOutcome.AuthFailed;
 
             // Ensure the snapshot is loaded so a first-page result resolves as editable. Only the first
@@ -258,7 +265,8 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // Results always route to the tab that started the run, never to whichever tab is focused now.
             // A tab that has since been closed (or dropped by a project switch) is dead but harmless to
             // assign to — RunFinished is what tells the user the run ended, with TabStillOpen false.
-            tab.SetFreshResults(ResultSetBuilder.BuildResultSets(results, sql, session.Snapshot));
+            tab.SetFreshResults(ResultSetBuilder.BuildResultSets(
+                results, sql, session.Snapshot, ProviderTraits.For(info)));
             LogExecution(info, sql, results);
             var summary = ResultSetBuilder.DescribeResults(results, wall.Elapsed);
             // On success, lead with the connection so the status bar reads e.g. "pagila (local) · 88 ms".
@@ -267,31 +275,51 @@ public sealed partial class ExecutionViewModel : ObservableObject
         }
     }
 
-    /// <summary>Which credential kinds a fresh acquire can actually help: prompt (re-ask) and Entra
-    /// (re-mint). A stored password that didn't change would just fail identically, so we don't retry it —
-    /// unless the store can't hold passwords at all (no keyring), where "stored password" really means
-    /// "there is nothing stored" and the retry is what gets the user prompted for one.</summary>
-    private bool CanRefreshCredential(ConnectionInfo info)
-        => info.CredentialKind is CredentialKind.EntraToken or CredentialKind.Prompt
-        || (info.CredentialKind is CredentialKind.StoredPassword && _ctx.Secrets is { CanStore: false });
-
-    /// <summary>True for the Postgres 28xxx authentication/authorization SQLSTATE class. Pure — unit-tested.</summary>
-    internal static bool IsAuthFailure(string? sqlState)
-        => sqlState is not null && sqlState.StartsWith("28", StringComparison.Ordinal);
-
-    /// <summary>Heuristic auth detection for a connect-time failure whose underlying Npgsql exception the App
-    /// layer can't type (no Npgsql reference here) — scan the message chain for the auth SQLSTATE / text.</summary>
-    private static bool LooksLikeAuthFailure(Exception ex)
+    /// <summary>Which credential kinds a fresh acquire can actually help. A kind that resolves to the same
+    /// value twice must not be retried: the second attempt fails identically, and the user reads
+    /// "Reauthenticating…" for an authentication that never happened. One arm per kind, with its reason,
+    /// because the arms are not obvious from the outside.</summary>
+    private bool CanRefreshCredential(ConnectionInfo info) => info.CredentialKind switch
     {
-        for (Exception? e = ex; e is not null; e = e.InnerException)
-        {
-            var m = e.Message;
-            if (m.Contains("28P01", StringComparison.OrdinalIgnoreCase)
-                || m.Contains("28000", StringComparison.OrdinalIgnoreCase)
-                || m.Contains("authentication failed", StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-        return false;
+        // Re-asking the user, and re-minting a token, are both things a retry can actually change.
+        CredentialKind.Prompt or CredentialKind.EntraToken => true,
+
+        // A stored password that didn't change would just fail identically — unless the store can't hold
+        // passwords at all (no keyring), where "stored password" really means "there is nothing stored" and
+        // the retry is what gets the user prompted for one.
+        CredentialKind.StoredPassword => _ctx.Secrets is { CanStore: false },
+
+        // The OS identity: nothing to re-prompt for and nothing to re-mint, so a retry would send the exact
+        // same handshake. Spelled out rather than left to the default arm because the case it must not fall
+        // into is right above it — an Integrated connection swept into the no-keyring branch would
+        // "reauthenticate" by doing nothing, twice.
+        CredentialKind.Integrated => false,
+
+        _ => false,
+    };
+
+    /// <summary>
+    /// The engine's own verdict on a failed statement. The App layer used to read Postgres SQLSTATEs as
+    /// strings (a <c>28</c> prefix meant "auth"), which silently mislabelled every other engine's codes —
+    /// SQL Server has no SQLSTATEs at all. <see cref="IDbProvider.Classify"/> is where that knowledge lives
+    /// now, and the Postgres verdicts are unchanged.
+    /// </summary>
+    private DbErrorKind Classify(ConnectionInfo info, QueryError error)
+        => ProviderFor(info) is { } provider ? provider.Classify(error) : DbErrorKind.Unknown;
+
+    /// <summary>The same judgement for a thrown failure — what the connect path has, since a failed
+    /// handshake never produces a <see cref="QueryError"/>.</summary>
+    private DbErrorKind Classify(ConnectionInfo info, Exception exception)
+        => ProviderFor(info) is { } provider ? provider.ClassifyException(exception) : DbErrorKind.Unknown;
+
+    /// <summary>The provider for a connection, or null when this build no longer ships that engine. Null
+    /// rather than a throw: classification only ever decides how a failure is <em>reported</em>, so an
+    /// unresolvable provider must degrade to <see cref="DbErrorKind.Unknown"/> — showing the driver's
+    /// message as-is — not turn a reportable error into a second one.</summary>
+    private IDbProvider? ProviderFor(ConnectionInfo info)
+    {
+        try { return _ctx.Providers.Get(info.ProviderId); }
+        catch (KeyNotFoundException) { return null; }
     }
 
     /// <summary>Run <paramref name="body"/> under <paramref name="tab"/>'s per-tab single-flight lifecycle:
@@ -308,8 +336,10 @@ public sealed partial class ExecutionViewModel : ObservableObject
         // so it reports through RunStatus, not RunFinished: telling someone their query stopped right after
         // they asked it to stop is noise, and it would toast on exactly the paths where the tab is going away.
         catch (OperationCanceledException) { RunStatus(tab, cancelled); }
-        // Cancelling an in-flight Npgsql query surfaces as a PostgresException (SQLSTATE 57014), not an
-        // OperationCanceledException — treat any failure while the token is cancelled as the user's cancel.
+        // A cancelled statement surfaces as the driver's own exception, not an OperationCanceledException
+        // (Npgsql raises SQLSTATE 57014; SqlClient raises error 0) — so any failure while our own token is
+        // cancelled is treated as the user's cancel. The token, not the code, is what settles it here, which
+        // is why this needs no classifier: whatever the engine called it, we asked for it.
         catch (Exception) when (ct.IsCancellationRequested) { RunStatus(tab, cancelled); }
         catch (Exception ex) { RunFinished(tab, $"{failed}: {ex.Message}"); }
         finally { tab.EndRun(); }
@@ -333,7 +363,17 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // PageSql shapes the paging: a top-level limit/offset (same as the first page, so the query's
             // ORDER BY is honored consistently across pages) when the query allows a safe suffix, else a
             // subquery wrap. The executor just runs the string.
-            var page = await session.Executor.ExecutePageAsync(PageSql.Page(rs.SourceSql, rs.Loaded, PageSize), ct);
+            if (PageSql.Page(ProviderTraits.For(session.Info).Dialect, rs.SourceSql, rs.Loaded, PageSize)
+                is not { } pageSql)
+            {
+                // The dialect refuses both shapes, so this query cannot be paged on this engine at all —
+                // a CTE on SQL Server, which may not sit in a derived table. Say so once and retire the
+                // affordances; the alternative was sending SQL the server rejects on every scroll.
+                rs.RetirePaging();
+                RunStatus(tab, "Paging unavailable for this query on this engine — the rows already loaded are all of them shown.");
+                return;
+            }
+            var page = await session.Executor.ExecutePageAsync(pageSql, ct);
 
             // A failed page arrives as an error result, not a throw, so it has to be checked for. Appending
             // it would append nothing and clear HasMore: the result would silently look complete — auto-load
@@ -342,9 +382,17 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // simply retries.
             if (!page.Success)
             {
-                // Npgsql raises a cancelled statement as PostgresException 57014, which the executor turns
-                // into an error result too — so the user's own Esc must not be reported as a server failure.
+                // The user's own Esc is answered by our token, and only by our token: it is the one cancel
+                // this app asked for, so it is the one that reports as a cancel.
                 ct.ThrowIfCancellationRequested();
+                // Anything else the driver calls a cancel was NOT requested here — Postgres raises 57014
+                // for `statement_timeout` and `pg_cancel_backend` as well as for Esc, and SqlClient's
+                // error 0 covers several client-side faults. Classifying those as "Load cancelled."
+                // discarded the server's own message and left the next scroll silently retrying the same
+                // doomed page, so the message is kept and only the wording softens.
+                if (page.Error is { } stopped
+                    && Classify(session.Info, stopped) == DbErrorKind.Canceled)
+                { RunStatus(tab, $"Load stopped: {stopped.Message}"); return; }
                 RunFinished(tab, $"Load more failed: {page.Error?.Message}");
                 return;
             }
@@ -457,7 +505,16 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // statement and stay on screen, so scroll position and any pending edits survive the fetch.
             // Asking for room + 1 lets the reader see one row past the ceiling: that is what distinguishes
             // "the result ends here" from "we stopped early", with no extra query.
-            var sql = PageSql.Page(rs.SourceSql, rs.Loaded, room + 1);
+            if (PageSql.Page(ProviderTraits.For(session.Info).Dialect, rs.SourceSql, rs.Loaded, room + 1)
+                is not { } sql)
+            {
+                // Same refusal as load-more: no shape this engine will wrap, so fetch-all has nothing to
+                // fetch with. Retire rather than stream a query the server would reject. `complete` stays
+                // false, so a caller chaining an Export off this still won't act on half a result.
+                rs.RetirePaging();
+                RunStatus(tab, "Fetch all unavailable for this query on this engine.");
+                return;
+            }
             var options = new QueryOptions { MaxRows = room, BatchRows = PageSize };
             var truncated = false;
 
@@ -503,10 +560,19 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
         await RunExclusiveAsync(tab, async ct =>
         {
+            // The wrapper is dialect-varying text, so it is shaped here — where the connection is known —
+            // and the executor only runs it, exactly as it only runs a page PageSql shaped. A dialect that
+            // refuses the shape (a CTE on SQL Server can't be a derived table) is answered here rather than
+            // by asking the server a question it cannot parse and reading "no total" out of the error.
+            if (ProviderTraits.For(session.Info).Dialect.CountWrap(rs.SourceSql) is not { } countSql)
+            {
+                RunFinished(tab, "Count unavailable for this query on this engine.");
+                return;
+            }
             // Null means the query can't be counted at all (shape), so "unavailable" is the honest report.
             // A *failed* count throws instead and lands in RunExclusiveAsync's "Count failed: …" — TotalCount
             // stays null, so CanCount stays true and the [Count] action is still there to retry.
-            rs.TotalCount = await session.Executor.CountAsync(rs.SourceSql, ct);
+            rs.TotalCount = await session.Executor.CountAsync(countSql, ct);
             RunFinished(tab, rs.TotalCount is not null ? "Counted total." : "Count unavailable for this query.");
         }, "Count cancelled.", "Count failed");
     }
@@ -647,12 +713,13 @@ public sealed partial class ExecutionViewModel : ObservableObject
         if (lease is null) return;
         var session = lease.Session;
 
-        var sql = ResultEditModel.BuildForeignKeySelect(target, row);
+        var sql = ResultEditModel.BuildForeignKeySelect(ProviderTraits.For(session.Info), target, row);
         await RunExclusiveAsync(tab, async ct =>
         {
             RunStatus(tab, "Opening referenced row…");
             var results = await session.Executor.ExecuteAsync(sql, new QueryOptions { MaxRows = PageSize }, ct);
-            tab.PushResults(ResultSetBuilder.BuildResultSets(results, sql, session.Snapshot));
+            tab.PushResults(ResultSetBuilder.BuildResultSets(
+                results, sql, session.Snapshot, ProviderTraits.For(session.Info)));
             RunFinished(tab, ResultSetBuilder.DescribeResults(results));
         }, "Navigation cancelled.", "Navigation failed");
     }
@@ -667,7 +734,10 @@ public sealed partial class ExecutionViewModel : ObservableObject
         if (tab is null || tab.IsRunning) return;
         if (rs.EditTarget is not { } target || !rs.HasPendingChanges) return;
 
-        var changes = ResultEditModel.BuildPendingChanges(rs, target);
+        // The engine's quoting and its INSERT-returning clause both come from here — `[dbo].[t]` and
+        // `output inserted.*` for T-SQL, `"public"."t"` and `returning *` for Postgres.
+        var traits = ProviderTraits.For(_ctx.EffectiveConnection(tab));
+        var changes = ResultEditModel.BuildPendingChanges(traits, rs, target);
         if (changes.Count == 0) { rs.ClearPending(); return; }
 
         // Every inline save confirms, showing the DML it is about to commit — this is the whole preview
@@ -675,7 +745,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
         // connection's write guard. A guarded connection gets the extra warning line, not the only prompt.
         // Ahead of the lease: a modal dialog must not hold a session open while the user reads it.
         if (_ctx.EffectiveConnection(tab) is { } connection && _dialogs is { } dialogs
-            && !await dialogs.ConfirmWriteAsync(WriteConfirmation.ForEdits(connection, WriteStatements(changes))))
+            && !await dialogs.ConfirmWriteAsync(WriteConfirmation.ForEdits(connection, WriteStatements(traits, changes))))
         {
             _ctx.SetStatus("Cancelled — save not confirmed.");
             return;
@@ -710,16 +780,31 @@ public sealed partial class ExecutionViewModel : ObservableObject
     public IReadOnlyList<WriteStatement> PendingWriteStatements(ResultSetViewModel rs)
     {
         if (rs.EditTarget is not { } target || !rs.HasPendingChanges) return Array.Empty<WriteStatement>();
-        return WriteStatements(ResultEditModel.BuildPendingChanges(rs, target));
+        var traits = ProviderTraits.For(Selected is { } tab ? _ctx.EffectiveConnection(tab) : null);
+        return WriteStatements(traits, ResultEditModel.BuildPendingChanges(traits, rs, target));
     }
 
-    private static IReadOnlyList<WriteStatement> WriteStatements(IReadOnlyList<ResultEditModel.PendingChange> changes)
+    private static IReadOnlyList<WriteStatement> WriteStatements(
+        ProviderTraits traits, IReadOnlyList<ResultEditModel.PendingChange> changes)
         => changes
             .Select(c => new WriteStatement(
                 c.Kind.ToString().ToUpperInvariant(),
-                ResultEditModel.InlineParameters(c.Command) + ";",
+                ResultEditModel.InlineParameters(traits, c.Command) + ";",
                 IsRisky: true))
             .ToList();
+
+    /// <summary>
+    /// The dialect of the selected tab's connection — what the editor must read the buffer with to know
+    /// where a statement ends (Run's statement-at-caret, the highlight margin, folding, completion's
+    /// statement scope). The sibling of <see cref="SnapshotForSelectedTab"/>, and asked per keystroke for
+    /// the same reason: one editor serves every tab, so the engine changes as the selection does.
+    /// <para>
+    /// Never null — <see cref="ProviderTraits.For(ConnectionInfo?)"/> answers Postgres for a tab with no
+    /// connection, which is what the editor did before there was a second engine.
+    /// </para>
+    /// </summary>
+    public ISqlDialect DialectForSelectedTab()
+        => ProviderTraits.For(Selected is { } tab ? _ctx.EffectiveConnection(tab) : null).Dialect;
 
     /// <summary>
     /// Schema for the selected tab's connection + database (drives completion); null only when it has never

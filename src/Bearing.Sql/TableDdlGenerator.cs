@@ -9,7 +9,8 @@ namespace Bearing.Sql;
 /// from the schema snapshot, plus — when a <see cref="TableDetails"/> read is supplied — the table's
 /// check/unique/exclusion constraints and a <c>CREATE INDEX</c> per index (#46).
 /// <para>
-/// Identifiers are always double-quoted. Still for display and copy rather than guaranteed
+/// Identifiers are quoted by the connection's dialect, so a SQL Server table reads as
+/// <c>[dbo].[Orders]</c>. Still for display and copy rather than guaranteed
 /// round-trippable: column defaults, identity/generated columns, storage parameters, partitioning and
 /// inheritance are not read, and a constraint or index comes out in the server's own rendering rather than
 /// one this generator controls.
@@ -24,16 +25,21 @@ public static class TableDdlGenerator
     /// the two must not be conflated.
     /// </param>
     public static string CreateTable(TableInfo table, ISchemaSnapshot snapshot, TableDetails? details = null)
+        => CreateTable(PostgresDialect.Instance, table, snapshot, details);
+
+    /// <inheritdoc cref="CreateTable(TableInfo, ISchemaSnapshot, TableDetails?)"/>
+    public static string CreateTable(
+        ISqlDialect dialect, TableInfo table, ISchemaSnapshot snapshot, TableDetails? details = null)
     {
         var columns = snapshot.ColumnsOf(table.Id);
         var sb = new StringBuilder();
-        sb.Append("create table ").Append(Qualify(table.Schema, table.Name)).Append(" (\n");
+        sb.Append("create table ").Append(Qualify(dialect, table.Schema, table.Name)).Append(" (\n");
 
         var lines = new List<string>();
         foreach (var c in columns)
-            lines.Add($"    {Ident(c.Name)} {c.DataType}{(c.NotNull ? " not null" : "")}");
+            lines.Add($"    {Ident(dialect, c.Name)} {c.DataType}{(c.NotNull ? " not null" : "")}");
 
-        var pk = columns.Where(c => c.IsPrimaryKey).Select(c => Ident(c.Name)).ToList();
+        var pk = columns.Where(c => c.IsPrimaryKey).Select(c => Ident(dialect, c.Name)).ToList();
         if (pk.Count > 0)
             lines.Add($"    primary key ({string.Join(", ", pk)})");
 
@@ -43,16 +49,16 @@ public static class TableDdlGenerator
             var referenced = snapshot.Tables.FirstOrDefault(t => t.Id == fk.ReferencedTableId);
             if (referenced is null) continue;
 
-            var parentCols = NamesByOrdinal(columns, fk.ParentOrdinals);
-            var refCols = NamesByOrdinal(snapshot.ColumnsOf(fk.ReferencedTableId), fk.ReferencedOrdinals);
+            var parentCols = NamesByOrdinal(dialect, columns, fk.ParentOrdinals);
+            var refCols = NamesByOrdinal(dialect, snapshot.ColumnsOf(fk.ReferencedTableId), fk.ReferencedOrdinals);
             lines.Add($"    foreign key ({string.Join(", ", parentCols)}) " +
-                      $"references {Qualify(referenced.Schema, referenced.Name)} ({string.Join(", ", refCols)})");
+                      $"references {Qualify(dialect, referenced.Schema, referenced.Name)} ({string.Join(", ", refCols)})");
         }
 
         // Check / unique / exclusion constraints, in the server's own words: a CHECK body cannot be rebuilt
         // from catalog columns, so this is the only rendering that is actually the table's.
         foreach (var constraint in Inline(details))
-            lines.Add($"    constraint {Ident(constraint.Name)} {constraint.Definition}");
+            lines.Add($"    constraint {Ident(dialect, constraint.Name)} {constraint.Definition}");
 
         sb.Append(string.Join(",\n", lines)).Append("\n);\n");
 
@@ -81,18 +87,23 @@ public static class TableDdlGenerator
             .Where(c => c.Definition.Length > 0);
 
 
-    private static List<string> NamesByOrdinal(IReadOnlyList<ColumnInfo> columns, IReadOnlyList<int> ordinals)
+    private static List<string> NamesByOrdinal(
+        ISqlDialect dialect, IReadOnlyList<ColumnInfo> columns, IReadOnlyList<int> ordinals)
     {
         var byOrdinal = columns.ToDictionary(c => c.Ordinal, c => c.Name);
         var names = new List<string>(ordinals.Count);
         foreach (var n in ordinals)
-            names.Add(Ident(byOrdinal.TryGetValue(n, out var name) ? name : $"?{n}"));
+            names.Add(Ident(dialect, byOrdinal.TryGetValue(n, out var name) ? name : $"?{n}"));
         return names;
     }
 
     /// <summary>Generated DDL always quotes — nobody types over this output, so the safe form wins.</summary>
-    private static string Ident(string id) => PgIdentifier.Quote(id);
+    /// <summary>Generated DDL always quotes — nobody types over this output, so the safe form
+    /// wins — and the dialect decides what quoting means.</summary>
+    private static string Ident(ISqlDialect dialect, string id) => dialect.Quote(id);
 
-    private static string Qualify(string? schema, string table) =>
-        string.IsNullOrEmpty(schema) ? Ident(table) : $"{Ident(schema)}.{Ident(table)}";
+    private static string Qualify(ISqlDialect dialect, string? schema, string table) =>
+        string.IsNullOrEmpty(schema)
+            ? Ident(dialect, table)
+            : $"{Ident(dialect, schema)}.{Ident(dialect, table)}";
 }

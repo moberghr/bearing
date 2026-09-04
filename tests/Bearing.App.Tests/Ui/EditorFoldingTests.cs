@@ -10,6 +10,7 @@ using Avalonia.Media;
 using Bearing.App.Controls;
 using Bearing.App.Editing;
 using Bearing.App.ViewModels;
+using Bearing.Sql;
 using Xunit;
 
 namespace Bearing.App.Tests.Ui;
@@ -53,7 +54,9 @@ public class EditorFoldingTests
     {
         var editor = new TextEditor { ShowLineNumbers = true };
         EditorChrome.Apply(editor);
-        var folding = new SqlFoldingController(editor);
+        // Postgres, as MainWindow's accessor answers for a tab with no connection: these tests are about
+        // the height tree, not about which lexer found the statements.
+        var folding = new SqlFoldingController(editor, () => PostgresDialect.Instance);
         var text = new EditorTextBehavior(editor);
         editor.TextChanged += (_, _) => folding.Refresh();
         var window = new Window { Width = 900, Height = 600, Content = editor };

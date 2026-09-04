@@ -12,6 +12,7 @@
 
   <ItemGroup Label="Data">
     <PackageVersion Include="Npgsql" Version="10.0.3" />
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.0.2" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.10" />
     <!-- Pin SQLitePCLRaw to 3.x so the bundled native SQLite is past GHSA-2m69-gcr7-jv3q. -->
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />

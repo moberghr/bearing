@@ -46,4 +46,23 @@ public class ColumnKindsTests
     [InlineData("", false)]
     public void Looks_json_sniffs_the_first_non_space_character(string raw, bool expected)
         => Assert.Equal(expected, ColumnKinds.LooksJson(raw));
+
+    [Theory]
+    [InlineData("json", true)]
+    [InlineData("jsonb", true)]
+    [InlineData("xml", true)]     // SQL Server's document type
+    [InlineData("XML", true)]
+    [InlineData("nvarchar", false)]  // may hold a document; the declared type does not say so
+    [InlineData("text", false)]
+    public void Document_columns_are_json_plus_xml(string type, bool expected)
+        => Assert.Equal(expected, ColumnKinds.IsDocument(type));
+
+    [Fact]
+    public void Xml_is_a_document_but_is_not_json()
+    {
+        // Both halves matter: xml earns the type badge and the inspector affordance, but handing it to the
+        // JSON tree would render nothing. Conflating the two questions is what a second engine broke.
+        Assert.True(ColumnKinds.IsDocument("xml"));
+        Assert.False(ColumnKinds.IsJson("xml"));
+    }
 }

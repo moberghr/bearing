@@ -24,7 +24,20 @@ public static class ConnectionEndpoint
     /// </para>
     /// </summary>
     public static string HostPort(ConnectionInfo info)
-        => info.Port == 0 ? info.Host : $"{info.Host}:{info.Port}";
+        => info.Port == 0 || IsNamedInstance(info.Host) ? info.Host : $"{info.Host}:{info.Port}";
+
+    /// <summary>
+    /// True when <paramref name="host"/> names a SQL Server <em>instance</em> rather than just a machine
+    /// (<c>SQLPROD\SALES</c>). The backslash is the instance separator and is legal in no hostname.
+    /// <para>
+    /// This is the second exception to "the port is always shown", and it is the same kind as a port of
+    /// zero: a named instance is resolved by the SQL Browser service, which hands back whatever dynamic
+    /// port that instance listens on. The configured port is not the address, so printing it invites the
+    /// user to go and check a number that had nothing to do with their failure. Postgres has no such
+    /// form, so its output is unchanged.
+    /// </para>
+    /// </summary>
+    public static bool IsNamedInstance(string? host) => host is not null && host.Contains('\\');
 
     /// <summary>The server and what it is pointed at: <c>host:port/database</c>. A connection with no
     /// database drops the slash rather than trailing one.</summary>

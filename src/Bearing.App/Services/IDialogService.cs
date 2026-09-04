@@ -83,12 +83,16 @@ public interface IDialogService
 
     /// <summary>Open the add/edit connection dialog. Returns the dialog result (add/update or delete), or
     /// null if cancelled. <paramref name="test"/> backs the dialog's Test button; <paramref name="storage"/>
-    /// decides which credential kind a new connection starts on and what the dialog warns about.</summary>
+    /// decides which credential kind a new connection starts on and what the dialog warns about;
+    /// <paramref name="providers"/> is the engine picker and the source of every field the dialog renders,
+    /// so it must be the app's own registry rather than a private one — the dialog can only offer the
+    /// engines this build actually composed.</summary>
     Task<ConnectionDialogResult?> ShowConnectionDialogAsync(
         ConnectionInfo? existing,
         string? existingPassword,
         Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
-        SecretStoragePosture storage);
+        SecretStoragePosture storage,
+        IProviderRegistry providers);
 
     /// <summary>Confirm deleting a script file. True = delete it. Implementations with no window
     /// (headless/tests) return false: as with <see cref="ConfirmRemoveProjectAsync"/>, nothing deletes a file

@@ -1,6 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Bearing.Data: provider abstractions' PostgreSQL/Npgsql implementation. -->
+  <!--
+    Bearing.Data: the provider abstractions' engine implementations — PostgreSQL/Npgsql (Postgres/) and
+    Microsoft SQL Server/SqlClient (SqlServer/). One folder per engine behind IDbProvider; no driver type
+    escapes this project.
+    Core only, per §2.2 — deliberately NOT Bearing.Sql. Every executor entry point that needs
+    dialect-varying text takes it already built (ExecutePageAsync, CountAsync), the way the App layer
+    already shaped paging before a second engine existed. That keeps one copy of each generated string, in
+    Bearing.Sql, without a lateral edge between the two tiers.
+  -->
 
   <ItemGroup>
     <ProjectReference Include="..\Bearing.Core\Bearing.Core.csproj" />
@@ -8,6 +16,7 @@
 
   <ItemGroup>
     <PackageReference Include="Npgsql" />
+    <PackageReference Include="Microsoft.Data.SqlClient" />
   </ItemGroup>
 
 </Project>

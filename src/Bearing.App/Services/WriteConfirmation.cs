@@ -27,17 +27,31 @@ public sealed record WriteStatement(string Kind, string Sql, bool IsRisky);
 /// inline-edit save) build one of these and hand it to <see cref="IDialogService.ConfirmWriteAsync"/>.
 /// Pure: all display text is derived here so it can be tested without a window (§2.5, §4.3).
 /// </summary>
+/// <param name="GuardIsDialectAware">
+/// False when <see cref="Bearing.Sql.WriteGuard"/> could not read this engine's grammar
+/// (<see cref="Bearing.Sql.ISqlDialect.HasDialectAwareGuard"/>) and therefore reported every statement as
+/// risky rather than guess. It changes what the prompt may claim: without it, every run of a guarded
+/// connection confirms and the user reads the standard wording as "your SELECT is destructive", which is
+/// both untrue and the fastest way to teach someone to click through the guard. That was SQL Server's
+/// situation until its guard learned to read T-SQL; both shipped dialects report true now, so this arm is
+/// what the next engine gets before its own scanner exists. Defaults to true so the Postgres path — and
+/// every existing caller — is untouched.
+/// </param>
 public sealed record WriteConfirmation(
     ConnectionInfo Connection,
     WriteAction Action,
     IReadOnlyList<string> Verbs,
-    IReadOnlyList<WriteStatement> Statements)
+    IReadOnlyList<WriteStatement> Statements,
+    bool GuardIsDialectAware = true)
 {
     /// <summary>A submitted batch: every statement, reads included, each tagged with what it does.</summary>
     public static WriteConfirmation ForBatch(ConnectionInfo connection, IReadOnlyList<StatementRisk> statements)
         => new(connection, WriteAction.RunBatch,
             statements.SelectMany(s => s.RiskyVerbs).Distinct(StringComparer.Ordinal).ToList(),
-            statements.Select(s => new WriteStatement(s.Label, s.Text, s.IsRisky)).ToList());
+            statements.Select(s => new WriteStatement(s.Label, s.Text, s.IsRisky)).ToList(),
+            // One statement that the guard could not read makes the whole verdict unreliable, so the
+            // conservative reading wins for the batch. An empty batch has nothing to be unsure about.
+            GuardIsDialectAware: statements.Count == 0 || statements.All(s => s.GuardIsDialectAware));
 
     /// <summary>An inline-edit save: the generated DML, which is risky by definition.</summary>
     public static WriteConfirmation ForEdits(ConnectionInfo connection, IReadOnlyList<WriteStatement> changes)
@@ -66,6 +80,14 @@ public sealed record WriteConfirmation(
     /// only reads), and the transaction guarantee for a save.</summary>
     public string Summary => Action switch
     {
+        // Ahead of the write-counting arms: when the guard couldn't read the dialect, RiskyCount is every
+        // statement by fiat, and saying "3 statements will modify data or schema" of three SELECTs would be
+        // a straight falsehood.
+        WriteAction.RunBatch when !GuardIsDialectAware =>
+            $"{Plural(Statements.Count, "statement")} below will run on {Target}."
+            + (Verbs.Count > 0
+                ? $" Recognised as writes: {VerbList}."
+                : " None of them was recognised as a write."),
         WriteAction.RunBatch when Statements.Count == RiskyCount =>
             $"{Plural(Statements.Count, "statement")} below will modify data or schema ({VerbList}).",
         WriteAction.RunBatch =>
@@ -82,6 +104,20 @@ public sealed record WriteConfirmation(
     public string? Warning => IsGuarded
         ? $"⚠ {Connection.Name} is marked as requiring confirmation for every write."
         : null;
+
+    /// <summary>
+    /// Why a read is being confirmed at all; null whenever the guard actually understood the batch.
+    /// <para>
+    /// This is the honest half of failing safe (§1.2). The guard errs toward asking, which is right — but a
+    /// prompt that asks without saying why trains the user to dismiss it, and the next prompt it dismisses
+    /// will be a real DROP. So it names the limitation instead of implying the statements write.
+    /// </para>
+    /// </summary>
+    public string? GuardNote => GuardIsDialectAware
+        ? null
+        : "Bearing does not parse this engine's SQL yet, so it cannot tell a read from a write here. "
+        + "Every statement in the batch is listed and confirmed. This is the guard being cautious, "
+        + "not a finding about these statements.";
 
     public string ConfirmLabel => Action == WriteAction.RunBatch ? "Run anyway" : "✓ Save";
 

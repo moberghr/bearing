@@ -1,3 +1,4 @@
+using System;
 using Bearing.Core.Data;
 using Bearing.Data;
 using Bearing.Data.Postgres;
@@ -11,6 +12,21 @@ public class PostgresWriteTests
 {
     private static ConnectionInfo Info() => PgTestServer.Info();
     private static string Password => PgTestServer.Password;
+
+    /// <summary>The count wrapper the App layer builds before calling the executor: <c>CountAsync</c>
+    /// runs an already-shaped count query and never generates one (same contract as
+    /// <c>ExecutePageAsync</c>), so the dialect's wrap is applied here exactly as production applies it.
+    /// Pairing them in the test is the point — a wrap the server rejects is a dialect bug, not an
+    /// executor bug, and this is where the two meet.</summary>
+    /// <summary>The count wrapper the App layer builds before calling the executor: <c>CountAsync</c>
+    /// runs an already-shaped count query and never generates one (same contract as
+    /// <c>ExecutePageAsync</c>). Non-null here by construction — every fixture below is a plain SELECT,
+    /// and the dialect only refuses shapes that cannot sit in a derived table (a CTE, a query hint,
+    /// FOR JSON/XML). Asserted rather than suppressed so a fixture that drifts into one of those
+    /// fails loudly instead of passing a null through.</summary>
+    private static string CountSql(string sql)
+        => PostgresDialect.Instance.CountWrap(sql)
+           ?? throw new InvalidOperationException($"dialect refused to wrap a count for: {sql}");
 
     [SkippableFact]
     public async Task Insert_update_delete_run_transactionally()
@@ -53,7 +69,7 @@ public class PostgresWriteTests
                 new[] { DmlGenerator.Delete(null, tbl, new[] { new ColumnValue("id", newId) }) },
                 CancellationToken.None);
             Assert.Equal(1, Assert.Single(del).RowCount);
-            var afterDel = await exec.CountAsync($"select * from {tbl}", CancellationToken.None);
+            var afterDel = await exec.CountAsync(CountSql($"select * from {tbl}"), CancellationToken.None);
             Assert.Equal(0, afterDel);
         }
         finally
@@ -83,7 +99,7 @@ public class PostgresWriteTests
             }, CancellationToken.None);
 
             Assert.False(res[0].Success);                   // returned as a single error result
-            var count = await exec.CountAsync($"select * from {tbl}", CancellationToken.None);
+            var count = await exec.CountAsync(CountSql($"select * from {tbl}"), CancellationToken.None);
             Assert.Equal(0, count);                          // nothing committed
         }
         finally

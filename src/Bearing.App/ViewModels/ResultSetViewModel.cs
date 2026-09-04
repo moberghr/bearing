@@ -51,11 +51,24 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// <summary>A row-returning success renders a grid; everything else renders as text.</summary>
     public bool HasGrid => Success && Columns.Count > 0;
 
-    /// <summary>True when this is a single SELECT that can be paged/counted.</summary>
-    public bool IsPageable { get; }
+    /// <summary>True when this is a single SELECT that can be paged/counted. Settable because the answer
+    /// can turn out to be no <em>after</em> the first page: an engine may refuse to wrap a shape it cannot
+    /// put in a derived table (a CTE on SQL Server), and <see cref="RetirePaging"/> is how that is admitted
+    /// rather than retried forever.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanCount))]
+    private bool _isPageable;
 
     /// <summary>The exact SELECT that produced this set (for paging/count); null unless pageable.</summary>
     public string? SourceSql { get; }
+
+    /// <summary>
+    /// The engine this set came from — its dialect and literal style. Carried on the result rather than
+    /// looked up per use because the surfaces that need it (Copy as ▸ SQL, the IN list) reach it from the
+    /// grid, which knows the result and not the connection. Defaults to Postgres, which is what every
+    /// caller did when there was one engine.
+    /// </summary>
+    public Connections.ProviderTraits Traits { get; init; } = Connections.ProviderTraits.Postgres;
 
     /// <summary>
     /// The statement text this set came from, for showing alongside the data (Copy as ▸ table with the
@@ -112,6 +125,17 @@ public sealed partial class ResultSetViewModel : ObservableObject
 
     /// <summary>Meta-row detail: live row count + the query time ("200 of 1,000 rows · 88 ms").</summary>
     public string MetaDetail => $"{RowCountText} · {(long)System.Math.Round(Duration.TotalMilliseconds)} ms";
+
+    /// <summary>
+    /// Give up paging this result: the rows already on screen stay, and load-more, fetch-all and [Count]
+    /// retire. For a query the engine cannot page at all — not for a page that merely failed, which is left
+    /// retryable on the next scroll.
+    /// </summary>
+    public void RetirePaging()
+    {
+        HasMore = false;
+        IsPageable = false;
+    }
 
     /// <summary>Append a freshly-fetched page and update whether more remain.</summary>
     public void AppendPage(IReadOnlyList<object?[]> rows, bool hasMore)

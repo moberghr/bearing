@@ -104,4 +104,74 @@ public class WriteConfirmationTests
 
         Assert.Equal("delete from rental;\ndelete from film;", confirmation.Script);
     }
+
+    // ---- A guard that cannot read the dialect --------------------------------------------------------
+
+    /// <summary>A batch as the guard reports it when it cannot read the engine: every statement risky, no
+    /// verb found, and the flag saying why. Built by hand rather than through SqlServerDialect so the
+    /// confirmation is tested on its own terms.</summary>
+    private static StatementRisk[] Unparsed(params string[] statements)
+        => statements
+            .Select(s => new StatementRisk(s, s.Split(' ')[0].ToUpperInvariant(), Array.Empty<string>(),
+                GuardIsDialectAware: false))
+            .ToArray();
+
+    [Fact]
+    public void An_unparsed_dialect_confirms_every_statement_but_claims_nothing_about_them()
+    {
+        var confirmation = WriteConfirmation.ForBatch(Conn(guarded: true),
+            Unparsed("select * from Orders", "select 1"));
+
+        // Fail safe: both are confirmed (§1.2).
+        Assert.Equal(2, confirmation.RiskyCount);
+        Assert.False(confirmation.GuardIsDialectAware);
+
+        // ...but the wording must not say two SELECTs modify data. That sentence is what teaches a user to
+        // click through the guard, and the next prompt they click through will be a real DROP.
+        Assert.DoesNotContain("modify data", confirmation.Summary);
+        Assert.Equal("2 statements below will run on prod-eu · Production. "
+                   + "None of them was recognised as a write.", confirmation.Summary);
+        Assert.Contains("does not parse this engine's SQL yet", confirmation.GuardNote);
+    }
+
+    [Fact]
+    public void An_unparsed_dialect_still_names_the_writes_it_did_recognise()
+    {
+        var statements = new[]
+        {
+            new StatementRisk("select 1", "SELECT", Array.Empty<string>(), GuardIsDialectAware: false),
+            new StatementRisk("delete from Orders", "DELETE", new[] { "DELETE" }, GuardIsDialectAware: false),
+        };
+
+        var confirmation = WriteConfirmation.ForBatch(Conn(guarded: true), statements);
+
+        Assert.Contains("Recognised as writes: DELETE.", confirmation.Summary);
+    }
+
+    [Fact]
+    public void A_parsed_dialect_carries_no_guard_note()
+    {
+        // The Postgres path is untouched: the note exists only to explain a confirmation nobody could
+        // otherwise account for.
+        Assert.Null(WriteConfirmation.ForBatch(Conn(), WriteGuard.Describe("delete from rental;")).GuardNote);
+        Assert.True(WriteConfirmation.ForBatch(Conn(), WriteGuard.Describe("select 1")).GuardIsDialectAware);
+    }
+
+    [Fact]
+    public void One_unreadable_statement_makes_the_whole_batch_unreadable()
+    {
+        // A mixed batch cannot happen through one dialect, but the verdict has to be conservative if it
+        // ever does: a batch is only as trustworthy as its least-understood statement.
+        var mixed = new[]
+        {
+            new StatementRisk("select 1", "SELECT", Array.Empty<string>()),
+            new StatementRisk("exec sp_x", "EXEC", Array.Empty<string>(), GuardIsDialectAware: false),
+        };
+
+        Assert.False(WriteConfirmation.ForBatch(Conn(), mixed).GuardIsDialectAware);
+    }
+
+    [Fact]
+    public void An_empty_batch_has_nothing_to_be_unsure_about()
+        => Assert.True(WriteConfirmation.ForBatch(Conn(), Array.Empty<StatementRisk>()).GuardIsDialectAware);
 }

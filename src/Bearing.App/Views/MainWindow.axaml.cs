@@ -51,15 +51,17 @@ public partial class MainWindow : Window
         EditorChrome.InstallSqlHighlighting(Editor);
         App.LogStartup("TextMate installed");
 
-        _completion = new CompletionController(Editor, new CompletionEngine(), () => Vm?.Execution.SnapshotForSelectedTab());
-        _folding = new SqlFoldingController(Editor); // installs the fold margin (left of the text)
+        Func<ISqlDialect> dialect = () => Vm?.Execution.DialectForSelectedTab() ?? PostgresDialect.Instance;
+        _completion = new CompletionController(Editor, new CompletionEngine(dialect),
+            () => Vm?.Execution.SnapshotForSelectedTab(), dialect);
+        _folding = new SqlFoldingController(Editor, dialect); // installs the fold margin (left of the text)
         // Auto-close reads the setting live, and loses Enter to the completion popup — while a suggestion is
         // selected, Enter accepts it rather than escaping a bracket (#70).
         _autoClose = new EditorAutoClose(
             Editor,
             enabled: () => Vm?.SettingsService.Current.AutoCloseBrackets ?? true,
             completionOpen: () => _completion.IsOpen);
-        _text = new EditorTextCommands(Editor);      // installs the statement-highlight margin
+        _text = new EditorTextCommands(Editor, dialect);   // installs the statement-highlight margin
 
         // These read the keymap lazily: the shortcuts editor can replace it at runtime, and they are built
         // before the dispatcher exists (commands must be registered first).
