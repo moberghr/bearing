@@ -27,7 +27,7 @@
 
 - **Active stack:** dotnet (.NET 10, `Nullable` enabled, `ImplicitUsings` on, central package versions)
 - **Build command:** `dotnet build`
-- **Test command:** `dotnet test` — no env vars needed; the defaults point at the `squirrel-pg-test` container on **55434** (`tests/Shared/PgTestServer.cs`), which `./build/test-db.sh` creates. Postgres integration tests skip cleanly without a DB, and the skip message names the endpoint and the reason. Override with `BEARING_TEST_PG_{HOST,PORT,DB,USER,PASSWORD}`.
+- **Test command:** `dotnet test` — no env vars needed; the defaults point at the `squirrel-pg-test` container on **55434** (`tests/Shared/PgTestServer.cs`), which `./build/test-db.sh` creates. Postgres integration tests skip cleanly without a DB, and the skip message names the endpoint and the reason. Override with `BEARING_TEST_PG_{HOST,PORT,DB,USER,PASSWORD}`. The SQL Server suites skip the same way off `BEARING_TEST_MSSQL_*` (`tests/Shared/MsSqlTestServer.cs`), and no box that has built this feature has had a SQL Server on it.
 - **Format:** `dotnet format --verbosity quiet`
 
 For framework-specific guidance, see `.claude/skills/tech-stack-dotnet/SKILL.md`.
@@ -71,10 +71,10 @@ Full reference docs (read on-demand by skills and review agents):
 
 - **Type:** Cross-platform desktop SQL query tool & script manager (Avalonia 12.1)
 - **UI:** Avalonia + AvaloniaEdit (editor) + Avalonia DataGrid (results); MVVM via CommunityToolkit.Mvvm
-- **SQL intelligence:** ANTLR4 PostgreSQL grammar + antlr4-c3 completion (`Bearing.Sql`)
-- **Data layer:** raw ADO.NET — Npgsql (Postgres targets), Microsoft.Data.Sqlite (local query log + workspace). **No ORM.**
+- **SQL intelligence:** ANTLR4 grammars — PostgreSQL **and** T-SQL — behind one antlr4-c3 completion engine, each dialect handing over its own rule set (`Bearing.Sql`, `ISqlDialect.ParseRules`, §9.5)
+- **Data layer:** raw ADO.NET — Npgsql (PostgreSQL targets), Microsoft.Data.SqlClient (SQL Server targets), Microsoft.Data.Sqlite (local query log + workspace). **No ORM.**
 - **DI:** manual composition root in `src/Bearing.App/App.axaml.cs` (no container)
-- **Database targets:** PostgreSQL
+- **Database targets:** PostgreSQL and Microsoft SQL Server, behind `IDbProvider` (connect/metadata/execute) + `ISqlDialect` (the SQL text)
 - **Test stack:** xUnit v2 + `Xunit.SkippableFact`, hand-rolled fakes (`tests/**/Fakes.cs`), no Moq/NSubstitute, no EF InMemory. Headless UI tests in `tests/Bearing.App.Tests/Ui/` on `Avalonia.Headless` (§4.5)
 - **Layout:** `src/Bearing.{Core,Sql,Data,Persistence,Updates,App,Desktop}` — dependency-free `Core` ← `Sql`/`Data`/`Persistence`/`Updates` ← `App` ← `Desktop`
 - **Distribution:** Velopack installers + delta auto-update, published to this repo's GitHub Releases by `build/velopack.sh` (see `docs/RELEASING.md`). `build/release.sh` is the older archive path, kept.
