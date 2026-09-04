@@ -232,8 +232,23 @@ public sealed class DemoExecutor : IQueryExecutor
         var statements = _split?.Invoke(sql) ?? [sql];
         var results = statements.Count <= 1
             ? Match(sql)
-            : statements.SelectMany(Match).ToList();
+            // Each set says which statement it came from, as the real provider does — that is what lets one
+            // grid of a batch be copied with its own query rather than with all of them. Positional, and
+            // only where it holds: a fixture whose pattern serves two sets for one statement breaks the
+            // one-set-per-statement correspondence, and an index the caller can't trust is worse than none
+            // (see QueryResult.StatementIndex).
+            : Attributed(statements.Select(s => Match(s)).ToList());
         return Task.FromResult(Cap(results, options.MaxRows));
+    }
+
+    /// <summary>Flatten one batch's per-statement results, numbering them when each statement produced
+    /// exactly one set — the condition <see cref="QueryResult.StatementIndex"/> is defined on.</summary>
+    private static List<QueryResult> Attributed(List<IReadOnlyList<QueryResult>> perStatement)
+    {
+        var oneEach = perStatement.All(r => r.Count == 1);
+        return perStatement
+            .SelectMany((sets, i) => sets.Select(r => oneEach ? r with { StatementIndex = i } : r))
+            .ToList();
     }
 
     /// <summary>

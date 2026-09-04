@@ -41,6 +41,10 @@
   <!-- Stop: filled square (Run button while a query is in flight — cancel) -->
   <StreamGeometry x:Key="Icon.Stop">M6,6 h12 v12 h-12 z</StreamGeometry>
 
+  <!-- Explain: a plan is a tree, so the mark is one — a root that forks to two leaves. Stroked rather than
+       filled, like Schema and Connections beside it, so it reads as structure and not as a solid object. -->
+  <StreamGeometry x:Key="Icon.Explain">M12,4 v5 M12,9 C12,9 7,9 7,14 M12,9 C12,9 17,9 17,14 M5,14 h4 v5 h-4 z M15,14 h4 v5 h-4 z M10,2 h4 v3 h-4 z</StreamGeometry>
+
   <!-- Focus: expand arrows -->
   <StreamGeometry x:Key="Icon.Focus">M4,9 v-5 h5 M20,9 v-5 h-5 M4,15 v5 h5 M20,15 v5 h-5</StreamGeometry>
 

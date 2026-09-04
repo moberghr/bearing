@@ -50,6 +50,25 @@ public sealed record QueryResult(
     bool Truncated)
 {
     public bool Success => Error is null;
+
+    /// <summary>
+    /// Which statement of the run produced this result — 0-based, and set <b>only when the provider can
+    /// prove the mapping</b>. It answers "where did this grid come from" for one set out of a batch, where
+    /// the run's own SQL text is the whole batch and names no single set.
+    /// <para>
+    /// An index rather than the statement's text, and deliberately: locating a statement in a buffer needs a
+    /// SQL lexer, which lives in <c>Bearing.Sql</c> — a project the data layer may not reference (§2.2). So a
+    /// provider reports the position it is certain of and the caller resolves the text, which also keeps this
+    /// provider-neutral (like <see cref="ColumnDescriptor.BaseTableId"/>).
+    /// </para>
+    /// <para>
+    /// Null means <i>unattributable, not unattempted</i>: the caller must fall back to the whole run's text
+    /// rather than assume position in the result list is the statement number. A provider sets it only where
+    /// it holds — see the Postgres executor, where a batch that returns fewer result sets than it has
+    /// statements (a write among the selects) has no public way to say which ones were skipped.
+    /// </para>
+    /// </summary>
+    public int? StatementIndex { get; init; }
 }
 
 /// <summary>

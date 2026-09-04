@@ -44,6 +44,9 @@ public static class CommandIds
     /// <summary>Command id for jumping to tab <paramref name="n"/> (1-based); n=9 is "last tab" (browser convention).</summary>
     public static string TabGoto(int n) => $"tab.goto{n}";
     public const string QueryRunAll = "query.runAll";
+    public const string QueryCancel = "query.cancel";
+    public const string QueryExplain = "query.explain";
+    public const string QueryExplainAnalyze = "query.explainAnalyze";
     public const string PanelConnections = "panel.connections";
     public const string PanelScripts = "panel.scripts";
     public const string PanelHistory = "panel.history";
@@ -73,8 +76,9 @@ public static class CommandIds
     public const string GridFetchAll = "grid.fetchAll";
 
     /// <summary>Copy the selection in one of the alternative formats: <c>grid.copyAs.csv</c>,
-    /// <c>.markdown</c>, <c>.json</c>, <c>.html</c>, <c>.sqlInsert</c>. All ship unbound (Ctrl+C is TSV) and
-    /// are reachable from the palette, the grid's context menu, or a user binding.</summary>
+    /// <c>.markdown</c>, <c>.json</c>, <c>.html</c>, <c>.htmlWithQuery</c>, <c>.sqlInsert</c>. All ship
+    /// unbound (Ctrl+C is TSV) and are reachable from the palette, the grid's context menu, or a user
+    /// binding.</summary>
     public static string GridCopyAs(CopyFormat format) => "grid.copyAs." + Lower(format.ToString());
 
     /// <summary>Export the whole result set: <c>grid.export.csv</c> / <c>grid.export.xlsx</c>.</summary>

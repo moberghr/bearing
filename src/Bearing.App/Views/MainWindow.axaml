@@ -156,6 +156,12 @@
       </MenuItem>
       <MenuItem Header="_Query">
         <MenuItem x:Name="MenuRun" Header="Run" Click="OnRunClick"/>
+        <MenuItem x:Name="MenuCancel" Header="Cancel running query" Click="OnCancelQueryClick"
+                  IsEnabled="{Binding Execution.IsBusy}"/>
+        <Separator/>
+        <MenuItem x:Name="MenuExplain" Header="Explain statement" Click="OnExplainClick"/>
+        <MenuItem x:Name="MenuExplainAnalyze" Header="Explain and analyse (runs the statement)"
+                  Click="OnExplainAnalyzeClick"/>
         <Separator/>
         <!-- Per tab, not per grid: a run's sets belong to the tab, so this is the one export that is not
              reachable from a result's own chrome (#12). -->
@@ -193,6 +199,22 @@
               <MenuItem Header="Remove project…" Click="OnRemoveProjectClick"/>
             </MenuFlyout>
           </Button.Flyout>
+        </Button>
+
+        <!-- Explain: plans the statement under the caret. A click is the safe form — it runs nothing. The
+             measured form executes the statement, so it is not one click away by accident: it lives on this
+             button's right-click menu and in the Query menu, both labelled with what it does. -->
+        <Button x:Name="ExplainButton" Classes="rail" Theme="{StaticResource RailButton}" Width="30" Height="30"
+                Click="OnExplainClick" Margin="4,0,0,0"
+                ToolTip.Tip="Explain statement (Ctrl+Shift+E) — right-click to analyse">
+          <Button.ContextMenu>
+            <ContextMenu>
+              <MenuItem Header="Explain statement" Click="OnExplainClick"/>
+              <MenuItem Header="Explain and analyse (runs the statement)" Click="OnExplainAnalyzeClick"/>
+            </ContextMenu>
+          </Button.ContextMenu>
+          <Path Data="{StaticResource Icon.Explain}" Stroke="{DynamicResource Syntax.Func}" StrokeThickness="1.4"
+                Fill="Transparent" Stretch="Uniform" Width="15" Height="15"/>
         </Button>
 
         <Border Width="1" Height="22" Background="{DynamicResource Border}" Margin="4,0"/>
@@ -483,9 +505,10 @@
                   <Setter Property="Opacity" Value="0.8"/>
                 </Style>
             </DockPanel.Styles>
-            <!-- Scrollbars Hidden, not Auto: the strip still scrolls (wheel, and keyboard switching brings
-                 the selection into view), but on a row this short the bar was a thin target that said "there
-                 is more" without saying more of *what*. The chevron says which tabs, and is the affordance. -->
+            <!-- Scrollbars Hidden, not Auto: the strip still scrolls (Shift+wheel, and every switch brings
+                 the selection into view — a plain wheel here switches tabs), but on a row this short the bar
+                 was a thin target that said "there is more" without saying more of *what*. The chevron says
+                 which tabs, and is the affordance. -->
             <ScrollViewer x:Name="PinnedTabScroll" DockPanel.Dock="Top"
                           IsVisible="{Binding Workspace.HasPinnedTabs}"
                           HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"

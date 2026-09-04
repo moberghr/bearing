@@ -26,6 +26,16 @@ public class ShellNavigationTests
     public void Adjacent_tab_of_a_single_tab_stays_on_it()
         => Assert.Equal(0, TabNavigator.AdjacentIndex(count: 1, current: 0, dir: +1));
 
+    // ---- the wheel over the strip -------------------------------------------------------------
+
+    [Theory]
+    [InlineData(0, +1, 1)]
+    [InlineData(2, +1, 2)]   // stops at the end rather than wrapping
+    [InlineData(0, -1, 0)]   // …and at the start
+    [InlineData(2, -1, 1)]
+    public void A_wheel_step_clamps_at_both_ends(int current, int dir, int expected)
+        => Assert.Equal(expected, TabNavigator.SteppedIndex(count: 3, current, dir));
+
     // ---- tab.goto{n} -------------------------------------------------------------------------
 
     [Theory]

@@ -23,6 +23,10 @@ public enum CopyFormat
     /// Teams / Outlook / Word / Excel as a real table.</summary>
     Html,
 
+    /// <summary><see cref="Html"/> with the statement that produced the rows across the top, so the pasted
+    /// table carries its own provenance.</summary>
+    HtmlWithQuery,
+
     /// <summary>One <c>insert into … values (…);</c> per row.</summary>
     SqlInsert,
 
@@ -44,6 +48,7 @@ public static class CopyRenderer
     public static IReadOnlyList<CopyFormat> Alternatives { get; } =
     [
         CopyFormat.Html,
+        CopyFormat.HtmlWithQuery,
         CopyFormat.InList,
         CopyFormat.Csv,
         CopyFormat.Markdown,
@@ -65,6 +70,10 @@ public static class CopyRenderer
         CopyFormat.Markdown => "Markdown table",
         CopyFormat.Json => "JSON",
         CopyFormat.Html => "Table (Teams, Outlook, Word, Excel)",
+        // Two entries rather than a setting, because the choice is per-paste and not per-user: the same
+        // person wants the query when they send a colleague a number to check, and doesn't when the table
+        // goes into a document that explains itself.
+        CopyFormat.HtmlWithQuery => "Table with the query that produced it",
         CopyFormat.SqlInsert => "SQL INSERT statements",
         // Named for the SQL construct, not for its punctuation: "comma-separated values" sat one line above
         // "CSV", which is the same words for a different thing. The example carries the rest of the meaning
@@ -73,14 +82,33 @@ public static class CopyRenderer
         _ => format.ToString(),
     };
 
+    /// <summary>Whether a format goes on the clipboard as the platform's HTML flavour rather than as text
+    /// (see <c>Services/HtmlClipboard</c>) — which is the difference between Teams pasting a table and
+    /// Teams pasting a wall of angle brackets.</summary>
+    public static bool IsRichHtml(CopyFormat format) => format is CopyFormat.Html or CopyFormat.HtmlWithQuery;
+
+    /// <summary>
+    /// The plain-text alternative that rides along on the same clipboard entry, for a target that takes no
+    /// HTML (a terminal, an editor). <paramref name="tsv"/> is the selection as plain Copy would give it.
+    /// <para>
+    /// The with-query format puts the statement above the rows here too: a user who asked for the query and
+    /// pasted somewhere plain should still get it, rather than silently losing the half they chose the
+    /// format for.
+    /// </para>
+    /// </summary>
+    public static string PlainAlternative(ResultSetViewModel result, string tsv, CopyFormat format)
+        => format == CopyFormat.HtmlWithQuery && result.ExecutedSql is { } sql ? sql + "\n\n" + tsv : tsv;
+
     /// <summary>Render <paramref name="block"/> in <paramref name="format"/>. <paramref name="result"/> is
-    /// consulted only for the SQL target's schema/table.</summary>
+    /// consulted only for the SQL target's schema/table and, for
+    /// <see cref="CopyFormat.HtmlWithQuery"/>, the statement that produced the rows.</summary>
     public static string Render(ResultSetViewModel result, TableBlock block, CopyFormat format) => format switch
     {
         CopyFormat.Csv => TableFormats.Csv(block),
         CopyFormat.Markdown => TableFormats.Markdown(block),
         CopyFormat.Json => TableFormats.Json(block),
         CopyFormat.Html => TableFormats.Html(block),
+        CopyFormat.HtmlWithQuery => TableFormats.Html(block, result.ExecutedSql),
         // The result carries the engine it came from, so the pasted SQL is valid where the rows live.
         CopyFormat.InList => TableFormats.InList(block, result.Traits),
         CopyFormat.SqlInsert => TableFormats.SqlInsert(

@@ -37,6 +37,16 @@ public static class KeymapDefaults
         // and taking it would have replaced a working gesture with a similar-looking one. The binding tests
         // caught the collision, which is what they are for.
         yield return G(CommandIds.TabPick, "Ctrl+E");
+        // Beside Run (Ctrl+Enter) rather than anywhere near it alphabetically: explaining a statement is the
+        // same gesture with a different question, so it shares the modifier and adds Shift/Alt. Alt+Enter is
+        // the measured one, because it actually runs the statement and deserves the less reflexive chord.
+        // query.cancel deliberately has NO default gesture. Escape already belongs to app.escape above, which
+        // owns the unwind order — overlay, then a transient menu bar, then the running query — and a second
+        // Global binding on the same key would shadow one of them arbitrarily. The command exists so the
+        // action is findable under "Query" rather than only as app.escape's "Escape / cancel" under "View",
+        // and so anyone who wants a dedicated key can bind one.
+        yield return G(CommandIds.QueryExplain, "Ctrl+Shift+E");
+        yield return G(CommandIds.QueryExplainAnalyze, "Ctrl+Alt+E");
         yield return G(CommandIds.TabNext, "Ctrl+PageDown");     // visual order (tab strip)
         yield return G(CommandIds.TabPrev, "Ctrl+PageUp");
         yield return G(CommandIds.TabMruNext, "Ctrl+Tab");       // most-recently-used order
