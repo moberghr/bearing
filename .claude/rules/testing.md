@@ -15,7 +15,17 @@ Supplement: `.claude/references/dotnet/testing-supplement.md`.
 
 ## §4.2 — Skip-safe Postgres integration tests
 - Tests needing a live Postgres use `Xunit.SkippableFact` and read `BEARING_TEST_PG_*` env vars,
-  defaulting to a local docker container. They **skip** (never fail) when no server is reachable.
+  defaulting to a local docker container. They **skip** (never fail) when no server is reachable. The
+  SQL Server suites work the same way off `BEARING_TEST_MSSQL_*` (`tests/Shared/MsSqlTestServer.cs`).
+- **A skip is not a pass, and the difference is measured.** Both engines have a script that creates the
+  container its defaults point at — `./build/test-db.sh` and `./build/test-db-mssql.sh` — and the second
+  did not exist for the whole of the SQL Server work. Those suites therefore skipped, the build stayed
+  green, and every claim about the `sys.*` catalog queries, column origin and batch row counts was argued
+  rather than observed. Their first live run failed 8 of 177, **6 of them real provider bugs**: asking for
+  column origin made `CREATE VIEW` fail (Msg 111), un-aliased columns carried no origin at all so FK
+  navigation and inline editing were dead on `select *`, and an error number missing from the
+  uncountable-shape set threw a server error at the user instead of hiding a total. WHEN a change touches
+  a provider, run its container before reporting a result.
 - WHEN adding a Postgres-dependent test, DO NOT write a plain `[Fact]` that fails without a DB — follow the
   `SkippableFact` + `BEARING_TEST_PG_*` pattern in `tests/Bearing.Data.Tests`.
 - To run them live: just `dotnet test`. Host/port/db/user/password come from `PgTestServer`

@@ -71,6 +71,65 @@ public class SqlServerExecutorTests
     private static Task DropAsync(IQueryExecutor exec, string table) => exec.ExecuteAsync(
         $"drop table if exists {table};", new QueryOptions(), CancellationToken.None);
 
+    /// <summary>
+    /// Creating a view, which asking for column origin used to make impossible. <c>ExecuteAsync</c> runs
+    /// under <see cref="System.Data.CommandBehavior.KeyInfo"/> — the only way SqlClient reports base
+    /// table/column names — and to get that browse metadata SqlClient prepends a SET to the batch. That
+    /// displaces whatever the user wrote, so a statement required to <em>begin</em> a batch (CREATE VIEW,
+    /// PROCEDURE, FUNCTION, TRIGGER, SCHEMA) was rejected with Msg 111, an error about the user's SQL that
+    /// the user's SQL had not earned. Typing a perfectly good <c>create view</c> into the editor failed.
+    /// <para>
+    /// The executor now retries once without KeyInfo, which is safe because Msg 111 is raised while the
+    /// batch is parsed, before any statement runs — the second half of this test is that measurement: a
+    /// batch whose DDL is genuinely not first still fails, and its preceding INSERT must not have landed,
+    /// or a retry would apply it twice.
+    /// </para>
+    /// </summary>
+    [SkippableFact]
+    public async Task A_batch_first_only_statement_is_not_broken_by_asking_for_column_origin()
+    {
+        var provider = Provider();
+        await using var factory = provider.CreateConnectionFactory(Info(), Password);
+        await MsSqlTestServer.RequireAsync(factory);
+
+        var executor = provider.CreateQueryExecutor(factory);
+        const string tbl = "dbo.bearing_ddl_test";
+        const string view = "dbo.bearing_ddl_view";
+        await executor.ExecuteAsync(
+            $"drop view if exists {view}; drop table if exists {tbl};"
+            + $" create table {tbl} (id int not null primary key);",
+            new QueryOptions(), CancellationToken.None);
+        try
+        {
+            var made = Assert.Single(await executor.ExecuteAsync(
+                $"create view {view} as select id from {tbl}", new QueryOptions(), CancellationToken.None));
+            Assert.True(made.Success, made.Error?.Message);
+
+            // It really exists, rather than the error merely having been swallowed.
+            var read = Assert.Single(await executor.ExecuteAsync(
+                $"select id from {view}", new QueryOptions(), CancellationToken.None));
+            Assert.True(read.Success, read.Error?.Message);
+
+            // A batch where the DDL is not first is invalid T-SQL either way, so the retry must not rescue
+            // it — and nothing before it may have been applied.
+            var invalid = Assert.Single(await executor.ExecuteAsync(
+                $"insert into {tbl} (id) values (9); create view {view}_2 as select 1 as one",
+                new QueryOptions(), CancellationToken.None));
+            Assert.False(invalid.Success);
+            Assert.Equal("111", invalid.Error!.SqlState);
+
+            var rows = Assert.Single(await executor.ExecuteAsync(
+                $"select count(*) from {tbl}", new QueryOptions(), CancellationToken.None));
+            Assert.Equal(0, Convert.ToInt32(rows.Rows[0][0]));
+        }
+        finally
+        {
+            await executor.ExecuteAsync(
+                $"drop view if exists {view};", new QueryOptions(), CancellationToken.None);
+            await DropAsync(executor, tbl);
+        }
+    }
+
     [SkippableFact]
     public async Task Executes_a_select_and_returns_typed_rows()
     {
@@ -109,14 +168,21 @@ public class SqlServerExecutorTests
     }
 
     /// <summary>
-    /// The behavioural difference most likely to be got wrong in a port from Npgsql:
-    /// <see cref="SqlDataReader.RecordsAffected"/> accumulates over the whole batch instead of resetting per
-    /// statement, so a naive read makes the second UPDATE claim it touched both statements' rows — and the
-    /// number keeps growing with every statement after it. Three rows updated twice must report 3 and 3,
-    /// never 3 and 6.
+    /// How a multi-statement DML batch is reported, which is where SqlClient departs from Npgsql furthest.
+    /// Npgsql gives one result per statement with that statement's count; SqlClient collapses a run of
+    /// non-row-returning statements into <em>one</em> result set whose
+    /// <see cref="SqlDataReader.RecordsAffected"/> is the batch total. So there is no per-statement
+    /// boundary to split on, and the executor cannot reproduce Postgres' shape without splitting the batch
+    /// itself — which would break <c>declare @x int</c>, T-SQL variables being batch-scoped.
+    /// <para>
+    /// What it does instead is what SQL Server's own tools do: report the total, and read the per-statement
+    /// breakdown off <see cref="SqlCommand.StatementCompleted"/>, the only place it exists. This test is
+    /// the measurement — it replaced one asserting three results of 3, 3 and 1, which the server never
+    /// offered.
+    /// </para>
     /// </summary>
     [SkippableFact]
-    public async Task Affected_rows_are_per_statement_not_the_running_batch_total()
+    public async Task A_dml_batch_reports_the_total_and_the_per_statement_breakdown()
     {
         var provider = Provider();
         await using var factory = provider.CreateConnectionFactory(Info(), Password);
@@ -134,9 +200,17 @@ public class SqlServerExecutorTests
                 $"update {tbl} set v = 1; update {tbl} set v = 2; update {tbl} set v = 3 where id = 1;",
                 new QueryOptions(), CancellationToken.None);
 
-            Assert.Equal(3, results.Count);
-            Assert.Equal(new[] { 3L, 3L, 1L }, results.Select(r => (long)r.RowCount));
-            Assert.All(results, r => Assert.True(r.Success, r.Error?.Message));
+            // One result, not three: SqlClient collapses a run of non-row-returning statements into a
+            // single result set, so there is no per-statement boundary for the executor to split on.
+            var result = Assert.Single(results);
+            Assert.True(result.Success, result.Error?.Message);
+
+            // RowCount is the batch total that the reader reports, 3 + 3 + 1.
+            Assert.Equal(7L, result.RowCount);
+
+            // The breakdown the reader cannot give is read off StatementCompleted instead, and is what
+            // stops the batch total from being mistaken for one statement's work.
+            Assert.Equal("3 statements: 3, 3, 1 row(s) affected", result.Message);
         }
         finally
         {
@@ -309,7 +383,13 @@ public class SqlServerExecutorTests
         try
         {
             var sql = $"select id from {NumbersTable}";
-            Assert.Null(SqlServerDialect.Instance.TryAppendPage(sql, 0, 10)); // refused, not invented
+            // Unsorted, so there is no ORDER BY for OFFSET/FETCH to hang off. A *first* page still has an
+            // answer without one — TOP (n) — and the dialect gives it; only a page at an offset has to fall
+            // back to the wrap, which is what the rest of this test exercises.
+            Assert.Equal(
+                $"select top (10) id from {NumbersTable}",
+                SqlServerDialect.Instance.TryAppendPage(sql, 0, 10));
+            Assert.Null(SqlServerDialect.Instance.TryAppendPage(sql, 10, 25)); // refused, not invented
 
             var page = await executor.ExecutePageAsync(
                 PageSql.Page(SqlServerDialect.Instance, sql, offset: 10, limit: 25)!, CancellationToken.None);

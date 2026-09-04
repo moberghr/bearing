@@ -27,8 +27,9 @@ namespace Bearing.Data.SqlServer;
 /// <para>
 /// Two SqlClient behaviours differ from Npgsql's and shape this file: column origin arrives as names and
 /// only under <see cref="CommandBehavior.KeyInfo"/> (see <see cref="ReadColumns"/>), and
-/// <see cref="SqlDataReader.RecordsAffected"/> accumulates across a batch instead of resetting per
-/// statement (see <see cref="BatchAffected"/>).
+/// <see cref="SqlDataReader.RecordsAffected"/> is the batch total rather than the current statement's,
+/// with a run of non-row-returning statements collapsed into one result set (see
+/// <see cref="DescribeBatch"/>).
 /// </para>
 /// </summary>
 public sealed class SqlServerQueryExecutor : IQueryExecutor
@@ -40,28 +41,31 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
     public async Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
-        var results = new List<QueryResult>();
-        var affected = new BatchAffected();
         try
         {
-            await using var conn = await _factory.OpenConnectionAsync(ct).ConfigureAwait(false);
-            await using var cmd = new SqlCommand(sql, conn);
-            // KeyInfo is the *only* way SqlDataReader reports base schema/table/column names, and this is
-            // the one path that wants them (FK navigation + inline edit). It costs extra server-side
-            // description work, so paging, counting and streaming below run without it.
-            await using var reader = await cmd
-                .ExecuteReaderAsync(CommandBehavior.KeyInfo, ct).ConfigureAwait(false);
-
-            // One QueryResult per statement's result set — NextResult walks a multi-statement batch.
-            // withBaseTables: capture column origin (schema/table/column) for FK-nav + inline edit.
-            do
+            return await RunAsync(sql, options, sw, keyInfo: true, ct).ConfigureAwait(false);
+        }
+        catch (SqlException ex) when (ex.Number == MustBeFirstInBatch)
+        {
+            // KeyInfo is not free: SqlClient prepends a SET to the batch to get the browse metadata, which
+            // makes a statement that must *begin* a batch (CREATE VIEW / PROCEDURE / FUNCTION / TRIGGER /
+            // SCHEMA) no longer first — so asking for column origin made creating a view fail with Msg 111,
+            // an error about the user's SQL that the user's SQL had not earned.
+            //
+            // Retrying without it is safe and loses nothing: Msg 111 is raised while the batch is parsed,
+            // before any statement runs (measured — a preceding INSERT does not land), so there is no
+            // half-applied batch to re-apply; and a DDL batch has no result columns for origin to describe.
+            // A batch where the DDL genuinely is not first still fails the same way on the retry, which is
+            // correct — that one is the user's to fix.
+            try
             {
-                results.Add(await ReadResultSetAsync(reader, options, sw, affected, ct, withBaseTables: true)
-                    .ConfigureAwait(false));
+                return await RunAsync(sql, options, sw, keyInfo: false, ct).ConfigureAwait(false);
             }
-            while (await reader.NextResultAsync(ct).ConfigureAwait(false));
-
-            return results;
+            catch (SqlException retry)
+            {
+                sw.Stop();
+                return new[] { Failure(sw.Elapsed, ErrorFrom(retry)) };
+            }
         }
         catch (SqlException ex)
         {
@@ -73,6 +77,48 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
             sw.Stop();
             return new[] { Failure(sw.Elapsed, new QueryError(SafeErrorText.Of(ex), null, null)) };
         }
+    }
+
+    /// <summary>
+    /// One execution of <paramref name="sql"/>, with or without the browse metadata that column origin
+    /// needs. Exceptions propagate: <see cref="ExecuteAsync"/> owns the decision to retry or report.
+    /// </summary>
+    private async Task<IReadOnlyList<QueryResult>> RunAsync(
+        string sql, QueryOptions options, Stopwatch sw, bool keyInfo, CancellationToken ct)
+    {
+        var results = new List<QueryResult>();
+
+        await using var conn = await _factory.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var cmd = new SqlCommand(sql, conn);
+
+        // The per-statement row counts, in statement order. This event is the only place they exist — see
+        // DescribeBatch for what the reader does and does not expose.
+        var counts = new List<int>();
+        cmd.StatementCompleted += (_, e) => counts.Add(e.RecordCount);
+
+        // KeyInfo is the *only* way SqlDataReader reports base schema/table/column names, and this is
+        // the one path that wants them (FK navigation + inline edit). It costs extra server-side
+        // description work, so paging, counting and streaming below run without it.
+        await using var reader = await cmd
+            .ExecuteReaderAsync(keyInfo ? CommandBehavior.KeyInfo : CommandBehavior.Default, ct)
+            .ConfigureAwait(false);
+
+        // One QueryResult per statement's result set — NextResult walks a multi-statement batch.
+        // withBaseTables: capture column origin (schema/table/column) for FK-nav + inline edit.
+        do
+        {
+            results.Add(await ReadResultSetAsync(reader, options, sw, ct, withBaseTables: keyInfo)
+                .ConfigureAwait(false));
+        }
+        while (await reader.NextResultAsync(ct).ConfigureAwait(false));
+
+        // Only now is the tally complete: every statement has run, so no later count can arrive. Filling
+        // this in inside the loop above would describe a batch that had not finished.
+        for (var i = 0; i < results.Count; i++)
+            if (results[i].Columns.Count == 0 && results[i].Success)
+                results[i] = results[i] with { Message = DescribeBatch(counts) };
+
+        return results;
     }
 
     public async Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
@@ -87,7 +133,7 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
             await using var cmd = new SqlCommand(pageSql, conn);
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             return await ReadResultSetAsync(
-                reader, new QueryOptions { MaxRows = null }, sw, new BatchAffected(), ct).ConfigureAwait(false);
+                reader, new QueryOptions { MaxRows = null }, sw, ct).ConfigureAwait(false);
         }
         catch (SqlException ex)
         {
@@ -180,6 +226,12 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
     ///     name for every column, so <c>select 1</c> or <c>select count(*)</c> without an alias is
     ///     uncountable as written. Postgres wraps those happily; this is a shape difference, not a
     ///     failure.</item>
+    ///   <item><b>10716</b> "A nested INSERT, UPDATE, DELETE, or MERGE statement must have an OUTPUT
+    ///     clause" — what a data-modifying statement dies of inside the wrap, for all three verbs. It is
+    ///     not 102/156: the wrap parses fine, and the statement is rejected for its position instead. This
+    ///     one was missing while the set was reasoned from documentation rather than measured, so counting
+    ///     a non-row-returning statement threw a server error at the user instead of quietly having no
+    ///     total.</item>
     ///   <item><b>8156</b> "The column 'x' was specified multiple times for '_sq'" — a join selecting two
     ///     columns of the same name is legal at the top level and illegal as a derived table. Again a
     ///     shape, and a common one.</item>
@@ -190,7 +242,7 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
     /// why this is a filtered catch and not a bare one.
     /// </summary>
     private static bool IsUncountableShape(SqlException ex)
-        => ex.Number is 102 or 156 or 1033 or 8155 or 8156;
+        => ex.Number is 102 or 156 or 1033 or 8155 or 8156 or 10716;
 
     public async Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(
         IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct)
@@ -236,6 +288,10 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
     /// INTO." Raised at compile time, so the batch has not partially applied when it fires.</summary>
     private const int OutputNotAllowedWithTrigger = 334;
 
+    /// <summary>Msg 111, "'X' must be the first statement in a query batch" — see the retry in
+    /// <see cref="ExecuteAsync"/> for why asking for column origin can provoke it on valid SQL.</summary>
+    private const int MustBeFirstInBatch = 111;
+
     /// <summary>
     /// One attempt at the batch, in one transaction: any failure disposes the transaction uncommitted, so
     /// the whole batch rolls back. <paramref name="withReturning"/> false runs each command's
@@ -256,23 +312,25 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
             foreach (var p in c.Parameters)
                 cmd.Parameters.Add(new DriverParameter(p.Name, p.Value ?? DBNull.Value));
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            // A fresh counter per command: each command has its own reader, so its RecordsAffected
-            // starts from nothing rather than continuing the previous command's total.
+            // One command per write, so its RecordsAffected stands for that write alone rather than
+            // continuing a running batch total.
             results.Add(await ReadResultSetAsync(
-                reader, new QueryOptions { MaxRows = null }, sw, new BatchAffected(), ct).ConfigureAwait(false));
+                reader, new QueryOptions { MaxRows = null }, sw, ct).ConfigureAwait(false));
         }
         await tx.CommitAsync(ct).ConfigureAwait(false);
         return results;
     }
 
     private static async Task<QueryResult> ReadResultSetAsync(
-        SqlDataReader reader, QueryOptions options, Stopwatch sw, BatchAffected affected,
+        SqlDataReader reader, QueryOptions options, Stopwatch sw,
         CancellationToken ct, bool withBaseTables = false)
     {
-        // A non-row-returning statement (INSERT/UPDATE/DDL) still reports affected rows.
+        // A non-row-returning statement (INSERT/UPDATE/DDL) still reports affected rows. RecordsAffected is
+        // the whole batch's total, which is the right number for this one result — a collapsed run of them
+        // is what it stands for. The per-statement breakdown is added by the caller, once the batch is done.
         if (reader.FieldCount == 0)
         {
-            var rows = affected.Take(reader.RecordsAffected);
+            var rows = reader.RecordsAffected;
             return new QueryResult(
                 Array.Empty<ColumnDescriptor>(), Array.Empty<object?[]>(),
                 RowCount: rows, sw.Elapsed,
@@ -316,7 +374,13 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
                 reader.GetName(i), reader.GetDataTypeName(i), reader.GetFieldType(i),
                 BaseSchemaName: origin?.BaseSchemaName,
                 BaseTableName: origin?.BaseTableName,
-                BaseColumnName: origin?.BaseColumnName,
+                // SqlClient sends BaseColumnName only when it *differs* from the exposed name — an alias.
+                // `select label as caption` reports it; the far more ordinary `select label`, and every
+                // column of `select *`, report null. Taken literally that left HasBaseColumn false for
+                // exactly the queries people run, so FK navigation and inline editing were dead on a
+                // SQL Server result unless every column happened to be aliased (measured). A base table
+                // with no base column name means the column was not renamed, so the exposed name *is* it.
+                BaseColumnName: BaseColumnNameOf(origin, reader.GetName(i)),
                 // T-SQL reaches another database with a three-part name, which Postgres has no analogue
                 // for. Dropping the catalog let `select * from reporting.dbo.Orders` on an `app`
                 // connection resolve against app.dbo.Orders — identical schemas across databases on one
@@ -325,6 +389,17 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
                 BaseCatalogName: origin?.BaseCatalogName);
         }
         return cols;
+    }
+
+    /// <summary>
+    /// The origin column's own name: what the driver reported, or the exposed name when it reported
+    /// nothing but did place the column in a base table. Null when there is no base table at all — an
+    /// expression column has no origin to fall back to, and must keep saying so.
+    /// </summary>
+    private static string? BaseColumnNameOf(DbColumn? origin, string exposedName)
+    {
+        if (origin is null || string.IsNullOrEmpty(origin.BaseTableName)) return null;
+        return string.IsNullOrEmpty(origin.BaseColumnName) ? exposedName : origin.BaseColumnName;
     }
 
     /// <summary>
@@ -351,28 +426,33 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
     }
 
     /// <summary>
-    /// Turns SqlClient's cumulative <see cref="SqlDataReader.RecordsAffected"/> into the per-statement count
-    /// the app reports. Npgsql resets that value at every result set; SqlClient adds the whole batch up, so
-    /// a naive port makes <c>update a; update b</c> claim the second statement touched both statements' rows
-    /// — and the number grows with every statement after it. The increase since the previous result set is
-    /// the honest answer.
+    /// The per-statement row counts as one message, mirroring what SQL Server's own tools show in their
+    /// messages pane: one entry per statement, in order, SELECTs included.
     /// <para>
-    /// A negative value means "no statement so far affected rows" (a SELECT-only batch, or SET NOCOUNT ON)
-    /// and is passed through untouched: it is the same sentinel <see cref="DescribeNonQuery"/> already reads
-    /// as "no count to report", and subtracting from it would invent one.
+    /// It reads them from <see cref="SqlCommand.StatementCompleted"/> because the reader cannot answer the
+    /// question. SqlClient collapses a run of non-row-returning statements into a <em>single</em> result
+    /// set and reports <see cref="SqlDataReader.RecordsAffected"/> as the batch total, so
+    /// <c>update a; update b; update c</c> arrives as one result saying 7 rather than three saying 3, 3
+    /// and 1 (measured). There are no per-statement reader boundaries to take a delta at, so the delta
+    /// this file used to compute could only ever re-derive that same total. The event fires once per
+    /// statement, in order, and is the only place the breakdown exists.
+    /// </para>
+    /// <para>
+    /// The trade-off this settles: a DML batch yields fewer results here than on Postgres, where Npgsql
+    /// resets the count per result set and the app shows one result per statement. Matching that would mean
+    /// splitting the batch into one command per statement, which breaks <c>declare @x int</c> — T-SQL
+    /// variables are batch-scoped, so each statement would stop seeing the previous one's.
     /// </para>
     /// </summary>
-    private sealed class BatchAffected
+    private static string DescribeBatch(IReadOnlyList<int> counts)
     {
-        private int _consumed;
-
-        public int Take(int cumulative)
-        {
-            if (cumulative < 0) return cumulative;
-            var delta = cumulative - _consumed;
-            _consumed = cumulative;
-            return delta;
-        }
+        // A negative count is SqlClient's "no count to report" (SET NOCOUNT ON, or pure DDL). Dropping
+        // those rather than printing them keeps the message about statements that touched rows; if none
+        // did, DescribeNonQuery's own wording for the case is the honest answer, and a zero would not be.
+        var real = counts.Where(c => c >= 0).ToList();
+        if (real.Count == 0) return DescribeNonQuery(-1);
+        if (real.Count == 1) return DescribeNonQuery(real[0]);
+        return $"{real.Count} statements: {string.Join(", ", real)} row(s) affected";
     }
 
     /// <summary>

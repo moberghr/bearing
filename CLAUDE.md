@@ -27,7 +27,7 @@
 
 - **Active stack:** dotnet (.NET 10, `Nullable` enabled, `ImplicitUsings` on, central package versions)
 - **Build command:** `dotnet build`
-- **Test command:** `dotnet test` — no env vars needed; the defaults point at the `squirrel-pg-test` container on **55434** (`tests/Shared/PgTestServer.cs`), which `./build/test-db.sh` creates. Postgres integration tests skip cleanly without a DB, and the skip message names the endpoint and the reason. Override with `BEARING_TEST_PG_{HOST,PORT,DB,USER,PASSWORD}`. The SQL Server suites skip the same way off `BEARING_TEST_MSSQL_*` (`tests/Shared/MsSqlTestServer.cs`), and no box that has built this feature has had a SQL Server on it.
+- **Test command:** `dotnet test` — no env vars needed; the defaults point at the `squirrel-pg-test` container on **55434** (`tests/Shared/PgTestServer.cs`), which `./build/test-db.sh` creates. Postgres integration tests skip cleanly without a DB, and the skip message names the endpoint and the reason. Override with `BEARING_TEST_PG_{HOST,PORT,DB,USER,PASSWORD}`. The SQL Server suites skip the same way off `BEARING_TEST_MSSQL_*` (`tests/Shared/MsSqlTestServer.cs`), defaulting to the `bearing-mssql-test` container on **1433** that `./build/test-db-mssql.sh` creates. **Run both scripts before trusting a green run** — a skip is not a pass, and the first live SQL Server run of these suites failed 8 tests, 6 of them real provider bugs in exactly the places that had been reasoned from documentation rather than measured.
 - **Format:** `dotnet format --verbosity quiet`
 
 For framework-specific guidance, see `.claude/skills/tech-stack-dotnet/SKILL.md`.
