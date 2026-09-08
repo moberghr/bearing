@@ -61,6 +61,12 @@ public sealed partial class CompletionEngine : ICompletionEngine
         var candidates = core.CollectCandidates(caret.TokenIndex, context: null);
         var intents = candidates.Rules.Keys.Select(PgCompletionRules.Classify).ToHashSet();
 
+        // Two column positions and one table position need more than their intent. A SET / insert column
+        // list may only name the target's own columns, and must name them bare; an INSERT target spells an
+        // alias with AS. See PgCompletionRules for why the intent alone cannot say so.
+        var writeTargetColumn = PgCompletionRules.IsWriteTargetColumn(candidates.Rules.Keys);
+        var insertTarget = PgCompletionRules.IsInsertTarget(candidates.Rules.Keys);
+
         // A half-typed alias is a name the user is inventing — nothing in the catalog or the grammar
         // belongs there, and whatever sat under Enter would overwrite it. An *empty* alias slot still
         // gets keywords (as / join / where), which is what actually follows a named source.
@@ -98,17 +104,24 @@ public sealed partial class CompletionEngine : ICompletionEngine
             // come through, which is what actually follows a named source (as / join / where).
             if (intents.Contains(CompletionIntent.TablePosition) && !aliasSlot)
             {
-                suggestions.AddRange(TableSuggestions(schema, sources));
+                // An INSERT target spells its alias with AS, so it gets none rather than a bare one that
+                // would not run: `INSERT INTO users u (…)` is a syntax error where `FROM users u` is fine.
+                suggestions.AddRange(TableSuggestions(schema, sources, aliased: !insertTarget));
                 suggestions.AddRange(SchemaSuggestions(schema));
                 // Only where a join can actually attach, and carrying whatever keyword the caret is still
                 // missing — accepting one after a bare source used to emit `from users u orders o on …`.
-                if (sources.Count > 0
+                // Never at a write target: `UPDATE users JOIN orders o ON …` is not a statement.
+                if (sources.Count > 0 && !insertTarget && !AtWriteTarget(parsed.Tokens.GetTokens(), caret.TokenIndex)
                     && JoinKeywordPrefix(parsed.Tokens.GetTokens(), caret.TokenIndex) is { } joinPrefix)
                     suggestions.AddRange(JoinSuggestions(schema, sources, joinPrefix));
             }
 
             if (intents.Contains(CompletionIntent.ColumnPosition))
-                suggestions.AddRange(ColumnSuggestions(schema, sources, qualifier: null));
+                // A SET or insert column list names the target's own columns, bare. Everywhere else the
+                // whole scope is in play and an aliased source qualifies what it offers.
+                suggestions.AddRange(writeTargetColumn
+                    ? WriteTargetColumnSuggestions(schema, sources)
+                    : ColumnSuggestions(schema, sources, qualifier: null));
 
             foreach (var tokenType in candidates.Tokens.Keys)
             {
@@ -181,8 +194,10 @@ public sealed partial class CompletionEngine : ICompletionEngine
 
     /// <param name="onlySchema">When set, only that schema's relations, and inserted bare — the caret
     /// already sits after <c>schema.</c>.</param>
+    /// <param name="aliased">Whether the insertion carries a generated alias. False at an INSERT target,
+    /// whose grammar is <c>INSERT INTO t [ AS alias ]</c> — a bare alias there is a syntax error.</param>
     private static IEnumerable<Suggestion> TableSuggestions(
-        ISchemaSnapshot schema, IReadOnlyList<TableRef> sources, string? onlySchema = null)
+        ISchemaSnapshot schema, IReadOnlyList<TableRef> sources, string? onlySchema = null, bool aliased = true)
     {
         var existing = ExistingAliases(sources);
         foreach (var t in schema.Tables)
@@ -201,7 +216,7 @@ public sealed partial class CompletionEngine : ICompletionEngine
                 DisplayText = t.Name,
                 FilterText = t.Name,
                 DetailText = t.Schema,
-                ReplacementText = $"{name} {alias}",
+                ReplacementText = aliased ? $"{name} {alias}" : name,
                 Kind = t.Kind == RelationKind.View ? SuggestionKind.View : SuggestionKind.Table,
                 Priority = 10,
                 Description = $"{t.Kind}: {t.Schema}.{t.Name}",
@@ -267,6 +282,38 @@ public sealed partial class CompletionEngine : ICompletionEngine
     }
 
     /// <summary>
+    /// True when the caret is naming (or has just named) a write statement's target. A join cannot attach
+    /// there — <c>UPDATE users JOIN orders o ON …</c> is not a statement — so the join snippets that suit a
+    /// FROM clause must not be offered.
+    /// </summary>
+    private static bool AtWriteTarget(IList<Antlr4.Runtime.IToken> toks, int caretTokenIndex)
+    {
+        for (var i = PrevMeaningful(toks, caretTokenIndex - 1); i >= 0; i = PrevMeaningful(toks, i - 1))
+        {
+            switch (toks[i].Type)
+            {
+                // The keyword that opened the slot, reached without passing anything that closes it.
+                case PostgreSQLParser.UPDATE:
+                    return i == 0 || PrevMeaningful(toks, i - 1) is var p && (p < 0
+                        || toks[p].Type is not (PostgreSQLParser.FOR or PostgreSQLParser.DO));
+                case PostgreSQLParser.INTO:
+                    var before = PrevMeaningful(toks, i - 1);
+                    return before >= 0
+                        && toks[before].Type is PostgreSQLParser.INSERT or PostgreSQLParser.MERGE;
+
+                // A name, a qualified name, or ONLY may sit between the keyword and the caret.
+                case PostgreSQLParser.DOT:
+                case PostgreSQLParser.ONLY:
+                    continue;
+                default:
+                    if (IsNameToken(toks[i])) continue;
+                    return false;   // anything else means we are past the target
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
     /// True when the caret sits where a source's alias goes, the relation before it already being named:
     /// <c>from film f|</c>, <c>from film |</c>, <c>from film as f|</c>, <c>from public.film f|</c>. Keyed
     /// off the token before the caret rather than the parse tree, so it survives half-typed SQL like the
@@ -295,10 +342,16 @@ public sealed partial class CompletionEngine : ICompletionEngine
             before = PrevMeaningful(toks, name - 1);
         }
 
-        // Only a FROM/JOIN list puts a relation name there; anything else (a select-list expression, a
-        // WHERE) is not an alias slot even though it may end in an identifier.
+        // Only a place that puts a relation name there; anything else (a select-list expression, a WHERE)
+        // is not an alias slot even though it may end in an identifier.
+        //
+        // The write targets belong in this list as much as FROM does — `update users |` and
+        // `insert into users |` are alias slots too. They were missing while nothing reported a table
+        // position there, and adding those rules turned the omission into wrong output: the caret offered
+        // every relation and a join snippet, so accepting the first gave `update users join orders o on …`.
         if (before < 0 || toks[before].Type is not (PostgreSQLParser.FROM or PostgreSQLParser.JOIN
-            or PostgreSQLParser.COMMA or PostgreSQLParser.LATERAL_P))
+            or PostgreSQLParser.COMMA or PostgreSQLParser.LATERAL_P
+            or PostgreSQLParser.UPDATE or PostgreSQLParser.INTO or PostgreSQLParser.USING))
             return false;
 
         var relation = PgIdentifier.Unquote(parts[^1]);
@@ -469,6 +522,28 @@ public sealed partial class CompletionEngine : ICompletionEngine
     }
 
     // ---- Column suggestions (alias-aware) ----------------------------------------------------
+
+    /// <summary>
+    /// The columns legal in an <c>UPDATE … SET</c> or an insert column list: the write target's own, and
+    /// nothing else, spelled bare.
+    /// <para>
+    /// Both restrictions are correctness, not taste. <c>UPDATE users SET … FROM orders</c> reads two
+    /// relations and may assign to exactly one, so offering the other's columns offers an error. And
+    /// <c>UPDATE users u SET u.name = …</c> is rejected outright by Postgres — the qualification that the
+    /// general column path adds for an aliased source is precisely wrong here.
+    /// </para>
+    /// <para>Falls back to the general path when no target was found, which is better than nothing while a
+    /// statement is still half-typed.</para>
+    /// </summary>
+    private static IEnumerable<Suggestion> WriteTargetColumnSuggestions(
+        ISchemaSnapshot schema, IReadOnlyList<TableRef> sources)
+    {
+        var target = sources.FirstOrDefault(s => s.IsWriteTarget && s.Resolved is not null);
+        if (target is null) return ColumnSuggestions(schema, sources, qualifier: null);
+
+        return schema.ColumnsOf(target.Resolved!.Id)
+            .Select(c => ColumnSuggestion(c, target.EffectiveName));   // no qualifier: bare, always
+    }
 
     private static IEnumerable<Suggestion> ColumnSuggestions(
         ISchemaSnapshot schema, IReadOnlyList<TableRef> sources, string? qualifier)

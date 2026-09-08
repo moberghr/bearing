@@ -30,10 +30,14 @@ public static class FromClauseExtractor
 
         for (var i = 0; i < toks.Count; i++)
         {
-            if (!IntroducesASource(toks, i)) continue;
+            if (Introducer(toks, i) is not { } introducer) continue;
 
             var j = i + 1;
             if (j < toks.Count && toks[j].Type == PostgreSQLParser.LATERAL_P) j++; // JOIN LATERAL (...)
+            // `UPDATE ONLY t` / `DELETE FROM ONLY t` — inheritance scoping, not part of the name. Left
+            // unskipped the loop broke on the keyword and the statement ended up with no sources at all,
+            // which is the whole-catalog fallback rather than a narrower answer.
+            if (j < toks.Count && toks[j].Type == PostgreSQLParser.ONLY) j++;
 
             // A comma-separated list of table refs (FROM a x, b y); each may be a name or a subquery.
             while (j < toks.Count)
@@ -81,6 +85,7 @@ public static class FromClauseExtractor
                         // qualifier the way the query does — `"__MigrationHistory".id`, not `.id` folded.
                         ReferenceText = alias ?? nameParts[^1],
                         Resolved = schema.ResolveTable(schemaName, name),
+                        IsWriteTarget = introducer,
                     });
 
                 if (k < toks.Count && toks[k].Type == PostgreSQLParser.COMMA) { j = k + 1; continue; }
@@ -105,13 +110,25 @@ public static class FromClauseExtractor
     /// than reading one.
     /// </para>
     /// </summary>
-    private static bool IntroducesASource(IReadOnlyList<IToken> toks, int i) => toks[i].Type switch
+    private static bool? Introducer(IReadOnlyList<IToken> toks, int i) => toks[i].Type switch
     {
-        PostgreSQLParser.FROM or PostgreSQLParser.JOIN => true,
-        PostgreSQLParser.UPDATE => i == 0
-            || toks[i - 1].Type is not (PostgreSQLParser.FOR or PostgreSQLParser.DO),
-        PostgreSQLParser.INTO => i > 0 && toks[i - 1].Type == PostgreSQLParser.INSERT,
-        _ => false,
+        // Read: FROM and JOIN, plus USING — which introduces a real source in `DELETE … USING u` and
+        // `MERGE … USING src`. Harmless on `JOIN a USING (id)`, where the next token is a paren and the
+        // name loop stops immediately.
+        PostgreSQLParser.FROM or PostgreSQLParser.JOIN or PostgreSQLParser.USING => false,
+
+        // Written: guarded, because both keywords also appear where no relation follows —
+        // `SELECT … FOR UPDATE`, `ON CONFLICT DO UPDATE SET`, and `SELECT … INTO newtable`, which
+        // creates a relation rather than reading one.
+        PostgreSQLParser.UPDATE => i == 0 || toks[i - 1].Type is not (PostgreSQLParser.FOR or PostgreSQLParser.DO)
+            ? true
+            : null,
+        PostgreSQLParser.INTO => i > 0
+            && toks[i - 1].Type is PostgreSQLParser.INSERT or PostgreSQLParser.MERGE
+            ? true
+            : null,
+
+        _ => null,
     };
 
     /// <summary>Only true identifiers (bare or quoted) name a table or alias here.</summary>

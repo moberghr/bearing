@@ -1,3 +1,5 @@
+using System.Linq;
+
 namespace Bearing.Sql;
 
 /// <summary>
@@ -64,4 +66,26 @@ public static class PgCompletionRules
         if (ruleIndex == PostgreSQLParser.RULE_func_name) return CompletionIntent.FunctionCall;
         return CompletionIntent.Keyword;
     }
+
+    /// <summary>
+    /// Whether the caret is at a column slot belonging to a write statement's <b>target</b> — an
+    /// <c>UPDATE … SET</c> or an insert column list — rather than a general expression position.
+    /// <para>
+    /// Both are <see cref="CompletionIntent.ColumnPosition"/>, but they are far stricter than one: only the
+    /// target's own columns are legal there (<c>UPDATE users SET … FROM orders</c> reads two relations and
+    /// may assign to exactly one), and the name must be bare — <c>UPDATE users u SET u.name = …</c> is an
+    /// error, not a style. The intent alone cannot carry that, so callers ask this as well.
+    /// </para>
+    /// </summary>
+    public static bool IsWriteTargetColumn(IEnumerable<int> ruleIndices)
+        => ruleIndices.Any(r => r == PostgreSQLParser.RULE_set_target
+                                || r == PostgreSQLParser.RULE_insert_column_item);
+
+    /// <summary>
+    /// Whether the caret names an INSERT's target relation. Unlike every other table position, an alias
+    /// there needs <c>AS</c>: Postgres' grammar is <c>INSERT INTO t [ AS alias ]</c>, so the bare
+    /// <c>users u</c> that suits a FROM clause is a syntax error here.
+    /// </summary>
+    public static bool IsInsertTarget(IEnumerable<int> ruleIndices)
+        => ruleIndices.Any(r => r == PostgreSQLParser.RULE_insert_target);
 }

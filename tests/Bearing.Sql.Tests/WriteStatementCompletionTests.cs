@@ -120,6 +120,98 @@ public class WriteStatementCompletionTests
         Assert.Equal(new[] { "id", "email", "name" }.OrderBy(c => c), columns.OrderBy(c => c));
     }
 
+    // ---- what must NOT be offered --------------------------------------------------------------------
+
+    /// <summary>
+    /// The slot after a write statement's target is its alias, and nothing else may go there. Reporting a
+    /// table position made it offer every relation *and* a join snippet, so accepting the first suggestion
+    /// gave <c>UPDATE users JOIN orders o ON …</c> — a syntax error, from one keypress.
+    /// </summary>
+    [Theory]
+    [InlineData("update users ")]
+    [InlineData("insert into users ")]
+    [InlineData("delete from users ")]
+    [InlineData("merge into users ")]
+    public void The_alias_slot_of_a_write_target_offers_no_relations_and_no_joins(string sql)
+    {
+        var result = Engine.Complete(sql, sql.Length, Schema);
+        Assert.Empty(result.Suggestions.Where(s => s.Kind is SuggestionKind.Table or SuggestionKind.View));
+        Assert.Empty(result.Suggestions.Where(s => s.Kind == SuggestionKind.Join));
+    }
+
+    /// <summary>
+    /// Postgres' grammar is <c>INSERT INTO t [ AS alias ]</c> — the <c>AS</c> is mandatory, unlike
+    /// UPDATE/DELETE where it is optional. So the bare <c>users u</c> that suits a FROM clause is a syntax
+    /// error here, and every accepted table completion in an INSERT produced one.
+    /// </summary>
+    [Fact]
+    public void An_insert_target_is_inserted_without_a_bare_alias()
+    {
+        var inserted = Engine.Complete("insert into ", 12, Schema)
+            .Suggestions.First(s => s.DisplayText == "users").ReplacementText;
+        Assert.Equal("users", inserted);
+    }
+
+    [Fact]
+    public void A_from_clause_still_gets_its_alias()
+    {
+        var inserted = Engine.Complete("select * from ", 14, Schema)
+            .Suggestions.First(s => s.DisplayText == "users").ReplacementText;
+        Assert.Equal("users u", inserted);
+    }
+
+    /// <summary>
+    /// <c>UPDATE users u SET u.name = …</c> is rejected by Postgres outright: a SET target is a bare column
+    /// name. The qualification the general column path adds for an aliased source is exactly wrong here.
+    /// </summary>
+    [Theory]
+    [InlineData("update users u set ")]
+    [InlineData("insert into users as u (")]
+    public void A_write_targets_columns_are_inserted_bare_even_when_the_target_is_aliased(string sql)
+    {
+        var inserted = Engine.Complete(sql, sql.Length, Schema)
+            .Suggestions.Where(s => s.Kind == SuggestionKind.Column)
+            .Select(s => s.ReplacementText);
+        Assert.All(inserted, text => Assert.DoesNotContain(".", text));
+    }
+
+    /// <summary>
+    /// Only the target's columns are assignable, however many relations the statement also reads. These are
+    /// exactly the shapes where a general column scope misfires.
+    /// </summary>
+    [Theory]
+    [InlineData("update users set  from orders", 17)]
+    [InlineData("insert into users () select * from orders", 19)]
+    public void Only_the_targets_columns_are_assignable(string sql, int caret)
+    {
+        var columns = Engine.Complete(sql, caret, Schema)
+            .Suggestions.Where(s => s.Kind == SuggestionKind.Column).Select(s => s.DisplayText).ToArray();
+
+        Assert.Equal(new[] { "id", "email", "name" }.OrderBy(c => c), columns.OrderBy(c => c));
+        Assert.DoesNotContain("total", columns);      // orders' column: readable, not assignable
+    }
+
+    /// <summary>ONLY is inheritance scoping, not part of the name. Skipped over, the extractor found no
+    /// source at all and fell back to every column in the database — the very failure this set fixes.</summary>
+    [Theory]
+    [InlineData("update only users set ")]
+    [InlineData("delete from only users where ")]
+    public void Only_before_the_target_does_not_lose_the_source(string sql)
+    {
+        var (_, columns) = At(sql);
+        Assert.Equal(new[] { "id", "email", "name" }.OrderBy(c => c), columns.OrderBy(c => c));
+    }
+
+    /// <summary>MERGE is a write statement this codebase already knows about — <c>WriteGuard</c> flags it
+    /// (§1.2) — so its target belongs in scope like any other.</summary>
+    [Fact]
+    public void Merge_scopes_its_target_and_its_source()
+    {
+        const string sql = "merge into users u using orders o on o.id = u.id when matched then update set ";
+        var (_, columns) = At(sql);
+        Assert.Equal(new[] { "id", "email", "name" }.OrderBy(c => c), columns.OrderBy(c => c));
+    }
+
     // ---- the caret, one character earlier than it looked ---------------------------------------------
 
     /// <summary>
