@@ -30,6 +30,16 @@ public static class PgCompletionRules
         PostgreSQLParser.RULE_table_ref,
         PostgreSQLParser.RULE_columnref,
         PostgreSQLParser.RULE_func_name,
+
+        // The write statements name their target through their own rules, not through table_ref — which is
+        // the FROM-clause rule and nothing else. Without these, `update `, `insert into ` and `delete from `
+        // reported no table position at all and offered keywords only.
+        PostgreSQLParser.RULE_relation_expr_opt_alias,   // UPDATE t / DELETE FROM t
+        PostgreSQLParser.RULE_insert_target,             // INSERT INTO t
+
+        // Likewise the column positions a write statement has, which are not columnref either.
+        PostgreSQLParser.RULE_set_target,                // UPDATE t SET c = …
+        PostgreSQLParser.RULE_insert_column_item,        // INSERT INTO t (c, …)
     };
 
     /// <summary>Token types that are never useful completion candidates (whitespace/comments).</summary>
@@ -43,8 +53,14 @@ public static class PgCompletionRules
 
     public static CompletionIntent Classify(int ruleIndex)
     {
-        if (ruleIndex == PostgreSQLParser.RULE_table_ref) return CompletionIntent.TablePosition;
-        if (ruleIndex == PostgreSQLParser.RULE_columnref) return CompletionIntent.ColumnPosition;
+        if (ruleIndex == PostgreSQLParser.RULE_table_ref
+            || ruleIndex == PostgreSQLParser.RULE_relation_expr_opt_alias
+            || ruleIndex == PostgreSQLParser.RULE_insert_target) return CompletionIntent.TablePosition;
+
+        if (ruleIndex == PostgreSQLParser.RULE_columnref
+            || ruleIndex == PostgreSQLParser.RULE_set_target
+            || ruleIndex == PostgreSQLParser.RULE_insert_column_item) return CompletionIntent.ColumnPosition;
+
         if (ruleIndex == PostgreSQLParser.RULE_func_name) return CompletionIntent.FunctionCall;
         return CompletionIntent.Keyword;
     }

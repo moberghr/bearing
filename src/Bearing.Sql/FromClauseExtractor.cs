@@ -30,7 +30,7 @@ public static class FromClauseExtractor
 
         for (var i = 0; i < toks.Count; i++)
         {
-            if (toks[i].Type is not (PostgreSQLParser.FROM or PostgreSQLParser.JOIN)) continue;
+            if (!IntroducesASource(toks, i)) continue;
 
             var j = i + 1;
             if (j < toks.Count && toks[j].Type == PostgreSQLParser.LATERAL_P) j++; // JOIN LATERAL (...)
@@ -90,6 +90,29 @@ public static class FromClauseExtractor
 
         return Dedupe(refs);
     }
+
+    /// <summary>
+    /// Whether the token at <paramref name="i"/> is a keyword that a table name follows.
+    /// <para>
+    /// FROM and JOIN are the obvious ones. <c>UPDATE t</c> and <c>INSERT INTO t</c> name a table just as
+    /// squarely, and leaving them out meant an UPDATE had no sources at all — so <c>SET</c> and its
+    /// <c>WHERE</c> were completed against every table in the database rather than the one being written.
+    /// (DELETE was already covered: its target follows a FROM.)
+    /// </para>
+    /// <para>
+    /// Both new keywords appear in places that name nothing, hence the guards: <c>FOR UPDATE</c> and
+    /// <c>ON CONFLICT DO UPDATE SET</c>, and <c>SELECT … INTO newtable</c>, which creates a relation rather
+    /// than reading one.
+    /// </para>
+    /// </summary>
+    private static bool IntroducesASource(IReadOnlyList<IToken> toks, int i) => toks[i].Type switch
+    {
+        PostgreSQLParser.FROM or PostgreSQLParser.JOIN => true,
+        PostgreSQLParser.UPDATE => i == 0
+            || toks[i - 1].Type is not (PostgreSQLParser.FOR or PostgreSQLParser.DO),
+        PostgreSQLParser.INTO => i > 0 && toks[i - 1].Type == PostgreSQLParser.INSERT,
+        _ => false,
+    };
 
     /// <summary>Only true identifiers (bare or quoted) name a table or alias here.</summary>
     private static bool IsName(IToken t)

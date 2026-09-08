@@ -583,6 +583,15 @@ public sealed partial class CompletionEngine : ICompletionEngine
             {
                 if (IsWord(t))
                     return new CaretResolution(t.TokenIndex, start, endExclusive - start);
+
+                // Sitting exactly at the end of a non-word token means the caret is *past* it, not on it:
+                // in `insert into users (|` the position is after the paren. Reporting the paren's own
+                // index asks c3 what may appear *where the paren is* — a different question, and one whose
+                // answer includes a parenthesised join, so that caret offered tables where the column list
+                // belongs. A word is the exception: `us|` is still the word being typed.
+                if (caret == endExclusive)
+                    return new CaretResolution(t.TokenIndex + 1, caret, 0);
+
                 return new CaretResolution(t.TokenIndex, caret, 0);
             }
         }
