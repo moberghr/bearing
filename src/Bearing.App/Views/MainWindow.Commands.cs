@@ -100,7 +100,7 @@ public partial class MainWindow
         // ---- Editor ----
         r.Register(KeyCommand.Sync(CommandIds.EditorOpenLineBelow, "Open line below", KeyScope.Editor, "Editor", () => _text.OpenLine(below: true)));
         r.Register(KeyCommand.Sync(CommandIds.EditorOpenLineAbove, "Open line above", KeyScope.Editor, "Editor", () => _text.OpenLine(below: false)));
-        r.Register(KeyCommand.Sync(CommandIds.EditorFormat, "Format SQL", KeyScope.Editor, "Editor", FormatSql));
+        r.Register(new KeyCommand(CommandIds.EditorFormat, "Format SQL", KeyScope.Editor, "Editor", FormatSqlAsync));
         r.Register(KeyCommand.Sync(CommandIds.EditorToggleComment, "Toggle comment", KeyScope.Editor, "Editor", _text.ToggleLineComment));
         r.Register(KeyCommand.Sync(CommandIds.EditorSelectStatement, "Select statement", KeyScope.Editor, "Editor", _text.SelectCurrentStatement));
         r.Register(KeyCommand.Sync(CommandIds.EditorFoldCurrent, "Fold current", KeyScope.Editor, "Editor", () => _folding.FoldCurrent()));
@@ -254,7 +254,7 @@ public partial class MainWindow
     /// <summary>editor.format (Ctrl+Shift+F): lay out the selection, or the whole buffer. A refusal — SQL
     /// that would not parse — is reported rather than swallowed, since the alternative is a keystroke that
     /// silently does nothing.</summary>
-    private void FormatSql()
+    private async ValueTask FormatSqlAsync()
     {
         // Read at invoke time, not captured: the settings window applies edits immediately, so a change to
         // keyword case or indent width takes effect on the next Ctrl+Shift+F rather than the next restart.
@@ -265,7 +265,7 @@ public partial class MainWindow
             IndentWidth = settings.SqlFormatIndentWidth,
         };
 
-        if (_text.FormatSql(options) is { } problem && Vm is not null) Vm.StatusText = problem;
+        if (await _text.FormatSqlAsync(options) is { } problem && Vm is not null) Vm.StatusText = problem;
     }
 
     /// <summary>view.toggleResults (Ctrl+R): flip the results pane; hiding it drops focus back to the editor.</summary>

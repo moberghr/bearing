@@ -14,8 +14,15 @@ public sealed partial class CompletionEngine : ICompletionEngine
 {
     public CompletionResult Complete(string sql, int caretOffset, ISchemaSnapshot schema)
         // The parse and antlr4-c3's walk both recurse per nesting level; PgParsing.OnDeepStack gives them
-        // the stack for it. Debounced and already off the UI thread, so the thread is free in practice.
+        // the stack for it. Kept for callers that are already off any thread that matters (tests).
         => PgParsing.OnDeepStack(() => CompleteCore(sql, caretOffset, schema));
+
+    /// <inheritdoc />
+    public Task<CompletionResult> CompleteAsync(string sql, int caretOffset, ISchemaSnapshot schema)
+        // What the editor uses. The synchronous path would have the caller's thread blocked on Join for the
+        // whole parse — and since the controller already calls this from the thread pool, that was a pool
+        // thread parked per keystroke on top of the deep-stack thread doing the work.
+        => PgParsing.OnDeepStackAsync(() => CompleteCore(sql, caretOffset, schema));
 
     private CompletionResult CompleteCore(string sql, int caretOffset, ISchemaSnapshot schema)
     {

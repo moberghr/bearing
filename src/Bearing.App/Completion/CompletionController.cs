@@ -138,7 +138,9 @@ internal sealed class CompletionController
         CompletionResult result;
         try
         {
-            result = await Task.Run(() => _engine.Complete(text, localCaret, snapshot));
+            // Not Task.Run: CompleteAsync already runs the parse on its own (deep) thread, so wrapping it
+            // would park a pool thread on top of that for the length of every keystroke's parse.
+            result = await _engine.CompleteAsync(text, localCaret, snapshot);
         }
         catch (Exception ex)
         {

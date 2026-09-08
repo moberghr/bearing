@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Antlr4.Runtime;
 
 namespace Bearing.Sql;
@@ -54,6 +55,20 @@ public static class SqlFormat
         // The parse and the tree walk both recurse per nesting level, so they run on a stack sized for it.
         // Synchronous and joined, so this stays an ordinary pure function from the caller's side.
         return PgParsing.OnDeepStack(() => FormatCore(sql, settings));
+    }
+
+    /// <summary>
+    /// <see cref="Format"/> without blocking the caller. Same pure function, same result — it differs only
+    /// in not parking a thread on the parse, which matters when the caller is the UI thread: a large script
+    /// takes hundreds of milliseconds, and a window that stops repainting for that long reads as a hang.
+    /// </summary>
+    public static Task<SqlFormatResult> FormatAsync(string sql, SqlFormatOptions? options = null)
+    {
+        if (string.IsNullOrWhiteSpace(sql))
+            return Task.FromResult(new SqlFormatResult(sql, false, null));
+
+        var settings = options ?? SqlFormatOptions.Default;
+        return PgParsing.OnDeepStackAsync(() => FormatCore(sql, settings));
     }
 
     private static SqlFormatResult FormatCore(string sql, SqlFormatOptions options)

@@ -1,4 +1,5 @@
 using System.Runtime.ExceptionServices;
+using System.Threading.Tasks;
 using Antlr4.Runtime;
 
 namespace Bearing.Sql;
@@ -72,6 +73,36 @@ public static class PgParsing
         thread.Join();
         failure?.Throw();   // rethrown on the caller's thread with the original stack trace
         return result;
+    }
+
+    /// <summary>
+    /// <see cref="OnDeepStack{T}"/> for a caller that can await instead of block.
+    /// <para>
+    /// Prefer this from anything already on the UI thread or the thread pool. The synchronous version parks
+    /// the calling thread on <c>Join</c> for the whole parse, so <c>Task.Run(() =&gt; OnDeepStack(…))</c> costs
+    /// two threads — a blocked pool thread and the one doing the work — and on the UI thread it is simply a
+    /// freeze. This completes a <see cref="TaskCompletionSource{T}"/> from the deep-stack thread instead, so
+    /// only the one thread exists and nothing waits on it.
+    /// </para>
+    /// </summary>
+    public static Task<T> OnDeepStackAsync<T>(Func<T> work)
+    {
+        // RunContinuationsAsynchronously: without it the awaiting continuation would resume *on the
+        // deep-stack thread*, which is about to die — and would run the caller's remaining work on a stack
+        // reserved for parsing.
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var thread = new Thread(
+            () =>
+            {
+                try { completion.SetResult(work()); }
+                catch (Exception ex) { completion.SetException(ex); }
+            },
+            DeepStackBytes)
+        { IsBackground = true };
+
+        thread.Start();
+        return completion.Task;
     }
 
     /// <summary>
