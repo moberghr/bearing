@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Data;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Bearing.App.Input;
 using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using Bearing.Core.Workspace;
@@ -52,17 +53,29 @@ public sealed partial class ResultView
             root.Children.Add(back);
         }
 
-        var header = ResultChrome.DockHeader(ViewMode, mode =>
-        {
-            ViewMode = mode;               // triggers Rebuild (re-renders the toggle's active state)
-            ViewModeChanged?.Invoke(mode); // persist on the VM
-        });
+        var header = ResultChrome.DockHeader(
+            ViewMode,
+            mode =>
+            {
+                ViewMode = mode;               // triggers Rebuild (re-renders the toggle's active state)
+                ViewModeChanged?.Invoke(mode); // persist on the VM
+            },
+            CloseRequested is null ? null : () => CloseRequested?.Invoke(),
+            CloseTip());
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
         root.Children.Add(BuildBody(results));
 
         Content = _inspector.Wrap(root);
     }
+
+    /// <summary>The ✕'s tooltip, naming whatever gesture is currently bound to view.toggleResults. Read from
+    /// the live keymap so a user rebinding it in <c>keybindings.json</c> is told the truth; the dispatcher may
+    /// not be wired yet (a bare ResultView in a test), in which case the button just says what it does.</summary>
+    private string CloseTip()
+        => _dispatcher?.Keymap.DisplayGesture(CommandIds.ViewToggleResults) is { } gesture
+            ? $"Close results ({gesture})"
+            : "Close results";
 
     // ---- Body: single set, stacked, or tabbed ------------------------------------------------
 

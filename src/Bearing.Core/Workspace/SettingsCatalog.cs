@@ -132,6 +132,41 @@ public static class SettingsCatalog
             Get = s => s.AutoCloseBrackets,
             Set = (s, v) => s with { AutoCloseBrackets = v },
         },
+        new EnumSetting
+        {
+            Key = "editor.sqlFormatKeywordCase",
+            CategoryId = Editor,
+            Title = "Keyword case when formatting SQL",
+            Description = "What Format SQL (Ctrl+Shift+F) does to keywords. Cosmetic either way — Postgres "
+                        + "folds unquoted names, so the case of a keyword never changes what a query means, "
+                        + "and quoted identifiers are left exactly as written.",
+            Keywords = "format formatter keyword case upper lower uppercase lowercase pretty print beautify",
+            Options =
+            [
+                new(nameof(SqlKeywordCase.Upper), "UPPERCASE",
+                    "SELECT / FROM / WHERE — the traditional SQL house style."),
+                new(nameof(SqlKeywordCase.Lower), "lowercase",
+                    "select / from / where."),
+                new(nameof(SqlKeywordCase.Preserve), "Leave as typed",
+                    "Change layout only and touch no keyword's case."),
+            ],
+            Get = s => s.SqlFormatKeywordCase.ToString(),
+            Set = (s, v) => s with { SqlFormatKeywordCase = Enum.Parse<SqlKeywordCase>(v) },
+        },
+        new IntSetting
+        {
+            Key = "editor.sqlFormatIndentWidth",
+            CategoryId = Editor,
+            Title = "Indent width when formatting SQL",
+            Description = "Spaces per level of nesting in formatted SQL — the indent under SELECT, inside a "
+                        + "subquery, and on a joined table.",
+            Keywords = "format formatter indent indentation spaces tab width nesting pretty print beautify",
+            Min = 1,
+            Max = 8,
+            Unit = "spaces",
+            Get = s => s.SqlFormatIndentWidth,
+            Set = (s, v) => s with { SqlFormatIndentWidth = v },
+        },
 
         // ---- Results ---------------------------------------------------------------------------
         new IntSetting

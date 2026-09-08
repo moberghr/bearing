@@ -276,15 +276,19 @@ public static class ResultChrome
         return box;
     }
 
-    /// <summary>An amber padlock chip for a locked (read-only) result; the reason lives in the tooltip
-    /// (design RESULTS_GRID §8).</summary>
     /// <summary>
     /// The body of a result that has no grid — a statement message or an error. One line of text, so it takes
     /// the data font size rather than inheriting the frame's, and it is inset to the same left edge as a
     /// grid's first column so a run of mixed results lines up.
+    /// <para>
+    /// <see cref="SelectableTextBlock"/>, not <see cref="TextBlock"/>: a failed statement's message is the one
+    /// thing on this pane people most want out of the app — into a search, a ticket, a colleague's chat — and
+    /// a plain TextBlock silently refuses to be selected. A grid result has Ctrl+C over its cells; this had
+    /// nothing, so the text had to be retyped from the screen.
+    /// </para>
     /// </summary>
     public static Control ResultText(string text, IBrush foreground, bool wrap = false)
-        => new TextBlock
+        => new SelectableTextBlock
         {
             Text = text,
             Foreground = foreground,
@@ -293,6 +297,8 @@ public static class ResultChrome
             TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap,
         };
 
+    /// <summary>An amber padlock chip for a locked (read-only) result; the reason lives in the tooltip
+    /// (design RESULTS_GRID §8).</summary>
     public static Control LockChip(string reason)
     {
         var padlock = new Path
@@ -358,7 +364,13 @@ public static class ResultChrome
 
     /// <summary>The persistent dock header: a RESULTS label plus the segmented Stacked/Tabbed toggle.
     /// <paramref name="onPick"/> fires only for a mode other than <paramref name="active"/>.</summary>
-    public static Control DockHeader(ResultsViewMode active, Action<ResultsViewMode> onPick)
+    /// <param name="onClose">Collapses the results pane. Null leaves the ✕ off entirely — a close button on a
+    /// dock nothing can close is a dead control, and <see cref="ResultView"/> is used bare in tests.</param>
+    /// <param name="closeTip">The ✕'s tooltip, so the caller can name the gesture that does the same thing
+    /// (resolved from the live keymap rather than hardcoded, which is how the menu's dead entries happened).</param>
+    public static Control DockHeader(
+        ResultsViewMode active, Action<ResultsViewMode> onPick,
+        Action? onClose = null, string closeTip = "Close results")
     {
         var label = new TextBlock
         {
@@ -369,12 +381,25 @@ public static class ResultChrome
             VerticalAlignment = VerticalAlignment.Center,
         };
 
-        var toggle = ViewToggle(active, onPick);
+        var right = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 2,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        right.Children.Add(ViewToggle(active, onPick));
+        if (onClose is not null)
+        {
+            var close = GlyphIconButton("M1.5,1.5 L11.5,11.5 M11.5,1.5 L1.5,11.5", closeTip, size: 11);
+            close.Click += (_, _) => onClose();
+            right.Children.Add(close);
+        }
+
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         Grid.SetColumn(label, 0);
-        Grid.SetColumn(toggle, 1);
+        Grid.SetColumn(right, 1);
         grid.Children.Add(label);
-        grid.Children.Add(toggle);
+        grid.Children.Add(right);
 
         return new Border
         {

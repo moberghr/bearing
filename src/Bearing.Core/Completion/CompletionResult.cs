@@ -1,3 +1,4 @@
+using System.Threading.Tasks;
 using Bearing.Core.Schema;
 
 namespace Bearing.Core.Completion;
@@ -18,4 +19,10 @@ public sealed record CompletionResult(
 public interface ICompletionEngine
 {
     CompletionResult Complete(string sql, int caretOffset, ISchemaSnapshot schema);
+
+    /// <summary>
+    /// <see cref="Complete"/> for a caller that can await. Same answer; it differs only in not parking the
+    /// calling thread while the parse runs, which matters because completion fires on every debounce tick.
+    /// </summary>
+    Task<CompletionResult> CompleteAsync(string sql, int caretOffset, ISchemaSnapshot schema);
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Threading.Tasks;
 using AvaloniaEdit;
 using Bearing.Sql;
 
@@ -140,4 +141,64 @@ public sealed class EditorTextCommands
     private (int Start, int End) Span() => _editor.SelectionLength > 0
         ? (_editor.SelectionStart, _editor.SelectionStart + _editor.SelectionLength)
         : (_editor.CaretOffset, _editor.CaretOffset);
+
+    // ---- formatting --------------------------------------------------------------------------
+
+    /// <summary>
+    /// editor.format: lay out the selection, or the whole buffer when there is none — the Format
+    /// Document / Format Selection convention, not <see cref="SqlToRun"/>'s statement-at-the-caret rule.
+    /// Formatting is a whole-file edit in every editor people arrive from, and quietly reformatting only the
+    /// statement you happened to be sitting in would be the surprise.
+    /// </summary>
+    /// <param name="options">Keyword case and indent width, from the user's settings.</param>
+    /// <returns>A line for the status bar when nothing was written — the formatter declined, or the buffer
+    /// moved under us — and null when there is nothing to say, the edit having happened or the text already
+    /// being laid out.</returns>
+    public async Task<string?> FormatSqlAsync(SqlFormatOptions options)
+    {
+        var selected = _editor.SelectionLength > 0;
+        var start = selected ? _editor.SelectionStart : 0;
+        var length = selected ? _editor.SelectionLength : _editor.Document.TextLength;
+        if (length == 0) return null;
+
+        // The document's line endings, not the fragment's: a one-line selection out of a CRLF file has no
+        // CRLF in it for the formatter to find, and it would hand back LF to splice into a CRLF buffer.
+        var newline = _editor.Document.Text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        var source = _editor.Document.GetText(start, length);
+
+        // Off the UI thread: a large script takes hundreds of milliseconds, and a window that stops
+        // repainting for that long reads as a hang. FormatAsync runs on its own stack-sized thread and
+        // blocks nothing, so this is one thread rather than a frozen one.
+        var before = _editor.Document.Version;
+        var result = await SqlFormat.FormatAsync(source, options with { Newline = newline });
+
+        // The user can type while we are away, and applying an edit computed against text that has since
+        // moved would corrupt the buffer — the offsets no longer mean what they meant. Decline instead, and
+        // say so rather than appearing to do nothing.
+        if (before is not null && _editor.Document.Version?.CompareAge(before) != 0)
+            return "Not formatted — the document changed while it was being formatted.";
+
+        if (result.Refused)
+            return selected
+                ? $"Selection not formatted — {result.Refusal}."
+                : $"Not formatted — {result.Refusal}.";
+        if (!result.Changed) return null;
+
+        // One Replace, so the whole reformat is a single undo step rather than a stack of them.
+        var caret = _editor.CaretOffset;
+        _editor.Document.Replace(start, length, result.Text);
+
+        if (selected)
+        {
+            _editor.SelectionStart = start;
+            _editor.SelectionLength = result.Text.Length;   // keep what was formatted selected
+        }
+        else
+        {
+            // The caret cannot be preserved meaningfully — every offset after the first change has moved —
+            // so it is clamped rather than guessed at. Landing near where you were beats landing at zero.
+            _editor.CaretOffset = Math.Min(caret, _editor.Document.TextLength);
+        }
+        return null;
+    }
 }

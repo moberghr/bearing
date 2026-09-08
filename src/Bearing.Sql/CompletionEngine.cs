@@ -13,6 +13,18 @@ namespace Bearing.Sql;
 public sealed partial class CompletionEngine : ICompletionEngine
 {
     public CompletionResult Complete(string sql, int caretOffset, ISchemaSnapshot schema)
+        // The parse and antlr4-c3's walk both recurse per nesting level; PgParsing.OnDeepStack gives them
+        // the stack for it. Kept for callers that are already off any thread that matters (tests).
+        => PgParsing.OnDeepStack(() => CompleteCore(sql, caretOffset, schema));
+
+    /// <inheritdoc />
+    public Task<CompletionResult> CompleteAsync(string sql, int caretOffset, ISchemaSnapshot schema)
+        // What the editor uses. The synchronous path would have the caller's thread blocked on Join for the
+        // whole parse — and since the controller already calls this from the thread pool, that was a pool
+        // thread parked per keystroke on top of the deep-stack thread doing the work.
+        => PgParsing.OnDeepStackAsync(() => CompleteCore(sql, caretOffset, schema));
+
+    private CompletionResult CompleteCore(string sql, int caretOffset, ISchemaSnapshot schema)
     {
         caretOffset = Math.Clamp(caretOffset, 0, sql.Length);
 
@@ -24,6 +36,14 @@ public sealed partial class CompletionEngine : ICompletionEngine
 
         var parsed = PgParsing.Create(sql);
         parsed.Tokens.Fill();
+
+        // Past a certain nesting the recursive-descent parser overflows the stack, and a
+        // StackOverflowException cannot be caught in .NET — the `catch` below would not run, the process
+        // would simply die and take the user's unsaved buffer with it. Completion is optional; a crash is
+        // not, so deeply nested text gets no suggestions rather than a parse attempt.
+        if (PgParsing.TooDeeplyNested(parsed.Tokens.GetTokens()))
+            return new CompletionResult(Array.Empty<Suggestion>(), caretOffset, 0);
+
         var caret = ResolveCaret(parsed.Tokens, caretOffset);
         var aliasSlot = CaretIsInAliasSlot(schema, parsed.Tokens.GetTokens(), caret.TokenIndex);
 
@@ -138,10 +158,15 @@ public sealed partial class CompletionEngine : ICompletionEngine
 
     /// <summary>The candidate intents at the caret (exposed for pinning tests).</summary>
     public IReadOnlySet<CompletionIntent> IntentsAt(string sql, int caretOffset)
+        => PgParsing.OnDeepStack(() => IntentsAtCore(sql, caretOffset));
+
+    private IReadOnlySet<CompletionIntent> IntentsAtCore(string sql, int caretOffset)
     {
         caretOffset = Math.Clamp(caretOffset, 0, sql.Length);
         var parsed = PgParsing.Create(sql);
         parsed.Tokens.Fill();
+        if (PgParsing.TooDeeplyNested(parsed.Tokens.GetTokens())) return new HashSet<CompletionIntent>();
+
         var caret = ResolveCaret(parsed.Tokens, caretOffset);
         try { parsed.Parser.root(); } catch { }
         parsed.Parser.Reset();

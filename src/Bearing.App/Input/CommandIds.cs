@@ -56,6 +56,9 @@ public static class CommandIds
     public const string SettingsOpen = "settings.open";
 
     // Editor
+    /// <summary>Lay out the selection, or the whole buffer when there is none (#102). Layout only — see
+    /// <c>Bearing.Sql.SqlFormat</c>, which refuses rather than guessing at SQL it could not parse.</summary>
+    public const string EditorFormat = "editor.format";
     public const string EditorOpenLineBelow = "editor.openLineBelow";
     public const string EditorOpenLineAbove = "editor.openLineAbove";
     public const string EditorToggleComment = "editor.toggleComment";

@@ -102,6 +102,9 @@ public partial class MainWindow : Window
         _keymapWarnings = keymap.Warnings;
         ResultsView.CommandDispatcher = _dispatcher;
         SyncMenuGestures();
+        // After the registry and the dispatcher, both of which the menu reads (labels from the commands,
+        // gestures from the live keymap on open).
+        EditorContextMenu.Install(Editor, _commands, () => _dispatcher!.Keymap);
 
         InstallWindowHandlers();
         WireSidebar();
@@ -191,6 +194,9 @@ public partial class MainWindow : Window
             RebuildResults(Vm?.Workspace.SelectedTab);
         };
         ResultsView.Status = text => { if (Vm is not null) Vm.StatusText = text; };
+        // The header's ✕. Collapse rather than toggle — the button is only reachable while the pane is open —
+        // and take focus with it, or it stays parked in a grid that is no longer on screen.
+        ResultsView.CloseRequested = () => { _resultsPane.SetVisible(false); Editor.TextArea.Focus(); };
         ResultsView.SaveChanges = async rs =>
         {
             if (Vm is null) return;
