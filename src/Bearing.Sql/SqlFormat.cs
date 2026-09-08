@@ -48,7 +48,24 @@ public static class SqlFormat
     {
         if (string.IsNullOrWhiteSpace(sql)) return new SqlFormatResult(sql, false, null);
 
+        // The parse and the tree walk both recurse per nesting level, so they run on a stack sized for it.
+        // Synchronous and joined, so this stays an ordinary pure function from the caller's side.
+        return PgParsing.OnDeepStack(() => FormatCore(sql));
+    }
+
+    private static SqlFormatResult FormatCore(string sql)
+    {
         var parsed = PgParsing.Create(sql);
+        parsed.Tokens.Fill();
+        var tokens = parsed.Tokens.GetTokens();
+
+        // Checked before parsing, never after. Even on the deep stack there is a depth past which the
+        // parser overflows, and a StackOverflowException cannot be caught in .NET — the process simply
+        // dies. See PgParsing.MaxNestingDepth: this is a crash backstop, not a size limit.
+        if (PgParsing.TooDeeplyNested(tokens))
+            return new SqlFormatResult(sql, false,
+                $"it nests more than {PgParsing.MaxNestingDepth} levels deep");
+
         var errors = new SyntaxErrorCollector();
         parsed.Parser.AddErrorListener(errors);
 
@@ -59,7 +76,6 @@ public static class SqlFormat
         if (errors.First is { } problem)
             return new SqlFormatResult(sql, false, $"the statement could not be parsed ({problem})");
 
-        var tokens = Filled(parsed.Tokens);
         var plan = SqlFormatLayout.Build(root, tokens);
         var formatted = SqlFormatWriter.Write(sql, tokens, plan);
 
@@ -67,14 +83,6 @@ public static class SqlFormat
             return new SqlFormatResult(sql, false, $"the result would not have been the same SQL ({difference})");
 
         return new SqlFormatResult(formatted, !string.Equals(formatted, sql, System.StringComparison.Ordinal), null);
-    }
-
-    /// <summary>The parse consumed the stream already; this hands back every token including the hidden
-    /// channel, which is where the comments are.</summary>
-    private static IList<IToken> Filled(CommonTokenStream tokens)
-    {
-        tokens.Fill();
-        return tokens.GetTokens();
     }
 
     /// <summary>Records the first syntax error and counts the rest. The message is for a status bar, so the
