@@ -95,10 +95,15 @@ public class SqlFormatSafetyTests
         => Assert.Contains(body, SqlFormat.Format(sql).Text, StringComparison.Ordinal);
 
     /// <summary>
-    /// The failure that disqualified the off-the-shelf library: it emitted <c>a # >> b</c>, <c>b | | c</c>
-    /// and <c>e &lt; @ f</c>, none of which run. The list is Postgres's own multi-character operator set,
-    /// taken from the dialect table that library tests against — every one of them is a single token here,
-    /// so none of them can come apart.
+    /// Splitting a multi-character operator is the classic way a formatter silently produces SQL that no
+    /// longer runs — <c>a # >> b</c>, <c>b | | c</c>, <c>e &lt; @ f</c>. It cannot happen here, because each
+    /// of these is a single lexer token rather than a run of characters, and the writer only ever chooses
+    /// the whitespace between tokens.
+    /// <para>
+    /// The list is enumerated from Postgres's operator table rather than from anything the formatter itself
+    /// declares. That is deliberate: a test generated from the same list the code works off can only ever
+    /// confirm what someone already remembered, and an omission stays invisible to it.
+    /// </para>
     /// </summary>
     [Theory]
     // json / jsonb

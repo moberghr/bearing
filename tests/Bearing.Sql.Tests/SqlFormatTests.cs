@@ -194,8 +194,7 @@ public class SqlFormatTests
     /// <summary>
     /// BETWEEN's AND is part of the operator, not a conjunction. Breaking there splits one comparison over
     /// two lines and reads as though a term went missing — and it is easy to get wrong, because every other
-    /// top-level AND in a WHERE does break. Found by reading the sql-formatter family's suite, which pins
-    /// the same case.
+    /// top-level AND in a WHERE does break, so the rule that handles them catches this one by accident.
     /// </summary>
     [Fact]
     public void Between_keeps_its_own_and_but_the_real_conjunction_still_breaks()

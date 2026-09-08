@@ -7,9 +7,9 @@ namespace Bearing.Sql.Tests;
 /// tests so the corpus can grow without touching them: one entry added here becomes a case in every property
 /// at once, which is the cheapest way this suite gets stronger.
 /// <para>
-/// Stocked from three places. Postgres shapes #102 calls out; the categories the
-/// <c>sql-formatter</c> family's own suite covers (its dialect tests were read for exactly this — operator
-/// tables, quoting styles, placeholder syntaxes, unicode identifiers, brutal whitespace); and the things
+/// Stocked from three places: the Postgres shapes #102 calls out; the categories a SQL formatter is
+/// conventionally expected to survive — the full operator table, every quoting and literal style,
+/// placeholder syntaxes, unicode identifiers, comments in every position, brutal whitespace; and the things
 /// this codebase already knows are load-bearing — <c>WriteGuard</c>'s risky verbs, <c>SqlRedactor</c>'s
 /// literal shapes, temporal types (§5.5).
 /// </para>
