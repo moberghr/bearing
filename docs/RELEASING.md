@@ -55,6 +55,16 @@ There is no macOS package, here or anywhere (see above).
 `workflow_dispatch` runs the test job alone against any ref, which answers "would this tag build" without
 creating a release that claims it did.
 
+### Pre-releases
+
+Tick **Set as a pre-release** and the workflow carries that through to `vpk upload --pre`, then re-asserts
+the flag once the assets are up. A tag with a pre-release identifier — `v0.6.1-beta.1` — counts on its own,
+checkbox or not.
+
+The flag is load-bearing rather than a label: the updater and `Help ▸ What's New` both filter pre-releases
+out, so a beta is installable from the Releases page and offered to nobody. Losing it is the whole reason it
+is asserted twice. By hand, `PRERELEASE=1` does the same.
+
 ### By hand
 
 The same script the workflow runs, for when you want the packages locally or CI is not an option.

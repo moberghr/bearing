@@ -50,13 +50,21 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      # The provisioning script rather than a `services:` block, deliberately: it is what pins the pagila
+      # ref and the Postgres major, and it writes the bearing_test_marker row the tests that create and drop
+      # schemas look for before they touch anything. A hand-rolled service container would reproduce three
+      # of those four things and silently skip the suites that need the fourth.
+      - name: Provision PostgreSQL + pagila
+        run: bash build/test-db.sh
+
       - name: Test
         # The release job skips its own test run (SKIP_TESTS=1) so this is the only one, and a failure here
         # stops the publish rather than being discovered after the assets are public.
         #
-        # Postgres-dependent tests skip cleanly with no server (§4.2) and the keychain tests skip with no
-        # credential store (#24 wants a matrix and a service container so those stop being quiet); what runs
-        # here is everything that does not need either.
+        # The Postgres-dependent suites are SkippableFacts: without a server they go *quiet*, so a green run
+        # full of skips was not evidence that the catalog reads, the TLS modes or the temporal mappings work
+        # (§4.2). The step above is what makes them run. The keychain tests still skip — those need a matrix
+        # with a reachable credential store per OS, which is the rest of #24.
         run: dotnet test Bearing.slnx -c Release --nologo
 
   publish:
@@ -87,6 +95,10 @@ jobs:
           PUBLISH: "1"
           RID: win-x64
           SKIP_TESTS: "1"
+          # "Set as a pre-release" on the release, carried through to `vpk upload --pre`. Without it a
+          # release ticked as a pre-release would be uploaded as a stable one, and the updater offers
+          # stable releases to everybody.
+          PRERELEASE: ${{ github.event.release.prerelease && '1' || '0' }}
         run: build/velopack.sh
 
       - name: Publish linux-x64
@@ -97,6 +109,7 @@ jobs:
           PUBLISH: "1"
           RID: linux-x64
           SKIP_TESTS: "1"
+          PRERELEASE: ${{ github.event.release.prerelease && '1' || '0' }}
         run: build/velopack.sh
 
       - name: Show what shipped
