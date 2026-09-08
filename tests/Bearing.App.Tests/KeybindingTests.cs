@@ -219,6 +219,18 @@ public class KeybindingTests
     }
 
     [Fact]
+    public void The_side_pane_answers_to_both_ctrl_b_and_ctrl_m()
+    {
+        // Ctrl+B is the editor convention; Ctrl+M is what a DBeaver/Eclipse user reaches for. Aliases, so
+        // the menu keeps showing Ctrl+B — and Ctrl+M must not have been taken by anything else.
+        Assert.Equal(CommandIds.ViewToggleSidePane, Defaults.Resolve(KeyScope.Global, KeyModifiers.Control, Key.B, NoPhys));
+        Assert.Equal(CommandIds.ViewToggleSidePane, Defaults.Resolve(KeyScope.Global, KeyModifiers.Control, Key.M, NoPhys));
+        Assert.Equal("Ctrl+B", Defaults.DisplayGesture(CommandIds.ViewToggleSidePane));
+        Assert.Null(Defaults.Resolve(KeyScope.Editor, KeyModifiers.Control, Key.M, NoPhys));
+        Assert.Null(Defaults.Resolve(KeyScope.Grid, KeyModifiers.Control, Key.M, NoPhys));
+    }
+
+    [Fact]
     public void DisplayGesture_prefers_the_first_binding()
     {
         Assert.Equal("Ctrl+Enter", Defaults.DisplayGesture(CommandIds.Run));   // not F5

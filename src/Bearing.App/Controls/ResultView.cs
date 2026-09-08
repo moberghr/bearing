@@ -113,6 +113,16 @@ public sealed partial class ResultView : UserControl
     /// <summary>Report a one-line outcome to the shell's status bar (what a paste wrote, what it dropped).</summary>
     public Action<string>? Status { get; set; }
 
+    /// <summary>
+    /// Invoked by the dock header's ✕: collapse the results pane. Assign before the first
+    /// <see cref="Results"/>, since that is what renders the header — left null the ✕ is not drawn at all.
+    /// <para>
+    /// The same thing <c>view.toggleResults</c> does, given a button: the pane could only be dismissed from
+    /// the keyboard, which is fine once you know the gesture and invisible until then.
+    /// </para>
+    /// </summary>
+    public Action? CloseRequested { get; set; }
+
     /// <summary>The shared keybinding pipeline (set once by the window), used to resolve a keystroke that
     /// lands in a grid. Spatial cell navigation stays local (see <see cref="OnGridKey"/>).
     /// <para>

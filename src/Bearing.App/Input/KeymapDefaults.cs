@@ -27,6 +27,9 @@ public static class KeymapDefaults
         yield return G(CommandIds.TabClose, "Ctrl+F4"); // Windows MDI convention; Ctrl+W is the editor's delete-word
         yield return G(CommandIds.TabRename, "F2");
         yield return G(CommandIds.ViewToggleSidePane, "Ctrl+B");
+        // Ctrl+M is the alias, not the primary: Ctrl+B is the editor convention the menu shows, and Ctrl+M is
+        // the reflex a DBeaver/Eclipse user brings with them. Both collapse the same pane.
+        yield return G(CommandIds.ViewToggleSidePane, "Ctrl+M");
         yield return G(CommandIds.ViewToggleResults, "Ctrl+R");
         yield return G(CommandIds.StatementPrev, "Alt+Up");
         yield return G(CommandIds.StatementNext, "Alt+Down");
