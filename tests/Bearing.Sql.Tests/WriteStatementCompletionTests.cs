@@ -135,8 +135,8 @@ public class WriteStatementCompletionTests
     public void The_alias_slot_of_a_write_target_offers_no_relations_and_no_joins(string sql)
     {
         var result = Engine.Complete(sql, sql.Length, Schema);
-        Assert.Empty(result.Suggestions.Where(s => s.Kind is SuggestionKind.Table or SuggestionKind.View));
-        Assert.Empty(result.Suggestions.Where(s => s.Kind == SuggestionKind.Join));
+        Assert.DoesNotContain(result.Suggestions, s => s.Kind is SuggestionKind.Table or SuggestionKind.View);
+        Assert.DoesNotContain(result.Suggestions, s => s.Kind == SuggestionKind.Join);
     }
 
     /// <summary>
