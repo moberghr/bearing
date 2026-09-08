@@ -219,6 +219,17 @@ public class KeybindingTests
     }
 
     [Fact]
+    public void Format_claims_the_gesture_people_already_press()
+    {
+        // #102 opens with "people press Ctrl+Shift+F reflexively and nothing happens". Editor scope, so it
+        // resolves on the tunnel path before AvaloniaEdit sees it, and it must be free everywhere else.
+        Assert.Equal(CommandIds.EditorFormat,
+            Defaults.Resolve(KeyScope.Editor, KeyModifiers.Control | KeyModifiers.Shift, Key.F, NoPhys));
+        Assert.Null(Defaults.Resolve(KeyScope.Global, KeyModifiers.Control | KeyModifiers.Shift, Key.F, NoPhys));
+        Assert.Null(Defaults.Resolve(KeyScope.Grid, KeyModifiers.Control | KeyModifiers.Shift, Key.F, NoPhys));
+    }
+
+    [Fact]
     public void The_side_pane_answers_to_both_ctrl_b_and_ctrl_m()
     {
         // Ctrl+B is the editor convention; Ctrl+M is what a DBeaver/Eclipse user reaches for. Aliases, so

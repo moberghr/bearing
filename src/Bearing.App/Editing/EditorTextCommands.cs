@@ -140,4 +140,46 @@ public sealed class EditorTextCommands
     private (int Start, int End) Span() => _editor.SelectionLength > 0
         ? (_editor.SelectionStart, _editor.SelectionStart + _editor.SelectionLength)
         : (_editor.CaretOffset, _editor.CaretOffset);
+
+    // ---- formatting --------------------------------------------------------------------------
+
+    /// <summary>
+    /// editor.format: lay out the selection, or the whole buffer when there is none — the Format
+    /// Document / Format Selection convention, not <see cref="SqlToRun"/>'s statement-at-the-caret rule.
+    /// Formatting is a whole-file edit in every editor people arrive from, and quietly reformatting only the
+    /// statement you happened to be sitting in would be the surprise.
+    /// </summary>
+    /// <returns>A line for the status bar when the formatter declined, or null when there was nothing to say
+    /// — the edit either happened or the text was already laid out.</returns>
+    public string? FormatSql()
+    {
+        var selected = _editor.SelectionLength > 0;
+        var start = selected ? _editor.SelectionStart : 0;
+        var length = selected ? _editor.SelectionLength : _editor.Document.TextLength;
+        if (length == 0) return null;
+
+        var result = SqlFormat.Format(_editor.Document.GetText(start, length));
+        if (result.Refused)
+            return selected
+                ? $"Selection not formatted — {result.Refusal}."
+                : $"Not formatted — {result.Refusal}.";
+        if (!result.Changed) return null;
+
+        // One Replace, so the whole reformat is a single undo step rather than a stack of them.
+        var caret = _editor.CaretOffset;
+        _editor.Document.Replace(start, length, result.Text);
+
+        if (selected)
+        {
+            _editor.SelectionStart = start;
+            _editor.SelectionLength = result.Text.Length;   // keep what was formatted selected
+        }
+        else
+        {
+            // The caret cannot be preserved meaningfully — every offset after the first change has moved —
+            // so it is clamped rather than guessed at. Landing near where you were beats landing at zero.
+            _editor.CaretOffset = Math.Min(caret, _editor.Document.TextLength);
+        }
+        return null;
+    }
 }

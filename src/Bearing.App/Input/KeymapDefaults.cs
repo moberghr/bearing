@@ -67,6 +67,9 @@ public static class KeymapDefaults
         // ---- Editor (resolved in the editor's tunnel handler) ----
         yield return E(CommandIds.EditorOpenLineBelow, "Shift+Enter");
         yield return E(CommandIds.EditorOpenLineAbove, "Ctrl+Shift+Enter");
+        // Ctrl+Shift+F: the gesture #102 opens with — what a DBeaver/Eclipse user presses reflexively, and
+        // what did nothing at all before there was a formatter behind it.
+        yield return E(CommandIds.EditorFormat, "Ctrl+Shift+F");
         yield return E(CommandIds.EditorToggleComment, "Ctrl+/");
         // Ctrl+- used to be the comment alias (on an HR layout the '/' key reports OemMinus), but zoom
         // owns that key now — the browser/editor convention everyone reaches for. Ctrl+K is the

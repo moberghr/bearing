@@ -37,6 +37,7 @@ public class EditorContextMenuTests
 
         Assert.Contains(items, i => Header(i) == "Run");
         Assert.Contains(items, i => Header(i) == "Explain statement");
+        Assert.Contains(items, i => Header(i) == "Format SQL");
         Assert.Contains(items, i => Header(i) == "Select statement");
         Assert.Contains(items, i => Header(i) == "Toggle comment");
         Assert.Contains(items, i => Header(i) == "Paste");
@@ -45,6 +46,7 @@ public class EditorContextMenuTests
         // bar's own gesture sync exists to prevent.
         Assert.Equal(KeyGesture.Parse("Ctrl+Enter"), items.First(i => Header(i) == "Run").InputGesture);
         Assert.Equal(KeyGesture.Parse("Ctrl+Shift+E"), items.First(i => Header(i) == "Explain statement").InputGesture);
+        Assert.Equal(KeyGesture.Parse("Ctrl+Shift+F"), items.First(i => Header(i) == "Format SQL").InputGesture);
 
         flyout.Hide();
     });

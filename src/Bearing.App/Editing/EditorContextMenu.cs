@@ -9,8 +9,8 @@ using Bearing.App.Input;
 namespace Bearing.App.Editing;
 
 /// <summary>
-/// The SQL editor's right-click menu: run / explain, the clipboard three, and the two statement-shaped
-/// edits (select, comment) plus fold-all. The editor had no context menu at all — every one of these
+/// The SQL editor's right-click menu: run / explain, the clipboard three, format, the two statement-shaped
+/// edits (select, comment) and fold-all. The editor had no context menu at all — every one of these
 /// actions existed but was reachable only by a gesture you had to already know.
 /// <para>
 /// Items come from the <see cref="CommandRegistry"/> rather than being spelled out here: the label is the
@@ -57,6 +57,7 @@ internal static class EditorContextMenu
         flyout.Items.Add(paste);
         flyout.Items.Add(new Separator());
 
+        Add(CommandIds.EditorFormat);
         Add(CommandIds.EditorSelectStatement);
         Add(CommandIds.EditorToggleComment);
         flyout.Items.Add(new Separator());

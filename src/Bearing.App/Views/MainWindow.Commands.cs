@@ -99,6 +99,7 @@ public partial class MainWindow
         // ---- Editor ----
         r.Register(KeyCommand.Sync(CommandIds.EditorOpenLineBelow, "Open line below", KeyScope.Editor, "Editor", () => _text.OpenLine(below: true)));
         r.Register(KeyCommand.Sync(CommandIds.EditorOpenLineAbove, "Open line above", KeyScope.Editor, "Editor", () => _text.OpenLine(below: false)));
+        r.Register(KeyCommand.Sync(CommandIds.EditorFormat, "Format SQL", KeyScope.Editor, "Editor", FormatSql));
         r.Register(KeyCommand.Sync(CommandIds.EditorToggleComment, "Toggle comment", KeyScope.Editor, "Editor", _text.ToggleLineComment));
         r.Register(KeyCommand.Sync(CommandIds.EditorSelectStatement, "Select statement", KeyScope.Editor, "Editor", _text.SelectCurrentStatement));
         r.Register(KeyCommand.Sync(CommandIds.EditorFoldCurrent, "Fold current", KeyScope.Editor, "Editor", () => _folding.FoldCurrent()));
@@ -248,6 +249,14 @@ public partial class MainWindow
     }
 
     // ---- focus & panes -----------------------------------------------------------------------
+
+    /// <summary>editor.format (Ctrl+Shift+F): lay out the selection, or the whole buffer. A refusal — SQL
+    /// that would not parse — is reported rather than swallowed, since the alternative is a keystroke that
+    /// silently does nothing.</summary>
+    private void FormatSql()
+    {
+        if (_text.FormatSql() is { } problem && Vm is not null) Vm.StatusText = problem;
+    }
 
     /// <summary>view.toggleResults (Ctrl+R): flip the results pane; hiding it drops focus back to the editor.</summary>
     private void ToggleResultsVisible()
