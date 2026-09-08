@@ -149,16 +149,17 @@ public sealed class EditorTextCommands
     /// Formatting is a whole-file edit in every editor people arrive from, and quietly reformatting only the
     /// statement you happened to be sitting in would be the surprise.
     /// </summary>
+    /// <param name="options">Keyword case and indent width, from the user's settings.</param>
     /// <returns>A line for the status bar when the formatter declined, or null when there was nothing to say
     /// — the edit either happened or the text was already laid out.</returns>
-    public string? FormatSql()
+    public string? FormatSql(SqlFormatOptions options)
     {
         var selected = _editor.SelectionLength > 0;
         var start = selected ? _editor.SelectionStart : 0;
         var length = selected ? _editor.SelectionLength : _editor.Document.TextLength;
         if (length == 0) return null;
 
-        var result = SqlFormat.Format(_editor.Document.GetText(start, length));
+        var result = SqlFormat.Format(_editor.Document.GetText(start, length), options);
         if (result.Refused)
             return selected
                 ? $"Selection not formatted — {result.Refusal}."

@@ -26,7 +26,7 @@ internal enum Gap
 
     Space,
 
-    /// <summary>Newline, then <see cref="SqlFormatPlan.IndentWidth"/> × the token's indent level.</summary>
+    /// <summary>Newline, then the indent width × the token's indent level.</summary>
     Line,
 
     /// <summary>A blank line, then the indent. Between statements of a batch.</summary>
@@ -40,8 +40,6 @@ internal enum Gap
 /// </summary>
 internal sealed class SqlFormatPlan
 {
-    public const int IndentWidth = 4;
-
     private readonly Gap[] _gaps;
     private readonly int[] _indent;
     private readonly bool[] _managed;

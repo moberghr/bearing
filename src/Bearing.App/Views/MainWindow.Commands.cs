@@ -11,6 +11,7 @@ using Avalonia.VisualTree;
 using Bearing.App.Editing;
 using Bearing.App.Input;
 using Bearing.App.ViewModels;
+using Bearing.Core.Workspace;
 using Bearing.Sql;
 
 namespace Bearing.App.Views;
@@ -255,7 +256,16 @@ public partial class MainWindow
     /// silently does nothing.</summary>
     private void FormatSql()
     {
-        if (_text.FormatSql() is { } problem && Vm is not null) Vm.StatusText = problem;
+        // Read at invoke time, not captured: the settings window applies edits immediately, so a change to
+        // keyword case or indent width takes effect on the next Ctrl+Shift+F rather than the next restart.
+        var settings = Vm?.SettingsService.Current ?? AppSettings.Defaults;
+        var options = new SqlFormatOptions
+        {
+            KeywordCase = settings.SqlFormatKeywordCase,
+            IndentWidth = settings.SqlFormatIndentWidth,
+        };
+
+        if (_text.FormatSql(options) is { } problem && Vm is not null) Vm.StatusText = problem;
     }
 
     /// <summary>view.toggleResults (Ctrl+R): flip the results pane; hiding it drops focus back to the editor.</summary>

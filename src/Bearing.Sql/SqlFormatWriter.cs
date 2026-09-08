@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using Antlr4.Runtime;
+using Bearing.Core.Workspace;
 
 namespace Bearing.Sql;
 
@@ -23,7 +24,7 @@ namespace Bearing.Sql;
 /// </summary>
 internal static class SqlFormatWriter
 {
-    public static string Write(string sql, IList<IToken> tokens, SqlFormatPlan plan)
+    public static string Write(string sql, IList<IToken> tokens, SqlFormatPlan plan, SqlFormatOptions options)
     {
         // Match the file's own line endings. Emitting LF into a CRLF buffer would rewrite every line in the
         // statement, turning a formatting change into a whole-file diff for anyone on Windows.
@@ -53,8 +54,8 @@ internal static class SqlFormatWriter
                 if (indent == 0) indent = plan.IndentAt(token.TokenIndex);
             }
 
-            Emit(output, sql, gap, indent, previous, token, newline);
-            output.Append(Text(token, plan));
+            Emit(output, sql, gap, indent, previous, token, newline, options.IndentWidth);
+            output.Append(Text(token, plan, options));
             previous = token;
         }
 
@@ -66,7 +67,8 @@ internal static class SqlFormatWriter
     }
 
     private static void Emit(
-        StringBuilder output, string sql, Gap gap, int indent, IToken? previous, IToken token, string newline)
+        StringBuilder output, string sql, Gap gap, int indent, IToken? previous, IToken token,
+        string newline, int indentWidth)
     {
         // Nothing has been written yet: a leading break would just indent the file's first line.
         if (output.Length == 0)
@@ -102,7 +104,7 @@ internal static class SqlFormatWriter
                 goto case Gap.Line;
 
             case Gap.Line:
-                output.Append(newline).Append(' ', indent * SqlFormatPlan.IndentWidth);
+                output.Append(newline).Append(' ', indent * indentWidth);
                 break;
         }
     }
@@ -131,12 +133,21 @@ internal static class SqlFormatWriter
         return (Gap.Line, 0);
     }
 
-    private static string Text(IToken token, SqlFormatPlan plan)
-        => plan.IsManaged(token.TokenIndex)
-           && !plan.KeepsCase(token.TokenIndex)
-           && SqlFormatKeywords.Uppercased.Contains(token.Type)
-            ? token.Text.ToUpperInvariant()
-            : token.Text;
+    /// <summary>
+    /// A token's text, with keyword case applied. Only a token the layout pass claimed, that the grammar did
+    /// not reach through an identifier position, and that is in the curated keyword set is ever recased.
+    /// </summary>
+    private static string Text(IToken token, SqlFormatPlan plan, SqlFormatOptions options)
+    {
+        if (options.KeywordCase == SqlKeywordCase.Preserve) return token.Text;
+        if (!plan.IsManaged(token.TokenIndex)) return token.Text;
+        if (plan.KeepsCase(token.TokenIndex)) return token.Text;
+        if (!SqlFormatKeywords.Uppercased.Contains(token.Type)) return token.Text;
+
+        return options.KeywordCase == SqlKeywordCase.Lower
+            ? token.Text.ToLowerInvariant()
+            : token.Text.ToUpperInvariant();
+    }
 
     private static bool IsComment(IToken token)
         => token.Type is PostgreSQLLexer.LineComment or PostgreSQLLexer.BlockComment;

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Antlr4.Runtime;
+using Bearing.Core.Workspace;
 
 namespace Bearing.Sql;
 
@@ -22,7 +23,11 @@ namespace Bearing.Sql;
 internal static class SqlFormatGuard
 {
     /// <summary>Null when the two texts are the same statement; otherwise what differs, for the refusal.</summary>
-    public static string? Difference(string before, string after)
+    /// <param name="keywordCase">What the formatter was allowed to do to case. Under
+    /// <see cref="SqlKeywordCase.Preserve"/> nothing may differ at all, so the check tightens to exact text
+    /// on every token — a stricter guard for the stricter setting, rather than one that always allows the
+    /// loosest thing any setting permits.</param>
+    public static string? Difference(string before, string after, SqlKeywordCase keywordCase = SqlKeywordCase.Upper)
     {
         var original = Significant(before);
         var formatted = Significant(after);
@@ -37,7 +42,9 @@ internal static class SqlFormatGuard
 
             // Case may differ only where the formatter is allowed to change it. Everything else — every
             // identifier, literal, operator and comment — must be byte-identical.
-            var sameText = SqlFormatKeywords.Uppercased.Contains(wasType)
+            var recasable = keywordCase != SqlKeywordCase.Preserve
+                            && SqlFormatKeywords.Uppercased.Contains(wasType);
+            var sameText = recasable
                 ? string.Equals(wasText, isText, StringComparison.OrdinalIgnoreCase)
                 : string.Equals(wasText, isText, StringComparison.Ordinal);
 

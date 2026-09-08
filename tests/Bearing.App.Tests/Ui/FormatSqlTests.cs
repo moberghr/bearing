@@ -6,6 +6,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 using AvaloniaEdit;
+using Bearing.Core.Workspace;
 using Xunit;
 
 namespace Bearing.App.Tests.Ui;
@@ -99,6 +100,50 @@ public class FormatSqlTests
         Assert.Equal("select id, name from users where id = 1", editor.Text);
     });
 
+    /// <summary>
+    /// The settings reach the keystroke, and reach it <b>live</b>: the settings window applies edits
+    /// immediately, so a keyword-case change has to take effect on the next Ctrl+Shift+F rather than the
+    /// next restart. That only holds because the command reads <c>SettingsService.Current</c> at invoke
+    /// time instead of capturing it when the command table is built.
+    /// </summary>
+    [Fact]
+    public Task Format_follows_the_keyword_case_setting_without_a_restart() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(Format_follows_the_keyword_case_setting_without_a_restart));
+        var editor = Focused(shell);
+
+        editor.Text = "select a from t";
+        shell.Pump();
+        Press(shell);
+        Assert.Equal("SELECT\n    a\nFROM t", editor.Text);
+
+        shell.Vm.SettingsService.Update(s => s with { SqlFormatKeywordCase = SqlKeywordCase.Lower });
+        editor.Text = "SELECT a FROM t";
+        shell.Pump();
+        Press(shell);
+        Assert.Equal("select\n    a\nfrom t", editor.Text);
+
+        shell.Vm.SettingsService.Update(s => s with { SqlFormatKeywordCase = SqlKeywordCase.Preserve });
+        editor.Text = "SeLeCt a frOM t";
+        shell.Pump();
+        Press(shell);
+        Assert.Equal("SeLeCt\n    a\nfrOM t", editor.Text);
+    });
+
+    [Fact]
+    public Task Format_follows_the_indent_width_setting() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(Format_follows_the_indent_width_setting));
+        var editor = Focused(shell);
+        shell.Vm.SettingsService.Update(s => s with { SqlFormatIndentWidth = 2 });
+
+        editor.Text = "select a from t";
+        shell.Pump();
+        Press(shell);
+
+        Assert.Equal("SELECT\n  a\nFROM t", editor.Text);
+    });
+
     [Fact]
     public Task The_context_menus_Format_item_formats() => _ui.Run(async () =>
     {
@@ -117,6 +162,13 @@ public class FormatSqlTests
         Assert.Equal("SELECT\n    a\nFROM t", editor.Text);
         flyout.Hide();
     });
+
+    /// <summary>Ctrl+Shift+F through the shell, then let the edit settle.</summary>
+    private static void Press(ShellHarness shell)
+    {
+        shell.Window.KeyPress(Key.F, RawInputModifiers.Control | RawInputModifiers.Shift, PhysicalKey.F, null);
+        shell.Pump();
+    }
 
     private static TextEditor Focused(ShellHarness shell)
     {

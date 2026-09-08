@@ -49,6 +49,19 @@ public sealed record AppSettings
     /// </summary>
     public bool AutoCloseBrackets { get; init; } = true;
 
+    /// <summary>
+    /// What Format SQL (Ctrl+Shift+F) does to keyword case (#102). Cosmetic only — Postgres folds unquoted
+    /// identifiers, and quoted ones are never touched.
+    /// </summary>
+    public SqlKeywordCase SqlFormatKeywordCase { get; init; } = SqlKeywordCase.Upper;
+
+    /// <summary>
+    /// Spaces per indent level in formatted SQL. Spaces rather than a tab/width pair: the formatter aligns
+    /// nothing to a column, so the one thing a tab would buy here — someone else's editor rendering the
+    /// alignment differently — is not on offer, and a single number cannot disagree with itself.
+    /// </summary>
+    public int SqlFormatIndentWidth { get; init; } = 4;
+
     /// <summary>Whether closing a tab that holds unsaved work asks first. Off means a close discards it
     /// silently — which is why the default is on, autosave or not.</summary>
     public bool ConfirmTabClose { get; init; } = true;

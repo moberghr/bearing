@@ -44,16 +44,19 @@ public sealed record SqlFormatResult(string Text, bool Changed, string? Refusal)
 public static class SqlFormat
 {
     /// <summary>Format a whole SQL text — one statement or a batch.</summary>
-    public static SqlFormatResult Format(string sql)
+    /// <param name="options">Layout and case dials; <see cref="SqlFormatOptions.Default"/> when omitted.</param>
+    public static SqlFormatResult Format(string sql, SqlFormatOptions? options = null)
     {
         if (string.IsNullOrWhiteSpace(sql)) return new SqlFormatResult(sql, false, null);
 
+        var settings = options ?? SqlFormatOptions.Default;
+
         // The parse and the tree walk both recurse per nesting level, so they run on a stack sized for it.
         // Synchronous and joined, so this stays an ordinary pure function from the caller's side.
-        return PgParsing.OnDeepStack(() => FormatCore(sql));
+        return PgParsing.OnDeepStack(() => FormatCore(sql, settings));
     }
 
-    private static SqlFormatResult FormatCore(string sql)
+    private static SqlFormatResult FormatCore(string sql, SqlFormatOptions options)
     {
         var parsed = PgParsing.Create(sql);
         parsed.Tokens.Fill();
@@ -77,9 +80,9 @@ public static class SqlFormat
             return new SqlFormatResult(sql, false, $"the statement could not be parsed ({problem})");
 
         var plan = SqlFormatLayout.Build(root, tokens);
-        var formatted = SqlFormatWriter.Write(sql, tokens, plan);
+        var formatted = SqlFormatWriter.Write(sql, tokens, plan, options);
 
-        if (SqlFormatGuard.Difference(sql, formatted) is { } difference)
+        if (SqlFormatGuard.Difference(sql, formatted, options.KeywordCase) is { } difference)
             return new SqlFormatResult(sql, false, $"the result would not have been the same SQL ({difference})");
 
         return new SqlFormatResult(formatted, !string.Equals(formatted, sql, System.StringComparison.Ordinal), null);
