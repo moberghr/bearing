@@ -200,7 +200,9 @@ echo
 # since the previous tag. Those subjects already carry "(#nn)" refs, which GitHub renders as issue links, so
 # the generated notes link back to the issues each release closed without any extra bookkeeping.
 NOTES="$ROOT/docs/release-notes/$VERSION.md"
+NOTES_ARE_AUTHORED=0
 if [[ -f "$NOTES" ]]; then
+  NOTES_ARE_AUTHORED=1
   echo "==> Release notes: docs/release-notes/$VERSION.md"
 else
   NOTES="$ROOT/artifacts/velopack/release-notes-$VERSION.md"
@@ -274,12 +276,22 @@ if [[ "${PUBLISH:-0}" == "1" ]]; then
 
   # vpk carries the notes inside the package but leaves the GitHub release body to us. Set it here rather
   # than at pack time so it is the same text either platform run produces — last writer wins, same content.
+  # vpk leaves the GitHub release body to us, but "us" is not always this script: a release created in the
+  # web UI arrives with a description already written, and generated commit subjects must not replace it.
+  # A hand-written docs/release-notes/<version>.md still wins, because that is the copy the app reads back
+  # through What's New and the one that travels inside the package.
   if command -v gh >/dev/null 2>&1; then
     echo
-    echo "==> Setting the release description"
-    gh release edit "$TAG" --notes-file "$NOTES" >/dev/null \
-      && echo "    done: $(gh release view "$TAG" --json url --jq .url)" \
-      || echo "    WARNING: couldn't set the release description; add it by hand." >&2
+    EXISTING_BODY="$(gh release view "$TAG" --json body --jq '.body' 2>/dev/null || true)"
+    if [[ "$NOTES_ARE_AUTHORED" != "1" && -n "${EXISTING_BODY//[[:space:]]/}" ]]; then
+      echo "==> Keeping the release description already on $TAG"
+      echo "    (no docs/release-notes/$VERSION.md, and the release is not empty)"
+    else
+      echo "==> Setting the release description"
+      gh release edit "$TAG" --notes-file "$NOTES" >/dev/null \
+        && echo "    done: $(gh release view "$TAG" --json url --jq .url)" \
+        || echo "    WARNING: couldn't set the release description; add it by hand." >&2
+    fi
   fi
 
   # --- Did it actually land? ----------------------------------------------------

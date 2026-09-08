@@ -1,0 +1,123 @@
+# Publish the Velopack packages when a GitHub release is published.
+#
+# The intended flow is one step: create the release in GitHub (or push a v* tag and publish the release it
+# makes), and this does the rest. Nothing to bump, nothing to run locally.
+#
+# Two things make that safe rather than merely convenient:
+#
+#   * the version comes from the tag (MinVer, see Directory.Build.props), so the number on the release, the
+#     number in Help > About and the number the update feed compares against are one value read once; and
+#   * build/velopack.sh verifies afterwards that the release really carries releases.<channel>.json and the
+#     full package. v0.5.4 was tagged, described, and shipped with no assets at all — the page said
+#     "Latest" while every installed copy correctly stayed on 0.5.3, and nothing anywhere said a word.
+#
+# macOS is deliberately absent: Velopack needs codesign/xcrun/productbuild, so a macOS package cannot be
+# built here or anywhere else we have (docs/RELEASING.md).
+
+name: release
+
+on:
+  release:
+    types: [published]
+  # Same job, without uploading — for checking a release will build before cutting it.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or ref to build (no publishing)"
+        required: true
+        type: string
+
+concurrency:
+  # One release at a time. Two runs racing would each fetch the other's half-finished feed as the delta
+  # base, and the loser would overwrite releases.<channel>.json with a history missing the other platform.
+  group: release-${{ github.event.release.tag_name || inputs.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write        # vpk uploads assets and gh edits the release body
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.ref }}
+          # MinVer reads the tag history; a shallow clone has none and every build would be 0.0.0-alpha.
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Test
+        # The release job skips its own test run (SKIP_TESTS=1) so this is the only one, and a failure here
+        # stops the publish rather than being discovered after the assets are public.
+        #
+        # Postgres-dependent tests skip cleanly with no server (§4.2) and the keychain tests skip with no
+        # credential store (#24 wants a matrix and a service container so those stop being quiet); what runs
+        # here is everything that does not need either.
+        run: dotnet test Bearing.slnx -c Release --nologo
+
+  publish:
+    needs: test
+    # Only a published release uploads anything. workflow_dispatch stops after the test job, which is the
+    # point of it — see whether a tag builds without creating a release that says it did.
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install the Velopack CLI
+        run: |
+          dotnet tool install -g vpk
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Publish win-x64
+        env:
+          # build/velopack.sh reads `gh auth token`; on a runner gh takes it from GH_TOKEN.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH: "1"
+          RID: win-x64
+          SKIP_TESTS: "1"
+        run: build/velopack.sh
+
+      - name: Publish linux-x64
+        # Velopack cross-builds both from one runner, and both land on the same release (--merge): each
+        # channel carries its own releases.<channel>.json and a client only ever reads its own.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH: "1"
+          RID: linux-x64
+          SKIP_TESTS: "1"
+        run: build/velopack.sh
+
+      - name: Show what shipped
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release view "${{ github.event.release.tag_name }}" --json assets --jq '.assets[].name'
+
+      - name: Withdraw the release if anything failed
+        # Publishing happens before the assets exist — that is the shape of the `release: published`
+        # trigger — so a failure anywhere above leaves a live release page with nothing on it. That is
+        # precisely what v0.5.4 is, and it is worse than no release: the tag looks used, the page says
+        # "Latest", and every installed copy stays where it is with no way to tell why.
+        #
+        # Back to draft, then. The tag survives, the notes survive, and re-running the workflow after a fix
+        # publishes it properly. Nothing here deletes anything.
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          echo "::error::Release $TAG failed to publish its packages — returning it to draft."
+          gh release edit "$TAG" --draft >/dev/null \
+            && echo "$TAG is a draft again; fix the failure and re-run this workflow." \
+            || echo "::warning::Could not return $TAG to draft. Check it by hand before announcing it."

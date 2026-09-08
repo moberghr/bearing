@@ -1,8 +1,11 @@
 # Releasing Bearing
 
 Bearing ships through [Velopack](https://velopack.io): an installer plus per-file delta auto-update, with
-**GitHub Releases on this repository** as the feed the app reads. There is no CI yet ([#24]) — releases are
-built from a working copy with `build/velopack.sh`.
+**GitHub Releases on this repository** as the feed the app reads.
+
+**Cutting a release is one step: publish a GitHub release.** `.github/workflows/release.yml` runs the tests,
+builds both platforms and uploads them. Everything below the next section is what that workflow does, kept
+because it still runs by hand when you want it to.
 
 Two platforms are covered. Both are built from one machine, whichever OS it runs, because Velopack can
 cross-build Windows and Linux packages. **macOS cannot be built off a Mac** (Velopack needs `codesign`,
@@ -16,12 +19,45 @@ its bare-binary path.
 
 ## One-time setup
 
+Only for building by hand — the workflow installs its own `vpk` and uses the run's `GITHUB_TOKEN`.
+
 ```bash
 dotnet tool install -g vpk       # the Velopack CLI (needs ~/.dotnet/tools on PATH)
 gh auth login                    # publishing needs write access; the script reads `gh auth token`
 ```
 
 ## Cutting a release
+
+Create the release in GitHub — **Releases ▸ Draft a new release**, pick or create the `v*` tag, write the
+description, publish. That is the whole job. The workflow then:
+
+1. runs `dotnet test` over the solution, and stops if anything fails — before any asset is public;
+2. builds `win-x64` and `linux-x64` and uploads both to that release;
+3. checks the release really carries `releases.<channel>.json` and the full package, and fails if not.
+
+The version is the tag. Nothing to bump, and nothing that can disagree with it.
+
+A description you type in the UI is kept. `docs/release-notes/<version>.md` still wins where it exists,
+because that copy is what the app reads back through **Help ▸ What's New** and what travels inside the
+package — write one for anything worth explaining.
+
+**The release is live before its assets are.** That is inherent to reacting to a release you published: for
+the few minutes the tests and build take, the page exists, watchers have been notified, and there is nothing
+to download. It looks exactly like a broken release because, briefly, it is one.
+
+So a failure anywhere in the job **returns the release to draft** and says so. The tag and the description
+survive; fix the cause and re-run the workflow. Re-running is safe — `--merge` and the asset check are both
+idempotent — and a release that never reaches the end is never left published and empty, which is the state
+`v0.5.4` has been in since it was cut.
+
+There is no macOS package, here or anywhere (see above).
+
+`workflow_dispatch` runs the test job alone against any ref, which answers "would this tag build" without
+creating a release that claims it did.
+
+### By hand
+
+The same script the workflow runs, for when you want the packages locally or CI is not an option.
 
 1. **Tag the commit you mean to release**, and push it:
 
