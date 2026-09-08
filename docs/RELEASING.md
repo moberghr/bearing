@@ -23,12 +23,25 @@ gh auth login                    # publishing needs write access; the script rea
 
 ## Cutting a release
 
-1. Bump `<Version>` in `Directory.Build.props`. That single property is the app version everywhere: the
-   assembly version, `Help ▸ About`, and the version the feed compares against. Velopack requires 3-part
-   semver2 (`0.3.0`, `0.3.0-beta.1`) — a 4-part version is rejected.
-2. Commit, then tag it: `git tag v0.3.0`. The script **refuses to build** unless `HEAD` carries the tag
-   matching `<Version>`, so a published version can never disagree with what About reports. For a
-   throwaway local package, `ALLOW_UNTAGGED=1` skips that check (and blocks publishing).
+1. **Tag the commit you mean to release**, and push it:
+
+   ```bash
+   git tag v0.6.0 && git push origin v0.6.0
+   ```
+
+   The tag is the version. There is no `<Version>` property to bump — [MinVer](https://github.com/adamralph/minver)
+   reads the nearest `v*` tag and feeds it to the assembly version, `Help ▸ About`, and the string the
+   update feed compares against. Velopack requires 3-part semver2 (`0.6.0`, `0.6.0-beta.1`); the script
+   rejects anything else before it starts building.
+
+   This used to be two steps — bump the property, then tag — and they drifted: `v0.5.4` landed on the
+   commit *before* the bump, so the tag said 0.5.4 while the build said 0.5.3. One value read once cannot
+   do that.
+
+   A commit with no tag has no release version, and the script refuses to build one. For a throwaway local
+   package `ALLOW_UNTAGGED=1` builds `<last-tag>-local.<sha>` instead (and blocks publishing).
+2. Write `docs/release-notes/<version>.md` — see below. Do this before publishing: the script reads it for
+   the release body, and the app shows it to every user.
 3. Build and publish each platform:
 
 ```bash
@@ -37,7 +50,10 @@ PUBLISH=1 RID=linux-x64 build/velopack.sh
 ```
 
 Both land on the same GitHub release (`--merge`); each channel carries its own `releases.<channel>.json`
-and clients only read their own. The script fetches the previous release first so this one ships as a
+and clients only read their own. After uploading, the script **checks the release actually carries**
+`releases.<channel>.json` and the full package, and fails if it does not — an empty release page is not a
+release, and `v0.5.4` shipped as exactly that: tagged, described, and invisible to every installed copy,
+with nothing to say so. The script fetches the previous release first so this one ships as a
 **delta** as well as a full package — that is what keeps an update a few MB instead of ~65 MB.
 
 `dist/velopack/<channel>` is wiped and repopulated from the feed on every run, deliberately: `vpk` reads

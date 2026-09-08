@@ -70,25 +70,33 @@ if ! command -v vpk >/dev/null 2>&1; then
   exit 2
 fi
 
-# --- Version: Directory.Build.props is the single source of truth -------------
-VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' Directory.Build.props | head -1)"
-if [[ -z "$VERSION" ]]; then
-  echo "ERROR: couldn't read <Version> from Directory.Build.props." >&2
+# --- Version: the tag on HEAD is the single source of truth -------------------
+# There is no <Version> to read any more, and that is the point. It used to live in
+# Directory.Build.props *as well as* in the tag, and the two drifted: v0.5.4 ended up on the commit
+# before the one that bumped the property, so the tag said 0.5.4 and the build said 0.5.3. MinVer now
+# derives the assembly version from this same tag, so the number here and the number in Help ▸ About
+# cannot disagree — they are one value read once.
+HEAD_TAG="$(git describe --exact-match --tags --match 'v*' HEAD 2>/dev/null || true)"
+if [[ -n "$HEAD_TAG" ]]; then
+  TAG="$HEAD_TAG"
+  VERSION="${HEAD_TAG#v}"
+elif [[ "${ALLOW_UNTAGGED:-0}" == "1" ]]; then
+  # A throwaway local package. MinVer gives the build a pre-release version of its own; mirror it here so
+  # the package name matches what the binary reports rather than inventing a second number.
+  VERSION="$(git describe --tags --match 'v*' --abbrev=0 2>/dev/null | sed 's/^v//' || echo 0.0.0)"
+  VERSION="${VERSION}-local.$(git rev-parse --short HEAD)"
+  TAG="(untagged)"
+  echo "WARNING: HEAD carries no v* tag (ALLOW_UNTAGGED=1) — building $VERSION, do not publish it."
+else
+  echo "ERROR: HEAD carries no v* tag, so there is no version to build." >&2
+  echo "       Tag the commit you mean to release:  git tag v0.6.0 && git push origin v0.6.0" >&2
+  echo "       Or set ALLOW_UNTAGGED=1 to build a throwaway package locally." >&2
   exit 1
 fi
 
-# The feed must never disagree with Help ▸ About, so the build refuses a version HEAD isn't tagged for.
-TAG="v$VERSION"
-HEAD_TAG="$(git describe --exact-match --tags HEAD 2>/dev/null || true)"
-if [[ "$HEAD_TAG" != "$TAG" ]]; then
-  if [[ "${ALLOW_UNTAGGED:-0}" == "1" ]]; then
-    echo "WARNING: HEAD is not tagged $TAG (ALLOW_UNTAGGED=1) — do not publish this build."
-  else
-    echo "ERROR: HEAD is not tagged $TAG (found: ${HEAD_TAG:-none})." >&2
-    echo "       Bump <Version> in Directory.Build.props, commit, then:  git tag $TAG" >&2
-    echo "       Or set ALLOW_UNTAGGED=1 to build a throwaway package locally." >&2
-    exit 1
-  fi
+if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+].*)?$ ]]; then
+  echo "ERROR: '$TAG' is not a 3-part semver2 tag; Velopack rejects anything else." >&2
+  exit 1
 fi
 
 TAG_STATUS=""
@@ -272,6 +280,36 @@ if [[ "${PUBLISH:-0}" == "1" ]]; then
     gh release edit "$TAG" --notes-file "$NOTES" >/dev/null \
       && echo "    done: $(gh release view "$TAG" --json url --jq .url)" \
       || echo "    WARNING: couldn't set the release description; add it by hand." >&2
+  fi
+
+  # --- Did it actually land? ----------------------------------------------------
+  # A release page with no assets is not a release: the app reads releases.<channel>.json off the release,
+  # so a tag whose upload half-failed leaves clients on the previous version while GitHub cheerfully
+  # labels the empty page "Latest". That is exactly how v0.5.4 shipped — tagged, described, downloadable
+  # by nobody — and nothing said a word. Verified here rather than assumed, because the whole point of
+  # publishing is the feed, and the feed is one of these files.
+  if command -v gh >/dev/null 2>&1; then
+    echo
+    echo "==> Verifying the upload"
+    ASSETS="$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")' 2>/dev/null || true)"
+    MISSING=""
+    for want in "releases.$CHANNEL.json" "$PACK_ID-$VERSION-full.nupkg"; do
+      case " $ASSETS " in
+        *" $want "*) ;;
+        *) MISSING="$MISSING $want" ;;
+      esac
+    done
+    if [[ -n "$MISSING" ]]; then
+      echo "ERROR: the release is missing:$MISSING" >&2
+      echo "       Clients read releases.$CHANNEL.json to find an update; without it this version is" >&2
+      echo "       invisible to every installed copy. Re-run the upload before calling this released." >&2
+      echo "       On the release now:${ASSETS:+ $ASSETS}${ASSETS:-  (nothing)}" >&2
+      exit 1
+    fi
+    echo "    ok: releases.$CHANNEL.json and the full package are on $TAG"
+  else
+    echo "    WARNING: gh not on PATH, so the upload could not be verified. Check the release has" >&2
+    echo "             releases.$CHANNEL.json before announcing it." >&2
   fi
 else
   echo "Not published (set PUBLISH=1 to upload to GitHub Releases)."

@@ -4,7 +4,7 @@ namespace Bearing.App;
 
 /// <summary>
 /// The running build's version, read once from the assembly's informational version — which is fed by
-/// <c>&lt;Version&gt;</c> in Directory.Build.props and is the same string the release feed compares against
+/// the git tag the build was cut at (MinVer) and is the same string the release feed compares against
 /// (see docs/RELEASING.md).
 /// <para>
 /// One source of truth for every surface that shows it: the About dialog, the status bar, and anything that

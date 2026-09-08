@@ -7,9 +7,35 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <AccelerateBuildsInVisualStudio>true</AccelerateBuildsInVisualStudio>
-    <!-- Single source of truth for the app version; surfaced in Help ▸ About. -->
-    <Version>0.5.4</Version>
     <!-- Bearing: a fast SQL query tool & script manager. See plans/i-want-to-create-bubbly-sunset.md -->
   </PropertyGroup>
+
+  <!--
+    The version comes from the git tag, not from a property here.
+
+    It used to be a hand-edited <Version>, which meant the number lived in two places that had to be kept
+    in step by hand — the property and the tag — and the release script existed partly to police that. The
+    tag is the one of the two that GitHub Releases, the update feed and `git describe` all already agree
+    on, so it is the one to believe.
+
+    MinVer reads the nearest v-prefixed tag reachable from HEAD:
+      * on a tagged commit            v0.6.0        -> 0.6.0
+      * on commits after one          v0.5.4 + 3    -> 0.5.5-alpha.0.3
+      * with no tag at all                          -> 0.0.0-alpha.0.N
+
+    That feeds AssemblyInformationalVersion, which is what Help ▸ About and the update check read
+    (AppVersion), so a build can no longer claim a version it was not cut at. A dev build says so in its
+    own version string rather than impersonating the last release.
+  -->
+  <PropertyGroup>
+    <MinVerTagPrefix>v</MinVerTagPrefix>
+    <!-- Untagged commits are "the next patch, in progress" rather than the next minor. A release decides
+         its own number by what it is tagged, so this only shapes what a working build calls itself. -->
+    <MinVerDefaultPreReleaseIdentifiers>alpha.0</MinVerDefaultPreReleaseIdentifiers>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MinVer" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers" />
+  </ItemGroup>
 
 </Project>
