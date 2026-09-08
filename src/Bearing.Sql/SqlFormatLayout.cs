@@ -222,22 +222,58 @@ internal sealed class SqlFormatLayout : PostgreSQLParserBaseVisitor<int>
     /// list. Depth is counted over the token range rather than taken from the tree: <c>a_expr</c> is deeply
     /// left-recursive, so "is this AND a child of the outermost expression" is a far harder question of the
     /// tree than "is this AND outside every bracket" is of the tokens — and the two agree.
+    /// <para>
+    /// <c>BETWEEN x AND y</c> is the exception, and not a cosmetic one: its AND is part of the operator, not
+    /// a conjunction, so breaking there splits one comparison across two lines and reads as though a term
+    /// went missing. Each unmatched BETWEEN claims the next AND at its own depth.
+    /// </para>
     /// </summary>
     private void BreakConjunctions(ParserRuleContext expr, int indent)
     {
         var depth = 0;
+        var betweensAwaitingTheirAnd = 0;
+
         for (var i = expr.Start.TokenIndex; i <= expr.Stop.TokenIndex; i++)
         {
             switch (_tokens[i].Type)
             {
                 case PostgreSQLLexer.OPEN_PAREN: depth++; break;
                 case PostgreSQLLexer.CLOSE_PAREN: depth--; break;
+
+                case PostgreSQLLexer.BETWEEN:
+                    if (depth == 0) betweensAwaitingTheirAnd++;
+                    break;
+
                 case PostgreSQLLexer.AND:
+                    if (depth != 0) break;
+                    if (betweensAwaitingTheirAnd > 0) betweensAwaitingTheirAnd--;   // this AND belongs to it
+                    else _plan.Set(i, Gap.Line, indent);
+                    break;
+
+                // OR can never be a BETWEEN's partner, so it always starts a line.
                 case PostgreSQLLexer.OR:
                     if (depth == 0) _plan.Set(i, Gap.Line, indent);
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// A CASE expression puts each WHEN, the ELSE and the END on their own lines. Long CASEs in a select
+    /// list are among the least readable things SQL produces on one line, and unlike the clause spine this
+    /// nests wherever the expression does — so the indent comes from the token's own planned level rather
+    /// than from <see cref="_indent"/>, which tracks query nesting and not expression nesting.
+    /// </summary>
+    public override int VisitCase_expr(PostgreSQLParser.Case_exprContext ctx)
+    {
+        var indent = _plan.IndentAt(ctx.Start.TokenIndex) + 1;
+
+        foreach (var when in ctx.when_clause_list()?.when_clause() ?? [])
+            Break(when.Start, indent);
+        if (ctx.case_default() is { } elseClause) Break(elseClause.Start, indent);
+        if (ctx.END_P() is { } end) Break(end.Symbol, indent - 1);
+
+        return VisitChildren(ctx);
     }
 
     // ---- INSERT / UPDATE / DELETE ----------------------------------------------------------------
@@ -282,6 +318,20 @@ internal sealed class SqlFormatLayout : PostgreSQLParserBaseVisitor<int>
     {
         if (ctx.using_clause() is { } usingClause) Break(usingClause.Start, _indent);
         if (ctx.returning_clause() is { } returning) Break(returning.Start, _indent);
+        return VisitChildren(ctx);
+    }
+
+    // ---- keywords standing in for identifiers ----------------------------------------------------
+
+    // A keyword reached through one of these rules is a column, alias, type or function name rather than a
+    // keyword, so its case is the user's. See SqlFormatPlan.KeepsCase.
+    public override int VisitUnreserved_keyword(PostgreSQLParser.Unreserved_keywordContext ctx) => KeepCase(ctx);
+    public override int VisitCol_name_keyword(PostgreSQLParser.Col_name_keywordContext ctx) => KeepCase(ctx);
+    public override int VisitType_func_name_keyword(PostgreSQLParser.Type_func_name_keywordContext ctx) => KeepCase(ctx);
+
+    private int KeepCase(ParserRuleContext ctx)
+    {
+        for (var i = ctx.Start.TokenIndex; i <= ctx.Stop.TokenIndex; i++) _plan.KeepCase(i);
         return VisitChildren(ctx);
     }
 

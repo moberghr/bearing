@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
 using Antlr4.Runtime;
@@ -24,6 +25,9 @@ internal static class SqlFormatWriter
 {
     public static string Write(string sql, IList<IToken> tokens, SqlFormatPlan plan)
     {
+        // Match the file's own line endings. Emitting LF into a CRLF buffer would rewrite every line in the
+        // statement, turning a formatting change into a whole-file diff for anyone on Windows.
+        var newline = sql.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
         var output = new StringBuilder(sql.Length + 64);
         IToken? previous = null;
 
@@ -49,7 +53,7 @@ internal static class SqlFormatWriter
                 if (indent == 0) indent = plan.IndentAt(token.TokenIndex);
             }
 
-            Emit(output, sql, gap, indent, previous, token);
+            Emit(output, sql, gap, indent, previous, token, newline);
             output.Append(Text(token, plan));
             previous = token;
         }
@@ -61,7 +65,8 @@ internal static class SqlFormatWriter
         return output.ToString();
     }
 
-    private static void Emit(StringBuilder output, string sql, Gap gap, int indent, IToken? previous, IToken token)
+    private static void Emit(
+        StringBuilder output, string sql, Gap gap, int indent, IToken? previous, IToken token, string newline)
     {
         // Nothing has been written yet: a leading break would just indent the file's first line.
         if (output.Length == 0)
@@ -93,11 +98,11 @@ internal static class SqlFormatWriter
                 break;
 
             case Gap.Blank:
-                output.Append('\n');
+                output.Append(newline);
                 goto case Gap.Line;
 
             case Gap.Line:
-                output.Append('\n').Append(' ', indent * SqlFormatPlan.IndentWidth);
+                output.Append(newline).Append(' ', indent * SqlFormatPlan.IndentWidth);
                 break;
         }
     }
@@ -127,7 +132,9 @@ internal static class SqlFormatWriter
     }
 
     private static string Text(IToken token, SqlFormatPlan plan)
-        => plan.IsManaged(token.TokenIndex) && SqlFormatKeywords.Uppercased.Contains(token.Type)
+        => plan.IsManaged(token.TokenIndex)
+           && !plan.KeepsCase(token.TokenIndex)
+           && SqlFormatKeywords.Uppercased.Contains(token.Type)
             ? token.Text.ToUpperInvariant()
             : token.Text;
 

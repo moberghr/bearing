@@ -52,6 +52,20 @@ internal static class SqlFormatKeywords
         PostgreSQLLexer.ANY, PostgreSQLLexer.SOME, PostgreSQLLexer.ASC,
         PostgreSQLLexer.DESC, PostgreSQLLexer.NULLS_P, PostgreSQLLexer.FIRST_P,
         PostgreSQLLexer.LAST_P, PostgreSQLLexer.OVER, PostgreSQLLexer.PARTITION,
-        PostgreSQLLexer.FILTER,
+        PostgreSQLLexer.FILTER, PostgreSQLLexer.SYMMETRIC, PostgreSQLLexer.ASYMMETRIC,
+
+        // Window frames and row locking. Several of these (ROW, RANGE, CURRENT, NO) are plausible column
+        // names, which is exactly what the identifier-position check above makes safe to ignore: reached
+        // through colid they keep the user's case, and only a real keyword use is uppercased.
+        PostgreSQLLexer.ROWS, PostgreSQLLexer.RANGE, PostgreSQLLexer.GROUPS,
+        PostgreSQLLexer.UNBOUNDED, PostgreSQLLexer.PRECEDING, PostgreSQLLexer.FOLLOWING,
+        PostgreSQLLexer.CURRENT_P, PostgreSQLLexer.ROW, PostgreSQLLexer.EXCLUDE,
+        PostgreSQLLexer.TIES, PostgreSQLLexer.OTHERS, PostgreSQLLexer.WITHIN,
+        PostgreSQLLexer.FOR, PostgreSQLLexer.NOWAIT, PostgreSQLLexer.LOCKED,
+        PostgreSQLLexer.SKIP_P, PostgreSQLLexer.SHARE, PostgreSQLLexer.NO,
+
+        // Grouping constructs and sampling.
+        PostgreSQLLexer.ROLLUP, PostgreSQLLexer.CUBE, PostgreSQLLexer.GROUPING,
+        PostgreSQLLexer.SETS, PostgreSQLLexer.TABLESAMPLE,
     ];
 }

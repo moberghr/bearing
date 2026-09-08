@@ -45,12 +45,14 @@ internal sealed class SqlFormatPlan
     private readonly Gap[] _gaps;
     private readonly int[] _indent;
     private readonly bool[] _managed;
+    private readonly bool[] _keepCase;
 
     public SqlFormatPlan(int tokenCount)
     {
         _gaps = new Gap[tokenCount];
         _indent = new int[tokenCount];
         _managed = new bool[tokenCount];
+        _keepCase = new bool[tokenCount];
         // Untouched by default: a token nothing claimed keeps its original surroundings.
         for (var i = 0; i < tokenCount; i++) _gaps[i] = Gap.Keep;
     }
@@ -75,6 +77,21 @@ internal sealed class SqlFormatPlan
         // original newlines are exactly what we are replacing.
         if (_gaps[tokenIndex] == Gap.Keep) _gaps[tokenIndex] = Gap.Auto;
     }
+
+    /// <summary>
+    /// Whether this token is a keyword being used as an <i>identifier</i> — a column called <c>name</c>, a
+    /// function called <c>left</c> — and so must keep the case the user typed.
+    /// <para>
+    /// Postgres has some four hundred keywords and many of the non-reserved ones are ordinary column names,
+    /// so uppercasing on the word alone turns <c>select value from t</c> into <c>select VALUE from t</c>.
+    /// The grammar already draws the line — <c>colid: identifier | unreserved_keyword | col_name_keyword</c>
+    /// — so a keyword reached through one of those rules is in an identifier position, and reaching it any
+    /// other way means it is a real keyword.
+    /// </para>
+    /// </summary>
+    public bool KeepsCase(int tokenIndex) => _keepCase[tokenIndex];
+
+    public void KeepCase(int tokenIndex) => _keepCase[tokenIndex] = true;
 
     /// <summary>Set the break in front of a token. Later rules win, which is what lets an outer rule set a
     /// default and an inner one sharpen it.</summary>

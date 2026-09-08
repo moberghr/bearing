@@ -191,6 +191,72 @@ public class SqlFormatTests
             """,
             Format("select count(*) filter (where status = 'x') as n, sum(amt) from t group by a having count(*) > 1"));
 
+    /// <summary>
+    /// BETWEEN's AND is part of the operator, not a conjunction. Breaking there splits one comparison over
+    /// two lines and reads as though a term went missing — and it is easy to get wrong, because every other
+    /// top-level AND in a WHERE does break. Found by reading the sql-formatter family's suite, which pins
+    /// the same case.
+    /// </summary>
+    [Fact]
+    public void Between_keeps_its_own_and_but_the_real_conjunction_still_breaks()
+        => Assert.Equal(
+            """
+            SELECT
+                a
+            FROM t
+            WHERE b BETWEEN 1 AND 2
+                AND c = 3
+            """,
+            Format("select a from t where b between 1 and 2 and c = 3"));
+
+    [Fact]
+    public void Not_between_and_between_symmetric_keep_theirs_too()
+    {
+        Assert.Contains("WHERE b NOT BETWEEN 1 AND 2", Format("select a from t where b not between 1 and 2"));
+        Assert.Contains("WHERE b BETWEEN SYMMETRIC 1 AND 2",
+            Format("select a from t where b between symmetric 1 and 2"));
+    }
+
+    /// <summary>A long CASE on one line is among the least readable things SQL produces. Its indent comes
+    /// from where the expression sits, not from the query nesting, so it works in a select list as well as
+    /// in a predicate.</summary>
+    [Fact]
+    public void Case_puts_each_when_on_its_own_line()
+        => Assert.Equal(
+            """
+            SELECT
+                CASE
+                    WHEN a = 1 THEN 'x'
+                    WHEN a = 2 THEN 'y'
+                    ELSE 'z'
+                END AS v
+            FROM t
+            """,
+            Format("select case when a = 1 then 'x' when a = 2 then 'y' else 'z' end as v from t"));
+
+    /// <summary>
+    /// Postgres has ~400 keywords and plenty of the non-reserved ones are ordinary names, so uppercasing on
+    /// the word alone would turn <c>select value from t</c> into <c>select VALUE from t</c>. The grammar
+    /// draws the line for us: a keyword reached through <c>colid</c> is in an identifier position.
+    /// </summary>
+    [Theory]
+    [InlineData("select value from t", "value")]
+    [InlineData("select name, type, source from t", "    name,\n    type,\n    source")]
+    [InlineData("select left(a, 1) from t", "left(a, 1)")]
+    [InlineData("select a as value from t", "a AS value")]
+    public void A_keyword_standing_in_for_an_identifier_keeps_the_users_case(string sql, string expected)
+        => Assert.Contains(expected, Format(sql));
+
+    /// <summary>The same word in a real keyword position still uppercases — which is what makes the
+    /// distinction worth drawing rather than just never touching these words.</summary>
+    [Fact]
+    public void The_same_word_used_as_a_keyword_is_still_uppercased()
+    {
+        Assert.Contains("SET name = 'x'", Format("update t set name = 'x'"));
+        Assert.Contains("VALUES (1)", Format("insert into t (value) values (1)"));
+        Assert.Contains("(value)", Format("insert into t (value) values (1)"));
+    }
+
     [Fact]
     public void Statements_in_a_batch_are_separated_by_a_blank_line()
         => Assert.Equal(

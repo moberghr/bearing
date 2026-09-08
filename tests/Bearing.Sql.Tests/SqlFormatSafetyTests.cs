@@ -19,56 +19,9 @@ namespace Bearing.Sql.Tests;
 /// </summary>
 public class SqlFormatSafetyTests
 {
-    /// <summary>SQL that must survive formatting unharmed. Every entry parses — an entry that does not would
-    /// be silently refused and would prove nothing.</summary>
-    public static IEnumerable<object[]> Corpus() => new[]
-    {
-        "select id, name from users where id = 1",
-        "select o.id from orders o join customers c on c.id = o.customer_id where o.total > 100 and c.active",
-        "with a as (select 1 as x), b as (select x from a) select * from b join a on a.x = b.x",
-        "select * from (select id from users where active) u where u.id > 5",
-        "select a from t1 union all select a from t2 order by a limit 10 offset 5",
-        "insert into t (a, b) values (1, 2), (3, 4) on conflict (a) do update set b = excluded.b returning *",
-        "insert into t (a) select x from other where x is not null",
-        "update t set a = 1, b = 2 where id = 3 returning id",
-        "delete from t using u where t.id = u.id returning *",
-        "select count(*) filter (where status = 'x') as n, sum(amt) from t group by a having count(*) > 1",
-        "select row_number() over (partition by a order by b desc) from t",
-        "select * from orders o, lateral (select 1 from items i where i.o = o.id) s",
-
-        // Multi-character operators: the exact thing a regex tokenizer splits and thereby corrupts.
-        "select a #>> '{x}', b -> 'k', c ->> 'k', d #- '{y}' from t",
-        "select a || ' ' || b from t where c <@ d and e @> f and g ?| array['h'] and i ?& array['j']",
-        "select a from t where b ~* 'pat' and c !~ 'other' and d is distinct from e",
-        "select a <> b, c >= d, e <= f, g << h, i >> j from t",
-
-        // Literals and quoting that must come through byte for byte.
-        "select $$ a '' \" quoted $$ from t",
-        "select $tag$ nested $$ inside $tag$ from t",
-        "select E'line\\nbreak', U&'\\0041', 'it''s' from t",
-        "select '{\"k\": [1, 2]}'::jsonb -> 'k' from t",
-        "select a::text, b::numeric(10, 2), cast(c as int) from t",
-        "select array[1, 2, 3], x[1], y[1:2] from t",
-        "select \"MixedCase\", \"with space\" from \"Quoted Table\"",
-        "select 1.5, 1e10, .5, 42, -1 from t",
-
-        // Comments in every position that matters.
-        "-- leading\nselect a from t",
-        "select a, /* between */ b from t",
-        "select a from t -- trailing\nwhere a = 1",
-        "select a from t /* multi\nline\ncomment */ where a = 1",
-        "select a -- one\n, b -- two\nfrom t",
-
-        // Shapes with no layout rules: these must come back untouched, which is itself a property.
-        "create table foo (\n    id int primary key,\n    name text\n)",
-        "create function f() returns int as $$ begin return 1; end $$ language plpgsql",
-        "explain analyze select a from t",
-
-        // Batches, mixed recognised and not.
-        "select 1; select 2",
-        "create index i on t (a);\nselect a from t",
-        "select a from t;\n",
-    }.Select(sql => new object[] { sql });
+    /// <summary>The SQL every property below is run against — see <see cref="SqlFormatCorpus"/>.</summary>
+    public static IEnumerable<object[]> Corpus()
+        => SqlFormatCorpus.All().Select(sql => new object[] { sql });
 
     /// <summary>
     /// The core invariant: formatting changes whitespace and keyword case, and nothing else. Every
@@ -141,21 +94,71 @@ public class SqlFormatSafetyTests
     public void A_dollar_quoted_body_is_untouched(string sql, string body)
         => Assert.Contains(body, SqlFormat.Format(sql).Text, StringComparison.Ordinal);
 
-    /// <summary>The failure that disqualified the off-the-shelf library: it emitted <c>a # >> b</c>,
-    /// <c>b | | c</c> and <c>e &lt; @ f</c>, none of which run.</summary>
+    /// <summary>
+    /// The failure that disqualified the off-the-shelf library: it emitted <c>a # >> b</c>, <c>b | | c</c>
+    /// and <c>e &lt; @ f</c>, none of which run. The list is Postgres's own multi-character operator set,
+    /// taken from the dialect table that library tests against — every one of them is a single token here,
+    /// so none of them can come apart.
+    /// </summary>
     [Theory]
-    [InlineData("select a #>> '{x}' from t", "#>>")]
-    [InlineData("select a || b from t", "||")]
-    [InlineData("select a from t where b <@ c", "<@")]
-    [InlineData("select a from t where b @> c", "@>")]
-    [InlineData("select a ->> 'k' from t", "->>")]
-    [InlineData("select a::text from t", "::")]
-    public void A_multi_character_operator_is_never_split(string sql, string op)
+    // json / jsonb
+    [InlineData("->")] [InlineData("->>")] [InlineData("#>")] [InlineData("#>>")] [InlineData("#-")]
+    [InlineData("@>")] [InlineData("<@")] [InlineData("?|")] [InlineData("?&")]
+    // pattern matching (single-character ~ is covered by the corpus; this theory is about splitting)
+    [InlineData("~*")] [InlineData("!~")] [InlineData("!~*")]
+    [InlineData("~~")] [InlineData("~~*")] [InlineData("!~~")] [InlineData("!~~*")]
+    // comparison, bitwise, arithmetic, text search
+    [InlineData("<>")] [InlineData("!=")] [InlineData(">=")] [InlineData("<=")]
+    [InlineData("<<")] [InlineData(">>")] [InlineData("||")] [InlineData("@@")]
+    [InlineData("::")]
+    public void A_multi_character_operator_is_never_split(string op)
     {
-        var formatted = SqlFormat.Format(sql).Text;
-        Assert.Contains(op, formatted, StringComparison.Ordinal);
-        // And not with a gap opened up inside it.
-        Assert.DoesNotContain(string.Join(" ", op.ToCharArray()), formatted, StringComparison.Ordinal);
+        // Both spaced and unspaced in the source: the unspaced form is where a naive tokenizer breaks, and
+        // the spaced form is where a naive "tighten everything" rule would merge it into its neighbour.
+        foreach (var sql in new[] { $"select a {op} b from t", $"select a{op}b from t" })
+        {
+            var result = SqlFormat.Format(sql);
+            Assert.False(result.Refused, $"{sql}: {result.Refusal}");
+            Assert.Contains(op, result.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain(string.Join(" ", op.ToCharArray()), result.Text, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>Prefix operators have no left operand, so a rule that reasoned "operator, therefore infix"
+    /// would put a space where the operand belongs.</summary>
+    [Theory]
+    [InlineData("select |/ 25 from t", "|/")]
+    [InlineData("select ||/ 27 from t", "||/")]
+    [InlineData("select @ -5 from t", "@")]
+    public void A_prefix_operator_survives(string sql, string op)
+        => Assert.Contains(op, SqlFormat.Format(sql).Text, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Line endings follow the file. Emitting LF into a CRLF buffer would rewrite every line of the
+    /// statement, turning a formatting change into a whole-file diff for anyone on Windows — which is most
+    /// of the people this feature is for.
+    /// </summary>
+    [Fact]
+    public void Crlf_input_stays_crlf_and_lf_stays_lf()
+    {
+        var crlf = SqlFormat.Format("select a, b\r\nfrom t\r\nwhere c = 1");
+        Assert.False(crlf.Refused);
+        Assert.Contains("\r\n", crlf.Text, StringComparison.Ordinal);
+        Assert.False(HasLoneLf(crlf.Text), "a CRLF buffer came back with bare LF line endings");
+
+        var lf = SqlFormat.Format("select a, b\nfrom t\nwhere c = 1");
+        Assert.False(lf.Refused);
+        Assert.Contains("\n", lf.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("\r", lf.Text, StringComparison.Ordinal);
+    }
+
+    /// <summary>Whether the text holds an LF that is not the tail of a CRLF pair.</summary>
+    private static bool HasLoneLf(string text)
+    {
+        for (var i = 0; i < text.Length; i++)
+            if (text[i] == '\n' && (i == 0 || text[i - 1] != '\r'))
+                return true;
+        return false;
     }
 
     /// <summary>
