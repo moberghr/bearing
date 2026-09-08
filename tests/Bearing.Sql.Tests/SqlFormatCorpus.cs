@@ -94,6 +94,12 @@ internal static class SqlFormatCorpus
         yield return "select count(*) filter (where status = 'x') from t";
         yield return "select sum(a) filter (where b), avg(c) from t group by d";
         yield return "select string_agg(a, ',' order by b) from t";
+        yield return "select percentile_cont(0.5) within group (order by a) from t";
+        yield return "select array_agg(x order by y desc nulls last) from t";
+        yield return "select case when a then case when b then 1 else 2 end else 3 end from t";
+        yield return "select a from t where case when x then 1 else 2 end = 1";
+        yield return "select 1 ; select 2 ;";
+        yield return "select 1;\n-- leading comment on the second\nselect 2;";
         yield return "select array_agg(distinct a) from t";
         yield return "select row_number() over (partition by a order by b desc) from t";
         yield return "select sum(a) over (order by b rows between unbounded preceding and current row) from t";

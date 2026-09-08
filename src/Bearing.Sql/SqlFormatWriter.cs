@@ -27,8 +27,11 @@ internal static class SqlFormatWriter
     public static string Write(string sql, IList<IToken> tokens, SqlFormatPlan plan, SqlFormatOptions options)
     {
         // Match the file's own line endings. Emitting LF into a CRLF buffer would rewrite every line in the
-        // statement, turning a formatting change into a whole-file diff for anyone on Windows.
-        var newline = sql.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        // statement, turning a formatting change into a whole-file diff for anyone on Windows. The caller
+        // may say outright, which is how formatting a one-line selection out of a CRLF document still gets
+        // CRLF — there is no CRLF inside the fragment itself to detect.
+        var newline = options.Newline
+                      ?? (sql.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n");
         var output = new StringBuilder(sql.Length + 64);
         IToken? previous = null;
 
@@ -42,7 +45,10 @@ internal static class SqlFormatWriter
             var gap = plan.GapBefore(token.TokenIndex);
             var indent = plan.IndentAt(token.TokenIndex);
 
-            if (IsComment(token))
+            // A comment normally decides its own placement from where it sat in the source. The exception is
+            // a blank line the layout pass planned onto it deliberately — the gap between two statements,
+            // which belongs in front of the second statement's leading comment rather than under it.
+            if (IsComment(token) && gap != Gap.Blank)
                 (gap, indent) = CommentGap(sql, tokens, plan, token, previous);
 
             // A line comment runs to end of line, so whatever follows it must start on a new one or it is

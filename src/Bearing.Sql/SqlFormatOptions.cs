@@ -21,6 +21,18 @@ public sealed record SqlFormatOptions
     /// <summary>What to do with keyword case. See <see cref="SqlKeywordCase"/>.</summary>
     public SqlKeywordCase KeywordCase { get; init; } = SqlKeywordCase.Upper;
 
+    /// <summary>
+    /// Line ending to write, or null to take it from the text being formatted.
+    /// <para>
+    /// It exists for the caller who has more context than the formatter does. Formatting a <i>selection</i>
+    /// hands over only the selected fragment, and a single-line fragment out of a CRLF document contains no
+    /// CRLF to detect — so the formatter would emit LF and splice bare LFs into a CRLF buffer, which is the
+    /// whole-file diff the detection exists to avoid. The editor knows the document's convention; the
+    /// formatter only ever sees the piece.
+    /// </para>
+    /// </summary>
+    public string? Newline { get; init; }
+
     private readonly int _indentWidth = 4;
 
     /// <summary>

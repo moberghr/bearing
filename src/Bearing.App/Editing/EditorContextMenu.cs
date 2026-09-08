@@ -37,7 +37,10 @@ internal static class EditorContextMenu
         {
             if (commands.Get(commandId) is not { } command) return;
             var item = new MenuItem { Header = command.Title };
-            item.Click += async (_, _) => await command.Run();
+            // Through CrashReporter.Observe, like the keyboard and palette paths — a bare `async void`
+            // handler would let a faulting command (Run against a connection that just dropped, Export)
+            // throw unhandled on the UI thread, past the app's own reporting.
+            item.Click += (_, _) => CrashReporter.Observe(command.Run(), $"command '{command.Id}'");
             flyout.Items.Add(item);
             wired.Add((item, command));
         }

@@ -144,6 +144,29 @@ public class FormatSqlTests
         Assert.Equal("SELECT\n  a\nFROM t", editor.Text);
     });
 
+    /// <summary>
+    /// A one-line selection out of a CRLF document still comes back CRLF. The formatter detects line
+    /// endings from the text it is given, and a single-line fragment has none in it to find — so without
+    /// the editor passing the document's own convention, formatting a selection spliced bare LFs into a
+    /// CRLF buffer. Which is the whole-file diff the detection exists to prevent.
+    /// </summary>
+    [Fact]
+    public Task Formatting_a_selection_keeps_the_documents_line_endings() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(Formatting_a_selection_keeps_the_documents_line_endings));
+        var editor = Focused(shell);
+
+        editor.Text = "select 1;\r\nselect id, name from users where id = 1";
+        editor.SelectionStart = 11;                        // the second statement, all on one line
+        editor.SelectionLength = editor.Text.Length - 11;
+        shell.Pump();
+
+        Press(shell);
+
+        Assert.Contains("SELECT\r\n    id,\r\n    name\r\nFROM users", editor.Text, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("\n    id", editor.Text.Replace("\r\n", ""), System.StringComparison.Ordinal);
+    });
+
     [Fact]
     public Task The_context_menus_Format_item_formats() => _ui.Run(async () =>
     {

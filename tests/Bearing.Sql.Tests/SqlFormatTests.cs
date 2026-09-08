@@ -256,6 +256,90 @@ public class SqlFormatTests
         Assert.Contains("(value)", Format("insert into t (value) values (1)"));
     }
 
+    /// <summary>
+    /// Only the <i>statement's</i> ORDER BY starts a line. The same <c>sort_clause</c> rule also serves an
+    /// aggregate's argument list, <c>WITHIN GROUP</c> and a window spec — none of which nests the indent —
+    /// so breaking on the rule itself pulled the ORDER BY of a windowed aggregate out to column zero, in
+    /// the middle of a function call. Every shape here was silently wrong while the suite stayed green.
+    /// </summary>
+    [Theory]
+    [InlineData("select array_agg(x order by y) from t", "    array_agg(x ORDER BY y)")]
+    [InlineData("select string_agg(a, ',' order by b) from t", "    string_agg(a, ',' ORDER BY b)")]
+    [InlineData("select rank() over (order by b) from t", "    rank() OVER (ORDER BY b)")]
+    [InlineData("select row_number() over (partition by a order by b desc) from t",
+        "    row_number() OVER (PARTITION BY a ORDER BY b DESC)")]
+    [InlineData("select percentile_cont(0.5) within group (order by a) from t",
+        "    percentile_cont(0.5) WITHIN GROUP (ORDER BY a)")]
+    public void An_order_by_inside_an_expression_stays_on_its_line(string sql, string expected)
+        => Assert.Contains(expected, Format(sql), StringComparison.Ordinal);
+
+    [Fact]
+    public void The_statements_own_order_by_still_breaks()
+        => Assert.Contains("\nORDER BY a\n", Format("select array_agg(x order by y) a from t order by a limit 1"));
+
+    /// <summary>
+    /// A CASE nests from wherever its line starts, which is not the same as the indent recorded on its own
+    /// first token — that is only set when the token itself begins a line, and read zero everywhere else.
+    /// A nested CASE therefore closed at column zero, reading as though the outer one had ended.
+    /// </summary>
+    [Fact]
+    public void A_nested_case_indents_from_the_line_it_starts_on()
+        => Assert.Equal(
+            """
+            SELECT
+                CASE
+                    WHEN a THEN CASE
+                        WHEN b THEN 1
+                    END
+                END
+            FROM t
+            """,
+            Format("select case when a then case when b then 1 end end from t"));
+
+    [Fact]
+    public void A_case_in_a_predicate_closes_at_the_clause_it_sits_in()
+        => Assert.Equal(
+            """
+            SELECT
+                a
+            FROM t
+            WHERE CASE
+                WHEN x THEN 1
+                ELSE 2
+            END = 1
+            """,
+            Format("select a from t where case when x then 1 else 2 end = 1"));
+
+    /// <summary>The semicolon closing a statement lives outside its parse context — <c>stmtmulti</c> is
+    /// <c>stmt? (SEMI stmt?)*</c> — so the sweep that tightens commas never reached it.</summary>
+    [Fact]
+    public void A_semicolon_is_pulled_tight_against_the_statement()
+        => Assert.Equal(
+            """
+            SELECT
+                1;
+
+            SELECT
+                2;
+            """,
+            Format("select 1 ; select 2 ;"));
+
+    /// <summary>A statement's leading comment introduces <i>it</i>, so the blank line goes above the
+    /// comment. Put on the statement's first token, the gap lands under the comment and glues it to the
+    /// statement above — the one statement it does not describe.</summary>
+    [Fact]
+    public void A_leading_comment_keeps_the_blank_line_above_it()
+        => Assert.Equal(
+            """
+            SELECT
+                1;
+
+            -- what the second one is for
+            SELECT
+                2;
+            """,
+            Format("select 1;\n-- what the second one is for\nselect 2;"));
+
     [Fact]
     public void Statements_in_a_batch_are_separated_by_a_blank_line()
         => Assert.Equal(

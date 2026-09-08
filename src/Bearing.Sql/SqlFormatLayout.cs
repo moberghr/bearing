@@ -52,12 +52,52 @@ internal sealed class SqlFormatLayout : PostgreSQLParserBaseVisitor<int>
         for (var i = 0; i < statements.Length; i++)
         {
             Visit(statements[i]);
-            // A blank line between statements, but only in front of one we actually re-laid-out: forcing a
-            // break onto a statement left verbatim would be changing layout we just declined to own.
-            if (i > 0 && _plan.IsManaged(statements[i].Start.TokenIndex))
-                _plan.Set(statements[i].Start.TokenIndex, Gap.Blank, 0);
+
+            // Everything below is for a statement we actually re-laid-out. Forcing structure onto one left
+            // verbatim would be changing layout we just declined to own.
+            if (!_plan.IsManaged(statements[i].Start.TokenIndex)) continue;
+
+            // The statement's semicolon lives *outside* its context — stmtmulti is `stmt? (SEMI stmt?)*` —
+            // so the managed sweep never reaches it and `select 1 ;` kept the space.
+            if (SemicolonAfter(statements[i].Stop.TokenIndex) is >= 0 and var semi)
+                _plan.Set(semi, Gap.None, 0);
+
+            // A blank line between statements, opened in front of the statement's *leading comment* where
+            // it has one. Put on the statement's first token instead, the gap lands under the comment and
+            // glues it to the statement above — which is the one statement it does not describe.
+            if (i > 0)
+                _plan.Set(LeadingCommentOr(statements[i], statements[i - 1]), Gap.Blank, 0);
         }
         return 0;
+    }
+
+    /// <summary>The index of the semicolon closing a statement, or -1 when it has none (the last statement
+    /// of a batch often does not).</summary>
+    private int SemicolonAfter(int stopIndex)
+    {
+        for (var i = stopIndex + 1; i < _tokens.Count; i++)
+        {
+            if (_tokens[i].Type is PostgreSQLLexer.Whitespace or PostgreSQLLexer.Newline
+                or PostgreSQLLexer.LineComment or PostgreSQLLexer.BlockComment) continue;
+            return _tokens[i].Type == PostgreSQLLexer.SEMI ? i : -1;
+        }
+        return -1;
+    }
+
+    /// <summary>Where a statement really begins for the reader: its leading comment when it has one,
+    /// otherwise its first token. A comment sitting between the previous semicolon and this statement
+    /// introduces this one.</summary>
+    private int LeadingCommentOr(ParserRuleContext statement, ParserRuleContext previous)
+    {
+        var start = statement.Start.TokenIndex;
+        for (var i = start - 1; i > previous.Stop.TokenIndex; i--)
+        {
+            var type = _tokens[i].Type;
+            if (type is PostgreSQLLexer.LineComment or PostgreSQLLexer.BlockComment) start = i;
+            else if (type is not (PostgreSQLLexer.Whitespace or PostgreSQLLexer.Newline or PostgreSQLLexer.SEMI))
+                break;
+        }
+        return start;
     }
 
     public override int VisitStmt(PostgreSQLParser.StmtContext ctx)
@@ -169,9 +209,19 @@ internal sealed class SqlFormatLayout : PostgreSQLParserBaseVisitor<int>
         return result;
     }
 
-    public override int VisitSort_clause(PostgreSQLParser.Sort_clauseContext ctx)
+    /// <summary>
+    /// The query's own ORDER BY, taken from <c>select_no_parens</c> rather than from <c>sort_clause</c>.
+    /// <para>
+    /// This distinction is the whole rule: <c>sort_clause</c> also appears inside an aggregate's argument
+    /// list (<c>array_agg(x ORDER BY y)</c>), inside <c>WITHIN GROUP</c>, and inside a window spec
+    /// (<c>OVER (PARTITION BY a ORDER BY b)</c>). None of those is a <c>select_with_parens</c>, so none of
+    /// them bumps <see cref="_indent"/> — breaking on the rule itself pulled the ORDER BY of a windowed
+    /// aggregate out to column zero, mid-function-call. Those sorts stay inline; only the statement's does.
+    /// </para>
+    /// </summary>
+    public override int VisitSelect_no_parens(PostgreSQLParser.Select_no_parensContext ctx)
     {
-        if (ctx.ORDER() is { } order) Break(order.Symbol, _indent);
+        if (ctx.sort_clause_()?.sort_clause()?.ORDER() is { } order) Break(order.Symbol, _indent);
         return VisitChildren(ctx);
     }
 
@@ -268,7 +318,7 @@ internal sealed class SqlFormatLayout : PostgreSQLParserBaseVisitor<int>
     /// </summary>
     public override int VisitCase_expr(PostgreSQLParser.Case_exprContext ctx)
     {
-        var indent = _plan.IndentAt(ctx.Start.TokenIndex) + 1;
+        var indent = LineIndentOf(ctx.Start.TokenIndex) + 1;
 
         foreach (var when in ctx.when_clause_list()?.when_clause() ?? [])
             Break(when.Start, indent);
@@ -381,6 +431,27 @@ internal sealed class SqlFormatLayout : PostgreSQLParserBaseVisitor<int>
     // ---- helpers ---------------------------------------------------------------------------------
 
     private void Break(IToken token, int indent) => _plan.Set(token.TokenIndex, Gap.Line, indent);
+
+    /// <summary>
+    /// The indent of the line a token will land on — the level of the nearest break planned at or before it.
+    /// <para>
+    /// Needed because <c>SqlFormatPlan.IndentAt</c> is only meaningful on a token that <i>starts</i> a line;
+    /// everywhere else it reads zero. An expression like CASE nests from wherever its line begins, which may
+    /// be a select-list item at one level or a WHERE at another, and reading the raw indent off its own
+    /// first token reported zero and outdented the whole construct to column zero.
+    /// </para>
+    /// <para>
+    /// Safe to read mid-walk because breaks are planned outside-in: by the time an expression is visited,
+    /// the clause that put it on a line has already recorded its own.
+    /// </para>
+    /// </summary>
+    private int LineIndentOf(int tokenIndex)
+    {
+        for (var i = tokenIndex; i >= 0; i--)
+            if (_plan.GapBefore(i) is Gap.Line or Gap.Blank)
+                return _plan.IndentAt(i);
+        return _indent;
+    }
 
     private void BreakTerminals(ParserRuleContext ctx, int indent, params int[] types)
     {

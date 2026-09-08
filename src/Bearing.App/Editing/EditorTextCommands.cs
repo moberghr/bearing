@@ -159,7 +159,12 @@ public sealed class EditorTextCommands
         var length = selected ? _editor.SelectionLength : _editor.Document.TextLength;
         if (length == 0) return null;
 
-        var result = SqlFormat.Format(_editor.Document.GetText(start, length), options);
+        // The document's line endings, not the fragment's: a one-line selection out of a CRLF file has no
+        // CRLF in it for the formatter to find, and it would hand back LF to splice into a CRLF buffer.
+        var newline = _editor.Document.Text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        var result = SqlFormat.Format(
+            _editor.Document.GetText(start, length),
+            options with { Newline = newline });
         if (result.Refused)
             return selected
                 ? $"Selection not formatted — {result.Refusal}."
