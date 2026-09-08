@@ -119,13 +119,24 @@ public class SqlFormatScaleTests
     }
 
     [Fact]
+    public void A_five_hundred_column_table_formats()
+    {
+        var ddl = "create table big ("
+                  + string.Join(", ", Enumerable.Range(0, 500).Select(i => $"col{i} text"))
+                  + ")";
+        var formatted = FormatWithin(ddl, 10_000, "500-column CREATE TABLE");
+        Assert.Equal(500, formatted.Split(",\n").Length);   // one per line
+    }
+
+    /// <summary>A statement shape with no layout rules comes back byte for byte however large it is — the
+    /// unmanaged path has to be as safe at scale as it is on one line.</summary>
+    [Fact]
     public void A_large_unrecognised_statement_comes_back_byte_for_byte()
     {
-        var ddl = "create table big (\n"
-                  + string.Join(",\n", Enumerable.Range(0, 500).Select(i => $"    col{i} text"))
-                  + "\n)";
+        var ddl = "alter table big\n"
+                  + string.Join(",\n", Enumerable.Range(0, 500).Select(i => $"    add column col{i} text"));
         var result = SqlFormat.Format(ddl);
-        Assert.False(result.Refused);
+        Assert.False(result.Refused, result.Refusal);
         Assert.False(result.Changed);
         Assert.Equal(ddl, result.Text);
     }

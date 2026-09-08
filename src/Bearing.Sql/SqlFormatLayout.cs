@@ -73,7 +73,9 @@ internal sealed class SqlFormatLayout : PostgreSQLParserBaseVisitor<int>
         => ctx.selectstmt() is not null
            || ctx.insertstmt() is not null
            || ctx.updatestmt() is not null
-           || ctx.deletestmt() is not null;
+           || ctx.deletestmt() is not null
+           || ctx.createstmt() is not null
+           || ctx.createfunctionstmt() is not null;
 
     // ---- SELECT ----------------------------------------------------------------------------------
 
@@ -318,6 +320,47 @@ internal sealed class SqlFormatLayout : PostgreSQLParserBaseVisitor<int>
     {
         if (ctx.using_clause() is { } usingClause) Break(usingClause.Start, _indent);
         if (ctx.returning_clause() is { } returning) Break(returning.Start, _indent);
+        return VisitChildren(ctx);
+    }
+
+    // ---- DDL -------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A CREATE TABLE's element list: one column or constraint per line, closing paren back at the
+    /// statement's level. The same "several read as a list, one rides along" rule the FROM list uses.
+    /// </summary>
+    public override int VisitCreatestmt(PostgreSQLParser.CreatestmtContext ctx)
+    {
+        if (ctx.opttableelementlist()?.tableelementlist()?.tableelement() is { Length: > 0 } elements)
+        {
+            foreach (var element in elements) Break(element.Start, _indent + 1);
+            if (ctx.CLOSE_PAREN() is { } close) Break(close.Symbol, _indent);
+        }
+        return VisitChildren(ctx);
+    }
+
+    /// <summary>
+    /// A CREATE FUNCTION / PROCEDURE's <b>envelope</b> — RETURNS and each option (AS, LANGUAGE, STABLE,
+    /// SECURITY DEFINER …) on its own line, and its parameters one per line once there is more than one.
+    /// <para>
+    /// The body is deliberately not touched, and could not be: <c>$$ … $$</c> is a single lexer token, which
+    /// is exactly what makes it survive byte for byte. It is also not necessarily SQL — <c>LANGUAGE plv8</c>
+    /// is JavaScript and <c>plpython3u</c> is Python — so laying it out as SQL would corrupt it.
+    /// </para>
+    /// </summary>
+    public override int VisitCreatefunctionstmt(PostgreSQLParser.CreatefunctionstmtContext ctx)
+    {
+        if (ctx.func_args_with_defaults()?.func_args_with_defaults_list()?.func_arg_with_default()
+            is { Length: > 1 } args)
+        {
+            foreach (var arg in args) Break(arg.Start, _indent + 1);
+            if (ctx.func_args_with_defaults()!.CLOSE_PAREN() is { } close) Break(close.Symbol, _indent);
+        }
+
+        if (ctx.RETURNS() is { } returns) Break(returns.Symbol, _indent);
+        foreach (var option in ctx.createfunc_opt_list()?.createfunc_opt_item() ?? [])
+            Break(option.Start, _indent);
+
         return VisitChildren(ctx);
     }
 

@@ -67,5 +67,22 @@ internal static class SqlFormatKeywords
         // Grouping constructs and sampling.
         PostgreSQLLexer.ROLLUP, PostgreSQLLexer.CUBE, PostgreSQLLexer.GROUPING,
         PostgreSQLLexer.SETS, PostgreSQLLexer.TABLESAMPLE,
+
+        // The DDL the layout pass claims — CREATE TABLE and CREATE FUNCTION. Column *types* are not here
+        // and are not keywords to this set, so `id int` keeps its lower-case `int` while `PRIMARY KEY`
+        // beside it is raised: the type is closer to a name than to a keyword, and shouting it buys nothing.
+        PostgreSQLLexer.CREATE, PostgreSQLLexer.TABLE, PostgreSQLLexer.TEMPORARY, PostgreSQLLexer.TEMP,
+        PostgreSQLLexer.FUNCTION, PostgreSQLLexer.PROCEDURE, PostgreSQLLexer.RETURNS,
+        PostgreSQLLexer.LANGUAGE, PostgreSQLLexer.REPLACE, PostgreSQLLexer.IF_P,
+        PostgreSQLLexer.PRIMARY, PostgreSQLLexer.KEY, PostgreSQLLexer.CONSTRAINT,
+        PostgreSQLLexer.CHECK, PostgreSQLLexer.UNIQUE, PostgreSQLLexer.REFERENCES,
+        PostgreSQLLexer.GENERATED, PostgreSQLLexer.IDENTITY_P, PostgreSQLLexer.COLLATE,
+
+        // Function options, so they do not sit in lower case beside an uppercased LANGUAGE. The language
+        // name itself (plpgsql, sql, plv8) is an identifier and stays exactly as written.
+        PostgreSQLLexer.IMMUTABLE, PostgreSQLLexer.STABLE, PostgreSQLLexer.VOLATILE,
+        PostgreSQLLexer.STRICT_P, PostgreSQLLexer.LEAKPROOF, PostgreSQLLexer.SECURITY,
+        PostgreSQLLexer.DEFINER, PostgreSQLLexer.INVOKER, PostgreSQLLexer.PARALLEL,
+        PostgreSQLLexer.CALLED, PostgreSQLLexer.COST,
     ];
 }

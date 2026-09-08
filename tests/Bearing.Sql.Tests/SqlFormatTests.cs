@@ -270,11 +270,17 @@ public class SqlFormatTests
 
     // ---- what it refuses to touch ------------------------------------------------------------------
 
+    /// <summary>
+    /// The default for any statement shape the layout pass does not claim. CREATE TABLE and CREATE FUNCTION
+    /// used to be in this list and are now laid out (see <see cref="SqlFormatDdlTests"/>); everything else in
+    /// DDL still comes back untouched, which is what "no rules means no change" has to keep meaning.
+    /// </summary>
     [Theory]
-    [InlineData("create table foo (\n    id int primary key,\n    name text\n)")]
-    [InlineData("create function f() returns int as $$ begin return 1; end $$ language plpgsql")]
     [InlineData("explain analyze select a from t")]
     [InlineData("alter table t\n    add column b int")]
+    [InlineData("create index i on t (a)")]
+    [InlineData("create view v as select a from t")]
+    [InlineData("drop table if exists t cascade")]
     public void A_statement_shape_with_no_layout_rules_is_returned_byte_for_byte(string sql)
     {
         var result = SqlFormat.Format(sql);
