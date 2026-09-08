@@ -27,6 +27,9 @@ public static class KeymapDefaults
         yield return G(CommandIds.TabClose, "Ctrl+F4"); // Windows MDI convention; Ctrl+W is the editor's delete-word
         yield return G(CommandIds.TabRename, "F2");
         yield return G(CommandIds.ViewToggleSidePane, "Ctrl+B");
+        // Ctrl+M is the alias, not the primary: Ctrl+B is the editor convention the menu shows, and Ctrl+M is
+        // the reflex a DBeaver/Eclipse user brings with them. Both collapse the same pane.
+        yield return G(CommandIds.ViewToggleSidePane, "Ctrl+M");
         yield return G(CommandIds.ViewToggleResults, "Ctrl+R");
         yield return G(CommandIds.StatementPrev, "Alt+Up");
         yield return G(CommandIds.StatementNext, "Alt+Down");
@@ -64,6 +67,9 @@ public static class KeymapDefaults
         // ---- Editor (resolved in the editor's tunnel handler) ----
         yield return E(CommandIds.EditorOpenLineBelow, "Shift+Enter");
         yield return E(CommandIds.EditorOpenLineAbove, "Ctrl+Shift+Enter");
+        // Ctrl+Shift+F: the gesture #102 opens with — what a DBeaver/Eclipse user presses reflexively, and
+        // what did nothing at all before there was a formatter behind it.
+        yield return E(CommandIds.EditorFormat, "Ctrl+Shift+F");
         yield return E(CommandIds.EditorToggleComment, "Ctrl+/");
         // Ctrl+- used to be the comment alias (on an HR layout the '/' key reports OemMinus), but zoom
         // owns that key now — the browser/editor convention everyone reaches for. Ctrl+K is the

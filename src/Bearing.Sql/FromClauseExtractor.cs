@@ -41,10 +41,14 @@ public static class FromClauseExtractor
 
         for (var i = 0; i < toks.Count; i++)
         {
-            if (toks[i].Type != rules.From && toks[i].Type != rules.Join) continue;
+            if (Introducer(rules, toks, i) is not { } introducer) continue;
 
             var j = i + 1;
             if (j < toks.Count && toks[j].Type == rules.Lateral) j++; // JOIN LATERAL (...)
+            // `UPDATE ONLY t` / `DELETE FROM ONLY t` — inheritance scoping, not part of the name. Left
+            // unskipped the loop broke on the keyword and the statement ended up with no sources at all,
+            // which is the whole-catalog fallback rather than a narrower answer.
+            if (j < toks.Count && toks[j].Type == rules.Only) j++;
 
             // A comma-separated list of table refs (FROM a x, b y); each may be a name or a subquery.
             while (j < toks.Count)
@@ -92,6 +96,7 @@ public static class FromClauseExtractor
                         // qualifier the way the query does — `"__MigrationHistory".id`, not `.id` folded.
                         ReferenceText = alias ?? nameParts[^1],
                         Resolved = schema.ResolveTable(schemaName, name),
+                        IsWriteTarget = introducer,
                     });
 
                 if (k < toks.Count && toks[k].Type == rules.Comma) { j = k + 1; continue; }
@@ -100,6 +105,42 @@ public static class FromClauseExtractor
         }
 
         return Dedupe(refs);
+    }
+
+    /// <summary>
+    /// Whether the token at <paramref name="i"/> is a keyword that a table name follows.
+    /// <para>
+    /// FROM and JOIN are the obvious ones. <c>UPDATE t</c> and <c>INSERT INTO t</c> name a table just as
+    /// squarely, and leaving them out meant an UPDATE had no sources at all — so <c>SET</c> and its
+    /// <c>WHERE</c> were completed against every table in the database rather than the one being written.
+    /// (DELETE was already covered: its target follows a FROM.)
+    /// </para>
+    /// <para>
+    /// Both new keywords appear in places that name nothing, hence the guards: <c>FOR UPDATE</c> and
+    /// <c>ON CONFLICT DO UPDATE SET</c>, and <c>SELECT … INTO newtable</c>, which creates a relation rather
+    /// than reading one.
+    /// </para>
+    /// </summary>
+    private static bool? Introducer(ISqlParseRules rules, IReadOnlyList<IToken> toks, int i)
+    {
+        var t = toks[i].Type;
+        // Read: FROM and JOIN, plus USING — which introduces a real source in `DELETE … USING u` and
+        // `MERGE … USING src`. Harmless on `JOIN a USING (id)`, where the next token is a paren and the
+        // name loop stops immediately.
+        if (t == rules.From || t == rules.Join || t == rules.Using) return false;
+
+        // Written: guarded, because both keywords also appear where no relation follows —
+        // `SELECT … FOR UPDATE`, `ON CONFLICT DO UPDATE SET`, and `SELECT … INTO newtable`, which
+        // creates a relation rather than reading one.
+        if (t == rules.Update)
+            return i == 0 || (toks[i - 1].Type != rules.For && toks[i - 1].Type != rules.Do) ? true : null;
+
+        if (t == rules.Into)
+            return i > 0 && (toks[i - 1].Type == rules.Insert || toks[i - 1].Type == rules.Merge)
+                ? true
+                : null;
+
+        return null;
     }
 
     private static (string? schema, string name) SplitQualified(

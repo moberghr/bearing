@@ -23,6 +23,18 @@ public sealed class CompletionEngine : ICompletionEngine
         => _dialect = dialect ?? (() => PostgresDialect.Instance);
 
     public CompletionResult Complete(string sql, int caretOffset, ISchemaSnapshot schema)
+        // The parse and antlr4-c3's walk both recurse per nesting level; PgParsing.OnDeepStack gives them
+        // the stack for it. Kept for callers that are already off any thread that matters (tests).
+        => PgParsing.OnDeepStack(() => CompleteCore(sql, caretOffset, schema));
+
+    /// <inheritdoc />
+    public Task<CompletionResult> CompleteAsync(string sql, int caretOffset, ISchemaSnapshot schema)
+        // What the editor uses. The synchronous path would have the caller's thread blocked on Join for the
+        // whole parse — and since the controller already calls this from the thread pool, that was a pool
+        // thread parked per keystroke on top of the deep-stack thread doing the work.
+        => PgParsing.OnDeepStackAsync(() => CompleteCore(sql, caretOffset, schema));
+
+    private CompletionResult CompleteCore(string sql, int caretOffset, ISchemaSnapshot schema)
     {
         caretOffset = Math.Clamp(caretOffset, 0, sql.Length);
 
@@ -47,6 +59,14 @@ public sealed class CompletionEngine : ICompletionEngine
 
         var parsed = rules.Parse(sql);
         parsed.Tokens.Fill();
+
+        // Past a certain nesting the recursive-descent parser overflows the stack, and a
+        // StackOverflowException cannot be caught in .NET — the `catch` below would not run, the process
+        // would simply die and take the user's unsaved buffer with it. Completion is optional; a crash is
+        // not, so deeply nested text gets no suggestions rather than a parse attempt.
+        if (PgParsing.TooDeeplyNested(parsed.Tokens.GetTokens()))
+            return new CompletionResult(Array.Empty<Suggestion>(), caretOffset, 0);
+
         var caret = ResolveCaret(parsed.Tokens, caretOffset);
         var aliasSlot = CaretIsInAliasSlot(rules, schema, parsed.Tokens.GetTokens(), caret.TokenIndex);
 
@@ -61,6 +81,12 @@ public sealed class CompletionEngine : ICompletionEngine
             rules.IgnoredTokens.ToHashSet());
         var candidates = core.CollectCandidates(caret.TokenIndex, context: null);
         var intents = candidates.Rules.Keys.Select(rules.Classify).ToHashSet();
+
+        // Two column positions and one table position need more than their intent. A SET / insert column
+        // list may only name the target's own columns, and must name them bare; an INSERT target spells an
+        // alias with AS. See PgCompletionRules for why the intent alone cannot say so.
+        var writeTargetColumn = rules.IsWriteTargetColumn(candidates.Rules.Keys);
+        var aliaslessTarget = rules.IsAliaslessWriteTarget(candidates.Rules.Keys);
 
         // A half-typed alias is a name the user is inventing — nothing in the catalog or the grammar
         // belongs there, and whatever sat under Enter would overwrite it. An *empty* alias slot still
@@ -99,17 +125,26 @@ public sealed class CompletionEngine : ICompletionEngine
             // come through, which is what actually follows a named source (as / join / where).
             if (intents.Contains(CompletionIntent.TablePosition) && !aliasSlot)
             {
-                suggestions.AddRange(TableSuggestions(dialect, schema, sources));
+                // A write target spells its alias through a FROM clause or an AS, never by juxtaposition,
+                // so it gets none rather than a bare one that would not run: `INSERT INTO users u (…)` is
+                // a syntax error where `FROM users u` is fine.
+                suggestions.AddRange(TableSuggestions(dialect, schema, sources, aliased: !aliaslessTarget));
                 suggestions.AddRange(SchemaSuggestions(dialect, schema));
                 // Only where a join can actually attach, and carrying whatever keyword the caret is still
                 // missing — accepting one after a bare source used to emit `from users u orders o on …`.
-                if (sources.Count > 0
+                // Never at a write target: `UPDATE users JOIN orders o ON …` is not a statement.
+                if (sources.Count > 0 && !aliaslessTarget
+                    && !AtWriteTarget(rules, parsed.Tokens.GetTokens(), caret.TokenIndex)
                     && JoinKeywordPrefix(rules, parsed.Tokens.GetTokens(), caret.TokenIndex) is { } joinPrefix)
                     suggestions.AddRange(JoinSuggestions(dialect, schema, sources, joinPrefix));
             }
 
             if (intents.Contains(CompletionIntent.ColumnPosition))
-                suggestions.AddRange(ColumnSuggestions(dialect, schema, sources, qualifier: null));
+                // A SET or insert column list names the target's own columns, bare. Everywhere else the
+                // whole scope is in play and an aliased source qualifies what it offers.
+                suggestions.AddRange(writeTargetColumn
+                    ? WriteTargetColumnSuggestions(dialect, schema, sources)
+                    : ColumnSuggestions(dialect, schema, sources, qualifier: null));
 
             foreach (var tokenType in candidates.Tokens.Keys)
             {
@@ -159,11 +194,16 @@ public sealed class CompletionEngine : ICompletionEngine
 
     /// <summary>The candidate intents at the caret (exposed for pinning tests).</summary>
     public IReadOnlySet<CompletionIntent> IntentsAt(string sql, int caretOffset)
+        => PgParsing.OnDeepStack(() => IntentsAtCore(sql, caretOffset));
+
+    private IReadOnlySet<CompletionIntent> IntentsAtCore(string sql, int caretOffset)
     {
         caretOffset = Math.Clamp(caretOffset, 0, sql.Length);
         var rules = _dialect().ParseRules;
         var parsed = rules.Parse(sql);
         parsed.Tokens.Fill();
+        if (PgParsing.TooDeeplyNested(parsed.Tokens.GetTokens())) return new HashSet<CompletionIntent>();
+
         var caret = ResolveCaret(parsed.Tokens, caretOffset);
         parsed.PrimeForCompletion();
 
@@ -177,9 +217,11 @@ public sealed class CompletionEngine : ICompletionEngine
 
     /// <param name="onlySchema">When set, only that schema's relations, and inserted bare — the caret
     /// already sits after <c>schema.</c>.</param>
+    /// <param name="aliased">Whether the insertion carries a generated alias. False at an INSERT target,
+    /// whose grammar is <c>INSERT INTO t [ AS alias ]</c> — a bare alias there is a syntax error.</param>
     private static IEnumerable<Suggestion> TableSuggestions(
         ISqlDialect dialect, ISchemaSnapshot schema, IReadOnlyList<TableRef> sources,
-        string? onlySchema = null)
+        string? onlySchema = null, bool aliased = true)
     {
         var existing = ExistingAliases(sources);
         foreach (var t in schema.Tables)
@@ -198,7 +240,7 @@ public sealed class CompletionEngine : ICompletionEngine
                 DisplayText = t.Name,
                 FilterText = t.Name,
                 DetailText = t.Schema,
-                ReplacementText = $"{name} {alias}",
+                ReplacementText = aliased ? $"{name} {alias}" : name,
                 Kind = t.Kind == RelationKind.View ? SuggestionKind.View : SuggestionKind.Table,
                 Priority = 10,
                 Description = $"{t.Kind}: {t.Schema}.{t.Name}",
@@ -266,6 +308,41 @@ public sealed class CompletionEngine : ICompletionEngine
     }
 
     /// <summary>
+    /// True when the caret is naming (or has just named) a write statement's target. A join cannot attach
+    /// there — <c>UPDATE users JOIN orders o ON …</c> is not a statement — so the join snippets that suit a
+    /// FROM clause must not be offered.
+    /// </summary>
+    private static bool AtWriteTarget(
+        ISqlParseRules rules, IList<Antlr4.Runtime.IToken> toks, int caretTokenIndex)
+    {
+        for (var i = PrevMeaningful(toks, caretTokenIndex - 1); i >= 0; i = PrevMeaningful(toks, i - 1))
+        {
+            var type = toks[i].Type;
+
+            // The keyword that opened the slot, reached without passing anything that closes it.
+            if (type == rules.Update)
+            {
+                var p = PrevMeaningful(toks, i - 1);
+                return i == 0 || p < 0 || (toks[p].Type != rules.For && toks[p].Type != rules.Do);
+            }
+
+            if (type == rules.Into)
+            {
+                var before = PrevMeaningful(toks, i - 1);
+                return before >= 0
+                    && (toks[before].Type == rules.Insert || toks[before].Type == rules.Merge);
+            }
+
+            // A name, a qualified name, or ONLY may sit between the keyword and the caret.
+            if (type == rules.Dot || type == rules.Only) continue;
+            if (IsNameToken(rules, toks[i])) continue;
+
+            return false;   // anything else means we are past the target
+        }
+        return false;
+    }
+
+    /// <summary>
     /// True when the caret sits where a source's alias goes, the relation before it already being named:
     /// <c>from film f|</c>, <c>from film |</c>, <c>from film as f|</c>, <c>from public.film f|</c>. Keyed
     /// off the token before the caret rather than the parse tree, so it survives half-typed SQL like the
@@ -295,12 +372,18 @@ public sealed class CompletionEngine : ICompletionEngine
             before = PrevMeaningful(toks, name - 1);
         }
 
-        // Only a FROM/JOIN list puts a relation name there; anything else (a select-list expression, a
-        // WHERE) is not an alias slot even though it may end in an identifier.
+        // Only a place that puts a relation name there; anything else (a select-list expression, a WHERE)
+        // is not an alias slot even though it may end in an identifier.
+        //
+        // The write targets belong in this list as much as FROM does — `update users |` and
+        // `insert into users |` are alias slots too. They were missing while nothing reported a table
+        // position there, and adding those rules turned the omission into wrong output: the caret offered
+        // every relation and a join snippet, so accepting the first gave `update users join orders o on …`.
         if (before < 0) return false;
         var opener = toks[before].Type;
         if (!(opener == rules.From || opener == rules.Join || opener == rules.Comma
-              || opener == rules.Lateral))
+              || opener == rules.Lateral || opener == rules.Update || opener == rules.Into
+              || opener == rules.Using))
             return false;
 
         var relation = rules.Unquote(parts[^1]);
@@ -472,6 +555,28 @@ public sealed class CompletionEngine : ICompletionEngine
 
     // ---- Column suggestions (alias-aware) ----------------------------------------------------
 
+    /// <summary>
+    /// The columns legal in an <c>UPDATE … SET</c> or an insert column list: the write target's own, and
+    /// nothing else, spelled bare.
+    /// <para>
+    /// Both restrictions are correctness, not taste. <c>UPDATE users SET … FROM orders</c> reads two
+    /// relations and may assign to exactly one, so offering the other's columns offers an error. And
+    /// <c>UPDATE users u SET u.name = …</c> is rejected outright by Postgres — the qualification that the
+    /// general column path adds for an aliased source is precisely wrong here.
+    /// </para>
+    /// <para>Falls back to the general path when no target was found, which is better than nothing while a
+    /// statement is still half-typed.</para>
+    /// </summary>
+    private static IEnumerable<Suggestion> WriteTargetColumnSuggestions(
+        ISqlDialect dialect, ISchemaSnapshot schema, IReadOnlyList<TableRef> sources)
+    {
+        var target = sources.FirstOrDefault(s => s.IsWriteTarget && s.Resolved is not null);
+        if (target is null) return ColumnSuggestions(dialect, schema, sources, qualifier: null);
+
+        return schema.ColumnsOf(target.Resolved!.Id)
+            .Select(c => ColumnSuggestion(dialect, c, target.EffectiveName));   // no qualifier: bare, always
+    }
+
     private static IEnumerable<Suggestion> ColumnSuggestions(
         ISqlDialect dialect, ISchemaSnapshot schema, IReadOnlyList<TableRef> sources, string? qualifier)
     {
@@ -580,6 +685,15 @@ public sealed class CompletionEngine : ICompletionEngine
             {
                 if (IsWord(t))
                     return new CaretResolution(t.TokenIndex, start, endExclusive - start);
+
+                // Sitting exactly at the end of a non-word token means the caret is *past* it, not on it:
+                // in `insert into users (|` the position is after the paren. Reporting the paren's own
+                // index asks c3 what may appear *where the paren is* — a different question, and one whose
+                // answer includes a parenthesised join, so that caret offered tables where the column list
+                // belongs. A word is the exception: `us|` is still the word being typed.
+                if (caret == endExclusive)
+                    return new CaretResolution(t.TokenIndex + 1, caret, 0);
+
                 return new CaretResolution(t.TokenIndex, caret, 0);
             }
         }

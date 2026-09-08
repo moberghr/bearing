@@ -125,6 +125,40 @@ public sealed partial class TSqlParseRules : ISqlParseRules
     /// </summary>
     public int Lateral => TokenConstants.InvalidType;
 
+    public int Using => TSqlParser.USING;
+    public int Update => TSqlParser.UPDATE;
+    public int Into => TSqlParser.INTO;
+    public int Insert => TSqlParser.INSERT;
+    public int Merge => TSqlParser.MERGE;
+    public int For => TSqlParser.FOR;
+
+    /// <summary>T-SQL has no <c>DO UPDATE</c> (no upsert of that shape) and no <c>ONLY</c> table scoping,
+    /// so both roles are absent and the branches that test them drop out.</summary>
+    public int Do => TokenConstants.InvalidType;
+
+    /// <inheritdoc cref="Do"/>
+    public int Only => TokenConstants.InvalidType;
+
+    /// <summary>
+    /// <c>update_elem</c> is the assignment in a SET list and <c>update_elem_merge</c> its MERGE form;
+    /// <c>insert_column_id</c> is one item of an insert column list, the analogue of PostgreSQL's
+    /// <c>insert_column_item</c>. Note it is the <em>item</em>, not <c>insert_column_name_list</c>: c3
+    /// reports the innermost rule it stopped at, and the list is the container.
+    /// </summary>
+    public bool IsWriteTargetColumn(IEnumerable<int> ruleIndices)
+        => ruleIndices.Any(r => r == TSqlParser.RULE_update_elem
+                                || r == TSqlParser.RULE_update_elem_merge
+                                || r == TSqlParser.RULE_insert_column_id);
+
+    /// <summary>
+    /// <c>ddl_object</c> is the target of INSERT, UPDATE and DELETE alike in this grammar — it cannot tell
+    /// them apart, and here it does not need to: T-SQL aliases a write target through a FROM clause
+    /// (<c>update u set … from t u</c>), never by juxtaposition, so a bare alias is wrong at all three.
+    /// That makes the broader rule the correct answer rather than an approximation.
+    /// </summary>
+    public bool IsAliaslessWriteTarget(IEnumerable<int> ruleIndices)
+        => ruleIndices.Any(r => r == TSqlParser.RULE_ddl_object);
+
     /// <summary>
     /// The four identifier tokens of <c>id_</c> that actually name something: a bare <c>ID</c>, a
     /// <c>#temp</c> table (<c>TEMP_ID</c>), a <c>"quoted"</c> name and a <c>[bracketed]</c> one.

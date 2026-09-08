@@ -52,6 +52,23 @@ public sealed partial class PgParseRules : ISqlParseRules
     /// not a different token — <c>LATERAL_P</c> is <c>lateral</c>.</summary>
     public int Lateral => PostgreSQLParser.LATERAL_P;
 
+    public int Using => PostgreSQLParser.USING;
+    public int Update => PostgreSQLParser.UPDATE;
+    public int Into => PostgreSQLParser.INTO;
+    public int Insert => PostgreSQLParser.INSERT;
+    public int Merge => PostgreSQLParser.MERGE;
+    public int For => PostgreSQLParser.FOR;
+    public int Do => PostgreSQLParser.DO;
+    public int Only => PostgreSQLParser.ONLY;
+
+    public bool IsWriteTargetColumn(IEnumerable<int> ruleIndices)
+        => PgCompletionRules.IsWriteTargetColumn(ruleIndices);
+
+    /// <summary>Postgres' grammar is <c>INSERT INTO t [ AS alias ]</c>, so only the INSERT target refuses
+    /// a bare alias; <c>UPDATE users u SET …</c> is legal.</summary>
+    public bool IsAliaslessWriteTarget(IEnumerable<int> ruleIndices)
+        => PgCompletionRules.IsInsertTarget(ruleIndices);
+
     public bool IsIdentifier(int tokenType)
         => tokenType is PostgreSQLParser.Identifier or PostgreSQLParser.QuotedIdentifier;
 

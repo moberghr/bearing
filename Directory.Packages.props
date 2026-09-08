@@ -5,6 +5,12 @@
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
 
+  <ItemGroup Label="Build">
+    <!-- Derives the version from the git tag; see Directory.Build.props. PrivateAssets so it never
+         becomes a dependency of anything that consumes these projects. -->
+    <PackageVersion Include="MinVer" Version="6.0.0" />
+  </ItemGroup>
+
   <ItemGroup Label="SQL parsing / completion">
     <PackageVersion Include="Antlr4.Runtime.Standard" Version="4.13.1" />
     <PackageVersion Include="Antlr4BuildTasks" Version="12.14.0" />

@@ -1,8 +1,11 @@
 # Releasing Bearing
 
 Bearing ships through [Velopack](https://velopack.io): an installer plus per-file delta auto-update, with
-**GitHub Releases on this repository** as the feed the app reads. There is no CI yet ([#24]) — releases are
-built from a working copy with `build/velopack.sh`.
+**GitHub Releases on this repository** as the feed the app reads.
+
+**Cutting a release is one step: publish a GitHub release.** `.github/workflows/release.yml` runs the tests,
+builds both platforms and uploads them. Everything below the next section is what that workflow does, kept
+because it still runs by hand when you want it to.
 
 Two platforms are covered. Both are built from one machine, whichever OS it runs, because Velopack can
 cross-build Windows and Linux packages. **macOS cannot be built off a Mac** (Velopack needs `codesign`,
@@ -16,6 +19,8 @@ its bare-binary path.
 
 ## One-time setup
 
+Only for building by hand — the workflow installs its own `vpk` and uses the run's `GITHUB_TOKEN`.
+
 ```bash
 dotnet tool install -g vpk       # the Velopack CLI (needs ~/.dotnet/tools on PATH)
 gh auth login                    # publishing needs write access; the script reads `gh auth token`
@@ -23,12 +28,56 @@ gh auth login                    # publishing needs write access; the script rea
 
 ## Cutting a release
 
-1. Bump `<Version>` in `Directory.Build.props`. That single property is the app version everywhere: the
-   assembly version, `Help ▸ About`, and the version the feed compares against. Velopack requires 3-part
-   semver2 (`0.3.0`, `0.3.0-beta.1`) — a 4-part version is rejected.
-2. Commit, then tag it: `git tag v0.3.0`. The script **refuses to build** unless `HEAD` carries the tag
-   matching `<Version>`, so a published version can never disagree with what About reports. For a
-   throwaway local package, `ALLOW_UNTAGGED=1` skips that check (and blocks publishing).
+Create the release in GitHub — **Releases ▸ Draft a new release**, pick or create the `v*` tag, write the
+description, publish. That is the whole job. The workflow then:
+
+1. runs `dotnet test` over the solution, and stops if anything fails — before any asset is public;
+2. builds `win-x64` and `linux-x64` and uploads both to that release;
+3. checks the release really carries `releases.<channel>.json` and the full package, and fails if not.
+
+The version is the tag. Nothing to bump, and nothing that can disagree with it.
+
+A description you type in the UI is kept. `docs/release-notes/<version>.md` still wins where it exists,
+because that copy is what the app reads back through **Help ▸ What's New** and what travels inside the
+package — write one for anything worth explaining.
+
+**The release is live before its assets are.** That is inherent to reacting to a release you published: for
+the few minutes the tests and build take, the page exists, watchers have been notified, and there is nothing
+to download. It looks exactly like a broken release because, briefly, it is one.
+
+So a failure anywhere in the job **returns the release to draft** and says so. The tag and the description
+survive; fix the cause and re-run the workflow. Re-running is safe — `--merge` and the asset check are both
+idempotent — and a release that never reaches the end is never left published and empty, which is the state
+`v0.5.4` has been in since it was cut.
+
+There is no macOS package, here or anywhere (see above).
+
+`workflow_dispatch` runs the test job alone against any ref, which answers "would this tag build" without
+creating a release that claims it did.
+
+### By hand
+
+The same script the workflow runs, for when you want the packages locally or CI is not an option.
+
+1. **Tag the commit you mean to release**, and push it:
+
+   ```bash
+   git tag v0.6.0 && git push origin v0.6.0
+   ```
+
+   The tag is the version. There is no `<Version>` property to bump — [MinVer](https://github.com/adamralph/minver)
+   reads the nearest `v*` tag and feeds it to the assembly version, `Help ▸ About`, and the string the
+   update feed compares against. Velopack requires 3-part semver2 (`0.6.0`, `0.6.0-beta.1`); the script
+   rejects anything else before it starts building.
+
+   This used to be two steps — bump the property, then tag — and they drifted: `v0.5.4` landed on the
+   commit *before* the bump, so the tag said 0.5.4 while the build said 0.5.3. One value read once cannot
+   do that.
+
+   A commit with no tag has no release version, and the script refuses to build one. For a throwaway local
+   package `ALLOW_UNTAGGED=1` builds `<last-tag>-local.<sha>` instead (and blocks publishing).
+2. Write `docs/release-notes/<version>.md` — see below. Do this before publishing: the script reads it for
+   the release body, and the app shows it to every user.
 3. Build and publish each platform:
 
 ```bash
@@ -37,7 +86,10 @@ PUBLISH=1 RID=linux-x64 build/velopack.sh
 ```
 
 Both land on the same GitHub release (`--merge`); each channel carries its own `releases.<channel>.json`
-and clients only read their own. The script fetches the previous release first so this one ships as a
+and clients only read their own. After uploading, the script **checks the release actually carries**
+`releases.<channel>.json` and the full package, and fails if it does not — an empty release page is not a
+release, and `v0.5.4` shipped as exactly that: tagged, described, and invisible to every installed copy,
+with nothing to say so. The script fetches the previous release first so this one ships as a
 **delta** as well as a full package — that is what keeps an update a few MB instead of ~65 MB.
 
 `dist/velopack/<channel>` is wiped and repopulated from the feed on every run, deliberately: `vpk` reads

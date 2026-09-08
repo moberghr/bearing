@@ -155,4 +155,49 @@ public interface ISqlParseRules
     /// suggestion has no valid shape after these, so it is withheld rather than inserted as a syntax error.
     /// </summary>
     IReadOnlySet<int> OnlessJoinQualifiers { get; }
+
+    // ---- The write statements. A table name follows more than FROM and JOIN, and the slots a write
+    // ---- statement opens are stricter than the read ones, so the engine needs these by role too (#124).
+
+    /// <summary>Introduces a source in <c>DELETE … USING u</c> and <c>MERGE … USING src</c>.</summary>
+    int Using { get; }
+
+    /// <summary>The verb of <c>UPDATE t SET …</c>, whose target is a table name like any other.</summary>
+    int Update { get; }
+
+    /// <summary>The <c>INTO</c> of <c>INSERT INTO t</c> / <c>MERGE INTO t</c>.</summary>
+    int Into { get; }
+
+    int Insert { get; }
+    int Merge { get; }
+
+    /// <summary>Needed only to recognise <c>FOR UPDATE</c>, where <see cref="Update"/> names nothing.</summary>
+    int For { get; }
+
+    /// <summary>Needed only to recognise <c>DO UPDATE</c> (Postgres' upsert), likewise naming nothing.
+    /// Absent in T-SQL — see the note on absent roles.</summary>
+    int Do { get; }
+
+    /// <summary>Postgres' inheritance scoping, <c>UPDATE ONLY t</c>: it sits between the keyword and the
+    /// name without being part of either. Absent in T-SQL.</summary>
+    int Only { get; }
+
+    /// <summary>
+    /// Whether the caret is at a column slot belonging to a write statement's <b>target</b> — an
+    /// <c>UPDATE … SET</c> or an insert column list — rather than a general expression position.
+    /// <para>
+    /// Both are <see cref="CompletionIntent.ColumnPosition"/>, but they are far stricter than one: only
+    /// the target's own columns are legal there, and the name must be bare. The intent alone cannot carry
+    /// that, so the engine asks this as well. A rule-index predicate rather than an intent because the
+    /// distinction is *narrower* than the intents, and adding an intent for it would make every dialect
+    /// re-answer a question only these two rules ask.
+    /// </para>
+    /// </summary>
+    bool IsWriteTargetColumn(IEnumerable<int> ruleIndices);
+
+    /// <summary>
+    /// Whether the caret names a write target that takes <b>no</b> bare alias, so the generated
+    /// <c>users u</c> that suits a FROM clause must be withheld as a syntax error.
+    /// </summary>
+    bool IsAliaslessWriteTarget(IEnumerable<int> ruleIndices);
 }
