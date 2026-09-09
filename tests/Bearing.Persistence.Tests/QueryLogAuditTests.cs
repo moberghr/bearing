@@ -1,3 +1,4 @@
+using System.Linq;
 using Bearing.Core.Logging;
 using Bearing.Persistence;
 using Microsoft.Data.Sqlite;
@@ -42,15 +43,43 @@ public class QueryLogAuditTests : IDisposable
     private static async Task<IReadOnlyList<QueryLogEntry>> Read(SqliteQueryLog log, QueryLogQuery query)
         => await log.SearchAsync(query, CancellationToken.None);
 
-    /// <summary>Wait until the background writer has landed <paramref name="expected"/> rows.</summary>
-    private static async Task<IReadOnlyList<QueryLogEntry>> Settled(SqliteQueryLog log, int expected)
+    /// <summary>
+    /// Wait until the background writer has landed <paramref name="expected"/> rows.
+    /// <para>
+    /// Driven by the log's own <see cref="IQueryLog.Appended"/> event, which fires once a row is actually
+    /// readable (#78) — so this waits exactly as long as the writer needs and no longer. It used to poll on
+    /// a fixed 2-second budget, which was ample for a few rows on a fast disk and not for 250 on a shared
+    /// CI runner: the 250-row test passed on every machine here and failed the first time CI ran it. A
+    /// timing budget guessed from one machine is not a wait.
+    /// </para>
+    /// <para>
+    /// The subscription has to be in place <b>before</b> the appends, so callers hand the entries over
+    /// rather than appending first — an event that has already fired cannot be waited for.
+    /// </para>
+    /// </summary>
+    private static async Task<IReadOnlyList<QueryLogEntry>> Appended(
+        SqliteQueryLog log, params QueryLogEntry[] entries)
     {
-        for (var attempt = 0; attempt < 200; attempt++)
+        var landed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var seen = 0;
+        void OnAppended(QueryLogEntry _)
         {
-            var rows = await Read(log, new QueryLogQuery { Limit = null });
-            if (rows.Count >= expected) return rows;
-            await Task.Delay(10);
+            if (Interlocked.Increment(ref seen) >= entries.Length) landed.TrySetResult();
         }
+
+        log.Appended += OnAppended;
+        try
+        {
+            foreach (var entry in entries) log.Append(entry);
+            var timeout = Task.Delay(TimeSpan.FromSeconds(60));
+            if (await Task.WhenAny(landed.Task, timeout).ConfigureAwait(false) == timeout)
+                Assert.Fail($"only {seen} of {entries.Length} entries reached the log");
+        }
+        finally
+        {
+            log.Appended -= OnAppended;
+        }
+
         return await Read(log, new QueryLogQuery { Limit = null });
     }
 
@@ -61,8 +90,8 @@ public class QueryLogAuditTests : IDisposable
         var id = Guid.NewGuid();
         await using var log = new SqliteQueryLog(Path_("log.sqlite"));
 
-        log.Append(Entry(DateTimeOffset.UtcNow, id: id, environment: "Production"));
-        var row = Assert.Single(await Settled(log, 1));
+        var row = Assert.Single(
+            await Appended(log, Entry(DateTimeOffset.UtcNow, id: id, environment: "Production")));
 
         Assert.Equal(id, row.ConnectionId);
         Assert.Equal("Production", row.Environment);
@@ -76,8 +105,7 @@ public class QueryLogAuditTests : IDisposable
         Directory.CreateDirectory(_dir);
         await using var log = new SqliteQueryLog(Path_("log.sqlite"));
 
-        log.Append(Entry(DateTimeOffset.UtcNow, id: Guid.NewGuid()));
-        var row = Assert.Single(await Settled(log, 1));
+        var row = Assert.Single(await Appended(log, Entry(DateTimeOffset.UtcNow, id: Guid.NewGuid())));
 
         Assert.Null(row.Environment);
     }
@@ -114,10 +142,9 @@ public class QueryLogAuditTests : IDisposable
 
         var id = Guid.NewGuid();
         await using var log = new SqliteQueryLog(path);
-        log.Append(Entry(DateTimeOffset.UtcNow, sql: "select 2", id: id, environment: "Staging"));
 
-        var rows = await Settled(log, 2);
-        Assert.Equal(2, rows.Count);
+        var rows = await Appended(log, Entry(DateTimeOffset.UtcNow, sql: "select 2", id: id, environment: "Staging"));
+        Assert.Equal(2, rows.Count);   // the v1 row plus this one
         // Newest first, as SearchAsync orders.
         Assert.Equal(id, rows[0].ConnectionId);
         Assert.Null(rows[1].ConnectionId);
@@ -179,10 +206,11 @@ public class QueryLogAuditTests : IDisposable
         await using var log = new SqliteQueryLog(Path_("range.sqlite"));
 
         var day = new DateTimeOffset(2026, 9, 3, 12, 0, 0, TimeSpan.Zero);
-        log.Append(Entry(day.AddDays(-2), sql: "select 'before'"));
-        log.Append(Entry(day, sql: "select 'inside'"));
-        log.Append(Entry(day.AddDays(2), sql: "select 'after'"));
-        await Settled(log, 3);
+        await Appended(
+            log,
+            Entry(day.AddDays(-2), sql: "select 'before'"),
+            Entry(day, sql: "select 'inside'"),
+            Entry(day.AddDays(2), sql: "select 'after'"));
 
         var inside = await Read(log, new QueryLogQuery
         {
@@ -207,8 +235,7 @@ public class QueryLogAuditTests : IDisposable
 
         // Both are the same instant: 22:30 UTC on the 2nd.
         var withOffset = new DateTimeOffset(2026, 9, 3, 0, 30, 0, TimeSpan.FromHours(2));
-        log.Append(Entry(withOffset, sql: "select 'shifted'"));
-        await Settled(log, 1);
+        await Appended(log, Entry(withOffset, sql: "select 'shifted'"));
 
         var utc = withOffset.ToUniversalTime();
         var found = await Read(log, new QueryLogQuery
@@ -237,8 +264,9 @@ public class QueryLogAuditTests : IDisposable
         await using var log = new SqliteQueryLog(Path_("limit.sqlite"));
 
         var at = DateTimeOffset.UtcNow;
-        for (var i = 0; i < 250; i++) log.Append(Entry(at.AddSeconds(-i), sql: $"select {i}"));
-        await Settled(log, 250);
+        await Appended(
+            log,
+            [.. Enumerable.Range(0, 250).Select(i => Entry(at.AddSeconds(-i), sql: $"select {i}"))]);
 
         Assert.Equal(250, (await Read(log, new QueryLogQuery { Limit = null })).Count);
         // The history panel's screenful is unchanged — an audit export must not have redefined it.
