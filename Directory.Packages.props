@@ -51,6 +51,10 @@
 
   <ItemGroup Label="Testing">
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <!-- Turns a test run into GitHub annotations and a job-summary table. Without it a CI failure is a
+         line buried in a log, and a *skip* is invisible entirely — which is the state #24 was written to
+         end, so the summary is configured to list skipped tests by name. -->
+    <PackageVersion Include="GitHubActionsTestLogger" Version="3.0.5" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
     <PackageVersion Include="Xunit.SkippableFact" Version="1.5.61" />

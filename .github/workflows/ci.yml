@@ -60,7 +60,7 @@ jobs:
             database: false
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # MinVer reads the tag history (Directory.Build.props); a shallow clone has none and every build
           # is 0.0.0-alpha. Harmless for a test run, but it makes the version the build reports here the
@@ -68,7 +68,7 @@ jobs:
           # it matters.
           fetch-depth: 0
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
 
@@ -98,9 +98,17 @@ jobs:
           failed=()
           for project in Sql Data Persistence Updates App; do
             echo "::group::Bearing.$project.Tests"
+            # Two loggers, for two different readers. GitHubActions annotates each failure on the line it
+            # happened and writes a job-summary table — including skipped tests by name, because a skip is
+            # otherwise invisible and 100 of them looked alarming until someone counted. trx is the durable
+            # copy, uploaded below, for anything the summary cannot hold.
+            #
             # --no-build: the solution is already built above. Each project on its own, for the contention
             # reason in this file's header.
-            if ! dotnet test "tests/Bearing.$project.Tests" -c Release --no-build --nologo; then
+            if ! dotnet test "tests/Bearing.$project.Tests" -c Release --no-build --nologo \
+                 --results-directory "artifacts/test-results" \
+                 --logger "GitHubActions;summary.includePassedTests=false;summary.includeSkippedTests=true" \
+                 --logger "trx;LogFileName=$project.trx"; then
               failed+=("$project")
             fi
             echo "::endgroup::"
@@ -109,6 +117,15 @@ jobs:
             echo "::error::failing suites: ${failed[*]}"
             exit 1
           fi
+
+      # always(): the run that failed is the one whose results are worth keeping.
+      - name: Keep the test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ matrix.os }}
+          path: artifacts/test-results/*.trx
+          if-no-files-found: error
 
       # Said out loud in the log, because a skipped test is invisible in the summary and "0 failed" over a
       # suite that skipped its whole database half is the reassurance #24 was written to remove.
