@@ -944,8 +944,12 @@ public sealed class RelationNodeViewModel : SchemaNodeViewModel
             .Select(t => (SchemaNodeViewModel)new TriggerNodeViewModel(t)));
         // Beside the constraints and triggers (#119), because this is where you are standing when a query
         // returns fewer rows than you expect — the one thing RLS does that nothing else in the tree explains.
+        // No snapshot, so the row is the policy's name alone: which table it is on is implied by the folder
+        // it sits in, and repeating it spends horizontal space a narrow panel does not have. The
+        // per-database group passes one, because there two policies of the same name on different tables
+        // would otherwise be indistinguishable.
         Folder("Policies", "Icon.Policy", details.Policies
-            .Select(p => (SchemaNodeViewModel)new PolicyNodeViewModel(p, _snapshot)));
+            .Select(p => (SchemaNodeViewModel)new PolicyNodeViewModel(p)));
         Folder("Rules", "Icon.Rule", details.Rules
             .Select(r => (SchemaNodeViewModel)new RuleNodeViewModel(r)));
         // Last, because a partition is a whole table of its own and the folders above describe *this* one.

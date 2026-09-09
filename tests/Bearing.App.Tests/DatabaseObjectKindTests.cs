@@ -282,12 +282,21 @@ public class DatabaseObjectKindTests
     [Fact]
     public async Task Under_its_own_table_a_policy_row_does_not_repeat_the_table_name()
     {
-        // It is already implied by where the row is; repeating it is noise on a narrow panel.
+        // It is already implied by where the row is; repeating it is noise on a narrow panel — and the
+        // schema-tree capture showed exactly that, `payment_own_st(` clipped where the whole name would
+        // have fitted.
+        //
+        // This assertion used to say " on shop.payment" while the test's *name* said it should not: written
+        // from the design, then made to match what the code did. The capture is what caught the gap.
         var relation = await ExpandedRelation(DemoCatalog.PaymentId);
         var policies = relation.Children.OfType<SchemaGroupNodeViewModel>().Single(g => g.Title == "Policies");
 
-        Assert.Equal(["payment_own_store on shop.payment", "payment_no_refunds on shop.payment"],
-            policies.Children.Select(c => c.Title));
+        Assert.Equal(["payment_own_store", "payment_no_refunds"], policies.Children.Select(c => c.Title));
+
+        // …while the per-database group still qualifies them, because there the table is the distinguisher.
+        Assert.All(
+            Group(await Expanded(new KindBrowser()), "Policies").Children,
+            row => Assert.Contains(" on ", row.Title));
     }
 
     private static async Task<RelationNodeViewModel> ExpandedRelation(long tableId)
