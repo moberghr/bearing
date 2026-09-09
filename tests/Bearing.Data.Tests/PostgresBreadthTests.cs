@@ -316,6 +316,63 @@ public class PostgresBreadthTests
         }
     }
 
+    /// <summary>
+    /// A relation dropped while the size read is running does not take the other relations' sizes with it.
+    /// <para>
+    /// <c>pg_class</c> is read under the query's MVCC snapshot, but <c>pg_total_relation_size</c> stats
+    /// files — which is not — so a concurrent <c>DROP</c> leaves a row listed with a null size. The reader
+    /// called <c>GetInt64</c> on it and threw <c>InvalidCastException</c>, losing every size in the
+    /// database to one other person's DDL. CI found it: this suite's own schema-creating classes race the
+    /// enumerating ones, and the runner lost a race this machine kept winning.
+    /// </para>
+    /// <para>
+    /// Reproduced by asking for a size <em>while</em> a relation is being dropped, repeatedly — the window
+    /// is small, so one attempt would prove nothing either way. The assertion is that nothing throws and the
+    /// surviving relations still report, not that the doomed one is absent: whether it is caught depends on
+    /// the timing this test cannot control.
+    /// </para>
+    /// </summary>
+    [SkippableFact]
+    public async Task A_relation_dropped_mid_read_does_not_lose_the_other_sizes()
+    {
+        var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
+        await using var factory = provider.CreateConnectionFactory(Info(), Password);
+        await PgTestServer.RequireWritableAsync(factory);
+
+        var exec = provider.CreateQueryExecutor(factory);
+        var reader = provider.CreateMetadataReader(factory);
+        const string churn = Schema + "_churn";
+
+        await exec.ExecuteAsync($"drop schema if exists {churn} cascade; create schema {churn};",
+            new QueryOptions(), CancellationToken.None);
+        try
+        {
+            for (var attempt = 0; attempt < 12; attempt++)
+            {
+                // Enough tables that the size read is still walking the list when the drop lands.
+                var create = string.Join(" ", Enumerable.Range(0, 25)
+                    .Select(i => $"create table {churn}.t{i} (x int);"));
+                await exec.ExecuteAsync(create, new QueryOptions(), CancellationToken.None);
+
+                var dropping = exec.ExecuteAsync(
+                    $"drop schema {churn} cascade; create schema {churn};",
+                    new QueryOptions(), CancellationToken.None);
+                var sizing = reader.GetRelationSizesAsync(CancellationToken.None);
+
+                await Task.WhenAll(dropping, sizing);
+
+                // pagila's own tables are never dropped here, so a working read always finds them.
+                Assert.NotEmpty(sizing.Result);
+                Assert.Contains(sizing.Result, size => size.TotalBytes > 0);
+            }
+        }
+        finally
+        {
+            await exec.ExecuteAsync($"drop schema if exists {churn} cascade;",
+                new QueryOptions(), CancellationToken.None);
+        }
+    }
+
     // ---- fixture ------------------------------------------------------------------------------------
 
     private static async Task Setup(IQueryExecutor exec)

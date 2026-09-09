@@ -917,13 +917,23 @@ public sealed class PostgresMetadataReader : IMetadataReader
         var list = new List<RelationSize>();
         while (await r.ReadAsync(ct).ConfigureAwait(false))
         {
-            var rows = r.GetInt64(5);
+            // A null size means the relation is no longer there.
+            //
+            // pg_class is read under the query's MVCC snapshot, but pg_total_relation_size stats files —
+            // which is not, so a relation dropped by someone else while this query runs is still listed and
+            // has no size. Skipped rather than reported as 0: zero bytes says "this table is empty", and the
+            // row it belongs to is about to disappear from the tree anyway. Sizes are already best-effort
+            // and arrive after the tree renders (#76), so one missing entry costs a label, not a feature —
+            // whereas throwing loses every other relation's size to one concurrent DROP.
+            if (r.IsDBNull(1)) continue;
+
+            var rows = r.IsDBNull(5) ? -1 : r.GetInt64(5);
             list.Add(new RelationSize(
                 TableId: r.GetInt64(0),
                 TotalBytes: r.GetInt64(1),
-                TableBytes: r.GetInt64(2),
-                IndexBytes: r.GetInt64(3),
-                ToastBytes: r.GetInt64(4),
+                TableBytes: r.IsDBNull(2) ? 0 : r.GetInt64(2),
+                IndexBytes: r.IsDBNull(3) ? 0 : r.GetInt64(3),
+                ToastBytes: r.IsDBNull(4) ? 0 : r.GetInt64(4),
                 // -1 means "never analysed". A row count of minus one is not a row count.
                 EstimatedRows: rows < 0 ? null : rows));
         }
