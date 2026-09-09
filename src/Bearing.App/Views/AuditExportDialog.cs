@@ -73,13 +73,22 @@ public sealed class AuditExportDialog : Window
         Content = layout;
     }
 
+    /// <summary>
+    /// The two date pickers, on one line where they fit and on two where they do not.
+    /// <para>
+    /// A <see cref="WrapPanel"/> rather than a horizontal <c>StackPanel</c>, which clipped the second picker
+    /// off the right edge of the window: a <c>DatePicker</c> is three fields wide and its month field is as
+    /// wide as the longest month name in the user's culture, so the pair fits in 520px in some locales and
+    /// not in others. Wrapping decides per locale instead of betting on one.
+    /// </para>
+    /// </summary>
     private Control Dates()
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
-        row.Children.Add(new TextBlock { Text = "from", VerticalAlignment = VerticalAlignment.Center, Foreground = Res("Text.Dim") });
-        row.Children.Add(_from);
-        row.Children.Add(new TextBlock { Text = "to", VerticalAlignment = VerticalAlignment.Center, Foreground = Res("Text.Dim") });
-        row.Children.Add(_to);
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        // Each label travels with its own picker, so a wrap moves "to <picker>" down as a pair rather than
+        // leaving a lone "to" dangling at the end of the first line.
+        row.Children.Add(Bound("from", _from));
+        row.Children.Add(Bound("to", _to));
 
         // Both pickers stay enabled but stop being read: greying them out hides what the report *would*
         // cover if the box were cleared again, which is the thing being decided here.
@@ -87,6 +96,24 @@ public sealed class AuditExportDialog : Window
         panel.Children.Add(row);
         panel.Children.Add(_wholeLog);
         return panel;
+
+        static Control Bound(string label, DatePicker picker) => new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            // Right margin for the gap between the pair, vertical for the gutter when the row wraps.
+            Margin = new Thickness(0, 2, 8, 2),
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = label,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Foreground = Res("Text.Dim"),
+                },
+                picker,
+            },
+        };
     }
 
     /// <summary>A checkbox per value. None ticked means every value — stated on screen, because an empty

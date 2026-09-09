@@ -48,7 +48,8 @@ public sealed class PendingEditsSqlWindow : Window
         DockPanel.SetDock(buttons, Dock.Bottom);
         root.Children.Add(buttons);
 
-        root.Children.Add(SqlStatementList.Build(request));
+        // The window's own button row carries Copy, so the list must not draw a second one.
+        root.Children.Add(SqlStatementList.Build(request, copyButton: false));
 
         Content = root;
     }
@@ -58,9 +59,12 @@ public sealed class PendingEditsSqlWindow : Window
     {
         var panel = new StackPanel { Spacing = 4, Margin = new Avalonia.Thickness(0, 0, 0, 10) };
 
+        // Not request.Heading: that is the confirmation's *question* ("Save 4 changes to production ·
+        // Production?"), and this window asks nothing — its buttons are Copy, Open in a new tab and Close.
+        // A question mark over a read-only view invites the reader to look for the yes button.
         panel.Children.Add(new TextBlock
         {
-            Text = request.Heading,
+            Text = $"{Plural(request.Statements.Count, "pending change")} to {request.Target}",
             Foreground = Res("Text.Primary"),
             FontSize = Metric("Font.Body"),
             FontWeight = FontWeight.Bold,
@@ -92,6 +96,8 @@ public sealed class PendingEditsSqlWindow : Window
 
         return panel;
     }
+
+    private static string Plural(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
 
     private Control Buttons(WriteConfirmation request)
     {
