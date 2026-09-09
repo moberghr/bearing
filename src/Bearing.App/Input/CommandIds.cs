@@ -50,8 +50,15 @@ public static class CommandIds
     public const string PanelConnections = "panel.connections";
     public const string PanelScripts = "panel.scripts";
     public const string PanelHistory = "panel.history";
+
+    /// <summary>Export the query history as an audit report (#113). No default binding — it is a deliberate,
+    /// occasional action, reachable from the palette and the History panel's own button.</summary>
+    public const string HistoryExport = "history.export";
     public const string ConnectionNew = "connection.new";
     public const string ConnectionImportDBeaver = "connection.import.dbeaver";
+    /// <summary>Fuzzy-pick a relation from the loaded schema and reveal it in the tree (#117).</summary>
+    public const string SchemaGotoTable = "schema.gotoTable";
+
     public const string SettingsKeybindings = "settings.keybindings";
     public const string SettingsOpen = "settings.open";
 
@@ -71,6 +78,10 @@ public static class CommandIds
     public const string EditorDeleteWordBack = "editor.deleteWordBack";
     public const string EditorZoomIn = "editor.zoomIn";
     public const string EditorZoomOut = "editor.zoomOut";
+    /// <summary>F12 on the identifier under the caret: reveal what it refers to in the schema tree (#117).
+    /// Editor scope, because it is about the caret.</summary>
+    public const string EditorGotoDefinition = "editor.gotoDefinition";
+
     public const string EditorZoomReset = "editor.zoomReset";
 
     // Grid
@@ -103,6 +114,7 @@ public static class CommandIds
     public const string GridSetNull = "grid.setNull";
     public const string GridAddRow = "grid.addRow";
     public const string GridSave = "grid.save";
+    public const string GridShowSql = "grid.showSql";
     public const string GridDiscard = "grid.discard";
     public const string GridClearSelection = "grid.clearSelection";
     public const string GridInspect = "grid.inspectValue";

@@ -29,7 +29,8 @@ public sealed class WorkspaceContext
         IScriptStore? scriptStore = null,
         ICredentialPrompt? credentialPrompt = null,
         IEntraTokenProvider? entraTokens = null,
-        SettingsService? settings = null)
+        SettingsService? settings = null,
+        ISchemaBrowser? schema = null)
     {
         SettingsService = settings ?? SettingsService.InMemory();
         Providers = providers;
@@ -44,7 +45,10 @@ public sealed class WorkspaceContext
         Credentials = new CredentialResolver(() => Secrets, credentialPrompt, entraTokens ?? new EntraTokenProvider());
         var sessions = new ConnectionSessionManager(providers, () => Credentials, IdleTimeout(Settings));
         Sessions = sessions;
-        Schema = new SchemaBrowser(providers, () => Credentials);
+        // Injectable like every other dependency here (§2.4), rather than reached for: the schema tree's
+        // reveal (#117) is otherwise only testable against a live server, since a real browser opens its own
+        // connections. The app still passes nothing and gets the real one.
+        Schema = schema ?? new SchemaBrowser(providers, () => Credentials);
 
         // The idle sweep is the one service that caches a setting rather than reading it per use, so it
         // has to be told when the setting changes.

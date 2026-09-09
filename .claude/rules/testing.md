@@ -147,3 +147,29 @@ of `ResultSetBuilder` and the resolvers.
   `MaxRows` ceiling and the `Truncated` flag, a count that can be a number / a blank / a throw, and
   `ExecuteWriteAsync` recording the generated DML so §5.4's parameterization is assertable without a server.
   A page query comes back **without** column origins, as it does from the real provider.
+
+## §4.7 — A live test asserts the server's behaviour, not our fixture's history
+Three of #119/#120's live tests failed first on the *test's* premise rather than on the query, and each one is
+a shape to expect again:
+- **pagila's sequences have no `OWNED BY`.** The dump defines them standalone with a `default nextval(…)`, so
+  `pg_get_serial_sequence` returns nothing and there is not one `'a'`/`'i'` dependency in the database.
+  Asserting an owner against pagila asserts how pagila was built. The ownership join is covered against a
+  `serial` column the suite creates itself.
+- **A sequence's type is its own.** `film_id` is `integer`; `film_film_id_seq` is `bigint`, Postgres' default.
+- **A silently-swallowed read hides a query bug.** `Best()` turning a failed kind into an empty list is right
+  at runtime (§9.9) and means a broken query looks like an empty catalog. Only the live test distinguished
+  them — the fixture agreed with itself.
+
+So: when a live assertion fails, establish which side is wrong before changing either. `docker exec
+squirrel-pg-test psql -U postgres -d pagila -Atc "…"` is the fastest way to ask.
+
+Objects a live test creates go in **their own schema**, dropped in `finally` — and for anything cluster-wide
+(a role), tear down **one statement per call**: Npgsql runs a batch in one implicit transaction, so a
+`revoke` that fails because the role is already gone aborts the drops behind it and leaves roles on a shared
+server.
+
+**Updated 2026-09-08, third instance:** the same mistake happened a third time — a test asserting *pagila has
+no partitions*. It has seven: `payment` is partitioned by month. Checking first turned a wrong test into a
+better one, since a real parent with real children in a database nobody wrote for the test is the strongest
+fixture available. The lesson is not "pagila is surprising"; it is that a fixture's contents are a fact to
+look up, never to assume.

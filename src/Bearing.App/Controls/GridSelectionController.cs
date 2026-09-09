@@ -325,6 +325,37 @@ public sealed class GridSelectionController
     /// <summary>A column header's result-column index. Headers are the Control instances the cell factory
     /// built per column, so they match by reference — and the Columns collection keeps its build order even
     /// after the user drags columns around (reordering moves DisplayIndex, not the collection).</summary>
+    /// <summary>
+    /// Drop cells in now-hidden columns from the selection (#118).
+    /// <para>
+    /// The controller is the only writer of <see cref="Model"/>, so the prune belongs here rather than in
+    /// each reader: filtering in <c>Copy</c> would leave <c>PlanSetNull</c>, the paste target and the stats
+    /// bar each to remember, and one of them would forget.
+    /// </para>
+    /// </summary>
+    public void DropHiddenColumns(ResultSetViewModel result)
+    {
+        if (!ReferenceEquals(Model.Result, result)) return;
+
+        var hidden = Model.Cells.Where(c => result.ColumnLayout.IsHidden(c.Col)).ToList();
+        if (hidden.Count == 0) return;
+        foreach (var cell in hidden) Model.Cells.Remove(cell);
+
+        // The cursor and the anchor can be sitting in the column that just went away. Moved to the nearest
+        // visible column rather than cleared: clearing would lose the row the user was on as well.
+        if (Model.Active is { } active && result.ColumnLayout.IsHidden(active.Col))
+            Model.Active = (active.Row, GridSelectionOps.NearestVisibleColumn(result, active.Col));
+        if (Model.Anchor is { } anchor && result.ColumnLayout.IsHidden(anchor.Col))
+            Model.Anchor = (anchor.Row, GridSelectionOps.NearestVisibleColumn(result, anchor.Col));
+
+        Notify();
+    }
+
+    /// <summary>Which result column a header belongs to, or null for the corner header (which owns none).
+    /// Exposed because the column menu (#118) needs the same mapping this class already does.</summary>
+    internal static int? ColumnIndexOfHeader(DataGrid grid, DataGridColumnHeader header)
+        => ColumnIndexOf(grid, header);
+
     private static int? ColumnIndexOf(DataGrid grid, DataGridColumnHeader header)
     {
         for (var i = 0; i < grid.Columns.Count; i++)

@@ -71,6 +71,49 @@ public interface IMetadataReader
 
     /// <summary>Rendered <c>CREATE … FUNCTION/PROCEDURE</c> source, by routine id (<see cref="RoutineInfo.Id"/>).</summary>
     Task<string> GetRoutineDefinitionAsync(long routineId, CancellationToken ct);
+
+    /// <summary>
+    /// The per-database object kinds the schema explorer shows beside relations and routines (#119) —
+    /// sequences, user-defined types, installed extensions and row-level security policies.
+    /// <para>
+    /// One call rather than four, and deliberately: they are all wanted at the same moment (the tree has
+    /// just been handed a database's relations) and four catalog reads on four round trips would be strictly
+    /// worse than four on one connection. It is also what keeps a new engine's cost to one method — a
+    /// provider that has no answer for a kind returns an empty list for it, rather than the interface
+    /// growing a method it will have to stub.
+    /// </para>
+    /// <para>
+    /// Not part of <see cref="ISchemaSnapshot"/>, for <see cref="TableDetails"/>'s reason: the snapshot is on
+    /// the completion hot path and none of this answers a question a keystroke asks.
+    /// </para>
+    /// </summary>
+    Task<DatabaseObjectKinds> GetDatabaseObjectsAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Every role on the <b>server</b> (#120) — cluster-wide, so any reachable database can answer it.
+    /// <para>
+    /// Read from the view that masks the password (<c>pg_roles</c> on Postgres), never the table that holds
+    /// it. A provider with no notion of roles returns an empty list.
+    /// </para>
+    /// </summary>
+    Task<IReadOnlyList<RoleInfo>> GetRolesAsync(CancellationToken ct);
+
+    /// <summary>
+    /// What <paramref name="roleName"/> may do on the reader's own database (#120): the database-level
+    /// privileges and the per-relation grants, rendered readably.
+    /// <para>
+    /// Per database because that is the only scope the answer has — the roles are the server's, but a grant
+    /// is on an object, and objects live in one database. Reports whether the reading role could see the
+    /// answer at all rather than returning a bare empty list.
+    /// </para>
+    /// </summary>
+    Task<RoleGrants> GetRoleGrantsAsync(string roleName, CancellationToken ct);
+
+    /// <summary>
+    /// Tablespaces — the other cluster-wide kind besides roles, so it belongs beside them on the server
+    /// rather than under a database. Location and size where the reading role may see them.
+    /// </summary>
+    Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(CancellationToken ct);
 }
 
 public interface IQueryExecutor

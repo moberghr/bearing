@@ -209,6 +209,28 @@ public partial class MainWindow : Window
             await Vm.Execution.DiscardChangesAsync(rs);   // reverts pending changes in place
             RebuildResults(Vm.Workspace.SelectedTab);     // re-render the restored rows
         };
+        ResultsView.ShowPendingSql = ShowPendingEditsSqlAsync;
+    }
+
+    /// <summary>
+    /// The [SQL] button / <c>grid.showSql</c> (#114): the DML for what is pending, in its own window, with
+    /// Copy and "open in a new tab". Opening it changes nothing about the pending state — the grid is left
+    /// exactly as it was, whichever way the window is closed.
+    /// </summary>
+    private async Task ShowPendingEditsSqlAsync(ResultSetViewModel rs)
+    {
+        if (Vm is null) return;
+        if (Vm.Execution.PendingEditsConfirmation(rs) is not { } request)
+        { Vm.StatusText = "Nothing pending to show SQL for."; return; }
+
+        var window = new PendingEditsSqlWindow(request);
+        if (await window.ShowDialog<bool>(this) is not true) return;
+
+        // A scratch tab, so the statements can be edited and run through the ordinary path — write guard
+        // included — rather than being a read-only transcript.
+        Vm.Workspace.NewTab(request.Script);
+        Vm.StatusText = "Pending changes opened as a script.";
+        LoadEditorFromSelectedTab();
     }
 
     private void HookViewModel()

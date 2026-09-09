@@ -95,6 +95,21 @@ internal sealed class FakeMetadata : IMetadataReader
     public Task<IReadOnlyList<RoutineInfo>> GetRoutinesAsync(CancellationToken ct)
         => Task.FromResult<IReadOnlyList<RoutineInfo>>(System.Array.Empty<RoutineInfo>());
 
+    /// <summary>#119's per-database kinds. Empty: nothing in these tests asks about them, and an empty set
+    /// is a state the tree has to handle anyway (no groups at all).</summary>
+    public Task<DatabaseObjectKinds> GetDatabaseObjectsAsync(CancellationToken ct)
+        => Task.FromResult(DatabaseObjectKinds.Empty);
+
+    /// <summary>#120's roles. Empty: nothing in these tests asks about them.</summary>
+    public Task<IReadOnlyList<RoleInfo>> GetRolesAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<RoleInfo>>(System.Array.Empty<RoleInfo>());
+
+    public Task<RoleGrants> GetRoleGrantsAsync(string roleName, CancellationToken ct)
+        => Task.FromResult(RoleGrants.Of(System.Array.Empty<RoleGrant>()));
+
+    public Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<SchemaObjectInfo>>(System.Array.Empty<SchemaObjectInfo>());
+
     public Task<string> GetViewDefinitionAsync(long tableId, CancellationToken ct)
         => Task.FromResult("");
 
@@ -494,6 +509,20 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
     {
         ExportPickers.Add((suggestedName, format));
         return Task.FromResult(ExportPath);
+    }
+
+    /// <summary>What the audit-export dialog (#113) answers. Null = the user cancelled it.</summary>
+    public Bearing.App.Results.AuditExportRequest? AuditExport { get; set; }
+
+    /// <summary>The (connections, environments) the audit-export dialog was offered, in order — so a test
+    /// can assert the shell derived the choices from the project rather than from the log.</summary>
+    public List<(IReadOnlyList<string> Connections, IReadOnlyList<string> Environments)> AuditExportPrompts { get; } = new();
+
+    public Task<Bearing.App.Results.AuditExportRequest?> ShowAuditExportAsync(
+        IReadOnlyList<string> connectionNames, IReadOnlyList<string> environments)
+    {
+        AuditExportPrompts.Add((connectionNames, environments));
+        return Task.FromResult(AuditExport);
     }
 
     /// <summary>What the write/save confirmation answers. False cancels the write.</summary>

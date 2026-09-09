@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Bearing.App.Results;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
 
@@ -35,9 +36,23 @@ public sealed partial class ResultSetViewModel : ObservableObject
         SourceSql = pageable ? sourceSql : null;
         ExecutedSql = string.IsNullOrWhiteSpace(sourceSql) ? null : sourceSql.Trim();
         _hasMore = pageable && result.Truncated;
+        ColumnLayout = new ColumnLayout(Columns.Count);
+        // The marker on the meta row is derived from the layout, so it has to be told when the layout moves
+        // (the layout itself is deliberately not an ObservableObject — it is pure, §2.5).
+        ColumnLayout.Changed += () => OnPropertyChanged(nameof(HiddenColumnsText));
     }
 
     public IReadOnlyList<ColumnDescriptor> Columns { get; }
+
+    /// <summary>
+    /// Which columns are hidden and how many are frozen (#118). Owned per result set: it describes what is
+    /// on screen, and a re-run is a different result.
+    /// </summary>
+    public ColumnLayout ColumnLayout { get; }
+
+    /// <summary>The meta row's "2 columns hidden" marker, or null when nothing is hidden — so a hidden
+    /// column is never a silent omission from what an export contains.</summary>
+    public string? HiddenColumnsText => ColumnLayout.HiddenText;
 
     /// <summary>Rows shown in the grid; grows as pages are appended (bound as the grid ItemsSource).</summary>
     public ObservableCollection<object?[]> Rows { get; }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using Bearing.Core.Data;
 using Bearing.Sql;
@@ -18,7 +19,56 @@ public enum WriteAction
 
 /// <summary>One statement as a write confirmation lists it: a kind tag (<c>UPDATE</c>, <c>DROP + CREATE</c>,
 /// or a plain <c>SELECT</c> for a read that shares the batch), the SQL itself, and whether it writes.</summary>
-public sealed record WriteStatement(string Kind, string Sql, bool IsRisky);
+/// <param name="Impact">How many rows this statement will touch (#112), when that could be established.
+/// Null for everything else — most statements, including every statement the reducer declines.</param>
+public sealed record WriteStatement(string Kind, string Sql, bool IsRisky, RowImpact? Impact = null);
+
+/// <summary>
+/// How many rows one <c>UPDATE</c> / <c>DELETE</c> is about to touch (#112), and #100's "no WHERE at all".
+/// <para>
+/// 3,412 when you expected 1 is unmistakable in a way no amount of "are you sure" is — it is the number
+/// that catches the wrong-tab mistake, because the tab you meant had one matching row and this one has the
+/// whole table. Three states, and they are deliberately distinguishable: a count, "every row", and
+/// <em>we could not find out</em>. The last is never rendered as zero or as silence.
+/// </para>
+/// </summary>
+/// <param name="Verb"><c>UPDATE</c> or <c>DELETE</c>.</param>
+/// <param name="Relation">The relation as the statement names it.</param>
+/// <param name="Rows">The count, or null when it could not be taken in time.</param>
+/// <param name="EveryRow">True when the statement has no <c>WHERE</c> — #100's case.</param>
+public sealed record RowImpact(string Verb, string Relation, long? Rows, bool EveryRow)
+{
+    /// <summary>The statement matched a predicate, and this many rows satisfy it right now.</summary>
+    public static RowImpact Counted(UpdateDeleteTarget target, long rows)
+        => new(target.Verb, target.Relation, rows, EveryRow: false);
+
+    /// <summary>No <c>WHERE</c>: the whole table (#100). No count is taken — the answer is already known,
+    /// and it is not a number the user needs.</summary>
+    public static RowImpact Every(UpdateDeleteTarget target)
+        => new(target.Verb, target.Relation, null, EveryRow: true);
+
+    /// <summary>The count did not come back in its budget. Said out loud rather than dropped, so the absence
+    /// of a number can't be read as a small one.</summary>
+    public static RowImpact Uncounted(UpdateDeleteTarget target)
+        => new(target.Verb, target.Relation, null, EveryRow: false);
+
+    /// <summary>What the prompt says. Invariant grouping, for the reason the plan window uses it: a prompt
+    /// that reads "3.412 rows" to one user and "3,412" to another is a prompt about a different number.</summary>
+    public string Text => EveryRow
+        ? $"This will {Action} every row in {Relation}."
+        : Rows switch
+        {
+            1 => $"This will {Action} 1 row in {Relation}.",
+            { } n => $"This will {Action} {n.ToString("N0", CultureInfo.InvariantCulture)} rows in {Relation}.",
+            null => $"Could not count the rows this will {Action} in {Relation} in time.",
+        };
+
+    /// <summary>Whether to draw this loud. Every row is the alarming case — it is #100's warning — and so is
+    /// a count nobody could take, because the user is then deciding blind.</summary>
+    public bool IsAlarming => EveryRow || Rows is null;
+
+    private string Action => Verb.Equals("DELETE", StringComparison.OrdinalIgnoreCase) ? "delete" : "update";
+}
 
 /// <summary>
 /// Everything a write confirmation needs to be answerable without leaving the dialog: the target connection,
@@ -34,10 +84,20 @@ public sealed record WriteConfirmation(
     IReadOnlyList<WriteStatement> Statements)
 {
     /// <summary>A submitted batch: every statement, reads included, each tagged with what it does.</summary>
-    public static WriteConfirmation ForBatch(ConnectionInfo connection, IReadOnlyList<StatementRisk> statements)
+    /// <param name="impacts">
+    /// Row counts by statement index (#112), for the statements a count could be taken for. Optional so the
+    /// no-connection and count-declined paths build the same record they always did.
+    /// </param>
+    public static WriteConfirmation ForBatch(
+        ConnectionInfo connection,
+        IReadOnlyList<StatementRisk> statements,
+        IReadOnlyDictionary<int, RowImpact>? impacts = null)
         => new(connection, WriteAction.RunBatch,
             statements.SelectMany(s => s.RiskyVerbs).Distinct(StringComparer.Ordinal).ToList(),
-            statements.Select(s => new WriteStatement(s.Label, s.Text, s.IsRisky)).ToList());
+            statements
+                .Select((s, i) => new WriteStatement(
+                    s.Label, s.Text, s.IsRisky, impacts is not null && impacts.TryGetValue(i, out var im) ? im : null))
+                .ToList());
 
     /// <summary>An inline-edit save: the generated DML, which is risky by definition.</summary>
     public static WriteConfirmation ForEdits(ConnectionInfo connection, IReadOnlyList<WriteStatement> changes)
@@ -76,6 +136,22 @@ public sealed record WriteConfirmation(
         _ => $"{Statements.Count} statements run as one transaction — if any of them fails, "
             + "none of the changes are committed.",
     };
+
+    /// <summary>
+    /// The row counts, in statement order (#112). Empty when nothing could be counted — which is the common
+    /// case, and reads exactly as the confirmation did before.
+    /// </summary>
+    public IReadOnlyList<RowImpact> Impacts
+        => Statements.Select(s => s.Impact).OfType<RowImpact>().ToList();
+
+    /// <summary>
+    /// The caveat a multi-write batch needs: the counts were taken before <em>any</em> of it ran, so a
+    /// statement that a later one feeds is counted against rows an earlier one may remove. Null for a single
+    /// write, where there is nothing ahead of it to change the answer.
+    /// </summary>
+    public string? ImpactCaveat => Impacts.Count > 0 && RiskyCount > 1
+        ? "Counted before the batch runs — an earlier statement can change what a later one matches."
+        : null;
 
     /// <summary>The loud line shown only for a connection marked as requiring write confirmation; null on an
     /// ordinary connection, where an inline save still confirms but doesn't need shouting about.</summary>

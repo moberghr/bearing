@@ -40,13 +40,13 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name || inputs.ref }}
           # MinVer reads the tag history; a shallow clone has none and every build would be 0.0.0-alpha.
           fetch-depth: 0
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
 
@@ -57,15 +57,50 @@ jobs:
       - name: Provision PostgreSQL + pagila
         run: bash build/test-db.sh
 
+      # Fonts, because text measurement is load-bearing in the results grid and the headless UI tests use
+      # Skia rather than the stub renderer (§4.5). The runner image has them; this makes it a stated
+      # dependency rather than a lucky one.
+      - name: Install font libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libfontconfig1 fonts-dejavu-core
+
+      # Built once, separately, so a compile error is reported as a build failure rather than as the first
+      # test project's output.
+      - name: Build
+        run: dotnet build Bearing.slnx -c Release --nologo
+
       - name: Test
+        shell: bash
         # The release job skips its own test run (SKIP_TESTS=1) so this is the only one, and a failure here
         # stops the publish rather than being discovered after the assets are public.
         #
         # The Postgres-dependent suites are SkippableFacts: without a server they go *quiet*, so a green run
         # full of skips was not evidence that the catalog reads, the TLS modes or the temporal mappings work
-        # (§4.2). The step above is what makes them run. The keychain tests still skip — those need a matrix
-        # with a reachable credential store per OS, which is the rest of #24.
-        run: dotnet test Bearing.slnx -c Release --nologo
+        # (§4.2). The database step above is what makes them run. The keychain tests still skip — those need
+        # a matrix with a reachable credential store per OS, which ci.yml now provides for the PR path.
+        #
+        # **One project at a time**, the same as ci.yml and for the same reason: `dotnet test` on the
+        # solution runs test projects in parallel, and two of them talk to the single Postgres container, so
+        # a solution-wide run flakes a *rotating* victim — a timeout test that loses its race, a connection
+        # starved of the pool, a marker probe that reads as "not a Bearing test database" and skips. That was
+        # tolerable while this job had no database and every such test skipped. Now it has one, and the cost
+        # of the flake is not a red check to re-run: a failure here **returns the release to draft** after
+        # the page is already public and watchers have been notified.
+        run: |
+          set -uo pipefail
+          failed=()
+          for project in Sql Data Persistence Updates App; do
+            echo "::group::Bearing.$project.Tests"
+            if ! dotnet test "tests/Bearing.$project.Tests" -c Release --no-build --nologo; then
+              failed+=("$project")
+            fi
+            echo "::endgroup::"
+          done
+          if [ ${#failed[@]} -ne 0 ]; then
+            echo "::error::failing suites: ${failed[*]}"
+            exit 1
+          fi
 
   publish:
     needs: test
@@ -74,12 +109,12 @@ jobs:
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name }}
           fetch-depth: 0
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
 

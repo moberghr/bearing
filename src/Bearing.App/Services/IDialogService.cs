@@ -125,6 +125,13 @@ public interface IDialogService
     /// type. Returns the local path, or null if cancelled.</summary>
     Task<string?> PickExportFileAsync(string suggestedName, ExportFormat format);
 
+    /// <summary>
+    /// Ask what an audit export of the query history should cover (#113) — period, connections,
+    /// environments, writes-only, format. Null = cancelled.
+    /// </summary>
+    Task<AuditExportRequest?> ShowAuditExportAsync(
+        IReadOnlyList<string> connectionNames, IReadOnlyList<string> environments);
+
     /// <summary>Show SQL in a read-only, monospace preview window (non-modal; selectable to copy).</summary>
     void ShowSqlPreview(string sql, string title = "SQL preview — changes to save");
 }

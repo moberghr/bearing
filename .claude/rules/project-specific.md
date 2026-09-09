@@ -180,3 +180,145 @@ ordinary session it is not in the object graph at all.
 - `DemoWorkspace.DisposeAsync` closes the query log *first*. `SqliteQueryLog.DisposeAsync` now also releases
   its own connection pool, because reads hand connections back to it and the handle otherwise outlives the
   object — a demo that cannot delete its directory leaves exactly the residue it exists not to leave.
+
+## §9.8 — A late tree read that *adds* rows starts in `OnChildrenAttached`, not `LoadChildrenAsync`
+`SchemaNodeViewModel.EnsureChildrenAsync` clears `Children` **after** `LoadChildrenAsync` returns, so
+anything appended in the meantime is thrown away — a race whose outcome depended on whether the catalog
+answered faster than the tree rebuilt. `OnChildrenAttached` is called once the children are attached and is
+where every deferred read that appends a row belongs.
+- A read that only **relabels** existing rows was always immune and stays where it was
+  (`FillSizesAsync`, #76).
+- `DatabaseNodeViewModel` starts sizes + `FillObjectKindsAsync` there; `ServerNodeViewModel` starts database
+  sizes + `FillRolesAsync`.
+- Both raise an internal event (`SizesLoaded`, `ObjectKindsLoaded`, `RolesLoaded`) because nothing in the app
+  waits on these — which is the point of loading them late, and the only way a test can.
+
+## §9.9 — The explorer's object kinds, and where each one is shown (#119 / #120)
+`IMetadataReader.GetDatabaseObjectsAsync` returns `DatabaseObjectKinds` — sequences, user types, extensions,
+policies — in **one** call rather than four: they are all wanted at the same moment, and a new engine's cost
+stays one method. Each kind's read is best-effort **on its own** (`Best`), so a role that cannot read
+`pg_policy` still gets its sequences.
+- It is a **late** read (§9.8), not a field on `DatabaseObjects`: `GetObjectsAsync` is awaited before the tree
+  renders, so four more catalog reads there would make every expand slower by all of them.
+- **Policies appear twice, from two reads.** Per table via `TableDetails.Policies` (beside constraints and
+  triggers — where you are standing when a row count surprises you) and per database in the Policies group.
+  Different granularities, like relation sizes versus database sizes.
+- **Procedures are their own group.** `RoutineKind` always distinguished them and the tree did not; `CALL`
+  versus `SELECT` is a difference you need at the point of use. Aggregates and window functions stay with the
+  functions — the split is about how you invoke the thing.
+- Postgres specifics worth not rediscovering: the composite type Postgres creates per table/view is excluded
+  by `relkind = 'c'`, or every relation would be listed twice under Types; sequence ownership needs
+  `pg_depend.deptype in ('a','i')` ('i' is an identity column) — and **pagila's own sequences have no
+  `OWNED BY` at all**, so that join cannot be asserted against them; a sequence's type is its own (`bigint`
+  by default), not its column's; `last_value` is null for a sequence never read from, which is not zero.
+- **Roles hang off the server node**, never a database: they are cluster-wide. Grants are per database, and
+  the group label says which one.
+- A null-valued *untyped* parameter gives Postgres nothing to infer a placeholder's type from, and the read
+  fails — silently, when `Best` turns a failed kind into an empty list. Append the optional predicate to the
+  SQL instead of writing `$1 is null or …`.
+
+## §9.9a — The rest of the explorer's breadth, and where each thing lives
+The follow-up to §9.9 closed the gaps #119 left. Placement is the whole design here, and each choice has a
+reason that is not "it was convenient":
+
+- **Column defaults, identity, generated expressions, collations and comments** are in `TableDetails`, not
+  `ColumnInfo`. `ColumnInfo` lives in the snapshot — the completion hot path, loaded in bulk for every column
+  of every table — so a default expression and a comment per column would inflate the one structure whose
+  point is being cheap. The detail read is now awaited **before** the column nodes are built, and its failure
+  path still yields the columns with their types (they come from the snapshot; only the extras need the trip).
+- **A generated column never also reports a default.** Both arrive in the same `adbin`, and a default the
+  column can never use would be a lie about how it is written. Identity outranks a default on the row for the
+  same reason.
+- **Only a non-default collation is reported** (`attcollation <> typcollation`): every text column has one,
+  and listing the database default on all of them buries the single column that was given a different one.
+- **Comments** (`obj_description` / `col_description`) reach relations, columns, sequences, types,
+  extensions and routines. All of them go through `RelationDetailText.WithComment`, so "where does a comment
+  go" has one answer.
+- **Partitions are children, not siblings.** `TableInfo.PartitionOf` is the one relation extra that *is* in
+  the snapshot, because the tree needs it to arrange the list before anything is expanded, and it is one
+  nullable long per relation. A partition whose parent is **not** in the snapshot still appears at the top
+  level — hiding it would make it vanish. `pg_inherits` covers declarative partitioning and legacy
+  `INHERITS` alike, and the parent's row carries the count.
+- **Rules** are per-table, with `_RETURN` excluded: on a view that rule *is* the view, and reporting it would
+  make every view look like it had a rule.
+- **A Schemas level is additive**, not a restructure. The inline list stays the primary view — it is what
+  nearly every expand is for and it is already ordered by `search_path` rank — and the Schemas group adds the
+  level the tree could not express. Objects therefore appear in both places, the same call the policies made.
+  Skipped entirely for a single-schema database, and **lazy**: its children are a second set of nodes for
+  relations the inline list already holds, so a database with two thousand of them must not pay up front.
+  Inside a schema row, children are named unqualified.
+- **Tablespaces sit on the server** beside Roles — `pg_tablespace` and `pg_subscription` are the only
+  `relisshared` catalogs here. Event triggers, publications and foreign servers are **per database**, despite
+  reading as cluster-wide.
+- **One record for the long tail.** `SchemaObjectInfo` (id, schema, name, detail, comment) serves
+  publications, subscriptions, foreign servers, event triggers, collations, casts, operators, operator
+  classes, text-search configurations and tablespaces, with one `SchemaObjectNodeViewModel` and one query
+  each. The same call `TypeInfo.Detail` already made: these answer with a string the user reads and nothing
+  computes against, so a shape per kind would be twelve near-identical records carrying no extra information.
+  A kind graduates to its own record when something starts *using* a field, as `PolicyInfo.TableId` does.
+- `DatabaseObjectKinds` is **init-properties with empty defaults**, not positional: there are a dozen of
+  them, and a caller that cares about one should not have to name eleven.
+
+## §9.9b — Six defects a code review found in §9.9/§9.9a, and the shape of each
+Worth keeping because each is a *class* of mistake this tree invites, not a typo:
+
+1. **A late append needs a generation guard.** `OnChildrenAttached`'s reads finish after an await, and
+   "Refresh metadata" clears `Children` and re-runs the hook on the *same* node — so an in-flight read
+   landed its group on the rebuilt children and the new read added a second. `LoadGeneration` /
+   `IsCurrentLoad` is captured before the await and checked after. The window is the length of a catalog
+   query. The size read needs it too: it reorders live `Children`.
+2. **A hierarchy has to be passed down, not sliced.** Handing each nested relation node only its own child
+   list left a *sub*-partition reachable from nowhere: skipped at the top level (its parent was present) and
+   never added below. `PartitionMap` travels whole, and it is indexed — the first version scanned
+   `Tables.Any(p => p.Id == parent)` per partition on the path the tree renders from.
+3. **A `left join` on a one-to-many catalog fans out.** `pg_inherits` has a row per (child, parent) pair and
+   classic `INHERITS (a, b)` is legal, so the relation query emitted the same table twice — two tree rows,
+   two completion entries, two picker entries. Read the parent as a scalar subquery that reports one only
+   when there is exactly one.
+4. **A subscription to a model outlives the visual that made it.** `ColumnLayout` lives as long as its
+   `ResultSetViewModel`; a grid lives until the next render, and `RebuildResults` runs on **every tab
+   switch** over the same result sets. The handler is tracked in `_layoutSubscriptions` and detached at the
+   top of `Rebuild`, or each switch leaks a closure pinning a discarded `DataGrid` and its whole visual tree.
+   `ColumnLayout.ChangedSubscribers` exists so that is assertable.
+5. **An invariant enforced at write time is not enforced retroactively.** `GridSelectionOps` keeps a hidden
+   column out of a *new* selection, which made "a selection copy is what you see" true by construction — and
+   false for a selection made before the hide. `GridSelectionController.DropHiddenColumns` prunes on change,
+   in the controller because it is the only writer of the model.
+6. **Two coordinate spaces need naming.** "Freeze through here" is a count of leading **visible** columns in
+   display order; a hidden column keeps its `DisplayIndex`, so counting raw display indexes while
+   `ColumnLayout.Freeze` clamps against the visible count froze fewer columns than the menu item promised.
+   The arithmetic is `ResultColumnMenu.FreezeThrough`, next to the item it serves.
+
+## §9.10 — Freezing and hiding columns: hidden means unselectable, not unexported (#118)
+`ResultSetViewModel.ColumnLayout` (pure, `Results/ColumnLayout.cs`) holds the hidden set and the frozen count
+per **result set** — it describes what is on screen, and a re-run is a different result. The grid reads it
+in place (`ResultView.ApplyColumnLayout`); a layout change never rebuilds the grid, which would drop the
+scroll position and any pending edits.
+- Two rules keep the user out of a corner: the **last visible** column cannot be hidden (a grid with no
+  columns has no header left to undo from), and freezing is clamped so at least one column stays scrollable.
+  Hiding narrows an existing freeze.
+- A hidden column is excluded from **selection** everywhere — `GridSelectionOps.FirstColumn`, `LastColumn`,
+  `StepColumn`, `Rectangle`, `AllCells`. One rule at the four places that decide where columns are, which is
+  what makes "a selection copy is what you see" true by construction and keeps an arrow key from parking the
+  cursor on a cell with no visual.
+- **Exports and full copies still carry every column** — and the meta row's "2 columns hidden" marker
+  (`HiddenColumnsText`) is what keeps that from being a surprise. A hidden column may be an omission; it must
+  never be a silent one.
+- The **column header menu** (`ResultColumnMenu`) is resolved from `ContextRequested` in the tunnel phase,
+  because the grid would otherwise answer a header press with the cell menu. It is the shared home for
+  #106's sort.
+
+## §9.11 — Go to table / go to definition (#117)
+Two halves, split at the testability seam:
+- `Bearing.Sql.GoToDefinition.Resolve(sql, caret, snapshot)` is pure. Scoped to the statement under the
+  caret, like execution. **Which part of a dotted chain the caret is on decides the answer**: on `p` in
+  `p.amount` the user is asking what `p` is (the table); on `amount`, the column. It resolves an alias
+  through `FromClauseExtractor` — *not* `AliasResolver`, which generates a new alias — and returns null
+  rather than guessing: a jump to the wrong table is silent, and the user then reads the wrong schema.
+- `ConnectionsViewModel.RevealRelationAsync` does the descent, which cannot be pure: schema nodes load
+  children on first expand, so the path to a table does not exist until three awaited reads have happened.
+  The matching at each level is `Workspace/SchemaTreeReveal`'s. It returns a named `SchemaRevealResult`
+  rather than a bool — each outcome is a different sentence for the status bar.
+- A relation is matched on its **schema and name**, never its `Title`: a row in the default schema is
+  labelled `payment` and one elsewhere `reporting.payment`.
+- `WorkspaceContext` takes an optional `ISchemaBrowser` so this is testable without a live server (§2.4).

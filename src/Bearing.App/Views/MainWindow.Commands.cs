@@ -11,6 +11,7 @@ using Avalonia.VisualTree;
 using Bearing.App.Editing;
 using Bearing.App.Input;
 using Bearing.App.ViewModels;
+using Bearing.App.Workspace;
 using Bearing.Core.Workspace;
 using Bearing.Sql;
 
@@ -74,6 +75,8 @@ public partial class MainWindow
         r.Register(KeyCommand.Sync(CommandIds.SelectProject, "Select project…", KeyScope.Global, "Connection", OpenProjectPicker));
         r.Register(KeyCommand.Sync(CommandIds.SelectConnection, "Select connection…", KeyScope.Global, "Connection", OpenConnectionPicker));
         r.Register(KeyCommand.Sync(CommandIds.SelectDatabase, "Select database…", KeyScope.Global, "Connection", OpenDatabasePicker));
+        r.Register(new KeyCommand(CommandIds.SchemaGotoTable, "Go to table…", KeyScope.Global, "Connection",
+            async () => await GoToTableAsync()));
         r.Register(new KeyCommand(CommandIds.ProjectRemove, "Remove project…", KeyScope.Global, "Connection",
             async () => await RemoveCurrentProjectAsync()));
         // ShowPanel, not a bare ActivePanel assignment: these must reveal a collapsed pane even when the
@@ -84,6 +87,8 @@ public partial class MainWindow
             () => Vm?.ShowPanel(SidePanel.Scripts)));
         r.Register(KeyCommand.Sync(CommandIds.PanelHistory, "Show History panel", KeyScope.Global, "View",
             () => Vm?.ShowPanel(SidePanel.History)));
+        r.Register(new KeyCommand(CommandIds.HistoryExport, "Export query history as an audit report…",
+            KeyScope.Global, "View", async () => { if (Vm is not null) await Vm.ExportHistoryAsync(); }));
         r.Register(new KeyCommand(CommandIds.ConnectionNew, "New connection…", KeyScope.Global, "Connection", async () => await AddConnectionAsync()));
         r.Register(new KeyCommand(CommandIds.ConnectionImportDBeaver, "Import connections: from DBeaver…",
             KeyScope.Global, "Connection", async () => await ImportFromDBeaverAsync()));
@@ -114,6 +119,8 @@ public partial class MainWindow
         r.Register(KeyCommand.Sync(CommandIds.EditorZoomIn, "Zoom in (this tab)", KeyScope.Editor, "Editor", () => _zoom.ZoomIn()));
         r.Register(KeyCommand.Sync(CommandIds.EditorZoomOut, "Zoom out (this tab)", KeyScope.Editor, "Editor", () => _zoom.ZoomOut()));
         r.Register(KeyCommand.Sync(CommandIds.EditorZoomReset, "Reset zoom (this tab)", KeyScope.Editor, "Editor", () => _zoom.Reset()));
+        r.Register(new KeyCommand(CommandIds.EditorGotoDefinition, "Go to definition", KeyScope.Editor, "Editor",
+            async () => await GoToDefinitionAsync()));
 
         // Navigation/focus commands are claimed in a window tunnel handler so the framework's own tab
         // traversal and the editor/grid don't swallow them first.
@@ -354,6 +361,91 @@ public partial class MainWindow
     /// </summary>
     private static string TabPickerLabel(ViewModels.EditorTabViewModel tab)
         => $"{tab.Header}   {tab.HeaderTooltip}";
+
+    /// <summary>
+    /// schema.gotoTable (#117): a fuzzy list of every relation in the loaded snapshot; picking one expands
+    /// the schema tree to it and selects it.
+    /// <para>
+    /// Reads the snapshot the completion engine already holds, so it costs no round trip — which is the
+    /// whole reason this is cheap. When there is no snapshot it offers to load one rather than showing an
+    /// empty list: an empty picker looks like "this database has no tables", which is never what it means.
+    /// </para>
+    /// </summary>
+    private async Task GoToTableAsync()
+    {
+        if (Vm is null) return;
+        if (Vm.Connections.SelectedTabConnection is not { } connection)
+        { Vm.StatusText = "This tab has no connection — pick one."; return; }
+
+        var snapshot = Vm.Execution.SnapshotForSelectedTab();
+        if (snapshot is null)
+        {
+            Vm.StatusText = "Schema not loaded for this connection — loading…";
+            snapshot = await Vm.Connections.EnsureSnapshotForSelectedTabAsync();
+            if (snapshot is null) { Vm.StatusText = "Could not load the schema for this connection."; return; }
+        }
+
+        var database = snapshot.Database;
+        var items = snapshot.Tables
+            .OrderBy(t => t.Schema, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(t => (
+                Label: $"{t.Schema}.{t.Name}",
+                Pick: (Action)(() => _ = RevealAsync(
+                    new SchemaTreeReveal.Target(connection.Id, database, t.Schema, t.Name)))))
+            .ToList();
+
+        if (items.Count == 0) { Vm.StatusText = $"No relations in {database}."; return; }
+        _palette.ShowQuickPick("Go to table…", items);
+    }
+
+    /// <summary>
+    /// editor.gotoDefinition / F12 (#117): what the identifier under the caret refers to, revealed in the
+    /// schema tree. An alias resolves to its table; a column reference to that column.
+    /// </summary>
+    private async Task GoToDefinitionAsync()
+    {
+        if (Vm is null) return;
+        if (Vm.Connections.SelectedTabConnection is not { } connection)
+        { Vm.StatusText = "This tab has no connection — pick one."; return; }
+
+        var snapshot = Vm.Execution.SnapshotForSelectedTab();
+        if (snapshot is null)
+        {
+            Vm.StatusText = "Schema not loaded for this connection — loading…";
+            snapshot = await Vm.Connections.EnsureSnapshotForSelectedTabAsync();
+            if (snapshot is null) { Vm.StatusText = "Could not load the schema for this connection."; return; }
+        }
+
+        if (GoToDefinition.Resolve(Editor.Text, Editor.CaretOffset, snapshot) is not { } target)
+        { Vm.StatusText = "Nothing to go to — the caret is not on a table or column this schema knows."; return; }
+
+        await RevealAsync(new SchemaTreeReveal.Target(
+            connection.Id, snapshot.Database, target.Schema, target.Name, target.Column));
+    }
+
+    /// <summary>
+    /// Reveal a target in the schema tree and say what happened. Bringing the panel up first, because a
+    /// selection in a panel the user cannot see is not a reveal.
+    /// </summary>
+    private async Task RevealAsync(SchemaTreeReveal.Target target)
+    {
+        if (Vm is null) return;
+        Vm.SidePaneOpen = true;
+        Vm.ShowPanel(SidePanel.Schema);
+
+        // Each outcome is a different sentence, which is why the reveal reports one rather than a bool.
+        Vm.StatusText = await Vm.Connections.RevealRelationAsync(target) switch
+        {
+            SchemaRevealResult.Revealed => target.Label,
+            SchemaRevealResult.NoConnection => "That connection is no longer in the tree.",
+            SchemaRevealResult.NoDatabase => $"No database called {target.Database} on this server.",
+            SchemaRevealResult.NoRelation =>
+                $"{target.Schema}.{target.Name} is not in the tree — the schema may have changed since it was loaded.",
+            SchemaRevealResult.NoColumn => $"{target.Schema}.{target.Name} has no column {target.Column}.",
+            _ => Vm.StatusText,
+        };
+    }
 
     private void OpenDatabasePicker()
     {

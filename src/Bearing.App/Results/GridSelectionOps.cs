@@ -33,18 +33,50 @@ public static class GridSelectionOps
     public static bool IsFieldMotion(GridMotion motion)
         => motion is GridMotion.NextField or GridMotion.PreviousField;
 
-    /// <summary>The leftmost column (0, also for a result with no columns at all).</summary>
-    public static int FirstColumn(ResultSetViewModel result) => 0;
+    // A hidden column (#118) is not a place the cell cursor can go and not a cell a selection may contain.
+    // One rule, applied at the four places that decide where columns are: it is what makes "a selection copy
+    // is what you see" true by construction rather than by each caller remembering to filter — and it keeps
+    // an arrow key from parking the cursor on a cell with no visual, where the next keystroke edits
+    // something invisible.
 
-    /// <summary>The rightmost column; 0 for a result with no columns, so callers can index with it.</summary>
-    public static int LastColumn(ResultSetViewModel result) => Math.Max(0, result.Columns.Count - 1);
+    /// <summary>The leftmost <b>visible</b> column (0 for a result with no columns at all).</summary>
+    public static int FirstColumn(ResultSetViewModel result)
+    {
+        for (var c = 0; c < result.Columns.Count; c++)
+            if (!result.ColumnLayout.IsHidden(c)) return c;
+        return 0;
+    }
 
-    /// <summary>The next column from <paramref name="from"/> in direction ±1, or <paramref name="from"/>
-    /// itself at an edge (the cursor stops rather than wrapping).</summary>
+    /// <summary>The rightmost <b>visible</b> column; 0 for a result with no columns, so callers can index
+    /// with it.</summary>
+    public static int LastColumn(ResultSetViewModel result)
+    {
+        for (var c = result.Columns.Count - 1; c >= 0; c--)
+            if (!result.ColumnLayout.IsHidden(c)) return c;
+        return 0;
+    }
+
+    /// <summary>
+    /// The nearest visible column to <paramref name="from"/>, looking right first and then left. Used when
+    /// the column the cursor was on has just been hidden (#118) — the cursor moves rather than disappearing.
+    /// </summary>
+    public static int NearestVisibleColumn(ResultSetViewModel result, int from)
+    {
+        if (!result.ColumnLayout.IsHidden(from)) return from;
+        var right = StepColumn(result, from, +1);
+        if (right != from && !result.ColumnLayout.IsHidden(right)) return right;
+        var left = StepColumn(result, from, -1);
+        if (left != from && !result.ColumnLayout.IsHidden(left)) return left;
+        return FirstColumn(result);
+    }
+
+    /// <summary>The next visible column from <paramref name="from"/> in direction ±1, or
+    /// <paramref name="from"/> itself at an edge (the cursor stops rather than wrapping).</summary>
     public static int StepColumn(ResultSetViewModel result, int from, int dir)
     {
-        var to = from + dir;
-        return to >= 0 && to < result.Columns.Count ? to : from;
+        for (var to = from + dir; to >= 0 && to < result.Columns.Count; to += dir)
+            if (!result.ColumnLayout.IsHidden(to)) return to;
+        return from;
     }
 
     /// <summary>Where a motion lands from (<paramref name="row"/>, <paramref name="col"/>).
@@ -101,7 +133,8 @@ public static class GridSelectionOps
         {
             var rr = rows[r];
             for (var c = c0; c <= c1; c++)
-                if (c < rr.Length && c < result.Columns.Count) cells.Add((rr, c));
+                if (c < rr.Length && c < result.Columns.Count && !result.ColumnLayout.IsHidden(c))
+                    cells.Add((rr, c));
         }
         return cells;
     }
@@ -127,13 +160,14 @@ public static class GridSelectionOps
             ? Array.Empty<(object?[], int)>()
             : Rectangle(result, (result.Rows[0], from), (result.Rows[^1], to));
 
-    /// <summary>Every cell of the result (Ctrl+A).</summary>
+    /// <summary>Every visible cell of the result (Ctrl+A). A hidden column is not selected, so Ctrl+A then
+    /// Copy is what is on screen — the exports are the path that deliberately carries everything (#118).</summary>
     public static IReadOnlyList<(object?[] Row, int Col)> AllCells(ResultSetViewModel result)
     {
         var cells = new List<(object?[] Row, int Col)>();
         foreach (var row in result.Rows)
             for (var c = 0; c < result.Columns.Count; c++)
-                if (c < row.Length) cells.Add((row, c));
+                if (c < row.Length && !result.ColumnLayout.IsHidden(c)) cells.Add((row, c));
         return cells;
     }
 
