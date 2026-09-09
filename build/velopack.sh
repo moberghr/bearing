@@ -19,6 +19,7 @@
 #   PUBLISH=1 build/velopack.sh                # ...and upload to GitHub Releases (needs gh auth)
 #   SKIP_TESTS=1 build/velopack.sh             # skip the test run
 #   ALLOW_UNTAGGED=1 build/velopack.sh         # build a version HEAD isn't tagged for (local testing)
+#   PRERELEASE=1 build/velopack.sh             # publish it as a pre-release (see below)
 #
 # Requires: dotnet, vpk (dotnet tool install -g vpk), and gh for the GitHub steps.
 #
@@ -99,6 +100,23 @@ if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+].*)?$ ]]; then
   exit 1
 fi
 
+# --- Pre-release or not -------------------------------------------------------
+# Two ways in, and the union of them, because either alone loses:
+#
+#   * PRERELEASE=1 — the workflow passes the release's own "Set as a pre-release" checkbox, which a human
+#     can tick on any tag they like; and
+#   * a tag with a pre-release identifier (v0.6.1-beta.1), which *is* a pre-release by semver whether or
+#     not anyone remembered the checkbox.
+#
+# The flag is load-bearing rather than decorative. Velopack's own feed reader and the app's Help ▸ What's
+# New both filter pre-releases out, so it is the only thing standing between a beta and every installed
+# copy being offered it.
+if [[ "${PRERELEASE:-0}" == "1" || "$VERSION" == *-* ]]; then
+  IS_PRERELEASE=1
+else
+  IS_PRERELEASE=0
+fi
+
 TAG_STATUS=""
 
 if [[ "${PUBLISH:-0}" == "1" && "${ALLOW_UNTAGGED:-0}" == "1" ]]; then
@@ -141,6 +159,7 @@ RELEASE_DIR="$ROOT/dist/velopack/$CHANNEL"
 echo "==> Bearing release (Velopack)"
 echo "    version : $VERSION   (tag $TAG$TAG_STATUS)"
 echo "    runtime : $RID   channel $CHANNEL"
+[[ "$IS_PRERELEASE" == "1" ]] && echo "    release : pre-release"
 echo "    packId  : $PACK_ID"
 echo "    output  : $RELEASE_DIR"
 echo
@@ -266,12 +285,14 @@ if [[ "${PUBLISH:-0}" == "1" ]]; then
     exit 1
   fi
   echo "==> Publishing to GitHub Releases ($TAG)"
+  UPLOAD_ARGS=()
+  [[ "$IS_PRERELEASE" == "1" ]] && UPLOAD_ARGS+=(--pre)
   # --merge so the other platform's channel can land on the same release: win and linux each carry
   # their own releases.<channel>.json, and the app only ever reads its own.
   vpk upload github \
     --repoUrl "$REPO_URL" --token "$TOKEN" \
     --channel "$CHANNEL" --outputDir "$RELEASE_DIR" \
-    --publish --merge \
+    --publish --merge "${UPLOAD_ARGS[@]}" \
     --releaseName "Bearing $VERSION" --tag "$TAG"
 
   # vpk carries the notes inside the package but leaves the GitHub release body to us. Set it here rather
@@ -291,6 +312,22 @@ if [[ "${PUBLISH:-0}" == "1" ]]; then
       gh release edit "$TAG" --notes-file "$NOTES" >/dev/null \
         && echo "    done: $(gh release view "$TAG" --json url --jq .url)" \
         || echo "    WARNING: couldn't set the release description; add it by hand." >&2
+    fi
+  fi
+
+  # --- The pre-release flag, again ----------------------------------------------
+  # Asserted after the upload as well as during it, because `--merge` operates on a release that already
+  # exists and what it does to that release's flags is not documented. Getting this wrong in the quiet
+  # direction hands a beta to every user, so it is checked rather than assumed. Read back first: an
+  # unnecessary `gh release edit` on a correct release is a needless write to something a human published.
+  if [[ "$IS_PRERELEASE" == "1" ]] && command -v gh >/dev/null 2>&1; then
+    echo
+    if [[ "$(gh release view "$TAG" --json isPrerelease --jq '.isPrerelease' 2>/dev/null || echo true)" == "true" ]]; then
+      echo "==> $TAG is still marked a pre-release"
+    else
+      echo "==> Re-marking $TAG as a pre-release (the upload cleared it)"
+      gh release edit "$TAG" --prerelease >/dev/null \
+        || echo "    WARNING: could not re-mark it. Tick 'Set as a pre-release' by hand before" >&2
     fi
   fi
 

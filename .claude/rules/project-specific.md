@@ -45,6 +45,30 @@ binary name.
 - Applying an update goes through the ordinary window close (`UpdateCoordinator.RestartToApply`), never
   `ApplyUpdatesAndRestart` from under the UI — the shutdown pipeline is what saves the session.
 
+## §9.6a — The release version is the git tag, and releases publish themselves
+A release is cut by **publishing a GitHub Release** — nothing else (#125, docs/RELEASING.md).
+`.github/workflows/release.yml` fires on `release: published`, tests, then builds and uploads both platforms
+from one runner.
+
+- **There is no `<Version>` property.** MinVer derives the version from the nearest `v*` tag and feeds
+  `AssemblyInformationalVersion`, which is what `AppVersion` (and so `Help ▸ About` and the update check)
+  reads. DO NOT reintroduce a `<Version>` to `Directory.Build.props` and DO NOT "bump the version" for a
+  release: the property and the tag are exactly the two things that drifted before — `v0.5.4` landed on the
+  commit *before* the bump, so the tag said 0.5.4 while the build said 0.5.3.
+- A working build calls itself `0.5.5-alpha.0.3`, and that is correct: it is not a release, and a dev build
+  must not impersonate the last one. `ALLOW_UNTAGGED=1` packs `<last-tag>-local.<sha>` for the same reason.
+- `velopack.sh` **verifies after uploading** that `releases.<channel>.json` and the full `.nupkg` are on the
+  release, and fails if not. That check exists because `v0.5.4` shipped with *no assets at all*: the page
+  read "Latest" while every installed copy correctly stayed on 0.5.3, and nothing anywhere noticed. Keep it.
+- A failed job **returns the release to draft**. Publishing is the trigger, so the alternative is a live
+  release page with nothing on it — see above for what that costs.
+- A **pre-release** must reach `vpk upload --pre`, and the flag is re-asserted afterwards. It is what keeps
+  the updater and `Help ▸ What's New` from offering the build (both filter pre-releases out), so a lost flag
+  hands a beta to every user. `PRERELEASE=1` or a tag with a pre-release identifier both count.
+- Release notes: a hand-written `docs/release-notes/<version>.md` wins — it is the copy that travels inside
+  the package — otherwise a description typed in the web UI is **left alone**. Do not restore the
+  unconditional `gh release edit --notes-file`; it would overwrite what a human typed with commit subjects.
+
 ## §9.2 — Input goes through the unified pipeline
 - Keyboard handling flows through `src/Bearing.App/Input/` (`Gesture`/`GestureParser`, `Keymap`,
   `CommandRegistry`/`KeyCommand`, `KeyDispatcher`, `CommandIds`, `KeyScope`). Views call `TryHandle(e, scope)`.
