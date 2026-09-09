@@ -1,0 +1,28 @@
+# Line endings are checked out LF everywhere, and that is a correctness requirement here rather than a
+# preference.
+#
+# `Bearing.Sql.SqlFormatWriter` deliberately *preserves* the line endings of the SQL it is given, defaulting
+# to LF when the input has none (SqlFormatWriter.cs) — which is right for a formatter working on a buffer it
+# did not create. `SqlFormatTests` therefore compares its output against raw string literals in the test
+# file, so **the expected value depends on how the file was checked out**: a single-line input formats to LF
+# output, and on a CRLF checkout the multi-line expected literal beside it is CRLF. Forty of those tests
+# passed on every machine here (git config core.autocrlf=false) and failed the first time CI ran them on a
+# Windows runner, where git's default autocrlf=true converts on checkout.
+#
+# Normalising is the fix rather than loosening the assertions: a test that ignored line endings would stop
+# catching the thing the formatter is careful about.
+* text=auto eol=lf
+
+# Shell scripts must be LF regardless — a CRLF shebang line makes the kernel look for an interpreter whose
+# name ends in \r, and the script fails with "bad interpreter".
+*.sh text eol=lf
+
+# Binaries, so nothing tries to normalise them.
+*.png binary
+*.ico binary
+*.jpg binary
+*.pdf binary
+*.ttf binary
+*.otf binary
+*.xlsx binary
+*.zip binary
