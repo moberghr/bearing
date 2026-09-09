@@ -252,17 +252,23 @@ public static class ReportPeriod
     /// zone's offset <em>for that date</em> is what "midnight on the 5th" means.
     /// </para>
     /// </summary>
-    public static DateTimeOffset? StartOfDay(DateTimeOffset? day)
-        => day is { } d ? LocalMidnight(d.Date) : null;
+    /// <param name="zone">
+    /// The zone "midnight" is measured in; the machine's own when omitted. A parameter only so this is
+    /// testable: both CI runners are UTC, so a test that read <c>TimeZoneInfo.Local</c> skipped itself on
+    /// the one machine that matters and the DST bug it guards had no cover where it was found.
+    /// </param>
+    public static DateTimeOffset? StartOfDay(DateTimeOffset? day, TimeZoneInfo? zone = null)
+        => day is { } d ? Midnight(d.Date, zone) : null;
 
     /// <summary>The last instant of <paramref name="day"/>, so an inclusive upper bound covers all of it.</summary>
-    public static DateTimeOffset? EndOfDay(DateTimeOffset? day)
-        => day is { } d ? LocalMidnight(d.Date.AddDays(1)).AddTicks(-1) : null;
+    /// <inheritdoc cref="StartOfDay" path="/param"/>
+    public static DateTimeOffset? EndOfDay(DateTimeOffset? day, TimeZoneInfo? zone = null)
+        => day is { } d ? Midnight(d.Date.AddDays(1), zone).AddTicks(-1) : null;
 
-    private static DateTimeOffset LocalMidnight(DateTime date)
+    private static DateTimeOffset Midnight(DateTime date, TimeZoneInfo? zone)
     {
-        var local = DateTime.SpecifyKind(date.Date, DateTimeKind.Unspecified);
-        return new DateTimeOffset(local, TimeZoneInfo.Local.GetUtcOffset(local));
+        var wall = DateTime.SpecifyKind(date.Date, DateTimeKind.Unspecified);
+        return new DateTimeOffset(wall, (zone ?? TimeZoneInfo.Local).GetUtcOffset(wall));
     }
 
     /// <summary>

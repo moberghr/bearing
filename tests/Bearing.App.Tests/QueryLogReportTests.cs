@@ -336,21 +336,49 @@ public class QueryLogReportTests
     /// hour off local midnight. Asserted only where the local zone observes DST, since that is the only place
     /// the two offsets differ.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void A_day_picked_across_a_dst_boundary_is_bounded_at_its_own_midnight()
     {
+        // An explicit DST-observing zone rather than the machine's. This test used to skip when the local
+        // zone had none — which is both CI runners, so the one bug it guards had no cover in the only place
+        // that found it.
+        var zone = DstZone();
         var winter = new DateTime(2026, 1, 5);
-        var summer = new DateTime(2026, 7, 5);
-        var winterOffset = TimeZoneInfo.Local.GetUtcOffset(winter);
-        var summerOffset = TimeZoneInfo.Local.GetUtcOffset(summer);
-        Skip.If(winterOffset == summerOffset, "the local zone has no DST, so the two readings agree");
+        var winterOffset = zone.GetUtcOffset(winter);
+        var summerOffset = zone.GetUtcOffset(new DateTime(2026, 7, 5));
+        Assert.NotEqual(winterOffset, summerOffset);
 
         // A January day carrying July's offset — what the picker hands over when seeded in summer.
         var picked = new DateTimeOffset(winter, summerOffset);
 
-        var start = ReportPeriod.StartOfDay(picked)!.Value;
+        var start = ReportPeriod.StartOfDay(picked, zone)!.Value;
         Assert.Equal(winterOffset, start.Offset);
         Assert.Equal(new DateTime(2026, 1, 5, 0, 0, 0), start.DateTime);
+
+        // …and the upper bound is the end of that same day, in that same offset.
+        var end = ReportPeriod.EndOfDay(picked, zone)!.Value;
+        Assert.Equal(winterOffset, end.Offset);
+        Assert.Equal(5, end.Day);
+    }
+
+    /// <summary>
+    /// A zone that observes DST, by whichever id this platform knows it as. .NET resolves IANA ids on
+    /// Windows and Windows ids on Linux through ICU, but only one of the two is guaranteed on a given
+    /// image — so both are tried before giving up.
+    /// </summary>
+    private static TimeZoneInfo DstZone()
+    {
+        foreach (var id in new[] { "Europe/Zagreb", "Central European Standard Time" })
+        {
+            try { return TimeZoneInfo.FindSystemTimeZoneById(id); }
+            catch (TimeZoneNotFoundException) { }
+            catch (InvalidTimeZoneException) { }
+        }
+
+        // Rather than skip: a machine with no time-zone database cannot answer this question, and saying so
+        // is more useful than a green tick.
+        throw new InvalidOperationException(
+            "no DST-observing time zone found; this platform's time-zone data is incomplete");
     }
 
     [Fact]
