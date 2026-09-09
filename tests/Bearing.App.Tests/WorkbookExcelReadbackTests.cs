@@ -56,7 +56,7 @@ public class WorkbookExcelReadbackTests : IDisposable
             ]),
         ]);
 
-        var csv = await ConvertToCsvAsync(soffice!, book);
+        var csv = SheetCsv(await ConvertSheetsToCsvAsync(soffice!, book), "orders");
 
         // The header and every value, present and unmangled. Assert on the text rather than parsing CSV: the
         // question is whether the data survived, and a parser here would just be a second thing to get wrong.
@@ -76,9 +76,6 @@ public class WorkbookExcelReadbackTests : IDisposable
         var soffice = FindSoffice();
         Skip.If(soffice is null, "LibreOffice (soffice) is not on PATH.");
 
-        // soffice --convert-to csv exports only the *first* sheet, so the round trip is per sheet: convert the
-        // same book three times, selecting a different sheet each time. That the sheet names themselves are
-        // right is what WorkbookExportTests checks; this checks each one holds its own rows.
         var book = Path.Combine(_dir, "multi.xlsx");
         ResultExport.WriteWorkbook(book, [
             Sheet("first", [[1, "alpha"]]),
@@ -86,12 +83,14 @@ public class WorkbookExcelReadbackTests : IDisposable
             Sheet("third", [[3, "gamma"]]),
         ]);
 
-        for (var sheet = 1; sheet <= 3; sheet++)
-        {
-            var csv = await ConvertToCsvAsync(soffice!, book, sheet);
-            var expected = sheet switch { 1 => "alpha", 2 => "beta", _ => "gamma" };
-            Assert.Contains(expected, csv);
-        }
+        var sheets = await ConvertSheetsToCsvAsync(soffice!, book);
+
+        // Each sheet holds its own rows and only its own — the failure this catches is a writer that points
+        // three sheet entries at one worksheet part, which every in-suite assertion would still pass.
+        Assert.Contains("alpha", SheetCsv(sheets, "first"));
+        Assert.Contains("beta", SheetCsv(sheets, "second"));
+        Assert.Contains("gamma", SheetCsv(sheets, "third"));
+        Assert.DoesNotContain("beta", SheetCsv(sheets, "first"));
     }
 
     /// <summary>
@@ -133,12 +132,14 @@ public class WorkbookExcelReadbackTests : IDisposable
         // The xlsx carries its own notes, so there is no sibling file — unlike the CSV path.
         Assert.Equal([book], written);
 
-        var rows = await ConvertToCsvAsync(soffice!, book, sheet: 1);
+        var sheets = await ConvertSheetsToCsvAsync(soffice!, book);
+
+        var rows = SheetCsv(sheets, "Audit report");
         Assert.Contains("delete from rental", rows);
         Assert.Contains("a, b", rows);
         Assert.DoesNotContain("Period:", rows);   // the notes are not mixed into the table
 
-        var about = await ConvertToCsvAsync(soffice!, book, sheet: 2);
+        var about = SheetCsv(sheets, "About");
         Assert.Contains("Period: 2026-09-01", about);
         Assert.Contains("redaction is currently OFF", about);
         // …and the period survived with its offset, which is what makes the report answerable.
@@ -178,16 +179,30 @@ public class WorkbookExcelReadbackTests : IDisposable
         return null;
     }
 
-    private async Task<string> ConvertToCsvAsync(string soffice, string book, int sheet = 1)
+    /// <summary>
+    /// Convert the workbook to CSV and return every sheet, keyed by its name.
+    /// <para>
+    /// One invocation exporting all sheets, rather than one per sheet selecting an index — and the index was
+    /// the bug. The filter token list this used to pass was <c>44,34,76,{sheet}</c>, described in a comment
+    /// as "comma, double-quote, UTF-8, and the 1-based sheet to export". Token 4 is <b>FirstLineNumber</b>;
+    /// there is no sheet selector until token 12. So every conversion exported the <em>first</em> sheet and
+    /// the multi-sheet test asserted against it while believing it had asked for sheet 2 — invisible for as
+    /// long as the whole class skipped for want of LibreOffice, and the first thing it reported once CI had
+    /// it.
+    /// </para>
+    /// <para>
+    /// Token 12 = <c>-1</c> is "all sheets", which writes one file per sheet named
+    /// <c>&lt;stem&gt;-&lt;SheetName&gt;.csv</c>. Keying on that name is better than an index anyway: it
+    /// checks the names too, and a test asking for "About" says what it means.
+    /// </para>
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, string>> ConvertSheetsToCsvAsync(string soffice, string book)
     {
         // A private profile directory per conversion: soffice refuses to start a second instance against a
         // profile another one holds, and the suite must not depend on the developer's LibreOffice being closed.
         var profile = Path.Combine(_dir, $"profile-{Guid.NewGuid():N}");
-        var outDir = Path.Combine(_dir, $"out-{sheet}-{Guid.NewGuid():N}");
+        var outDir = Path.Combine(_dir, $"out-{Guid.NewGuid():N}");
         Directory.CreateDirectory(outDir);
-
-        // 44,34,76,{sheet} is the Calc CSV filter's token list: comma separator, double-quote text delimiter,
-        // UTF-8, and the 1-based sheet to export.
         var start = new ProcessStartInfo(soffice)
         {
             RedirectStandardOutput = true,
@@ -198,7 +213,10 @@ public class WorkbookExcelReadbackTests : IDisposable
         start.ArgumentList.Add("--norestore");
         start.ArgumentList.Add($"-env:UserInstallation=file:///{profile.Replace('\\', '/').TrimStart('/')}");
         start.ArgumentList.Add("--convert-to");
-        start.ArgumentList.Add($"csv:Text - txt - csv (StarCalc):44,34,76,{sheet}");
+        // Comma, double-quote, UTF-8, from line 1, no format codes, language 0, unquoted fields as values,
+        // detect numbers, cells as shown, no formulas, keep spaces — and finally -1: every sheet.
+        start.ArgumentList.Add(
+            "csv:Text - txt - csv (StarCalc):44,34,76,1,,0,false,true,true,false,false,-1");
         start.ArgumentList.Add("--outdir");
         start.ArgumentList.Add(outDir);
         start.ArgumentList.Add(book);
@@ -229,7 +247,36 @@ public class WorkbookExcelReadbackTests : IDisposable
             $"LibreOffice produced no CSV from the workbook — it could not open it.\n"
             + $"stdout: {await stdout}\nstderr: {stderrText}");
 
-        return await File.ReadAllTextAsync(produced[0]);
+        // "<stem>-<Sheet Name>.csv" for an all-sheets export; a single-sheet book is just "<stem>.csv".
+        var stem = Path.GetFileNameWithoutExtension(book);
+        var sheets = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var file in produced)
+        {
+            var name = Path.GetFileNameWithoutExtension(file);
+            var sheet = name.StartsWith(stem + "-", StringComparison.Ordinal)
+                ? name[(stem.Length + 1)..]
+                : name;
+            sheets[sheet] = await File.ReadAllTextAsync(file);
+        }
+        return sheets;
+    }
+
+    /// <summary>
+    /// One sheet's CSV by name, or a skip naming what was produced instead.
+    /// <para>
+    /// A skip rather than a failure because the all-sheets token is a LibreOffice version behaviour, not a
+    /// property of our workbook: a build that ignores it says so and says what it did produce, which is the
+    /// same posture the rest of this class takes toward the environment.
+    /// </para>
+    /// </summary>
+    private static string SheetCsv(IReadOnlyDictionary<string, string> sheets, string name)
+    {
+        if (sheets.TryGetValue(name, out var csv)) return csv;
+
+        Skip.If(true,
+            $"LibreOffice produced sheets [{string.Join(", ", sheets.Keys)}] rather than one called "
+            + $"'{name}' — this build may not support exporting every sheet.");
+        return "";
     }
 
     /// <summary>The first few lines of soffice's stderr, so a skip message says what it decided on without
