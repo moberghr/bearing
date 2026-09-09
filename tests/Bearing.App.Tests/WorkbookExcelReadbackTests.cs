@@ -94,6 +94,57 @@ public class WorkbookExcelReadbackTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// The audit report's workbook (#113), which is the other two-sheet shape this writer produces — the
+    /// rows on one sheet and the notes that have to travel with them on another.
+    /// <para>
+    /// Its own test rather than leaning on the run-workbook one above, because it is assembled by a
+    /// different function (<c>ResultExport.WriteReport</c> rather than <c>WriteWorkbook</c>) and because the
+    /// notes are the part that would be silently lost: a reader that dropped the second sheet would leave a
+    /// report that still looks complete and no longer says what period it covers or whether its SQL was
+    /// stored redacted.
+    /// </para>
+    /// </summary>
+    [SkippableFact]
+    public async Task An_audit_report_keeps_its_rows_and_its_notes_in_separate_sheets()
+    {
+        var soffice = FindSoffice();
+        Skip.If(soffice is null, "LibreOffice (soffice) is not on PATH.");
+
+        var book = Path.Combine(_dir, "audit.xlsx");
+        var table = new TableBlock(
+            [
+                new ColumnDescriptor("executed_at", "text", typeof(string)),
+                new ColumnDescriptor("statement", "text", typeof(string)),
+            ],
+            [
+                ["2026-09-03 10:00:00 +00:00", "delete from rental where rental_id = 1"],
+                // A comma and a quote, which is where a CSV round trip goes wrong.
+                ["2026-09-03 10:01:00 +00:00", """update payment set note = 'a, b "c"' where id = 2"""],
+            ]);
+        string[] notes =
+        [
+            "Bearing query log — audit report",
+            "Period: 2026-09-01 00:00:00 +02:00 to 2026-09-07 23:59:59 +02:00",
+            "Literal redaction is currently OFF: statements are recorded as written, values included.",
+        ];
+
+        var written = ResultExport.WriteReport(book, table, ExportFormat.Xlsx, "Audit report", notes);
+        // The xlsx carries its own notes, so there is no sibling file — unlike the CSV path.
+        Assert.Equal([book], written);
+
+        var rows = await ConvertToCsvAsync(soffice!, book, sheet: 1);
+        Assert.Contains("delete from rental", rows);
+        Assert.Contains("a, b", rows);
+        Assert.DoesNotContain("Period:", rows);   // the notes are not mixed into the table
+
+        var about = await ConvertToCsvAsync(soffice!, book, sheet: 2);
+        Assert.Contains("Period: 2026-09-01", about);
+        Assert.Contains("redaction is currently OFF", about);
+        // …and the period survived with its offset, which is what makes the report answerable.
+        Assert.Contains("+02:00", about);
+    }
+
     // ---- the conversion ------------------------------------------------------------------------------
 
     private static string? FindSoffice()

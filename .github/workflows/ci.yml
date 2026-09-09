@@ -72,15 +72,29 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
-      # Text measurement is load-bearing in the results grid — initial column widths, ellipsization and
-      # scroll offsets all derive from it, which is why the headless UI tests use Skia rather than the
-      # stub renderer (§4.5). Skia needs fontconfig and something to measure; the runner image has both,
-      # and this makes that a stated dependency rather than a lucky one.
-      - name: Install font libraries
+      # Two dependencies, one apt pass.
+      #
+      # Fonts, because text measurement is load-bearing in the results grid — initial column widths,
+      # ellipsization and scroll offsets all derive from it, which is why the headless UI tests use Skia
+      # rather than the stub renderer (§4.5). The runner image has them; this makes it a stated dependency
+      # rather than a lucky one.
+      #
+      # LibreOffice, because `XlsxWriter` hand-rolls OOXML across four parts that must agree, and the
+      # in-suite tests check that agreement against the same understanding of the format that wrote it. A
+      # workbook whose parts are mutually consistent and still rejected by Excel passes every one of them
+      # and fails at the user's desk. `soffice --convert-to csv` is a second opinion from a codebase that
+      # has never seen ours, and it was skipping everywhere — including on the change in this branch that
+      # made the audit report a *two-sheet* workbook.
+      #
+      # Costs about a minute. Safe to add, because the readback test distinguishes "LibreOffice cannot
+      # start here" from "LibreOffice cannot read our file" and skips on the former: a broken soffice on the
+      # runner reports itself rather than reddening the build.
+      - name: Install font and spreadsheet libraries
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends libfontconfig1 fonts-dejavu-core
+          sudo apt-get install -y --no-install-recommends             libfontconfig1 fonts-dejavu-core libreoffice-calc
+          soffice --version
 
       - name: Provision the test database
         if: matrix.database
