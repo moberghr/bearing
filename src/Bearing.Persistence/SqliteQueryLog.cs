@@ -69,13 +69,31 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         return conn;
     }
 
+    /// <summary>
+    /// Bring the schema up to <see cref="SchemaVersion"/>, one step at a time.
+    /// <para>
+    /// Stepwise rather than one create: an existing log is the user's own record of what they ran, so a
+    /// version bump has to <em>add</em> to it, never rebuild it. A fresh file runs both steps in order and
+    /// lands in the same shape an upgraded one does, which is the property that keeps the two testable
+    /// against each other.
+    /// </para>
+    /// </summary>
     private static void Migrate(SqliteConnection conn)
     {
         using var check = conn.CreateCommand();
         check.CommandText = "PRAGMA user_version;";
         var version = Convert.ToInt64(check.ExecuteScalar());
-        if (version >= 1) return;
+        if (version >= SchemaVersion) return;
 
+        if (version < 1) MigrateTo1(conn);
+        if (version < 2) MigrateTo2(conn);
+    }
+
+    /// <summary>The schema this build writes. 2 added the connection id and environment (#113).</summary>
+    private const long SchemaVersion = 2;
+
+    private static void MigrateTo1(SqliteConnection conn)
+    {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             CREATE TABLE IF NOT EXISTS query_log (
@@ -99,6 +117,65 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
             END;
             PRAGMA user_version = 1;
             """;
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// #113: the connection <b>id</b> and the environment label, as they were at execution time.
+    /// <para>
+    /// The log had only the connection's display name, which cannot answer an audit question reliably: two
+    /// connections can be renamed into each other's names, and a renamed connection makes its own history
+    /// unfindable. The id fixes that going forward — and only forward. Rows already in the log keep a null
+    /// here, so a report over them can match by name at best, and has to say so rather than implying it
+    /// looked an id up.
+    /// </para>
+    /// <para>
+    /// The environment is stored rather than resolved at report time for a different reason: it is a fact
+    /// about the past. A connection re-pointed from production to staging must not rewrite what last week's
+    /// statements ran against.
+    /// </para>
+    /// </summary>
+    private static void MigrateTo2(SqliteConnection conn)
+    {
+        // Two defences, and both are needed.
+        //
+        // The transaction stops a half-applied schema being *created*: as a plain batch, a failure between
+        // the two ALTERs (disk full, lock timeout, the process killed) left `connection_id` present with
+        // user_version still 1, so the next start re-entered this method and threw "duplicate column name"
+        // on the first ALTER — for good. A log that cannot be opened is exactly the crash §5.2 says
+        // persistence must never cause.
+        //
+        // Adding each column only when it is absent is what *recovers* a database already left in that
+        // state by a build without the transaction. The transaction alone would have fixed the bug for
+        // everyone except the people who had already hit it.
+        //
+        // BEGIN IMMEDIATE, not a plain BEGIN: it takes the write lock up front, so two processes opening the
+        // same log on first launch after an upgrade (a double-click, a Velopack relaunch racing a pinned
+        // launch) serialise on busy_timeout instead of both reading "no such column" and the second throwing
+        // "duplicate column" out of the constructor. The check-then-act is only safe inside that lock.
+        using var transaction = conn.BeginTransaction(deferred: false);
+        if (!HasColumn(conn, "query_log", "connection_id"))
+            Execute(conn, "ALTER TABLE query_log ADD COLUMN connection_id TEXT;");
+        if (!HasColumn(conn, "query_log", "environment"))
+            Execute(conn, "ALTER TABLE query_log ADD COLUMN environment TEXT;");
+        Execute(conn, "PRAGMA user_version = 2;");
+        transaction.Commit();
+    }
+
+    /// <summary>Whether a table already has a column, from <c>pragma table_info</c>.</summary>
+    private static bool HasColumn(SqliteConnection conn, string table, string column)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"select count(*) from pragma_table_info($table) where name = $column;";
+        cmd.Parameters.AddWithValue("$table", table);
+        cmd.Parameters.AddWithValue("$column", column);
+        return Convert.ToInt64(cmd.ExecuteScalar()) > 0;
+    }
+
+    private static void Execute(SqliteConnection conn, string sql)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
     }
 
@@ -166,12 +243,15 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         using var cmd = _writeConnection.CreateCommand();
         cmd.CommandText = """
             INSERT INTO query_log
-                (executed_at, provider_id, connection, db, sql_text, duration_ms, row_count, success, error_message, script_path)
-            VALUES ($at, $provider, $conn, $db, $sql, $dur, $rows, $ok, $err, $script);
+                (executed_at, provider_id, connection, connection_id, environment, db, sql_text,
+                 duration_ms, row_count, success, error_message, script_path)
+            VALUES ($at, $provider, $conn, $connId, $env, $db, $sql, $dur, $rows, $ok, $err, $script);
             """;
         cmd.Parameters.AddWithValue("$at", e.ExecutedAt.ToString("o", CultureInfo.InvariantCulture));
         cmd.Parameters.AddWithValue("$provider", e.ProviderId);
         cmd.Parameters.AddWithValue("$conn", e.ConnectionName);
+        cmd.Parameters.AddWithValue("$connId", (object?)e.ConnectionId?.ToString() ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$env", (object?)e.Environment ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$db", e.Database);
         cmd.Parameters.AddWithValue("$sql", e.SqlText);
         cmd.Parameters.AddWithValue("$dur", (long)e.Duration.TotalMilliseconds);
@@ -201,13 +281,32 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
             where.Add("q.connection = $conn");
         }
         if (query.SuccessOnly == true) where.Add("q.success = 1");
+        // julianday on both sides, like the retention prune: the stored timestamps carry their own offsets,
+        // so comparing the text would order "2026-09-08T00:30+02:00" after "2026-09-08T01:00Z" (#113).
+        if (query.From is { } from)
+        {
+            cmd.Parameters.AddWithValue("$from", from.ToString("o", CultureInfo.InvariantCulture));
+            where.Add("julianday(q.executed_at) >= julianday($from)");
+        }
+        if (query.To is { } to)
+        {
+            cmd.Parameters.AddWithValue("$to", to.ToString("o", CultureInfo.InvariantCulture));
+            where.Add("julianday(q.executed_at) <= julianday($to)");
+        }
 
-        cmd.Parameters.AddWithValue("$limit", query.Limit);
+        // An audit report wants the whole period rather than a screenful, so a null limit is unbounded.
+        var limit = "";
+        if (query.Limit is { } max)
+        {
+            cmd.Parameters.AddWithValue("$limit", max);
+            limit = " LIMIT $limit";
+        }
         cmd.CommandText =
             "SELECT q.id, q.executed_at, q.provider_id, q.connection, q.db, q.sql_text, q.duration_ms, " +
-            "q.row_count, q.success, q.error_message, q.script_path FROM query_log q" +
+            "q.row_count, q.success, q.error_message, q.script_path, q.connection_id, q.environment " +
+            "FROM query_log q" +
             (where.Count > 0 ? " WHERE " + string.Join(" AND ", where) : "") +
-            " ORDER BY q.id DESC LIMIT $limit;";
+            " ORDER BY q.id DESC" + limit + ";";
 
         var results = new List<QueryLogEntry>();
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
@@ -226,6 +325,12 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
                 Success = reader.GetInt64(8) != 0,
                 ErrorMessage = reader.IsDBNull(9) ? null : reader.GetString(9),
                 ScriptPath = reader.IsDBNull(10) ? null : reader.GetString(10),
+                // A malformed id is treated as absent rather than throwing: one unreadable historical row
+                // must not fail the read that the whole history panel and every report go through.
+                ConnectionId = reader.IsDBNull(11) || !Guid.TryParse(reader.GetString(11), out var connectionId)
+                    ? null
+                    : connectionId,
+                Environment = reader.IsDBNull(12) ? null : reader.GetString(12),
             });
         }
         return results;

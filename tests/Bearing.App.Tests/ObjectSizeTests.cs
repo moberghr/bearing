@@ -436,6 +436,26 @@ public class ObjectSizeTests
         public Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(ConnectionInfo connection, CancellationToken ct)
             => Task.FromResult(DemoCatalog.DatabaseSizes());
 
+        /// <summary>#119's per-database kinds. Empty here: these fixtures exist for other questions, and a
+        /// group they never assert on would only add noise to the trees they build.</summary>
+        public Task<DatabaseObjectKinds> GetDatabaseObjectKindsAsync(
+            ConnectionInfo connection, string database, CancellationToken ct)
+            => Task.FromResult(DatabaseObjectKinds.Empty);
+
+        /// <summary>#120's roles. Empty here: these fixtures exist for other questions, and a Roles group
+        /// they never assert on would only add noise to the trees they build.</summary>
+        public Task<IReadOnlyList<RoleInfo>> GetRolesAsync(ConnectionInfo connection, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<RoleInfo>>([]);
+
+        public Task<RoleGrants> GetRoleGrantsAsync(
+            ConnectionInfo connection, string database, string roleName, CancellationToken ct)
+            => Task.FromResult(RoleGrants.Of([]));
+
+        /// <summary>Tablespaces (#119 follow-up). Empty here for the same reason the roles are.</summary>
+        public Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(
+            ConnectionInfo connection, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<SchemaObjectInfo>>([]);
+
         public Task<string> GetViewDefinitionAsync(ConnectionInfo connection, string database, long tableId, CancellationToken ct)
             => Task.FromResult("select 1");
 

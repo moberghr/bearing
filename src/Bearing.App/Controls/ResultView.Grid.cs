@@ -1,8 +1,10 @@
+using System;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.VisualTree;
 using Avalonia.Media;
 using Bearing.App.Input;
 using Bearing.App.ViewModels;
@@ -86,9 +88,74 @@ public sealed partial class ResultView
             fetchAll: result.IsPageable ? () => FetchAll?.Invoke(result) ?? Task.CompletedTask : null,
             export: format => Export?.Invoke(result, format) ?? Task.CompletedTask);
 
+        // #118: the header's own menu, resolved before the grid's cell flyout gets the chance. Handled in
+        // the tunnel phase because ContextFlyout is driven by ContextRequested, which the grid would
+        // otherwise answer with the cell menu for a press that landed on a header.
+        grid.AddHandler(ContextRequestedEvent, (_, e) => OnGridContextRequested(grid, result, e),
+            RoutingStrategies.Tunnel);
+
+        // Hidden / frozen columns are applied here and re-applied whenever the layout changes, in place: the
+        // alternative is rebuilding the grid, which would drop the scroll position and every expanded
+        // inspector for what is meant to be a change of view.
+        //
+        // The handler is *tracked* so Rebuild can detach it. The layout lives as long as its
+        // ResultSetViewModel while a grid lives only until the next render — and RebuildResults runs on
+        // every tab switch over the same result sets, so an untracked subscription left one dead closure per
+        // switch, each pinning a discarded DataGrid and its whole visual tree, and each re-applying the
+        // layout to a grid nobody can see.
+        ApplyColumnLayout(grid, result);
+        void OnLayoutChanged() => ApplyColumnLayout(grid, result);
+        result.ColumnLayout.Changed += OnLayoutChanged;
+        _layoutSubscriptions.Add((result.ColumnLayout, OnLayoutChanged));
+
         WireSelection(grid, result);
         if (result.IsEditable) WireEditing(grid, result);
         return grid;
+    }
+
+    /// <summary>
+    /// Push the result's column layout (#118) onto the grid, and drop any now-hidden cells from the
+    /// selection.
+    /// <para>
+    /// The prune is the part that matters. <c>GridSelectionOps</c> keeps a hidden column out of a
+    /// <em>new</em> selection, but a selection made <b>before</b> the hide still held those cells — so
+    /// Ctrl+A, hide a column, Copy put the column the user had just hidden on the clipboard, and Set NULL
+    /// would have staged an UPDATE against a cell with no visual. Pruning here keeps "a selection copy is
+    /// what you see" true after the fact as well as by construction.
+    /// </para>
+    /// </summary>
+    private void ApplyColumnLayout(DataGrid grid, ResultSetViewModel result)
+    {
+        var layout = result.ColumnLayout;
+        for (var i = 0; i < grid.Columns.Count && i < result.Columns.Count; i++)
+            grid.Columns[i].IsVisible = !layout.IsHidden(i);
+        grid.FrozenColumnCount = layout.FrozenCount;
+        _selection.DropHiddenColumns(result);
+    }
+
+    /// <summary>
+    /// A right-click on a column header opens the column menu instead of the cell menu (#118). Anything
+    /// else — a cell, the gutter, the corner, empty space — is left to the grid's own flyout.
+    /// </summary>
+    private void OnGridContextRequested(DataGrid grid, ResultSetViewModel result, ContextRequestedEventArgs e)
+    {
+        if (e.Source is not Visual source) return;
+
+        DataGridColumnHeader? header = null;
+        foreach (var visual in source.GetSelfAndVisualAncestors())
+        {
+            // A cell settles it: the cell menu is the right one, and cells sit under the same grid.
+            if (visual is Border { Tag: ValueTuple<object?[], int> }) return;
+            if (visual is DataGridColumnHeader candidate) { header = candidate; break; }
+        }
+        if (header is null) return;
+        if (GridSelectionController.ColumnIndexOfHeader(grid, header) is not { } index) return;  // the corner
+
+        // A count of leading *visible* columns in display order — see ResultColumnMenu.FreezeThrough,
+        // which owns the arithmetic because it is the arithmetic behind its own menu item.
+        var through = ResultColumnMenu.FreezeThrough(grid, index);
+        ResultColumnMenu.Build(result, index, through).ShowAt(header);
+        e.Handled = true;
     }
 
     /// <summary>Hook the grid up to the selection controller. Cells drive their own selection (per-cell

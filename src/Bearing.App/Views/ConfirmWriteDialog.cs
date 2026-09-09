@@ -42,6 +42,27 @@ public sealed class ConfirmWriteDialog : Window
             TextWrapping = TextWrapping.Wrap,
             Opacity = 0.85,
         });
+        // #112: how many rows each write touches, above the statement list and above the guard warning —
+        // this is the line that actually stops a mistake, so nothing pushes it below the fold. Amber for
+        // "every row" and for a count that could not be taken; plain for a number.
+        foreach (var impact in request.Impacts)
+            layout.Children.Add(new TextBlock
+            {
+                Text = impact.Text,
+                FontSize = 14,
+                FontWeight = FontWeight.SemiBold,
+                Foreground = impact.IsAlarming ? Res("Warn.Amber") : Res("Text.Primary"),
+                TextWrapping = TextWrapping.Wrap,
+            });
+        if (request.ImpactCaveat is { } caveat)
+            layout.Children.Add(new TextBlock
+            {
+                Text = caveat,
+                FontSize = 11,
+                Foreground = Res("Text.Muted"),
+                TextWrapping = TextWrapping.Wrap,
+            });
+
         if (request.Warning is { } warning)
             layout.Children.Add(new TextBlock
             {

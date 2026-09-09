@@ -90,6 +90,18 @@ public sealed class DemoMetadata : IMetadataReader
     public Task<IReadOnlyList<RoutineInfo>> GetRoutinesAsync(CancellationToken ct)
         => Task.FromResult(DemoCatalog.Routines());
 
+    public Task<DatabaseObjectKinds> GetDatabaseObjectsAsync(CancellationToken ct)
+        => Task.FromResult(DemoCatalog.ObjectKinds());
+
+    public Task<IReadOnlyList<RoleInfo>> GetRolesAsync(CancellationToken ct)
+        => Task.FromResult(DemoCatalog.Roles());
+
+    public Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(CancellationToken ct)
+        => Task.FromResult(DemoCatalog.Tablespaces());
+
+    public Task<RoleGrants> GetRoleGrantsAsync(string roleName, CancellationToken ct)
+        => Task.FromResult(DemoCatalog.GrantsOf(roleName));
+
     public Task<string> GetViewDefinitionAsync(long tableId, CancellationToken ct)
         => Task.FromResult("select p.id as payment_id, s.name as store_name\n"
                            + "from shop.payment p join shop.store s on s.id = p.store_id");

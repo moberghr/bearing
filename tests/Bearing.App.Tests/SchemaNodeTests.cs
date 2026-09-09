@@ -69,7 +69,11 @@ public class SchemaNodeTests
 
         Assert.DoesNotContain("Views", db.Children.Select(c => c.Title));
         Assert.DoesNotContain("Functions", db.Children.Select(c => c.Title));
-        Assert.All(db.Children, c => Assert.IsType<RelationNodeViewModel>(c));
+        // The Schemas group is not a bucket of objects — it is a level over the same ones, and this fixture
+        // has three schemas, so it is expected here (SchemaBreadthTests covers it).
+        Assert.All(
+            db.Children.Where(c => c.Title != "Schemas"),
+            c => Assert.IsType<RelationNodeViewModel>(c));
     }
 
     /// <summary>The schema is on the row for anything outside the default schema, and those rows sort last.
@@ -82,7 +86,7 @@ public class SchemaNodeTests
         await db.EnsureChildrenAsync();
 
         Assert.Equal(
-            new[] { "film", "audit.events", "audit.film", "billing.invoice", "Views", "Functions" },
+            new[] { "film", "audit.events", "audit.film", "billing.invoice", "Schemas", "Views", "Functions" },
             db.Children.Select(c => c.Title));
     }
 
@@ -113,7 +117,7 @@ public class SchemaNodeTests
 
         // audit is now the bare, top-sorted schema; public gets the prefix.
         Assert.Equal(
-            new[] { "events", "film", "billing.invoice", "public.film", "Views", "Functions" },
+            new[] { "events", "film", "billing.invoice", "public.film", "Schemas", "Views", "Functions" },
             db.Children.Select(c => c.Title));
         var views = db.Children.OfType<SchemaGroupNodeViewModel>().First(g => g.Title == "Views");
         Assert.Equal(new[] { "public.film_list" }, views.Children.Select(c => c.Title));
@@ -224,6 +228,26 @@ public class SchemaNodeTests
         public Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(ConnectionInfo connection, CancellationToken ct)
             => Task.FromResult<IReadOnlyList<DatabaseSize>>([]);
 
+        /// <summary>#119's per-database kinds. Empty here: these fixtures exist for other questions, and a
+        /// group they never assert on would only add noise to the trees they build.</summary>
+        public Task<DatabaseObjectKinds> GetDatabaseObjectKindsAsync(
+            ConnectionInfo connection, string database, CancellationToken ct)
+            => Task.FromResult(DatabaseObjectKinds.Empty);
+
+        /// <summary>#120's roles. Empty here: these fixtures exist for other questions, and a Roles group
+        /// they never assert on would only add noise to the trees they build.</summary>
+        public Task<IReadOnlyList<RoleInfo>> GetRolesAsync(ConnectionInfo connection, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<RoleInfo>>([]);
+
+        public Task<RoleGrants> GetRoleGrantsAsync(
+            ConnectionInfo connection, string database, string roleName, CancellationToken ct)
+            => Task.FromResult(RoleGrants.Of([]));
+
+        /// <summary>Tablespaces (#119 follow-up). Empty here for the same reason the roles are.</summary>
+        public Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(
+            ConnectionInfo connection, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<SchemaObjectInfo>>([]);
+
         public Task<string> GetRoutineDefinitionAsync(ConnectionInfo connection, string database, long routineId, CancellationToken ct)
             => Task.FromResult("CREATE FUNCTION calc() ...");
 
@@ -277,6 +301,26 @@ public class SchemaNodeTests
 
         public Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(ConnectionInfo connection, CancellationToken ct)
             => Task.FromResult<IReadOnlyList<DatabaseSize>>([]);
+
+        /// <summary>#119's per-database kinds. Empty here: these fixtures exist for other questions, and a
+        /// group they never assert on would only add noise to the trees they build.</summary>
+        public Task<DatabaseObjectKinds> GetDatabaseObjectKindsAsync(
+            ConnectionInfo connection, string database, CancellationToken ct)
+            => Task.FromResult(DatabaseObjectKinds.Empty);
+
+        /// <summary>#120's roles. Empty here: these fixtures exist for other questions, and a Roles group
+        /// they never assert on would only add noise to the trees they build.</summary>
+        public Task<IReadOnlyList<RoleInfo>> GetRolesAsync(ConnectionInfo connection, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<RoleInfo>>([]);
+
+        public Task<RoleGrants> GetRoleGrantsAsync(
+            ConnectionInfo connection, string database, string roleName, CancellationToken ct)
+            => Task.FromResult(RoleGrants.Of([]));
+
+        /// <summary>Tablespaces (#119 follow-up). Empty here for the same reason the roles are.</summary>
+        public Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(
+            ConnectionInfo connection, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<SchemaObjectInfo>>([]);
 
         public Task<string> GetRoutineDefinitionAsync(ConnectionInfo connection, string database, long routineId, CancellationToken ct)
             => Task.FromResult("CREATE FUNCTION calc() ...");

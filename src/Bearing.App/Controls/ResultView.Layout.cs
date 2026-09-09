@@ -23,6 +23,12 @@ public sealed partial class ResultView
     private readonly Dictionary<ResultSetViewModel, DataGrid> _gridsByResult = new();
     // One stats bar per rendered result set, re-synced whenever the selection changes.
     private readonly List<QuickStatsBar> _statsBars = new();
+
+    /// <summary>
+    /// The <see cref="ColumnLayout.Changed"/> handlers this render attached, so the next one can detach
+    /// them. A layout outlives its grid — see the subscription site in <c>ResultView.Grid.cs</c>.
+    /// </summary>
+    private readonly List<(ColumnLayout Layout, Action Handler)> _layoutSubscriptions = new();
     // Result sets the user has collapsed in stacked view (keyed by VM reference; new runs reset it).
     private readonly HashSet<ResultSetViewModel> _collapsed = new();
 
@@ -36,6 +42,10 @@ public sealed partial class ResultView
     /// re-tint rows, both of which would lose the grids' scroll position.</summary>
     private void Rebuild()
     {
+        // Detached before anything else: these point at grids this render is about to discard.
+        foreach (var (layout, handler) in _layoutSubscriptions) layout.Changed -= handler;
+        _layoutSubscriptions.Clear();
+
         _editableGrids.Clear();
         _gridsByResult.Clear();
         _statsBars.Clear();
@@ -213,6 +223,9 @@ public sealed partial class ResultView
         detail.Bind(TextBlock.TextProperty, new Binding(nameof(ResultSetViewModel.MetaDetail)));
         left.Children.Add(detail);
 
+        // Before the pageable-only buttons: a result that cannot be paged can still have hidden columns.
+        AddHiddenColumnsMarker(left, result);
+
         if (!result.IsPageable) return;
         var countBtn = ResultChrome.SubtleButton("∑ count", "Count all rows");
         countBtn.Margin = new Thickness(6, 0, 0, 0);
@@ -229,6 +242,36 @@ public sealed partial class ResultView
         fetchAllBtn.Bind(Visual.IsVisibleProperty, new Binding(nameof(ResultSetViewModel.HasMore)));
         fetchAllBtn.Click += async (_, _) => { if (FetchAll is { } f) await f(result); };
         left.Children.Add(fetchAllBtn);
+    }
+
+    /// <summary>
+    /// "· 2 columns hidden" on the meta row (#118), visible only while something is hidden.
+    /// <para>
+    /// Not optional chrome. Exports and full copies deliberately carry hidden columns, so without this a
+    /// grid narrowed an hour ago would produce a file with columns its own author had never seen — a hidden
+    /// column may be an omission, but it must never be a silent one.
+    /// </para>
+    /// </summary>
+    private static void AddHiddenColumnsMarker(StackPanel left, ResultSetViewModel result)
+    {
+        var marker = new TextBlock
+        {
+            Foreground = Res("Text.Faint"),
+            FontSize = Metric("Font.Body"),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0, 0, 0),
+            DataContext = result,
+        };
+        marker.Bind(
+            TextBlock.TextProperty,
+            new Binding(nameof(ResultSetViewModel.HiddenColumnsText)) { StringFormat = "· {0}" });
+        marker.Bind(
+            Visual.IsVisibleProperty,
+            new Binding(nameof(ResultSetViewModel.HiddenColumnsText))
+            {
+                Converter = Avalonia.Data.Converters.ObjectConverters.IsNotNull,
+            });
+        left.Children.Add(marker);
     }
 
     /// <summary>The meta row's right-hand actions: Export for every grid result, plus either the edit toolbar
@@ -250,5 +293,6 @@ public sealed partial class ResultView
             onAddRow: () => AddRowTo(grid, result),
             onDelete: () => _selection.DeleteSelectedRows(grid, result),
             onSave: async () => { if (SaveChanges is { } f) await f(result); },
-            onDiscard: async () => { if (DiscardChanges is { } f) await f(result); });
+            onDiscard: async () => { if (DiscardChanges is { } f) await f(result); },
+            onShowSql: async () => { if (ShowPendingSql is { } f) await f(result); });
 }

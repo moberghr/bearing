@@ -51,10 +51,31 @@ public sealed class PostgresMetadataReader : IMetadataReader
         return list;
     }
 
+    /// <summary>
+    /// Every relation, with the parent of a partition (#119 follow-up).
+    /// <para>
+    /// The parent comes from a scalar subquery rather than a <c>left join pg_inherits</c>, and that is a
+    /// correctness fix rather than a style one: <c>pg_inherits</c> has one row per (child, parent) pair, and
+    /// classic <c>CREATE TABLE c () INHERITS (a, b)</c> is legal — so the join fanned out and emitted the
+    /// same relation twice, which reached the tree as two identical rows, the completion engine as two
+    /// tables, and the go-to-table picker as two entries.
+    /// </para>
+    /// <para>
+    /// A relation with <b>more than one</b> parent reports none. It is not a partition of anything in
+    /// particular, and picking one of its parents arbitrarily would nest it somewhere the catalog does not
+    /// say it belongs.
+    /// </para>
+    /// <para>
+    /// Read here rather than separately because the tree needs the link to <em>arrange</em> the relation
+    /// list, which happens before anything is expanded.
+    /// </para>
+    /// </summary>
     private static async Task<List<TableInfo>> ReadTablesAsync(NpgsqlConnection conn, CancellationToken ct)
     {
         const string sql = """
-            select c.oid::bigint, n.nspname, c.relname, c.relkind::text
+            select c.oid::bigint, n.nspname, c.relname, c.relkind::text,
+                   (select case when count(*) = 1 then min(i.inhparent) end
+                    from pg_inherits i where i.inhrelid = c.oid)::bigint as parent
             from pg_class c
             join pg_namespace n on n.oid = c.relnamespace
             where c.relkind in ('r','v','m','f','p')
@@ -69,7 +90,11 @@ public sealed class PostgresMetadataReader : IMetadataReader
         {
             var id = r.GetInt64(0);
             var kind = MapRelKind(r.GetString(3)[0]);
-            list.Add(new TableInfo(id, r.GetString(1), r.GetString(2), kind));
+            // pg_inherits covers both declarative partitioning and the older INHERITS, and the tree treats
+            // them the same: either way this relation's rows are part of the parent's, which is what makes a
+            // hundred sibling rows misleading rather than merely untidy.
+            var parent = r.IsDBNull(4) ? (long?)null : r.GetInt64(4);
+            list.Add(new TableInfo(id, r.GetString(1), r.GetString(2), kind, parent));
         }
         return list;
     }
@@ -144,7 +169,8 @@ public sealed class PostgresMetadataReader : IMetadataReader
         const string sql = """
             select p.oid::bigint, n.nspname, p.proname, p.prokind::text,
                    pg_get_function_arguments(p.oid) as args,
-                   pg_get_function_result(p.oid)    as result
+                   pg_get_function_result(p.oid)    as result,
+                   obj_description(p.oid, 'pg_proc') as comment
             from pg_proc p
             join pg_namespace n on n.oid = p.pronamespace
             where p.prokind in ('f','p','a','w')
@@ -164,10 +190,668 @@ public sealed class PostgresMetadataReader : IMetadataReader
                 Name: r.GetString(2),
                 Kind: MapProKind(r.GetString(3)[0]),
                 Arguments: r.IsDBNull(4) ? "" : r.GetString(4),
-                ReturnType: r.IsDBNull(5) ? "" : r.GetString(5)));
+                ReturnType: r.IsDBNull(5) ? "" : r.GetString(5),
+                Comment: r.IsDBNull(6) ? null : r.GetString(6)));
         }
         return list;
     }
+
+    /// <summary>
+    /// Sequences, user-defined types, extensions and RLS policies (#119) — four catalog reads on one
+    /// connection, since the tree wants all of them the moment a database is expanded.
+    /// <para>
+    /// Every read is best-effort at the <em>kind</em> level: a role without the privileges for one catalog
+    /// must still get the other three, so a failure yields an empty list for its own kind rather than
+    /// emptying the lot. Failing the whole call would take sequences away from anyone who cannot read
+    /// policies, which is a common shape on a locked-down database.
+    /// </para>
+    /// </summary>
+    public async Task<DatabaseObjectKinds> GetDatabaseObjectsAsync(CancellationToken ct)
+    {
+        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
+        return new DatabaseObjectKinds
+        {
+            Sequences = await Best(() => ReadSequencesAsync(conn, ct)).ConfigureAwait(false),
+            Types = await Best(() => ReadTypesAsync(conn, ct)).ConfigureAwait(false),
+            Extensions = await Best(() => ReadExtensionsAsync(conn, ct)).ConfigureAwait(false),
+            Policies = await Best(() => ReadPoliciesAsync(conn, ct)).ConfigureAwait(false),
+            Publications = await Best(() => Objects(conn, PublicationsSql, ct)).ConfigureAwait(false),
+            Subscriptions = await Best(() => Objects(conn, SubscriptionsSql, ct)).ConfigureAwait(false),
+            ForeignServers = await Best(() => Objects(conn, ForeignServersSql, ct)).ConfigureAwait(false),
+            EventTriggers = await Best(() => Objects(conn, EventTriggersSql, ct)).ConfigureAwait(false),
+            Collations = await Best(() => Objects(conn, CollationsSql, ct)).ConfigureAwait(false),
+            Casts = await Best(() => Objects(conn, CastsSql, ct)).ConfigureAwait(false),
+            Operators = await Best(() => Objects(conn, OperatorsSql, ct)).ConfigureAwait(false),
+            OperatorClasses = await Best(() => Objects(conn, OperatorClassesSql, ct)).ConfigureAwait(false),
+            TextSearchConfigs = await Best(() => Objects(conn, TextSearchConfigsSql, ct)).ConfigureAwait(false),
+        };
+    }
+
+    /// <summary>
+    /// Read a kind that is nothing but <c>(id, schema, name, detail, comment)</c>. One helper for a dozen
+    /// queries — the shape is the point (see <see cref="SchemaObjectInfo"/>), so the only thing that differs
+    /// between them is the SQL.
+    /// </summary>
+    private static async Task<List<SchemaObjectInfo>> Objects(
+        NpgsqlConnection conn, string sql, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        var list = new List<SchemaObjectInfo>();
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+        {
+            list.Add(new SchemaObjectInfo(
+                Id: r.GetInt64(0),
+                Schema: r.IsDBNull(1) ? "" : r.GetString(1),
+                Name: r.GetString(2),
+                Detail: r.IsDBNull(3) ? "" : r.GetString(3),
+                Comment: r.IsDBNull(4) ? null : r.GetString(4)));
+        }
+        return list;
+    }
+
+    /// <summary>What a publication replicates, and how much of the database.</summary>
+    private const string PublicationsSql = """
+        select p.oid::bigint, '', p.pubname,
+               case when p.puballtables then 'all tables'
+                    else coalesce((select count(*)::text || ' tables'
+                                   from pg_publication_rel pr where pr.prpubid = p.oid), '0 tables') end
+               || ' · ' ||
+               coalesce(nullif(concat_ws(', ',
+                 case when p.pubinsert then 'insert' end,
+                 case when p.pubupdate then 'update' end,
+                 case when p.pubdelete then 'delete' end,
+                 case when p.pubtruncate then 'truncate' end), ''), 'nothing'),
+               obj_description(p.oid, 'pg_publication')
+        from pg_publication p
+        order by p.pubname
+        """;
+
+    /// <summary>
+    /// Subscriptions belonging to the connected database.
+    /// <para>
+    /// <c>subconninfo</c> is <b>never</b> selected. It is the publisher's connection string and can carry a
+    /// password, so reading it at all would put a credential into a tree row, a tooltip and a clipboard
+    /// (§1.1). What a subscription is for — whether it is on and which publications it takes — needs none
+    /// of it.
+    /// </para>
+    /// </summary>
+    private const string SubscriptionsSql = """
+        select s.oid::bigint, '', s.subname,
+               case when s.subenabled then 'enabled' else 'disabled' end
+               || coalesce(' · publications: ' || nullif(array_to_string(s.subpublications, ', '), ''), ''),
+               obj_description(s.oid, 'pg_subscription')
+        from pg_subscription s
+        where s.subdbid = (select oid from pg_database where datname = current_database())
+        order by s.subname
+        """;
+
+    /// <summary>
+    /// Foreign servers and the wrapper behind each.
+    /// <para>
+    /// <c>srvoptions</c> is deliberately not rendered, and neither are user mappings: a foreign server's
+    /// options and a mapping's options routinely contain a password, and <c>pg_user_mappings</c> shows them
+    /// in full to the owner (§1.1). The name, the wrapper and the version answer "what does this foreign
+    /// table point at" without any of that.
+    /// </para>
+    /// </summary>
+    private const string ForeignServersSql = """
+        select s.oid::bigint, '', s.srvname,
+               w.fdwname || coalesce(' · version ' || s.srvversion, ''),
+               obj_description(s.oid, 'pg_foreign_server')
+        from pg_foreign_server s
+        join pg_foreign_data_wrapper w on w.oid = s.srvfdw
+        order by s.srvname
+        """;
+
+    /// <summary>Event triggers: the DDL event, the state, and the function called.</summary>
+    private const string EventTriggersSql = """
+        select t.oid::bigint, '', t.evtname,
+               t.evtevent
+               || case t.evtenabled when 'D' then ' · disabled' when 'O' then '' else ' · replica only' end
+               || ' · ' || quote_ident(n.nspname) || '.' || quote_ident(p.proname) || '()',
+               obj_description(t.oid, 'pg_event_trigger')
+        from pg_event_trigger t
+        join pg_proc p on p.oid = t.evtfoid
+        join pg_namespace n on n.oid = p.pronamespace
+        order by t.evtname
+        """;
+
+    /// <summary>
+    /// Collations defined outside the catalog schemas. The provider and whether it is deterministic, which
+    /// is what makes a collation behave surprisingly in a comparison.
+    /// </summary>
+    private const string CollationsSql = """
+        select c.oid::bigint, n.nspname, c.collname,
+               case c.collprovider when 'i' then 'icu' when 'c' then 'libc' when 'b' then 'builtin'
+                                   else c.collprovider::text end
+               || coalesce(' · ' || nullif(c.collcollate, ''), '')
+               || case when not c.collisdeterministic then ' · nondeterministic' else '' end,
+               obj_description(c.oid, 'pg_collation')
+        from pg_collation c
+        join pg_namespace n on n.oid = c.collnamespace
+        where n.nspname <> 'pg_catalog' and n.nspname <> 'information_schema'
+        order by n.nspname, c.collname
+        """;
+
+    /// <summary>
+    /// User-defined casts, named by what they convert. A cast has no name of its own in the catalog, so the
+    /// row is called <c>source → target</c> — which is what someone looking for one would search for.
+    /// </summary>
+    private const string CastsSql = """
+        select c.oid::bigint, '',
+               format_type(c.castsource, null) || ' → ' || format_type(c.casttarget, null),
+               case c.castcontext when 'i' then 'implicit' when 'a' then 'in assignment'
+                                  else 'explicit' end
+               || case c.castmethod when 'b' then ' · binary-coercible' when 'i' then ' · via i/o'
+                                    else '' end,
+               obj_description(c.oid, 'pg_cast')
+        from pg_cast c
+        left join pg_type s on s.oid = c.castsource
+        left join pg_namespace sn on sn.oid = s.typnamespace
+        left join pg_type t on t.oid = c.casttarget
+        left join pg_namespace tn on tn.oid = t.typnamespace
+        where sn.nspname <> 'pg_catalog' or tn.nspname <> 'pg_catalog'
+        order by 3
+        """;
+
+    /// <summary>User-defined operators, with their operand and result types.</summary>
+    private const string OperatorsSql = """
+        select o.oid::bigint, n.nspname, o.oprname,
+               coalesce(format_type(o.oprleft, null) || ' ', '')
+               || coalesce(format_type(o.oprright, null), '')
+               || ' → ' || format_type(o.oprresult, null),
+               obj_description(o.oid, 'pg_operator')
+        from pg_operator o
+        join pg_namespace n on n.oid = o.oprnamespace
+        where n.nspname <> 'pg_catalog' and n.nspname <> 'information_schema'
+        order by n.nspname, o.oprname
+        """;
+
+    /// <summary>Operator classes — which index method a type can be indexed with, and by default or not.</summary>
+    private const string OperatorClassesSql = """
+        select c.oid::bigint, n.nspname, c.opcname,
+               a.amname || ' · ' || format_type(c.opcintype, null)
+               || case when c.opcdefault then ' · default' else '' end,
+               obj_description(c.oid, 'pg_opclass')
+        from pg_opclass c
+        join pg_namespace n on n.oid = c.opcnamespace
+        join pg_am a on a.oid = c.opcmethod
+        where n.nspname <> 'pg_catalog' and n.nspname <> 'information_schema'
+        order by n.nspname, c.opcname
+        """;
+
+    /// <summary>Text-search configurations, with the parser each uses.</summary>
+    private const string TextSearchConfigsSql = """
+        select c.oid::bigint, n.nspname, c.cfgname,
+               'parser ' || quote_ident(pn.nspname) || '.' || quote_ident(p.prsname),
+               obj_description(c.oid, 'pg_ts_config')
+        from pg_ts_config c
+        join pg_namespace n on n.oid = c.cfgnamespace
+        join pg_ts_parser p on p.oid = c.cfgparser
+        join pg_namespace pn on pn.oid = p.prsnamespace
+        where n.nspname <> 'pg_catalog' and n.nspname <> 'information_schema'
+        order by n.nspname, c.cfgname
+        """;
+
+    /// <summary>
+    /// Tablespaces — cluster-wide, so this is the server's own list rather than a database's.
+    /// <para>
+    /// <c>pg_tablespace_location</c> raises for a role that may not see it, and the size is not free, so
+    /// both are wrapped: a tablespace whose location this role cannot read still appears, by name.
+    /// </para>
+    /// </summary>
+    public async Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(CancellationToken ct)
+    {
+        const string sql = """
+            select t.oid::bigint, '', t.spcname,
+                   coalesce(nullif(pg_catalog.pg_tablespace_location(t.oid), ''), 'the data directory'),
+                   obj_description(t.oid, 'pg_tablespace')
+            from pg_tablespace t
+            order by t.spcname
+            """;
+        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
+        return await Best(() => Objects(conn, sql, ct)).ConfigureAwait(false);
+    }
+
+    /// <summary>Run one kind's read, or fall back to an empty list when the server refuses it. Never
+    /// swallows a cancellation — the caller's Esc still stops the whole call.</summary>
+    private static async Task<IReadOnlyList<T>> Best<T>(Func<Task<List<T>>> read)
+    {
+        try { return await read().ConfigureAwait(false); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception) { return Array.Empty<T>(); }
+    }
+
+    /// <summary>
+    /// Sequences, with the column each one backs where there is one.
+    /// <para>
+    /// <c>pg_sequences</c> rather than <c>pg_sequence</c>: the view is what exposes <c>last_value</c>, and it
+    /// reports null both for a sequence never read from and for one this role may not read — two states we
+    /// deliberately do not distinguish, because neither is a number to show.
+    /// </para>
+    /// <para>
+    /// The owning column comes from <c>pg_depend</c> with <c>deptype in ('a','i')</c>: 'a' is a
+    /// <c>serial</c>'s auto dependency and 'i' an identity column's internal one. Reading only 'a' would
+    /// leave every <c>generated as identity</c> column with no route to its sequence, which is the modern
+    /// spelling and so the one more likely to be in a new schema.
+    /// </para>
+    /// </summary>
+    private static async Task<List<SequenceInfo>> ReadSequencesAsync(NpgsqlConnection conn, CancellationToken ct)
+    {
+        const string sql = """
+            select c.oid::bigint, s.schemaname, s.sequencename, format_type(q.seqtypid, null),
+                   s.last_value, s.increment_by, s.min_value, s.max_value, s.cycle,
+                   case when d.refobjid is not null
+                        then dn.nspname || '.' || dc.relname || '.' || a.attname end as owned_by,
+                   obj_description(c.oid, 'pg_class') as comment
+            from pg_sequences s
+            join pg_namespace sn on sn.nspname = s.schemaname
+            join pg_class c on c.relname = s.sequencename and c.relnamespace = sn.oid
+            join pg_sequence q on q.seqrelid = c.oid
+            left join pg_depend d
+                   on d.objid = c.oid and d.classid = 'pg_class'::regclass
+                  and d.refclassid = 'pg_class'::regclass and d.deptype in ('a', 'i')
+            left join pg_class dc on dc.oid = d.refobjid
+            left join pg_namespace dn on dn.oid = dc.relnamespace
+            left join pg_attribute a on a.attrelid = d.refobjid and a.attnum = d.refobjsubid
+            where s.schemaname <> 'pg_catalog' and s.schemaname <> 'information_schema'
+              and s.schemaname not like 'pg=_temp%' escape '='
+              and s.schemaname not like 'pg=_toast%' escape '='
+            order by s.schemaname, s.sequencename
+            """;
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        var list = new List<SequenceInfo>();
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+        {
+            list.Add(new SequenceInfo(
+                Id: r.GetInt64(0),
+                Schema: r.GetString(1),
+                Name: r.GetString(2),
+                DataType: r.IsDBNull(3) ? "bigint" : r.GetString(3),
+                LastValue: r.IsDBNull(4) ? null : r.GetInt64(4),
+                Increment: r.GetInt64(5),
+                MinValue: r.GetInt64(6),
+                MaxValue: r.GetInt64(7),
+                Cycles: r.GetBoolean(8),
+                OwnedBy: r.IsDBNull(9) ? null : r.GetString(9),
+                Comment: r.IsDBNull(10) ? null : r.GetString(10)));
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// Enums, domains, composites and ranges, each with the server's own rendering of what it is.
+    /// <para>
+    /// The detail is assembled in SQL rather than here because only the server can produce it: an enum's
+    /// labels have to come out in <c>enumsortorder</c>, a domain's check constraints through
+    /// <c>pg_get_constraintdef</c>, and a composite's attributes through <c>format_type</c> — the same
+    /// reasoning as <see cref="ConstraintInfo.Definition"/>.
+    /// </para>
+    /// <para>
+    /// The composite type Postgres creates implicitly for every table and view is excluded (its
+    /// <c>relkind</c> is not 'c'): otherwise every table in the database would appear a second time under
+    /// Types, which is noise rather than information.
+    /// </para>
+    /// </summary>
+    private static async Task<List<TypeInfo>> ReadTypesAsync(NpgsqlConnection conn, CancellationToken ct)
+    {
+        const string sql = """
+            select t.oid::bigint, n.nspname, t.typname,
+                   case t.typtype when 'e' then 'enum' when 'd' then 'domain'
+                                  when 'c' then 'composite' when 'r' then 'range' end as kind,
+                   case t.typtype
+                     when 'e' then (select string_agg(quote_literal(e.enumlabel), ', ' order by e.enumsortorder)
+                                    from pg_enum e where e.enumtypid = t.oid)
+                     when 'd' then format_type(t.typbasetype, t.typtypmod)
+                                   || case when t.typnotnull then ' not null' else '' end
+                                   || coalesce((select ' ' || string_agg(pg_get_constraintdef(k.oid), ' ')
+                                                from pg_constraint k where k.contypid = t.oid), '')
+                     when 'c' then (select string_agg(a.attname || ' ' || format_type(a.atttypid, a.atttypmod),
+                                                      ', ' order by a.attnum)
+                                    from pg_attribute a
+                                    where a.attrelid = t.typrelid and a.attnum > 0 and not a.attisdropped)
+                     when 'r' then (select format_type(g.rngsubtype, null)
+                                    from pg_range g where g.rngtypid = t.oid)
+                   end as detail,
+                   obj_description(t.oid, 'pg_type') as comment
+            from pg_type t
+            join pg_namespace n on n.oid = t.typnamespace
+            left join pg_class c on c.oid = t.typrelid
+            where t.typtype in ('e', 'd', 'c', 'r')
+              and (t.typrelid = 0 or c.relkind = 'c')
+              and n.nspname <> 'pg_catalog' and n.nspname <> 'information_schema'
+              and n.nspname not like 'pg=_temp%' escape '='
+              and n.nspname not like 'pg=_toast%' escape '='
+            order by n.nspname, t.typname
+            """;
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        var list = new List<TypeInfo>();
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+        {
+            list.Add(new TypeInfo(
+                Id: r.GetInt64(0),
+                Schema: r.GetString(1),
+                Name: r.GetString(2),
+                Kind: MapTypeKind(r.IsDBNull(3) ? "" : r.GetString(3)),
+                Detail: r.IsDBNull(4) ? "" : r.GetString(4),
+                Comment: r.IsDBNull(5) ? null : r.GetString(5)));
+        }
+        return list;
+    }
+
+    private static TypeKind MapTypeKind(string kind) => kind switch
+    {
+        "enum" => TypeKind.Enum,
+        "domain" => TypeKind.Domain,
+        "range" => TypeKind.Range,
+        _ => TypeKind.Composite,
+    };
+
+    /// <summary>Installed extensions and their versions — the answer to "is pgcrypto here".</summary>
+    private static async Task<List<ExtensionInfo>> ReadExtensionsAsync(NpgsqlConnection conn, CancellationToken ct)
+    {
+        const string sql = """
+            select e.oid::bigint, e.extname, coalesce(n.nspname, ''), e.extversion,
+                   obj_description(e.oid, 'pg_extension') as comment
+            from pg_extension e
+            left join pg_namespace n on n.oid = e.extnamespace
+            order by e.extname
+            """;
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        var list = new List<ExtensionInfo>();
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+            list.Add(new ExtensionInfo(
+                r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetString(3),
+                r.IsDBNull(4) ? null : r.GetString(4)));
+        return list;
+    }
+
+    /// <summary>
+    /// Row-level security policies, with their expressions rendered by <c>pg_get_expr</c>.
+    /// <para>
+    /// Carries its table's id, so the tree can show a policy under the table it applies to as well as in a
+    /// per-database group — under the table is where you are standing when a row count surprises you.
+    /// </para>
+    /// <para>
+    /// An empty <c>polroles</c> means the policy applies to everyone, which Postgres spells <c>PUBLIC</c>;
+    /// it is reported as that rather than as no roles at all, because "applies to nobody" would be the
+    /// opposite of the truth.
+    /// </para>
+    /// </summary>
+    /// <param name="tableId">One relation's policies, or every relation's when null.</param>
+    private static async Task<List<PolicyInfo>> ReadPoliciesAsync(
+        NpgsqlConnection conn, CancellationToken ct, long? tableId = null)
+    {
+        const string sql = """
+            select p.oid::bigint, p.polname, p.polrelid::bigint, p.polcmd::text, p.polpermissive,
+                   coalesce(
+                     (select array_agg(coalesce(r.rolname::text, 'public') order by r.rolname)
+                      from unnest(p.polroles) as ro(oid)
+                      left join pg_roles r on r.oid = ro.oid),
+                     array['public']) as roles,
+                   pg_get_expr(p.polqual, p.polrelid)      as using_expr,
+                   pg_get_expr(p.polwithcheck, p.polrelid) as check_expr
+            from pg_policy p
+            join pg_class c on c.oid = p.polrelid
+            join pg_namespace n on n.oid = c.relnamespace
+            where n.nspname <> 'pg_catalog' and n.nspname <> 'information_schema'
+              and n.nspname not like 'pg=_temp%' escape '='
+              and n.nspname not like 'pg=_toast%' escape '='
+            """;
+        // The per-relation filter is appended rather than expressed as `$1 is null or …`: an untyped
+        // parameter carrying a null gives Postgres nothing to infer the placeholder's type from, and the
+        // whole read then fails — silently, because Best() turns a failed kind into an empty list. The
+        // symptom was every policy in the database disappearing while the per-table read worked, which is
+        // what the live test caught.
+        var filtered = tableId is null
+            ? sql + "\n            order by n.nspname, c.relname, p.polname"
+            : sql + "\n              and p.polrelid = $1\n            order by p.polname";
+        await using var cmd = new NpgsqlCommand(filtered, conn);
+        if (tableId is { } id) cmd.Parameters.AddWithValue(id);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        var list = new List<PolicyInfo>();
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+        {
+            list.Add(new PolicyInfo(
+                Id: r.GetInt64(0),
+                Name: r.GetString(1),
+                TableId: r.GetInt64(2),
+                Command: MapPolicyCommand(r.GetString(3)),
+                Permissive: r.GetBoolean(4),
+                Roles: r.IsDBNull(5) ? ["public"] : r.GetFieldValue<string[]>(5),
+                Using: r.IsDBNull(6) ? null : r.GetString(6),
+                WithCheck: r.IsDBNull(7) ? null : r.GetString(7)));
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// Every role on the server (#120), with its memberships.
+    /// <para>
+    /// <c>pg_roles</c>, never <c>pg_authid</c>. The view exists precisely because the table holds the
+    /// password hash: it masks <c>rolpassword</c> to <c>********</c> and is readable by any role, so this
+    /// works for a non-superuser and cannot leak a credential even by accident. The hash is not selected
+    /// here either — there is nowhere in <see cref="RoleInfo"/> to put it (§1.1).
+    /// </para>
+    /// </summary>
+    public async Task<IReadOnlyList<RoleInfo>> GetRolesAsync(CancellationToken ct)
+    {
+        const string sql = """
+            select r.oid::bigint, r.rolname, r.rolcanlogin, r.rolsuper, r.rolcreatedb, r.rolcreaterole,
+                   r.rolinherit, r.rolconnlimit, r.rolvaliduntil,
+                   coalesce(
+                     (select array_agg(g.rolname order by g.rolname)
+                      from pg_auth_members m
+                      join pg_roles g on g.oid = m.roleid
+                      where m.member = r.oid),
+                     array[]::name[]) as member_of
+            from pg_roles r
+            order by r.rolname
+            """;
+        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        var list = new List<RoleInfo>();
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+        {
+            list.Add(new RoleInfo(
+                Id: r.GetInt64(0),
+                Name: r.GetString(1),
+                CanLogin: r.GetBoolean(2),
+                IsSuperuser: r.GetBoolean(3),
+                CanCreateDb: r.GetBoolean(4),
+                CanCreateRole: r.GetBoolean(5),
+                InheritsPrivileges: r.GetBoolean(6),
+                ConnectionLimit: r.GetInt32(7),
+                // Null here is "no expiry", which is the default — not a permission problem. Kept as null all
+                // the way to the row so the two cannot be conflated (§1.1).
+                ValidUntil: r.IsDBNull(8) ? null : new DateTimeOffset(r.GetDateTime(8)),
+                MemberOf: r.IsDBNull(9) ? [] : r.GetFieldValue<string[]>(9)));
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// What one role may do on this database (#120): the three database-level privileges, then the
+    /// per-relation grants out of <c>relacl</c>.
+    /// <para>
+    /// <c>aclexplode</c> rather than parsing the <c>aclitem</c> text: the compact form (<c>arwdDxt</c>) is a
+    /// rendering of a bitmask, and re-deriving privilege names from it here would be a second implementation
+    /// of something the server already spells out. The result is <c>SELECT, INSERT</c>, which is what the
+    /// question was.
+    /// </para>
+    /// <para>
+    /// Read-only, and that is a design decision rather than an omission: generating <c>GRANT</c> /
+    /// <c>REVOKE</c> is not in scope, because a mistake there is a production incident and the write guard
+    /// has no lexer for ACLs (§1.2).
+    /// </para>
+    /// </summary>
+    public async Task<RoleGrants> GetRoleGrantsAsync(string roleName, CancellationToken ct)
+    {
+        // Parameterized, not interpolated: a role name is user data here (it came from the tree, but the
+        // tree got it from a catalog the user's own DDL writes), and `has_database_privilege` takes it as a
+        // value.
+        const string databaseSql = """
+            select 'database ' || current_database(),
+                   array_remove(array[
+                     case when has_database_privilege($1, current_database(), 'CONNECT') then 'CONNECT' end,
+                     case when has_database_privilege($1, current_database(), 'CREATE')  then 'CREATE'  end,
+                     case when has_database_privilege($1, current_database(), 'TEMP')    then 'TEMPORARY' end
+                   ], null)
+            """;
+        const string relationSql = """
+            select n.nspname || '.' || c.relname,
+                   array_agg(distinct a.privilege_type order by a.privilege_type)
+            from pg_class c
+            join pg_namespace n on n.oid = c.relnamespace
+            cross join lateral aclexplode(c.relacl) as a
+            join pg_roles g on g.oid = a.grantee
+            where g.rolname = $1
+              and c.relkind in ('r', 'v', 'm', 'f', 'p')
+              and n.nspname <> 'pg_catalog' and n.nspname <> 'information_schema'
+              and n.nspname not like 'pg=_temp%' escape '='
+              and n.nspname not like 'pg=_toast%' escape '='
+            group by n.nspname, c.relname
+            order by n.nspname, c.relname
+            """;
+
+        try
+        {
+            await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
+            var grants = new List<RoleGrant>();
+            // The database row first: it is the one privilege set that exists even for a role with no object
+            // grants at all, so a role with nothing else still says something true.
+            grants.AddRange(await ReadGrantsAsync(conn, databaseSql, roleName, ct).ConfigureAwait(false));
+            grants.AddRange(await ReadGrantsAsync(conn, relationSql, roleName, ct).ConfigureAwait(false));
+            return RoleGrants.Of(grants);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception)
+        {
+            // Reported as "could not see", never as "no grants": showing a refused read as an empty
+            // privilege list is the one mistake a privilege screen must not make.
+            return RoleGrants.NotVisible;
+        }
+    }
+
+    private static async Task<List<RoleGrant>> ReadGrantsAsync(
+        NpgsqlConnection conn, string sql, string roleName, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue(roleName);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        var list = new List<RoleGrant>();
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+        {
+            var privileges = r.IsDBNull(1) ? [] : r.GetFieldValue<string[]>(1);
+            // A row with no privileges is not a grant. It arrives from the database query for a role that
+            // may do nothing at all here, and listing it would read as a grant of nothing.
+            if (privileges.Length > 0) list.Add(new RoleGrant(r.GetString(0), privileges));
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// One relation's per-column extras: default, identity, generated expression, collation, comment.
+    /// <para>
+    /// The default comes from <c>pg_get_expr</c> rather than the raw <c>adbin</c> tree, so a
+    /// <c>serial</c> reads as <c>nextval('film_film_id_seq'::regclass)</c> — the route from a column to its
+    /// sequence, which is the half <see cref="SequenceInfo.OwnedBy"/> does not provide.
+    /// </para>
+    /// <para>
+    /// The collation is reported only when it differs from the type's own (<c>attcollation</c> versus
+    /// <c>typcollation</c>): every text column has a collation, and listing the database default on all of
+    /// them would bury the one column that was given a different one.
+    /// </para>
+    /// </summary>
+    private static async Task<List<ColumnDetail>> ReadColumnDetailsAsync(
+        NpgsqlConnection conn, long tableId, CancellationToken ct)
+    {
+        var sql = $"""
+            select a.attnum,
+                   pg_get_expr(d.adbin, d.adrelid)                as default_expr,
+                   a.attidentity::text                            as identity,
+                   case when a.attgenerated <> '' then pg_get_expr(d.adbin, d.adrelid) end as generated,
+                   case when a.attcollation <> 0 and a.attcollation <> t.typcollation
+                        then co.collname end                      as collation,
+                   col_description(a.attrelid, a.attnum)          as comment
+            from pg_attribute a
+            join pg_type t on t.oid = a.atttypid
+            left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+            left join pg_collation co on co.oid = a.attcollation
+            where a.attrelid = {tableId} and a.attnum > 0 and not a.attisdropped
+            order by a.attnum
+            """;
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        var list = new List<ColumnDetail>();
+        while (await r.ReadAsync(ct).ConfigureAwait(false))
+        {
+            // A generated column's expression arrives in the same adbin as a default would, so it is read
+            // once and reported as whichever it is — never as both, which would say the column has a
+            // default it can never use.
+            var generated = r.IsDBNull(3) ? null : r.GetString(3);
+            list.Add(new ColumnDetail(
+                Ordinal: r.GetInt16(0),
+                Default: generated is not null || r.IsDBNull(1) ? null : r.GetString(1),
+                Identity: MapIdentity(r.IsDBNull(2) ? "" : r.GetString(2)),
+                GeneratedExpression: generated,
+                Collation: r.IsDBNull(4) ? null : r.GetString(4),
+                Comment: r.IsDBNull(5) ? null : r.GetString(5)));
+        }
+        return list;
+    }
+
+    private static ColumnIdentity MapIdentity(string attidentity) => attidentity switch
+    {
+        "a" => ColumnIdentity.Always,
+        "d" => ColumnIdentity.ByDefault,
+        _ => ColumnIdentity.None,
+    };
+
+    /// <summary>
+    /// One relation's rules. <c>_RETURN</c> is excluded: on a view that rule <em>is</em> the view, and the
+    /// tree already shows it as a definition — listing it here would make every view look like it had a rule.
+    /// </summary>
+    private static async Task<List<RuleInfo>> ReadRulesAsync(
+        NpgsqlConnection conn, long tableId, CancellationToken ct)
+    {
+        var sql = $"""
+            select r.oid::bigint, r.rulename, pg_get_ruledef(r.oid, true)
+            from pg_rewrite r
+            where r.ev_class = {tableId} and r.rulename <> '_RETURN'
+            order by r.rulename
+            """;
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        var list = new List<RuleInfo>();
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            list.Add(new RuleInfo(reader.GetInt64(0), reader.GetString(1), reader.GetString(2)));
+        return list;
+    }
+
+    /// <summary>The relation's comment, as a zero-or-one list so it can share <see cref="Best{T}"/>.</summary>
+    private static async Task<List<string>> ReadTableCommentAsync(
+        NpgsqlConnection conn, long tableId, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand($"select obj_description({tableId}, 'pg_class')", conn);
+        var value = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        return value is string { Length: > 0 } text ? [text] : [];
+    }
+
+    /// <summary><c>pg_policy.polcmd</c>'s single char, spelled the way the DDL does.</summary>
+    private static string MapPolicyCommand(string cmd) => cmd switch
+    {
+        "r" => "SELECT",
+        "a" => "INSERT",
+        "w" => "UPDATE",
+        "d" => "DELETE",
+        _ => "ALL",
+    };
 
     // The id is the catalog OID (pure digits, read as bigint) — safe to interpolate, and the pg_get_*def
     // functions take an oid, which an integer literal casts to implicitly.
@@ -188,7 +872,18 @@ public sealed class PostgresMetadataReader : IMetadataReader
         var constraints = await ReadConstraintsAsync(conn, tableId, ct).ConfigureAwait(false);
         var indexes = await ReadIndexesAsync(conn, tableId, ct).ConfigureAwait(false);
         var triggers = await ReadTriggersAsync(conn, tableId, ct).ConfigureAwait(false);
-        return new TableDetails(constraints, indexes, triggers);
+        // Best-effort on its own, like the per-database kinds (#119): a role that cannot read pg_policy must
+        // still get the constraints and indexes it can.
+        var policies = await Best(() => ReadPoliciesAsync(conn, ct, tableId)).ConfigureAwait(false);
+        var columns = await Best(() => ReadColumnDetailsAsync(conn, tableId, ct)).ConfigureAwait(false);
+        var rules = await Best(() => ReadRulesAsync(conn, tableId, ct)).ConfigureAwait(false);
+        var comment = await Best(() => ReadTableCommentAsync(conn, tableId, ct)).ConfigureAwait(false);
+        return new TableDetails(constraints, indexes, triggers, policies)
+        {
+            Columns = columns,
+            Rules = rules,
+            Comment = comment.Count > 0 ? comment[0] : null,
+        };
     }
 
     /// <summary>

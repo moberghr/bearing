@@ -115,7 +115,9 @@ public static class DemoCatalog
                 new TriggerInfo(6001, "store_audit", Enabled: true,
                     "CREATE TRIGGER store_audit AFTER INSERT OR UPDATE ON shop.store "
                     + "FOR EACH ROW EXECUTE FUNCTION shop.write_audit()"),
-            ]),
+            ],
+            // No policies on this one: a table without them must not grow an empty group (#119).
+            []),
 
         PaymentId => new TableDetails(
             [
@@ -136,7 +138,10 @@ public static class DemoCatalog
                 new IndexInfo(5012, "payment_note_idx", IsUnique: false, IsPrimary: false, IsValid: false, [4],
                     "CREATE INDEX payment_note_idx ON shop.payment USING btree (note)"),
             ],
-            []),
+            [],
+            // The same two policies ObjectKinds() reports for this table, so the per-table folder and the
+            // per-database group cannot disagree about what is on shop.payment (#119).
+            [.. ObjectKinds().PoliciesOf(PaymentId)]),
 
         DocumentId => new TableDetails(
             [new ConstraintInfo(4020, "document_pkey", ConstraintKind.PrimaryKey, [1], "PRIMARY KEY (id)")],
@@ -153,7 +158,8 @@ public static class DemoCatalog
                 new TriggerInfo(6020, "document_touch", Enabled: false,
                     "CREATE TRIGGER document_touch BEFORE UPDATE ON shop.document "
                     + "FOR EACH ROW EXECUTE FUNCTION shop.touch()"),
-            ]),
+            ],
+            []),
 
         // A view has no constraints, indexes or triggers of its own — and "none" is an answer the tree has to
         // render as no folders rather than as empty ones.
@@ -190,6 +196,122 @@ public static class DemoCatalog
     [
         new RoutineInfo(3001, Schema, "gross_revenue", RoutineKind.Function, "(from_date date)", "numeric"),
     ];
+
+    /// <summary>
+    /// The per-database object kinds (#119): one sequence owned by a column, an enum, a domain, a
+    /// composite, two extensions and a policy on <c>payment</c>.
+    /// <para>
+    /// One of each on purpose — the tree renders a group per kind and a detail line per node, and a fixture
+    /// with nothing in a kind would let that kind's rendering rot unnoticed. Fixed ids and values, like the
+    /// rest of this catalog (§4.6): captures get diffed and assertions count rows.
+    /// </para>
+    /// </summary>
+    public static DatabaseObjectKinds ObjectKinds() => new()
+    {
+        Sequences =
+        [
+            new SequenceInfo(4001, Schema, "payment_id_seq", "bigint",
+                LastValue: 8, Increment: 1, MinValue: 1, MaxValue: 9223372036854775807,
+                Cycles: false, OwnedBy: $"{Schema}.payment.id"),
+            // Never read from, so its last value is null rather than zero — a real state, and one the tree
+            // has to render as "not yet used" rather than as a number.
+            new SequenceInfo(4002, Schema, "receipt_no_seq", "integer",
+                LastValue: null, Increment: 10, MinValue: 1, MaxValue: 2147483647,
+                Cycles: true, OwnedBy: null,
+                // A comment, so the demo shows what a documented object looks like — and so the row that
+                // renders one has a fixture to render.
+                Comment: "reset each year by the January close job"),
+        ],
+        Types =
+        [
+            new TypeInfo(4101, Schema, "payment_state", TypeKind.Enum, "'pending', 'settled', 'refunded'"),
+            new TypeInfo(4102, Schema, "positive_amount", TypeKind.Domain,
+                "numeric(10,2) not null CHECK ((VALUE > (0)::numeric))"),
+            new TypeInfo(4103, Schema, "address", TypeKind.Composite, "line1 text, city text, postcode text"),
+        ],
+        Extensions =
+        [
+            new ExtensionInfo(4201, "pgcrypto", "public", "1.3"),
+            new ExtensionInfo(4202, "pg_stat_statements", "public", "1.10"),
+        ],
+        Publications = [Object(6001, "", "shop_stream", "2 tables · insert, update, delete")],
+        Subscriptions = [Object(6002, "", "shop_replica", "enabled · publications: shop_stream")],
+        ForeignServers = [Object(6003, "", "legacy_erp", "postgres_fdw · version 15", "read-only mirror")],
+        EventTriggers = [Object(6004, "", "audit_ddl", "ddl_command_end · shop.log_ddl()")],
+        Collations = [Object(6005, Schema, "case_insensitive", "icu · und-u-ks-level2 · nondeterministic")],
+        Casts = [Object(6006, "", "shop.positive_amount → numeric", "implicit · binary-coercible")],
+        Operators = [Object(6007, Schema, "&&&", "shop.address shop.address → boolean")],
+        OperatorClasses = [Object(6008, Schema, "address_btree", "btree · shop.address · default")],
+        TextSearchConfigs = [Object(6009, Schema, "product_search", "parser pg_catalog.default")],
+        Policies =
+        [
+            new PolicyInfo(4301, "payment_own_store", PaymentId, "ALL", Permissive: true,
+                Roles: ["app_user"],
+                Using: "(store_id = current_setting('app.store_id')::integer)",
+                WithCheck: null),
+            // Restrictive, and on the same table: the two kinds combine differently (OR versus AND), which
+            // is the distinction the row has to carry.
+            new PolicyInfo(4302, "payment_no_refunds", PaymentId, "UPDATE", Permissive: false,
+                Roles: ["public"],
+                Using: null,
+                WithCheck: "(amount >= (0)::numeric)"),
+        ],
+    };
+
+    /// <summary>
+    /// The long-tail kinds, one row each (#119 follow-up). Enough to make every group render, and no more:
+    /// these are the kinds the demo exists to <em>show the shape of</em>, not to exercise.
+    /// </summary>
+    private static SchemaObjectInfo Object(long id, string schema, string name, string detail, string? comment = null)
+        => new(id, schema, name, detail, comment);
+
+    /// <summary>Tablespaces — cluster-wide, so the server node's list rather than a database's.</summary>
+    public static IReadOnlyList<SchemaObjectInfo> Tablespaces() =>
+    [
+        Object(7001, "", "pg_default", "the data directory"),
+        Object(7002, "", "shop_archive", "/mnt/archive", "cold storage for settled payments"),
+    ];
+
+    /// <summary>
+    /// The server's roles (#120): a superuser, an application login, and a group the login belongs to.
+    /// <para>
+    /// Three because that is the smallest set that exercises the distinctions on the row — login versus
+    /// group, superuser versus not, a connection limit versus unlimited, an expiry versus none, and a
+    /// membership. Fixed, like everything else here (§4.6).
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<RoleInfo> Roles() =>
+    [
+        new RoleInfo(5001, "postgres", CanLogin: true, IsSuperuser: true, CanCreateDb: true,
+            CanCreateRole: true, InheritsPrivileges: true, ConnectionLimit: -1, ValidUntil: null, MemberOf: []),
+        new RoleInfo(5002, "shop_app", CanLogin: true, IsSuperuser: false, CanCreateDb: false,
+            CanCreateRole: false, InheritsPrivileges: true, ConnectionLimit: 20,
+            ValidUntil: new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero), MemberOf: ["shop_readers"]),
+        new RoleInfo(5003, "shop_readers", CanLogin: false, IsSuperuser: false, CanCreateDb: false,
+            CanCreateRole: false, InheritsPrivileges: true, ConnectionLimit: -1, ValidUntil: null, MemberOf: []),
+    ];
+
+    /// <summary>
+    /// What a role may do on the demo database (#120). <c>shop_app</c> can read and write payments and read
+    /// stores; <c>shop_readers</c> can only read; the superuser is reported as not visible, which is the
+    /// third state a grants pane has to render (and the one an empty list would misrepresent).
+    /// </summary>
+    public static RoleGrants GrantsOf(string roleName) => roleName switch
+    {
+        "shop_app" => RoleGrants.Of(
+        [
+            new RoleGrant($"database {Database}", ["CONNECT", "TEMPORARY"]),
+            new RoleGrant($"{Schema}.payment", ["DELETE", "INSERT", "SELECT", "UPDATE"]),
+            new RoleGrant($"{Schema}.store", ["SELECT"]),
+        ]),
+        "shop_readers" => RoleGrants.Of(
+        [
+            new RoleGrant($"database {Database}", ["CONNECT"]),
+            new RoleGrant($"{Schema}.store", ["SELECT"]),
+        ]),
+        "postgres" => RoleGrants.NotVisible,
+        _ => RoleGrants.Of([]),
+    };
 
     // ---- result sets ----------------------------------------------------------------------------
 

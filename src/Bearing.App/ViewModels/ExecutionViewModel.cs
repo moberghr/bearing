@@ -175,11 +175,14 @@ public sealed partial class ExecutionViewModel : ObservableObject
         if (info.RequireWriteConfirmation && _dialogs is { } dialogs)
         {
             var statements = WriteGuard.Describe(sql);
-            if (statements.Any(s => s.IsRisky)
-                && !await dialogs.ConfirmWriteAsync(WriteConfirmation.ForBatch(info, statements)))
+            if (statements.Any(s => s.IsRisky))
             {
-                _ctx.SetStatus("Cancelled — write not confirmed.");
-                return;
+                var impacts = await CountRowImpactsAsync(statements);
+                if (!await dialogs.ConfirmWriteAsync(WriteConfirmation.ForBatch(info, statements, impacts)))
+                {
+                    _ctx.SetStatus("Cancelled — write not confirmed.");
+                    return;
+                }
             }
         }
 
@@ -213,6 +216,79 @@ public sealed partial class ExecutionViewModel : ObservableObject
     }
 
     private enum RunOutcome { Success, AuthFailed, Failed }
+
+    /// <summary>Per-count deadline (#112). Short on purpose: the dialog is waiting on it.</summary>
+    private static readonly TimeSpan CountTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>Deadline for all of a batch's counts together, so a script full of writes cannot add up to a
+    /// long pause before the prompt appears. Statements past it report as uncounted, which is honest.</summary>
+    private static readonly TimeSpan CountBudget = TimeSpan.FromSeconds(4);
+
+    /// <summary>
+    /// How many rows each write in the batch will touch (#112), keyed by statement index — the number that
+    /// turns the confirmation from a ritual into information.
+    /// <para>
+    /// Three deliberate refusals. It never <b>connects</b>: a count is worth less than the credential prompt
+    /// that a connect could raise ahead of a confirmation the user has not answered yet, so an unconnected
+    /// tab simply shows no numbers. It never <b>blocks</b>: each count has a deadline and the batch has a
+    /// smaller total one, and anything that misses reports as uncounted rather than holding the dialog. And
+    /// it never <b>guesses</b>: <see cref="UpdateDeleteTarget.TryReduce"/> declines every statement it cannot
+    /// flatten with certainty, so a statement shows no number rather than a wrong one.
+    /// </para>
+    /// </summary>
+    private async Task<IReadOnlyDictionary<int, RowImpact>?> CountRowImpactsAsync(
+        IReadOnlyList<StatementRisk> statements)
+    {
+        var impacts = new Dictionary<int, RowImpact>();
+        var toCount = new List<(int Index, UpdateDeleteTarget Target)>();
+
+        for (var i = 0; i < statements.Count; i++)
+        {
+            if (!statements[i].IsRisky) continue;
+            if (UpdateDeleteTarget.TryReduce(statements[i].Text) is not { } target) continue;
+            // "Every row" is answered by the statement itself — #100's warning needs no server round trip,
+            // and asking one for it would be the slowest way to learn what the missing WHERE already said.
+            if (target.EveryRow) impacts[i] = RowImpact.Every(target);
+            else toCount.Add((i, target));
+        }
+
+        if (toCount.Count == 0) return impacts.Count > 0 ? impacts : null;
+
+        if (Selected is not { } tab || _ctx.EffectiveConnection(tab) is not { } info
+            || _ctx.Sessions.TryGet(SessionKey.For(info)) is not { } session)
+            return impacts.Count > 0 ? impacts : null;
+
+        // Leased for the counts only, and released before the dialog opens: a modal prompt must not hold a
+        // session open while the user reads it (the same rule SaveChangesAsync follows).
+        using var lease = _ctx.Sessions.Lease(session);
+        using var budget = new CancellationTokenSource(CountBudget);
+        foreach (var (index, target) in toCount)
+            impacts[index] = await CountOneAsync(session, target, budget.Token);
+
+        return impacts;
+    }
+
+    /// <summary>
+    /// One statement's count, or <see cref="RowImpact.Uncounted"/>. Every failure collapses to the same
+    /// answer on purpose: a timeout, a cancelled command, a permission denial and a relation that has since
+    /// been dropped all leave the user with no number, and none of them is a reason to fail — or delay — a
+    /// confirmation the user asked for.
+    /// </summary>
+    private static async Task<RowImpact> CountOneAsync(
+        ConnectionSession session, UpdateDeleteTarget target, CancellationToken budget)
+    {
+        try
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(budget);
+            deadline.CancelAfter(CountTimeout);
+            var rows = await session.Executor.CountAsync(target.RowsSql, deadline.Token);
+            return rows is { } n ? RowImpact.Counted(target, n) : RowImpact.Uncounted(target);
+        }
+        catch (Exception)
+        {
+            return RowImpact.Uncounted(target);
+        }
+    }
 
     /// <summary>Acquire a lease, run the first-page fetch, and — unless this is a non-final attempt that hit
     /// an authentication failure — bind + log the result. Returns <see cref="RunOutcome.AuthFailed"/> without
@@ -713,6 +789,19 @@ public sealed partial class ExecutionViewModel : ObservableObject
         return WriteStatements(ResultEditModel.BuildPendingChanges(rs, target));
     }
 
+    /// <summary>
+    /// The pending edits as the confirmation record that describes them (#114) — the same
+    /// <see cref="WriteConfirmation.ForEdits"/> the save dialog is handed, so "show me the SQL" and "save"
+    /// cannot disagree about what is pending. Null when there is nothing pending, or when the selected tab
+    /// has no connection to name as the target.
+    /// </summary>
+    public WriteConfirmation? PendingEditsConfirmation(ResultSetViewModel rs)
+    {
+        if (Selected is not { } tab || _ctx.EffectiveConnection(tab) is not { } connection) return null;
+        var statements = PendingWriteStatements(rs);
+        return statements.Count == 0 ? null : WriteConfirmation.ForEdits(connection, statements);
+    }
+
     private static IReadOnlyList<WriteStatement> WriteStatements(IReadOnlyList<ResultEditModel.PendingChange> changes)
         => changes
             .Select(c => new WriteStatement(
@@ -743,6 +832,10 @@ public sealed partial class ExecutionViewModel : ObservableObject
         ExecutedAt = DateTimeOffset.UtcNow,
         ProviderId = info.ProviderId,
         ConnectionName = info.Name,
+        // Id and environment as they are right now (#113): the id survives a later rename, and the
+        // environment is a fact about this execution that re-pointing the connection must not rewrite.
+        ConnectionId = info.Id,
+        Environment = string.IsNullOrWhiteSpace(info.Environment) ? null : info.Environment,
         Database = info.Database,
         SqlText = sql,
         Duration = results[^1].Duration,
