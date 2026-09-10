@@ -32,6 +32,8 @@ public partial class MainWindow : Window
     private readonly ResultsPaneController _resultsPane;    // editor / results split visibility
     private readonly TabStripScroller _tabScroll;           // tab strip: wheel switches tabs + keep-selected-visible
     private readonly TabStripScroller _pinnedTabScroll;      // …and the pinned row, which overflows the same way
+    private readonly TabStripOverflow _tabOverflow;          // the strip's end button: the count, and expand/collapse
+    private readonly TabDragReorder _tabDrag;               // drag a tab to a new position (or the other row)
     private readonly IReadOnlyList<string> _keymapWarnings;
     private bool _keymapWarningsShown;
     private HashSet<string> _navCommands = new();
@@ -70,10 +72,11 @@ public partial class MainWindow : Window
         _resultsPane = new ResultsPaneController(WorkspaceGrid, ResultsSplitter, ResultsView);
         _tabScroll = new TabStripScroller(TabScroll, TabStrip);
         _pinnedTabScroll = new TabStripScroller(PinnedTabScroll, PinnedTabStrip);
-        // One chevron for both rows: it is the answer to "where is my tab", and that question is not asked
-        // per row. Either row overflowing lights it, and its list holds every tab regardless.
-        _tabScroll.OverflowChanged += SyncTabOverflow;
-        _pinnedTabScroll.OverflowChanged += SyncTabOverflow;
+        // Dragging a tab to a new position, and across the rows to pin or unpin it. Both rows, because the
+        // drag can cross between them.
+        _tabDrag = new TabDragReorder(this, () => Vm?.Workspace,
+            new TabDragReorder.Row(PinnedTabScroll, PinnedTabStrip, _pinnedTabScroll, Pinned: true),
+            new TabDragReorder.Row(TabScroll, TabStrip, _tabScroll, Pinned: false));
         // The wheel over either row switches tabs. One step for both, because the drawn order spans them:
         // scrolling off the end of the pinned row continues into the strip rather than stopping at a row
         // boundary. The selection then brings itself into view (LoadEditorFromSelectedTab), so the row
@@ -101,6 +104,19 @@ public partial class MainWindow : Window
         _dispatcher = new KeyDispatcher(keymap.Keymap, _commands);
         _keymapWarnings = keymap.Warnings;
         ResultsView.CommandDispatcher = _dispatcher;
+        // One button for both rows: it drops down every open tab, and "where is my tab" is not a question
+        // asked per row. Expanding the strip and the modal picker are the two items under the list.
+        //
+        // Built after the dispatcher rather than beside the other tab-strip parts: it is handed
+        // MenuGesture, which reads the live keymap through _dispatcher — so the menu's right-hand column
+        // follows a rebinding in keybindings.json, and filling the menu before that field is assigned
+        // would throw.
+        _tabOverflow = new TabStripOverflow(TabOverflowButton,
+            () => Vm?.Workspace, ToggleTabStripExpanded, OpenTabPicker, MenuGesture,
+            (PinnedTabScroll, _pinnedTabScroll, TabStripOverflow.ExpandedPinnedMaxHeight),
+            (TabScroll, _tabScroll, TabStripOverflow.ExpandedMaxHeight));
+        _tabScroll.OverflowChanged += _tabOverflow.Sync;
+        _pinnedTabScroll.OverflowChanged += _tabOverflow.Sync;
         SyncMenuGestures();
         // After the registry and the dispatcher, both of which the menu reads (labels from the commands,
         // gestures from the live keymap on open).
@@ -382,6 +398,7 @@ public partial class MainWindow : Window
         if (e.PropertyName == nameof(WorkspaceViewModel.SelectedTab))
         {
             LoadEditorFromSelectedTab();
+            _tabOverflow.Refresh();   // the tick in the dropdown marks this tab
             // Promote on a normal switch; TabNavigator ignores this while a Ctrl+Tab cycle is in flight
             // (that commits on modifier release).
             if (Vm?.Workspace.SelectedTab is { } t) _tabs.Promote(t);
@@ -413,69 +430,45 @@ public partial class MainWindow : Window
     }
 
     private void OnTabRowsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
-        => SyncTabStripSelection();
-
-    /// <summary>
-    /// Show or hide the overflow chevron, and put the count of hidden tabs on it (#65).
-    /// <para>
-    /// Set from code rather than bound because the count comes from arranged bounds — which tabs actually
-    /// ended up outside the viewport — and no binding can see those. Driven by
-    /// <c>TabStripScroller.OverflowChanged</c>, which only fires when the number changes, so this is not
-    /// per-frame work.
-    /// </para>
-    /// <para>
-    /// The two rows are summed rather than shown separately: one chevron answering "where is my tab" matches
-    /// the question, and a pinned row and an unpinned row each with their own count would make the user do
-    /// the addition.
-    /// </para>
-    /// </summary>
-    /// <summary>The chevron's own width, reserved from the strip whether it is showing or not. Wide enough
-    /// for a two-digit count; a strip with more than 99 hidden tabs is not one anyone is reading.</summary>
-    private const double TabChevronWidth = 40;
-
-    private void SyncTabOverflow()
     {
-        // Reserve the chevron's width from both strips regardless of whether it is up. Otherwise showing it
-        // narrows the very viewport the count was read from, the count changes because the chevron appeared,
-        // and the answer oscillates. Not hypothetical: with this, the unconditional write below, and the
-        // button's fixed width all absent, the shell threw "Infinite layout loop detected" out of the render
-        // pass and never drew — found by a render capture, and pinned now by
-        // WiringTests.An_overflowing_strip_renders_instead_of_looping.
-        //
-        // Measured: removing any *one* of the three breaks the cycle on its own, so each is redundant with the
-        // others. All three are kept anyway — they are each independently the right thing (a count that does
-        // not depend on its own effect, no layout write from a layout callback, a chevron that does not resize
-        // as its number changes), and relying on exactly one of them would mean the next small change to any
-        // of the other two silently re-arms this.
-        var hidden = _tabScroll.HiddenCount(TabChevronWidth)
-                     + _pinnedTabScroll.HiddenCount(TabChevronWidth);
-        var visible = hidden > 0;
-        // The glyph carries the number, as it does in DBeaver: "there are 4 more, and they are over here".
-        // A bare chevron would say the first half only, which is what the scrollbar already failed to do.
-        var label = $"» {hidden}";
-
-        // Touch nothing unless something changed. An unconditional write from a layout callback invalidates
-        // layout on every pass, and the next pass arrives with the same numbers to write again.
-        if (TabOverflowButton.IsVisible == visible && (TabOverflowButton.Content as string) == label) return;
-        TabOverflowButton.IsVisible = visible;
-        TabOverflowButton.Content = label;
+        SyncTabStripSelection();
+        _tabOverflow.Refresh();   // the dropdown lists these rows; a keyboard open takes what is there
     }
 
-    /// <summary>The chevron opens the same picker as tab.pick, so there is one list and one implementation.</summary>
-    private void OnTabOverflowClick(object? sender, RoutedEventArgs e) => OpenTabPicker();
+    /// <summary>
+    /// Expand the strip so every tab is on screen at once, wrapped onto as many rows as it takes — or
+    /// collapse it back to one row. Offered by the strip's dropdown and by <c>tab.expandStrip</c>; the state
+    /// and the button's label live in <see cref="TabStripOverflow"/>.
+    /// </summary>
+    internal void ToggleTabStripExpanded()
+    {
+        // Collapsing puts the selected tab back on screen: it may well be one of the ones that were off the
+        // edge before the strip was expanded, which is often why it was expanded.
+        if (!_tabOverflow.Toggle()) BringSelectedTabIntoView();
+    }
+
+    /// <summary>
+    /// Scroll whichever row holds the selection to it.
+    /// <para>
+    /// Only that row: the other keeps a selection of its own that it cannot be talked out of (a
+    /// <c>TabStrip</c> is always-selected), so scrolling it would drag it sideways to a tab the user did not
+    /// pick — and when nothing is pinned, that row is collapsed.
+    /// </para>
+    /// </summary>
+    private void BringSelectedTabIntoView()
+    {
+        if (Vm?.Workspace.SelectionIsPinned == true) _pinnedTabScroll.BringSelectionIntoView();
+        else _tabScroll.BringSelectionIntoView();
+    }
 
     private void LoadEditorFromSelectedTab()
     {
         // Every route to a different tab comes through here, keyboard ones included, so this is where the
         // strips are told to show what is now selected (#65). Both are asked: only the row holding the
         // selection has anything to do, and neither knows which that is.
-        // Which row shows the selection, before asking either to scroll to it.
+        // Which row shows the selection, before asking it to scroll to it.
         SyncTabStripSelection();
-        // Only the row that holds the selection is scrolled to it. The other row keeps a selection of its own
-        // that it cannot be talked out of (a TabStrip is always-selected), so scrolling it would drag it
-        // sideways to a tab the user did not pick — and when nothing is pinned, that row is collapsed.
-        if (Vm?.Workspace.SelectionIsPinned == true) _pinnedTabScroll.BringSelectionIntoView();
-        else _tabScroll.BringSelectionIntoView();
+        BringSelectedTabIntoView();
         var tab = Vm?.Workspace.SelectedTab;
         // Folds belong to the editor, not to a tab (one editor serves all of them), so they are dropped
         // before the buffer is replaced rather than carried into it — and dropped *first*, while the old

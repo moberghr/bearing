@@ -29,7 +29,14 @@ public static class CommandIds
     public const string TabPrev = "tab.prev";
     public const string TabMruNext = "tab.mruNext";    // most-recently-used order (Ctrl+Tab)
     public const string TabMruPrev = "tab.mruPrev";
-    public const string TabPick = "tab.pick";          // the strip's chevron: pick from a list of all tabs
+    public const string TabPick = "tab.pick";          // a modal list of every tab, fuzzy-filtered (Ctrl+E)
+
+    /// <summary>
+    /// Expand the tab strip so every tab is on screen at once, wrapped onto as many rows as it takes — what
+    /// the strip's own end button does. Unbound by default: the button is the affordance, and this exists so
+    /// the palette can reach it and <c>keybindings.json</c> can bind it.
+    /// </summary>
+    public const string TabExpandStrip = "tab.expandStrip";
     public const string FocusCycle = "focus.cycle";
     public const string FocusEditor = "focus.editor";
     public const string FocusResults = "focus.results";

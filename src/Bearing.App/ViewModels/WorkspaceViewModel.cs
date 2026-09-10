@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Bearing.App.Input;
 using Bearing.App.Services;
 using Bearing.App.Workspace;
 using Bearing.Core.Workspace;
@@ -246,6 +247,41 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         if (!Tabs.Contains(tab) || tab.IsPinned == pinned) return;
         tab.IsPinned = pinned;
         ResplitTabs();
+    }
+
+    /// <summary>
+    /// Move a tab to <paramref name="slot"/> among the tabs of one row — what a drag on the strip commits.
+    /// <para>
+    /// One method for reordering and for pinning, because on the strip they are one gesture: dropping a tab
+    /// on the other row is how you pin or unpin it by hand, and it has to land in a chosen position there
+    /// rather than being appended. <see cref="SetPinned"/> stays for the keystroke and the menu item, which
+    /// flip the flag and have no position to offer.
+    /// </para>
+    /// <para>
+    /// The order this writes is the order <c>session.json</c> saves (<c>OpenEditors</c> is
+    /// <see cref="Tabs"/>), so a rearranged strip comes back rearranged — which is most of the point of
+    /// being able to rearrange it.
+    /// </para>
+    /// </summary>
+    /// <param name="slot">Position among the target row's <i>other</i> tabs; clamped, so a caller may pass
+    /// the row's length for "last".</param>
+    /// <returns>Whether anything actually moved — false for a drag that ended where it started.</returns>
+    public bool MoveTab(EditorTabViewModel tab, bool pinned, int slot)
+    {
+        var from = Tabs.IndexOf(tab);
+        if (from < 0) return false;
+
+        var to = TabReorder.TargetIndex(Tabs.Select(t => t.IsPinned).ToList(), from, pinned, slot);
+        if (to < 0) return false;
+        var repinned = tab.IsPinned != pinned;
+        if (!repinned && to == from) return false;
+
+        tab.IsPinned = pinned;
+        // The Move re-splits the rows through the collection-changed hook; a pin change that moves nothing
+        // (the tab is already where it belongs in master order) has to ask for that itself.
+        if (to != from) Tabs.Move(from, to);
+        else ResplitTabs();
+        return true;
     }
 
     /// <summary>Re-derive <see cref="PinnedTabs"/> and <see cref="UnpinnedTabs"/> from <see cref="Tabs"/>.</summary>

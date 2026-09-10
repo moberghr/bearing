@@ -58,7 +58,11 @@ public partial class MainWindow
             canRun: () => Vm is not null && (_palette.AnyOpen || Vm.IsMenuTransient || Vm.Execution.IsBusy)));
         r.Register(KeyCommand.Sync(CommandIds.PaletteOpen, "Command palette", KeyScope.Global, "View",
             () => { if (Vm is not null) _palette.TogglePalette(); }));
-        r.Register(KeyCommand.Sync(CommandIds.TabPick, "Show all tabs…", KeyScope.Global, "Tabs", OpenTabPicker));
+        r.Register(KeyCommand.Sync(CommandIds.TabPick, "Go to tab… (list every tab)", KeyScope.Global, "Tabs", OpenTabPicker));
+        // The strip's end button, as a command: same toggle, so the palette and a user binding cannot drift
+        // from what the button does.
+        r.Register(KeyCommand.Sync(CommandIds.TabExpandStrip, "Show all tabs (expand the strip)", KeyScope.Global, "Tabs",
+            ToggleTabStripExpanded));
         r.Register(KeyCommand.Sync(CommandIds.TabNext, "Next tab (visual order)", KeyScope.Global, "Tabs", () => WithWorkspace(ws => _tabs.SelectAdjacent(ws, +1))));
         r.Register(KeyCommand.Sync(CommandIds.TabPrev, "Previous tab (visual order)", KeyScope.Global, "Tabs", () => WithWorkspace(ws => _tabs.SelectAdjacent(ws, -1))));
         r.Register(KeyCommand.Sync(CommandIds.TabMruNext, "Next tab (recently used)", KeyScope.Global, "Tabs", () => WithWorkspace(ws => _tabs.CycleMru(ws, +1))));
