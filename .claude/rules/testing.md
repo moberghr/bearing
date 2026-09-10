@@ -115,6 +115,15 @@ faster, parallelizable, and reads better. Reach for a UI test when the visual tr
   unconditional static let whichever test ran first decide it for every later one — which made
   `EnvironmentWashTests`' no-Application fallback assertions pass or fail on test order. The alternative,
   `parallelizeTestCollections: false`, was tried and rejected: it hid both bugs instead of fixing them.
+- **A synthetic drag needs `RawInputModifiers.LeftMouseButton` on every move.** `window.MouseDown(p,
+  MouseButton.Left)` then `window.MouseMove(p2)` is a move with the button *up* as far as the app can tell —
+  `PointerEventArgs.GetCurrentPoint(...).Properties.IsLeftButtonPressed` is read from the modifiers, so a
+  press-drag-release written without them exercises a hover and a gesture that reads button state does
+  nothing. Pass the modifier on the moves and on nothing else (`MouseUp` takes the button itself). This is
+  how `TabDragTests` drives the tab reorder end to end (§9.12).
+- **Press a tab where a user would grab it.** The tab header's right-hand third is the pin toggle and the ✕,
+  both of which claim their own presses, so a fixture that presses a tab's *centre* lands on the pin. Aim at
+  the label (≈20% across) and assert the gesture armed before asserting what it did.
 - **An `async void` handler's completion is not reliably observable from a UI test.** Closing a tab through
   synthetic input does close it, and asserting that it *has* closed passed alone and failed inside its own
   class — the outcome depended on what an earlier test in the collection had left on the shared dispatcher,
@@ -122,7 +131,7 @@ faster, parallelizable, and reads better. Reach for a UI test when the visual tr
   (the last made it worse). Assert the **synchronous** half instead: for a press, that the event was marked
   handled, which is what a routing fix actually changes. A test that needs the completion belongs on the
   view model, where the close can be awaited directly.
-- **Available and unused so far:** synthetic input on any `TopLevel` (`MouseDown`/`MouseMove`/`MouseUp`/
+- **Available, and used by the tab reorder:** synthetic input on any `TopLevel` (`MouseDown`/`MouseMove`/`MouseUp`/
   `MouseWheel`, `KeyPress`/`KeyPressQwerty`, `KeyTextInput`, `SetRenderScaling`, and `DragDrop`, which takes
   an `IDataTransfer` and so already matches the v12 typed API, §9.3), plus real pixels via
   `AvaloniaHeadlessPlatform.ForceRenderTimerTick(n)` + `CaptureRenderedFrame()`.

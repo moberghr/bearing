@@ -71,4 +71,26 @@ internal static class TabOverflow
     /// positive, named so the call site reads as intent.</summary>
     public static bool Overflows(IReadOnlyList<(double Start, double Width)> spans, double offset, double viewport)
         => HiddenCount(spans, offset, viewport) > 0;
+
+    /// <summary>
+    /// What the strip's end button says.
+    /// <para>
+    /// It is a <b>dropdown</b> of every open tab now (Visual Studio's document-well dropdown), so it is
+    /// always there — a list of the open tabs is never a lie about the strip, which is why the count used to
+    /// gate it: a <c>»</c> chevron promising more tabs when none were hidden said something false, and that
+    /// was the same objection that retired the scrollbar before it. The count decorates the caret when there
+    /// is one to report, in DBeaver's spirit — "there are 4 more, and they are in here".
+    /// </para>
+    /// <para>
+    /// Expanding the strip and the modal picker both moved into the menu, so the glyph no longer changes
+    /// with the strip's state: it is one affordance saying one thing.
+    /// </para>
+    /// </summary>
+    /// <param name="hidden">Tabs off the edge right now.</param>
+    public static (bool Visible, string Label, string Tip) Chevron(int hidden)
+        => (true,
+            hidden > 0 ? $"▾ {hidden}" : "▾",
+            hidden > 0
+                ? $"All open tabs ({hidden} off the edge)"
+                : "All open tabs");
 }

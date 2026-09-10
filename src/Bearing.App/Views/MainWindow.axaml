@@ -481,6 +481,12 @@
                 <Style Selector="TabStripItem:pointerover Border.tabpin:pointerover">
                   <Setter Property="Opacity" Value="1"/>
                 </Style>
+                <!-- The tab being dragged to a new position. It stays where it is until the pointer is
+                     released (nothing reorders mid-drag), so without this there is nothing to tell it apart
+                     from the tab the insertion caret happens to be beside. -->
+                <Style Selector="StackPanel.dragging">
+                  <Setter Property="Opacity" Value="0.45"/>
+                </Style>
                 <!-- A pinned tab keeps its pin visible: it is the only thing on that row saying why the row
                      exists, and the row is also the only place the unpin action lives. -->
                 <Style Selector="TabStripItem Border.tabpin.pinned">
@@ -521,13 +527,23 @@
               <TabStrip x:Name="PinnedTabStrip" ItemsSource="{Binding Workspace.PinnedTabs}"
                         Classes.dormant="{Binding !Workspace.SelectionIsPinned}"
                         SelectionChanged="OnTabStripSelectionChanged">
+                  <TabStrip.ItemsPanel>
+                    <!-- A WrapPanel, explicitly: measured at infinite width (the collapsed strip, inside a
+                         scroller) it lays out in one line exactly as a StackPanel would, and measured against
+                         the viewport (the expanded strip) it wraps. That is the whole of the expand — the
+                         chevron only changes which of the two the scroller asks for. -->
+                    <ItemsPanelTemplate>
+                      <WrapPanel/>
+                    </ItemsPanelTemplate>
+                  </TabStrip.ItemsPanel>
                 <TabStrip.ItemTemplate>
                   <DataTemplate x:DataType="vm:EditorTabViewModel">
                     <!-- Compact on purpose: name, state beacon, dirty dot. No X — a pinned tab is one you
                          mean to keep, and a close target two pixels from it is how you lose it. Unpin from
                          the right-click menu or Alt+P, then close. -->
                     <StackPanel Orientation="Horizontal" DoubleTapped="OnTabHeaderDoubleTapped"
-                                ContextRequested="OnTabContextRequested">
+                                ContextRequested="OnTabContextRequested"
+                                Classes.dragging="{Binding IsDragging}">
                       <!-- Capped and ellipsized: a tab took its natural text width, so one long filename ate
                            the strip and pushed the others off the edge. The tooltip carries the full name
                            and its folder, so nothing is lost to the trim. -->
@@ -592,17 +608,19 @@
             </ScrollViewer>
             <Button DockPanel.Dock="Right" Content="+" Click="OnNewTabClick" Padding="8,2" Margin="6,0,0,0"
                     VerticalAlignment="Center" ToolTip.Tip="New editor tab (Ctrl+T)"/>
-            <!-- The overflow chevron: hidden while everything fits, and carrying the count of tabs that do
-                 not. Its content is set from code (SyncTabOverflow) because the count comes from arranged
+            <!-- The tab dropdown: every open tab, click one to go to it (Visual Studio's document-well
+                 dropdown), carrying the count of tabs that are off the edge. Expanding the strip and the
+                 modal picker (Ctrl+E) are the two items under the list. The flyout is attached in code so
+                 Avalonia owns the open/close, and it is refilled on every open — a tab list is not a fixed
+                 menu. Content and tooltip come from TabStripOverflow because the count comes from arranged
                  bounds, which no binding can see. -->
-            <!-- Width fixed at the same 40px SyncTabOverflow reserves from the strip. The two numbers have to
+            <!-- Width fixed at the same 40px TabStripOverflow reserves from the strip. The two numbers have to
                  agree: the count is computed against a viewport already short by this much, so a chevron that
                  measured wider would take space the count did not know about and the strip would re-flow the
                  moment it appeared. -->
-            <Button x:Name="TabOverflowButton" DockPanel.Dock="Right" Click="OnTabOverflowClick"
+            <Button x:Name="TabOverflowButton" DockPanel.Dock="Right"
                     Width="40" Padding="0" Margin="6,0,0,0" IsVisible="False"
-                    HorizontalContentAlignment="Center" VerticalAlignment="Center"
-                    ToolTip.Tip="Show all tabs (Ctrl+E)"/>
+                    HorizontalContentAlignment="Center" VerticalAlignment="Center"/>
             <!-- Double-click the empty part of the strip to open a tab, as every browser does. Wired on the
                  scroller rather than the TabStrip: with few tabs the strip is only as wide as its items, so
                  the empty space to the right belongs to the scroller. The handler ignores double-clicks that
@@ -613,12 +631,22 @@
             <TabStrip x:Name="TabStrip" ItemsSource="{Binding Workspace.UnpinnedTabs}"
                       Classes.dormant="{Binding Workspace.SelectionIsPinned}"
                       SelectionChanged="OnTabStripSelectionChanged">
+                <TabStrip.ItemsPanel>
+                  <!-- A WrapPanel, explicitly: measured at infinite width (the collapsed strip, inside a
+                       scroller) it lays out in one line exactly as a StackPanel would, and measured against
+                       the viewport (the expanded strip) it wraps. That is the whole of the expand — the
+                       chevron only changes which of the two the scroller asks for. -->
+                  <ItemsPanelTemplate>
+                    <WrapPanel/>
+                  </ItemsPanelTemplate>
+                </TabStrip.ItemsPanel>
               <TabStrip.ItemTemplate>
                 <DataTemplate x:DataType="vm:EditorTabViewModel">
                   <!-- Right-click: Rename / Save / Close / Reveal in Scripts / Open containing folder,
                        built in code-behind for *this* tab (OnTabContextRequested), not the selected one. -->
                   <StackPanel Orientation="Horizontal" DoubleTapped="OnTabHeaderDoubleTapped"
-                              ContextRequested="OnTabContextRequested">
+                              ContextRequested="OnTabContextRequested"
+                              Classes.dragging="{Binding IsDragging}">
                     <!-- Header is the backing file's name (scratch included); the tooltip adds its folder.
                          Renaming swaps the label for a box in place (#39): Enter commits, Esc cancels,
                          clicking away commits. Both live in the tree; only one is visible. -->

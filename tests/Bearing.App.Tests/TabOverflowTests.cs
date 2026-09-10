@@ -126,4 +126,33 @@ public class TabOverflowTests
         // because the tab genuinely cannot be read.
         Assert.Equal(1, TabOverflow.HiddenCount([(0, 200)], offset: 0, viewport: 80));
     }
+
+    // ---- what the strip's end button says --------------------------------------------------------
+
+    /// <summary>
+    /// The button is a dropdown of every open tab now, so it is always there. The count used to gate it,
+    /// because a <c>»</c> promising more tabs when none were hidden said something false — a list of the
+    /// open tabs never does.
+    /// </summary>
+    [Fact]
+    public void The_button_is_there_with_no_count_while_everything_fits()
+    {
+        var (visible, label, tip) = TabOverflow.Chevron(hidden: 0);
+
+        Assert.True(visible);
+        Assert.Equal("▾", label);
+        Assert.DoesNotContain("0", label);   // "▾ 0" would be a count of nothing, which reads as a bug
+        Assert.Equal("All open tabs", tip);
+    }
+
+    [Fact]
+    public void The_count_decorates_the_caret_when_tabs_are_off_the_edge()
+    {
+        // "there are 4 more, and they are in here" — the count is still the message, in DBeaver's spirit.
+        var (visible, label, tip) = TabOverflow.Chevron(hidden: 4);
+
+        Assert.True(visible);
+        Assert.Equal("▾ 4", label);
+        Assert.Contains("4", tip);
+    }
 }

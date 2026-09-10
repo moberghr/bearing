@@ -322,3 +322,65 @@ Two halves, split at the testability seam:
 - A relation is matched on its **schema and name**, never its `Title`: a row in the default schema is
   labelled `payment` and one elsewhere `reporting.payment`.
 - `WorkspaceContext` takes an optional `ISchemaBrowser` so this is testable without a live server (§2.4).
+
+## §9.12 — The tab strip: three routes to a tab, and a drag to reorder
+**The `▾ N` button is a dropdown of every open tab** — Visual Studio's document-well dropdown, in the same
+place: press it, point at a tab, go there. `Controls/TabOverflowMenu` fills it; it is attached as the
+button's own `Flyout` so Avalonia owns the open/close, and **refilled on every open** (`Opening`) because a
+tab list is not a fixed menu. Built-per-press, like `TabContextMenu`: which tab is selected, which is dirty
+and what the expand item should say are then simply true at build time.
+- The pinned tabs are listed first, behind a separator — the two groups the strip draws as two rows.
+- The active tab is marked with a tick in the **icon column**, not in the header text, so the marks line up
+  down the list. A name over 44 chars is trimmed and its dirty dot survives the trim; the full path is the
+  item's tooltip, as on the tab itself.
+- The `go` callback checks the tab is still in `Tabs`. A dropdown can outlive its list — a background close
+  (a deleted script, a project switch) can take a tab away while the menu is open.
+
+**Each of the three routes answers a different question**, which is why all three exist and why the other
+two hang off the bottom of the dropdown rather than being their own buttons:
+- the dropdown — "which tabs do I have open", pointed at, where the tabs are;
+- the modal picker (**Ctrl+E**, `tab.pick`) — "where is the one called X": it filters, and it carries each
+  tab's folder, which is what tells two same-named scripts apart;
+- **expanding the strip** (`tab.expandStrip`, unbound) — "show me all of them at once", and leaves them on
+  screen to be dragged around.
+
+**Expanding** swaps both rows' `HorizontalScrollBarVisibility` from `Hidden` to **`Disabled`** — that is what
+constrains the strip to the viewport, which is what makes its `WrapPanel` wrap — and takes a `MaxHeight`
+(~5 rows) with a vertical scrollbar past it. State lives in `Views/TabStripOverflow`.
+- The `ItemsPanel` is an explicit `WrapPanel` on both strips. Measured at infinite width (collapsed, inside
+  the scroller) it is a `StackPanel` in every observable way; the expand is entirely "which of the two
+  measurements the scroller asks for".
+- Collapsing scrolls the selection back into view — it is often one of the tabs that were off the edge.
+
+**The button is always visible now**, which reverses #65's rule and does not contradict its reason. What was
+forbidden was a `»` chevron *claiming tabs were hidden* when none were — the same false claim that retired
+the scrollbar before it. A list of the open tabs is never that claim, so the caret stands alone and the
+count decorates it only when there is one to report (`TabOverflow.Chevron`).
+- The three safeguards against the #65 layout loop are unchanged and still all three: the width is reserved
+  from the count whether the button shows or not, the button's width is fixed at that same 40px, and `Sync`
+  writes nothing unless something changed.
+
+**And a tab drags to a new position, or onto the other row to pin or unpin it** (`Views/TabDragReorder`).
+- **Pointer capture, not `DragDrop.DoDragDropAsync`** — which is the right call for the trees, and the wrong
+  one here. A platform drag session grabs the pointer and runs its own modal loop, so it cannot be driven
+  from synthetic input; capture can, and `tests/Bearing.App.Tests/Ui/TabDragTests.cs` drives the real
+  gesture end to end because of it (§4.5).
+- **Nothing moves until the pointer is released.** A mis-aimed drag is therefore free, and no reorder
+  happens while the container bounds the drop is read from are still moving.
+- **The drag handle is the label, not the whole tab.** The pin toggle and the ✕ own their presses (the pin
+  toggles on the press itself), and on a ~100px tab they cover the right-hand third — a test that pressed
+  the middle landed on the pin and asserted nothing. Same rule as a browser, whose ✕ is not a drag handle.
+- **The drop reads the pointer's row, then its X.** The expanded strip wraps, so row two repeats row one's
+  X range; X alone files every drop on it into row one. `TabReorder.Hit` does the row-then-column part.
+- **A slot in a row is not an index in `Tabs`.** The rows are two views over one master list, so a slot has
+  to be translated through every tab's `IsPinned` — `TabReorder.TargetIndex`, in
+  `ObservableCollection.Move`'s destination space (the list with the moved item already removed). Mixing
+  those two spaces is §9.9b item 6 again.
+- `WorkspaceViewModel.MoveTab` is the one mutation, reorder and re-pin together, because on the strip they
+  are one gesture. `SetPinned` stays for the keystroke and the menu, which have no position to offer. A
+  re-pin that moves nothing still has to `ResplitTabs` itself — there is no `Move` to raise the collection
+  change that normally does it.
+- The order it writes is the order `session.json` saves, so a rearranged strip comes back rearranged.
+- `Nearest` picks the row **closest** to the pointer rather than the one under it: a row is under 30px tall,
+  and a caret that blinks out whenever the hand strays above or below reads as a broken gesture. Crossing
+  rows still takes moving onto the other one.
