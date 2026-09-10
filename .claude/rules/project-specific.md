@@ -308,6 +308,80 @@ scroll position and any pending edits.
   because the grid would otherwise answer a header press with the cell menu. It is the shared home for
   #106's sort.
 
+## §9.10a — Focus arriving in a results grid is not a viewport event (#60)
+`GridSelectionController.SeedActive` seeds a cursor when the grid takes focus with none — and it used to
+seed the result's **absolute** first cell and scroll to it. That ran from the grid's `GotFocus`, which the
+click that focuses the grid raises *before* the click's own selection is applied, so a horizontally scrolled
+result snapped back to column zero on the first click into it: a cell, a column header, the row gutter, the
+corner, all four. Only the cell path had a corrective (`ResultCellFactory.KeepClickedCellInView`), and it
+scrolls the clicked cell in *minimally* — a no-op when that cell is already visible at offset zero, which is
+the case the user sees.
+
+- It only fires on the **first** click into a grid that does not already hold the cursor (`NeedsSeed`), which
+  is why it read as intermittent: the second click is always clean.
+- The seed now names the first cell **already on screen** (`FirstCellInView`) and passes `scroll: false`.
+  Seeding is not navigation — it says where the cursor is, it does not move it. `MoveActive` still scrolls by
+  default, because a cursor the keyboard moved has to stay followable.
+- A column scrolled off to the left keeps its cells realized but **collapses them to nothing and parks them
+  at a positive x**, so a position test alone picks the leftmost column of the *result* rather than of the
+  viewport. `FirstCellInView` filters on `IsEffectivelyVisible` and a non-zero size for that reason
+  (measured, §4.5).
+- `SelectBand` and the corner branch take focus **after** writing the model, so the seed does not run at all
+  on a header press. Keep that order.
+- **A press is never a scroll.** `KeepClickedCellInView` is gone: once the seed stopped jumping, all it
+  still did was `ScrollIntoView` a cell clipped by the viewport edge, so clicking the sliver of a
+  half-visible column slid the result sideways. Nothing the user clicks needs revealing — they could see it
+  well enough to click it. Cursor *motion* still scrolls (`MoveActive` with `scroll: true`); that is the
+  user moving the cursor, not the pane moving itself.
+- **Both of that corrective's documented causes are now measured away.** The second was the quick-stats bar
+  re-measuring the grid, which is why it was posted at `Loaded` priority. The bar does cost ~30px of grid
+  height when it appears — and changes *neither* scroll offset, so the pressed cell does not move. What
+  remains is occlusion, not movement: a cell in the bottom 30px ends up under the bar. Holding still is the
+  better of the two.
+- **A chrome press has to seed the cursor in view, not just leave the viewport alone.** A band's origin is
+  the result's first row (column header) or first column (row gutter), and while focusing scrolled to the
+  top-left that origin was on screen by accident. With the viewport correctly held still it is not, and the
+  first arrow key afterwards yanked the grid from offset 386 to 27 — the same jump, one keystroke later.
+  `SelectBand` therefore takes a `cursor` separate from its `origin`: the origin stays the **anchor**, so a
+  later Shift+click still extends from where the band starts, and only the cursor is pulled into view
+  (`InViewRow` / `InViewColumn`).
+- Two traps for the next test here:
+  - a fixture that scrolls with `ScrollIntoView(row, col)` and then clicks *that same cell* restores the
+    identical offset by accident and passes over the bug — click a different cell;
+  - `WideEditableResult`'s only numeric column is its primary key, and `GridSelectionOps.MeasureValues`
+    excludes PK **and** FK columns, so no selection in it can ever raise the stats bar. A test that thought
+    it was measuring the bar was measuring nothing; `WideNumericResult` exists for that.
+
+## §9.10b — Selecting a tree row must not scroll the panel sideways (#60, same pass)
+`TreeView` calls `BringIntoView()` on the row container on every selection change, and that overload asks
+for the container's **whole width** — a deep indent plus a long qualified name, wider than the panel. The
+scroll presenter honoured it, so clicking a group row like *Views* threw the tree sideways to chase the end
+of a row the user had just successfully clicked. `TreeChrome` rewrites the request instead.
+
+- **The rewrite is a zero-width sliver at an x already inside the viewport**, which leaves the request
+  purely vertical. Zeroing the *width* alone is not enough and was the first attempt: the rect keeps the
+  row's own left edge as its x, and in a panel already scrolled right that edge is off-screen to the
+  **left**, so the presenter still acted — by scrolling back to zero. Clamping x into the visible range is
+  what makes it a no-op in both directions.
+- **Vertical bring-into-view is deliberately kept.** "Go to table" / F12 (§9.11) reveals a row by scrolling
+  to it, and a fix that killed bring-into-view outright would have broken that silently.
+- **It is a class handler on `TreeViewItem`, and it must run *after* Avalonia's own.** The event is
+  bubble-only and the presenter that acts on it is an *ancestor* of the row, so a handler on the `TreeView`
+  runs after the scroll has already happened. But `TreeViewItem` registers its own class handler for the
+  same event, which rewrites `TargetRect` to the header's bounds — whichever registers second wins, and
+  that was decided by which type's static initialiser ran first. **It silently reversed between two runs of
+  the suite.** `RuntimeHelpers.RunClassConstructor(typeof(TreeViewItem).TypeHandle)` in the static
+  initialiser makes the order ours to state; the header rect is the better input anyway.
+- **Scoped, despite being a class handler**: the row's tree must be one `Apply` was called on (a weak table),
+  or "is the trim in force" would depend on whether anything had touched `TreeChrome` yet — the test-order
+  trap §4.5 documents for `ThemeBrush.AtAlphaCached`. And the request's target must be the row container
+  *itself*, so a descendant asking to be revealed on its own behalf (an inline-rename box scrolling to its
+  caret) is left alone.
+- The trap for the next test: **both of the first two tests started at offset zero and could not see the
+  bug.** A tree-scroll fixture has to set a non-zero offset, and its click has to land inside the viewport —
+  aiming at the row's own left edge misses the panel entirely once it is scrolled, and then passes while
+  hitting nothing.
+
 ## §9.11 — Go to table / go to definition (#117)
 Two halves, split at the testability seam:
 - `Bearing.Sql.GoToDefinition.Resolve(sql, caret, snapshot)` is pure. Scoped to the statement under the
