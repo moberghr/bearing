@@ -166,7 +166,7 @@ internal static class ResultsHarness
 
     /// <summary>Where a realized cell sits inside the grid's own coordinate space — the position that must not
     /// move when the viewport is meant to stay put (#60).</summary>
-    public static Point PositionIn(Border cell, Visual grid)
+    public static Point PositionIn(Visual cell, Visual grid)
         => cell.TranslatePoint(default, grid)
            ?? throw new InvalidOperationException("cell is not connected to the grid's visual tree");
 

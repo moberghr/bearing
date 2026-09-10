@@ -325,6 +325,133 @@ public class ResultGridScrollTests
         window.Close();
     });
 
+    /// <summary>
+    /// One Tab is one scroll. Avalonia's <c>DataGrid_KeyUp</c> answers a Tab <b>release</b> with
+    /// <c>ScrollSlotIntoView(…, forceHorizontalScroll: true)</c> aimed at the DataGrid's <i>own</i> current
+    /// cell — which is not our cursor, so it is wherever the last click left it. Tabbing therefore scrolled
+    /// twice per keystroke and disagreed with itself: measured 304 on the press, 153 after the key down,
+    /// then 56 on the release.
+    /// <para>
+    /// Note that <c>KeyPress</c> is key-<i>down</i> only, which is why no earlier test could see this: the
+    /// release has to be sent explicitly.
+    /// </para></summary>
+    [Fact]
+    public Task Tabbing_scrolls_once_per_keystroke_not_twice() => _ui.Run(() =>
+    {
+        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (window, view) = ResultsHarness.Show(rs);
+        var grid = ResultsHarness.Grid(view);
+
+        // Put the cursor — and the DataGrid's own current cell — on the left, then scroll away from both.
+        grid.ScrollIntoView(rows[5], grid.Columns[1]);
+        ResultsHarness.Pump(window);
+        Click(window, ResultsHarness.RequireCell(view, rows[5], 1));
+        ResultsHarness.Pump(window);
+        grid.ScrollIntoView(rows[5], grid.Columns[12]);
+        ResultsHarness.Pump(window);
+
+        window.KeyPress(Key.Tab, RawInputModifiers.None, PhysicalKey.Tab, "\t");
+        ResultsHarness.Pump(window);
+        var afterKeyDown = Offsets(grid);
+
+        window.KeyRelease(Key.Tab, RawInputModifiers.None, PhysicalKey.Tab, "\t");
+        ResultsHarness.Pump(window);
+
+        // The key down moved the cursor one field and the viewport followed it — that is ours, and correct.
+        // The release must add nothing.
+        Assert.Equal(afterKeyDown, Offsets(grid));
+        window.Close();
+    });
+
+    /// <summary>
+    /// Committing an edit in the sliver of a column clipped by the viewport edge does not reveal it. The twin
+    /// of <c>KeepClickedCellInView</c>, removed for the same reason and measured doing the same thing: 304 →
+    /// 250, the jump #60 reports, from a commit instead of a click.
+    /// </summary>
+    [Fact]
+    public Task Committing_an_edit_on_a_clipped_cell_does_not_reveal_it() => _ui.Run(() =>
+    {
+        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (window, view) = ResultsHarness.Show(rs);
+        var grid = ResultsHarness.Grid(view);
+
+        var target = rows[20];
+        grid.ScrollIntoView(target, grid.Columns[12]);
+        ResultsHarness.Pump(window);
+
+        var clipped = grid.GetVisualDescendants().OfType<Border>()
+            .Where(b => b.Tag is ValueTuple<object?[], int> t && ReferenceEquals(t.Item1, target))
+            .Where(b => b.IsEffectivelyVisible && b.Bounds.Width > 0)
+            .Select(b => (Cell: b, X: b.TranslatePoint(default, grid)?.X ?? 0))
+            .OrderBy(t => t.X)
+            .First();
+        Assert.True(clipped.X < 0, $"fixture must clip a cell at the left edge, got x={clipped.X}");
+        var col = ((ValueTuple<object?[], int>)clipped.Cell.Tag!).Item2;
+
+        Click(window, clipped.Cell);
+        ResultsHarness.Pump(window);
+        var before = Offsets(grid);
+
+        grid.SelectedItem = target;
+        grid.CurrentColumn = grid.Columns[col];
+        Assert.True(grid.BeginEdit(), "the grid refused to begin editing");
+        ResultsHarness.Pump(window);
+        var editor = grid.GetVisualDescendants().OfType<TextBox>().SingleOrDefault();
+        Assert.NotNull(editor);
+        editor!.Text = "edited";
+        Assert.True(grid.CommitEdit(), "the grid refused to commit");
+        ResultsHarness.Pump(window);
+
+        Assert.Equal("edited", target[col]);          // the edit landed…
+        Assert.Equal(before, Offsets(grid));          // …and the pane did not move to show it
+        window.Close();
+    });
+
+    /// <summary>
+    /// The one exception, pinned so it is not "tidied" away later: <b>beginning</b> an edit does reveal the
+    /// cursor, because <c>grid.BeginEdit()</c> needs a realized cell to put an editor in.
+    /// <para>
+    /// Measured both ways. With the <c>ScrollIntoView</c> in <c>BeginEditActive</c> removed, this exact
+    /// gesture leaves the viewport alone and opens <i>no editor at all</i> — F2 silently does nothing. So
+    /// revealing the cell you asked to edit is part of executing the command, not the pane moving on its
+    /// own, and it is the only keystroke still allowed to scroll (§9.10a).
+    /// </para>
+    /// <para>
+    /// The cursor can be off screen at all only because the wheel and the scrollbar move the viewport
+    /// without moving it — every other route keeps the two together.
+    /// </para></summary>
+    [Fact]
+    public Task Beginning_an_edit_reveals_the_cursor_because_the_editor_needs_a_realized_cell() => _ui.Run(() =>
+    {
+        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (window, view) = ResultsHarness.Show(rs);
+        var grid = ResultsHarness.Grid(view);
+
+        Click(window, ResultsHarness.RequireCell(view, rows[2], 1));
+        ResultsHarness.Pump(window);
+        Assert.Equal((rows[2], 1), view.Selection.Model.Active);
+
+        // Scrolled away from the cursor, as a wheel or a scrollbar drag does.
+        grid.ScrollIntoView(rows[35], grid.Columns[12]);
+        ResultsHarness.Pump(window);
+        Assert.Null(ResultsHarness.Cell(view, rows[2], 1));   // the cursor's cell has no visual at all now
+
+        view.Selection.BeginEditActive(grid, rs);
+        ResultsHarness.Pump(window);
+
+        var editor = grid.GetVisualDescendants().OfType<TextBox>().SingleOrDefault();
+        Assert.NotNull(editor);
+        Assert.Equal("r3c1-value", editor!.Text);
+
+        // …and the editor is inside the viewport, which is the point. Asserted on the editor rather than on
+        // the cell: an editing cell has no tagged display border — the grid swaps it for the editing element
+        // — so ResultsHarness.Cell is legitimately null here.
+        var at = ResultsHarness.PositionIn(editor, grid);
+        Assert.InRange(at.X, 0, grid.Bounds.Width);
+        Assert.InRange(at.Y, 0, grid.Bounds.Height);
+        window.Close();
+    });
+
     /// <summary>Which piece of grid chrome a press is aimed at.</summary>
     public enum GridPress { ColumnHeader, RowGutter, Corner }
 

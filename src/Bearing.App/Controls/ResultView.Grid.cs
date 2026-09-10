@@ -176,6 +176,18 @@ public sealed partial class ResultView
         // arrow-nav / Ctrl+C before it acts (setting Handled skips its class-level OnKeyDown).
         grid.Focusable = true;
         grid.AddHandler(KeyDownEvent, (_, e) => OnGridKey(grid, result, e), RoutingStrategies.Tunnel);
+
+        // …and the *release* of a Tab has to be claimed too. Avalonia's `DataGrid_KeyUp` answers a Tab keyup
+        // with `ScrollSlotIntoView(…, forceHorizontalScroll: true)` aimed at the DataGrid's **own** current
+        // cell — which is not our cursor (we own cell selection, §9.2, and only a click and BeginEdit ever
+        // set the grid's), so it is wherever the last click left it. Tabbing therefore scrolled twice per
+        // keystroke and disagreed with itself: measured 304 → 153 on the key down, then → 56 on the release.
+        // We claim Tab on the way down, so claiming its release is the same decision, not a new one.
+        // A cell editor's own Tab handling is left alone — it is a TextBox, and Tab there commits and moves.
+        grid.AddHandler(KeyUpEvent, (_, e) =>
+        {
+            if (e.Key == Key.Tab && e.Source is not TextBox) e.Handled = true;
+        }, RoutingStrategies.Tunnel);
         _gridsByResult[result] = grid; // resolve the grid for a palette-invoked grid command (see GridTarget)
 
         // When the grid takes focus (e.g. via F6) with no active cell yet, seed the top-left cell so the
@@ -227,14 +239,12 @@ public sealed partial class ResultView
             if (e.EditingElement is TextBox tb) result.SetCell(row, idx, tb.Text);
             ResultRowPainter.ApplyRowStatus(e.Row, result); // tint + status bar on the edited row immediately
 
-            // The same corrective the click path has (ResultCellFactory.KeepClickedCellInView), for the same
-            // reason: whatever moved the viewport while the editor tore down — the grid re-adopting a current
-            // cell, the row re-tinting, the cell's content swapping — the cell you just edited ends up
-            // visible again (#60). A no-op when nothing moved, and posted because the layout pass that could
-            // move it happens after this returns.
-            var column = e.Column;
-            Avalonia.Threading.Dispatcher.UIThread.Post(
-                () => grid.ScrollIntoView(row, column), Avalonia.Threading.DispatcherPriority.Loaded);
+            // There is deliberately no ScrollIntoView here any more. It was the twin of the click path's
+            // KeepClickedCellInView and went the same way (§9.10a): the causes it was written for — the grid
+            // re-adopting a current cell, the row re-tinting, the cell's content swapping — do not move the
+            // viewport, and what it still did was reveal a cell clipped by the viewport edge. So committing
+            // an edit in the sliver of a half-visible column slid the whole result sideways, measured at
+            // 304 → 250: the same jump #60 reports, from a commit instead of a click.
         };
     }
 

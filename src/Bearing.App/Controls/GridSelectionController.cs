@@ -698,11 +698,20 @@ public sealed class GridSelectionController
         : $"{count} cells are in NOT NULL columns";
 
     /// <summary>grid.beginEdit (Enter/F2): start editing the active cell via the DataGrid's own machinery —
-    /// except on a checkbox column, which has no text editor and cycles its value instead.</summary>
+    /// except on a checkbox column, which has no text editor and cycles its value instead.
+    /// <para>
+    /// The one place a keystroke is still allowed to scroll the results (§9.10a). See the comment on the
+    /// <c>ScrollIntoView</c> below for what happens without it.
+    /// </para></summary>
     public void BeginEditActive(DataGrid grid, ResultSetViewModel result)
     {
         if (Model.Active is not { } a || !ReferenceEquals(Model.Result, result)) return;
         if (result.Rows.IndexOf(a.Row) < 0 || a.Col >= grid.Columns.Count) return;
+        // This scroll stays, and it is the one exception to "a keystroke does not move the viewport".
+        // `grid.BeginEdit()` needs a realized cell to put an editor in: with the cursor scrolled out of
+        // view (a wheel or scrollbar drag moves the viewport without moving the cursor) and this line
+        // removed, F2 opens nothing at all and reports nothing — measured. Revealing the cell you asked to
+        // edit is part of executing the command, not the pane moving on its own.
         grid.ScrollIntoView(a.Row, grid.Columns[a.Col]);
         if (a.Col < result.Columns.Count && ColumnKinds.IsBool(result.Columns[a.Col]))
         {
