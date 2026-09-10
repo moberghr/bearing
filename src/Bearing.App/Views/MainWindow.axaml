@@ -619,7 +619,7 @@
                  measured wider would take space the count did not know about and the strip would re-flow the
                  moment it appeared. -->
             <Button x:Name="TabOverflowButton" DockPanel.Dock="Right"
-                    Width="40" Padding="0" Margin="6,0,0,0" IsVisible="False"
+                    Width="40" Padding="0" Margin="6,0,0,0" Content="▾"
                     HorizontalContentAlignment="Center" VerticalAlignment="Center"/>
             <!-- Double-click the empty part of the strip to open a tab, as every browser does. Wired on the
                  scroller rather than the TabStrip: with few tabs the strip is only as wide as its items, so

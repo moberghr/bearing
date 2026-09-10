@@ -137,9 +137,10 @@ public class TabOverflowTests
     [Fact]
     public void The_button_is_there_with_no_count_while_everything_fits()
     {
-        var (visible, label, tip) = TabOverflow.Chevron(hidden: 0);
+        // There is no "is it shown" in the answer any more: it always is, and a flag saying so was a
+        // constant being asserted as though it were a rule.
+        var (label, tip) = TabOverflow.Chevron(hidden: 0);
 
-        Assert.True(visible);
         Assert.Equal("▾", label);
         Assert.DoesNotContain("0", label);   // "▾ 0" would be a count of nothing, which reads as a bug
         Assert.Equal("All open tabs", tip);
@@ -149,9 +150,8 @@ public class TabOverflowTests
     public void The_count_decorates_the_caret_when_tabs_are_off_the_edge()
     {
         // "there are 4 more, and they are in here" — the count is still the message, in DBeaver's spirit.
-        var (visible, label, tip) = TabOverflow.Chevron(hidden: 4);
+        var (label, tip) = TabOverflow.Chevron(hidden: 4);
 
-        Assert.True(visible);
         Assert.Equal("▾ 4", label);
         Assert.Contains("4", tip);
     }

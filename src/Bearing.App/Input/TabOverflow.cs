@@ -85,11 +85,15 @@ internal static class TabOverflow
     /// Expanding the strip and the modal picker both moved into the menu, so the glyph no longer changes
     /// with the strip's state: it is one affordance saying one thing.
     /// </para>
+    /// <para>
+    /// There is no "should it be shown" in the answer any more. It always is, so a flag saying so was a
+    /// constant dressed as a rule — and two tests asserting it were asserting <c>true == true</c>. The XAML
+    /// starts the button visible; this only says what it reads.
+    /// </para>
     /// </summary>
     /// <param name="hidden">Tabs off the edge right now.</param>
-    public static (bool Visible, string Label, string Tip) Chevron(int hidden)
-        => (true,
-            hidden > 0 ? $"▾ {hidden}" : "▾",
+    public static (string Label, string Tip) Chevron(int hidden)
+        => (hidden > 0 ? $"▾ {hidden}" : "▾",
             hidden > 0
                 ? $"All open tabs ({hidden} off the edge)"
                 : "All open tabs");

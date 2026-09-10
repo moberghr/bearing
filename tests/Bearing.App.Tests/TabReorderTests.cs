@@ -97,7 +97,7 @@ public class TabReorderTests : IDisposable
 
     /// <summary>Past the last tab of a wrapped row lands there, not at the end of the whole list.</summary>
     [Fact]
-    public void Past_the_end_of_a_wrapped_row_stays_on_that_row()
+    public void Past_the_end_of_a_wrapped_row_stays_on_that_row()  // and not at the end of the whole list
     {
         Rect[] wrapped =
         [
@@ -108,12 +108,45 @@ public class TabReorderTests : IDisposable
         Assert.Equal(2, TabReorder.Hit(wrapped, new Point(900, 14)).Slot);
     }
 
+    /// <summary>
+    /// A pointer below the strip is judged by its X on the nearest row — it does <b>not</b> fall back to
+    /// the end of the list. That fallback is how a tab dragged straight down into the editor and released
+    /// ended up last, from a gesture that never moved sideways. (How far outside the strip still counts as
+    /// a drop at all is the gesture's business, not this function's.)
+    /// </summary>
     [Fact]
-    public void A_pointer_below_every_row_falls_back_to_the_end()
+    public void A_pointer_below_the_strip_is_still_judged_by_its_column()
     {
-        // A drag that strays out of a 28px strip still means what it plainly means; refusing would make the
-        // gesture feel broken every time the hand wobbled.
-        Assert.Equal(4, TabReorder.Hit(OneRow(), new Point(150, 400)).Slot);
+        Assert.Equal(2, TabReorder.Hit(OneRow(), new Point(210, 400)).Slot);
+        Assert.Equal(0, TabReorder.Hit(OneRow(), new Point(10, 400)).Slot);
+        Assert.Equal(4, TabReorder.Hit(OneRow(), new Point(900, 400)).Slot);
+    }
+
+    [Fact]
+    public void A_pointer_above_the_strip_reads_the_first_row()
+    {
+        Rect[] wrapped = [new Rect(0, 0, 100, 28), new Rect(0, 28, 100, 28)];
+
+        Assert.Equal(0, TabReorder.Hit(wrapped, new Point(10, -50)).Slot);
+    }
+
+    /// <summary>
+    /// A <c>WrapPanel</c> puts row two's top exactly on row one's bottom. With an inclusive test both rows
+    /// matched that one pixel line, and the drop was decided from two rows' tabs mixed into one list.
+    /// </summary>
+    [Fact]
+    public void The_line_where_two_rows_meet_belongs_to_the_lower_one()
+    {
+        Rect[] wrapped =
+        [
+            new Rect(0, 0, 100, 28), new Rect(100, 0, 100, 28),
+            new Rect(0, 28, 100, 28), new Rect(100, 28, 100, 28),
+        ];
+
+        var gap = TabReorder.Hit(wrapped, new Point(10, 28));
+
+        Assert.Equal(2, gap.Slot);
+        Assert.Equal(28, gap.Caret.Y);
     }
 
     [Fact]
@@ -146,6 +179,27 @@ public class TabReorderTests : IDisposable
         Assert.Equal(0, TabReorder.SlotWithoutDragged(slot: 0, draggedIndex: 3));
         // Dragged in from the other row: it is not in this strip's count at all.
         Assert.Equal(3, TabReorder.SlotWithoutDragged(slot: 3, draggedIndex: -1));
+    }
+
+    // ---- panning a scrolling row from the edge ---------------------------------------------------
+
+    [Theory]
+    [InlineData(5, -1)]      // hard against the left edge
+    [InlineData(27, -1)]     // just inside the zone
+    [InlineData(28, 0)]      // …and just outside it
+    [InlineData(200, 0)]     // the middle: nothing to do
+    [InlineData(373, 1)]     // into the right zone
+    [InlineData(399, 1)]
+    public void A_drag_near_an_edge_pans_that_way(double x, int expected)
+        => Assert.Equal(expected, TabReorder.EdgeScroll(x, width: 400, zone: 28));
+
+    /// <summary>A row narrower than two zones is all edge, so a pointer in the middle of it would be asked
+    /// to pan both ways at once. There is nowhere to stand, so it does not pan at all.</summary>
+    [Fact]
+    public void A_row_narrower_than_its_two_edge_zones_does_not_pan()
+    {
+        Assert.Equal(0, TabReorder.EdgeScroll(5, width: 50, zone: 28));
+        Assert.Equal(0, TabReorder.EdgeScroll(45, width: 50, zone: 28));
     }
 
     // ---- and where that lands in the master list ------------------------------------------------

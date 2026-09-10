@@ -30,31 +30,28 @@ internal static class TabReorder
     /// <summary>
     /// Which gap a pointer at <paramref name="pointer"/> is in, given each tab's arranged bounds.
     /// <para>
-    /// Rows, not just columns: the strip wraps when it is expanded (the chevron's "show all tabs"), so tabs
-    /// on the second row share the X range of the first. The pointer's own row is found by its Y, and only
-    /// then does X decide the gap — reading X alone would put a drop on row two into row one.
+    /// Rows, not just columns: the strip wraps when it is expanded (the dropdown's "show all tabs"), so tabs
+    /// on the second row share the X range of the first. The pointer's row is found by its Y, and only then
+    /// does X decide the gap — reading X alone would put a drop on row two into row one.
     /// </para>
     /// <para>
-    /// A pointer past the last tab of its row lands after that tab, not at the end of the strip: with the
-    /// strip wrapped, the far right of row one is nowhere near the end of the list.
+    /// The row is the <b>nearest</b> one, not only a row the pointer is inside. A pointer a little below a
+    /// 28px strip is still pointing at it — and the alternative, falling back to the end of the list, is how
+    /// a tab dragged straight downwards and released ended up last, from a gesture that never moved
+    /// sideways. How far outside the strip still counts is the caller's business
+    /// (<c>TabDragReorder.DropTolerance</c>); this decides <i>which</i> row, given that it counts.
     /// </para>
     /// </summary>
     /// <param name="tabs">Each tab's bounds in strip coordinates, in item order. A zero-width entry is a
     /// container that is not realized yet and is skipped — it has no position to judge.</param>
     public static Gap Hit(IReadOnlyList<Rect> tabs, Point pointer)
     {
-        // The tabs on the pointer's own row. With a single-row strip that is all of them.
+        if (NearestRow(tabs, pointer.Y) is not { } y) return new Gap(0, default);
+
+        // The tabs on that row, in item order.
         var row = new List<int>();
         for (var i = 0; i < tabs.Count; i++)
-        {
-            if (tabs[i].Width <= 0) continue;
-            if (pointer.Y >= tabs[i].Y && pointer.Y <= tabs[i].Bottom) row.Add(i);
-        }
-
-        // Above the first row or below the last: the strip is the target but no row is, so fall back to the
-        // end of the list rather than refusing — a drag that strays a few pixels below a 28px strip still
-        // means what it plainly means.
-        if (row.Count == 0) return AfterLast(tabs);
+            if (tabs[i].Width > 0 && tabs[i].Y == y) row.Add(i);
 
         // Halfway is the tipping point, as it is in every reorderable list: past a tab's midpoint the drop
         // goes after it.
@@ -68,11 +65,63 @@ internal static class TabReorder
         return new Gap(row[^1] + 1, Caret(last.Right, last));
     }
 
-    private static Gap AfterLast(IReadOnlyList<Rect> tabs)
+    /// <summary>
+    /// The <c>Y</c> of the row nearest <paramref name="y"/>, or null when nothing is arranged.
+    /// <para>
+    /// Containment is <b>half-open</b> — <c>Y &lt;= y &lt; Bottom</c>. A <c>WrapPanel</c> puts row two's top
+    /// exactly on row one's bottom, so an inclusive test matched both rows on that one pixel line, and the
+    /// caller then mixed two rows' tabs into a single list.
+    /// </para>
+    /// <para>
+    /// Ties go to the upper row. That only arises when rows are separated by a margin and the pointer is
+    /// exactly between them; some answer has to be picked, and picking the same one every time is what keeps
+    /// the caret from flickering between two rows as the hand shakes.
+    /// </para>
+    /// </summary>
+    private static double? NearestRow(IReadOnlyList<Rect> tabs, double y)
     {
-        for (var i = tabs.Count - 1; i >= 0; i--)
-            if (tabs[i].Width > 0) return new Gap(i + 1, Caret(tabs[i].Right, tabs[i]));
-        return new Gap(0, default);   // nothing arranged: there is one slot and no caret to draw
+        double? best = null;
+        var bestInside = false;
+        var bestDistance = double.MaxValue;
+
+        foreach (var tab in tabs)
+        {
+            if (tab.Width <= 0) continue;
+            var inside = y >= tab.Y && y < tab.Bottom;
+            var distance = inside ? 0 : y < tab.Y ? tab.Y - y : y - tab.Bottom;
+
+            // A row the pointer is *in* always beats one it is merely touching. Both are at distance zero
+            // on the line where two rows meet — that line is row two's, and comparing distances alone gave
+            // it to row one.
+            if (bestInside && !inside) continue;
+            if (inside == bestInside)
+            {
+                if (distance > bestDistance) continue;
+                if (distance == bestDistance && best is { } chosen && tab.Y >= chosen) continue;
+            }
+
+            bestInside = inside;
+            bestDistance = distance;
+            best = tab.Y;
+        }
+        return best;
+    }
+
+    /// <summary>
+    /// Which way a drag at <paramref name="x"/> should pan a scrolling row: -1 left, +1 right, 0 not near an
+    /// edge. <paramref name="zone"/> is how wide the sensitive strip along each edge is.
+    /// <para>
+    /// A row narrower than two zones would otherwise be all edge, and a pointer in the middle of it would
+    /// be asked to scroll both ways at once. There is nowhere to stand in such a row, so it does not
+    /// auto-scroll at all.
+    /// </para>
+    /// </summary>
+    public static int EdgeScroll(double x, double width, double zone)
+    {
+        if (width <= zone * 2) return 0;
+        if (x < zone) return -1;
+        if (x > width - zone) return 1;
+        return 0;
     }
 
     private static Rect Caret(double x, Rect tab) => new(x, tab.Y, 0, tab.Height);

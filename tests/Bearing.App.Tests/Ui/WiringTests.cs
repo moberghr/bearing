@@ -396,6 +396,63 @@ public class WiringTests : IDisposable
     });
 
     /// <summary>
+    /// The list is there before anyone has pressed the button, because the keyboard can open it too —
+    /// Tab to it, Space — and that path raises no pointer press. It used to be filled only from the press,
+    /// and the fill at construction time runs before the window has a <c>DataContext</c>, so a keyboard
+    /// open showed an empty popup.
+    /// </summary>
+    [Fact]
+    public Task The_dropdown_is_filled_before_anyone_presses_it() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(The_dropdown_is_filled_before_anyone_presses_it));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        for (var i = 1; i <= 4; i++) workspace.NewTab($"-- tab {i}");
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        var menu = Assert.IsType<MenuFlyout>(Chevron(shell).Flyout);
+
+        // Every tab plus the two footer items, with no press anywhere in this test.
+        Assert.Equal(workspace.Tabs.Count + 2, menu.Items.OfType<MenuItem>().Count());
+    });
+
+    /// <summary>
+    /// Picking the expand item must not pull the menu apart underneath the click that picked it. The
+    /// toggle refreshes the list (its own label flips to "Collapse"), and doing that inline would clear
+    /// the presenter's items while the item that raised the click was still being dismissed.
+    /// </summary>
+    [Fact]
+    public Task The_expand_item_survives_its_own_click() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(The_expand_item_survives_its_own_click));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        for (var i = 1; i <= 8; i++) workspace.NewTab($"-- tab {i}");
+        shell.Window.Width = 700;
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        var menu = OpenTabDropdown(shell);
+        var item = Assert.Single(menu.Items.OfType<MenuItem>(),
+            i => i.Header as string == "Show all tabs in the strip");
+
+        // Raised without dismissing the menu first — the shape a real pick has.
+        item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        Assert.NotEmpty(menu.Items.OfType<MenuItem>());   // nothing cleared under the click
+
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        // …and the deferred refresh did happen, so the item now offers the way back.
+        Assert.Contains(menu.Items.OfType<MenuItem>(), i => i.Header as string == "Collapse the tab strip");
+        menu.Hide();
+    });
+
+    /// <summary>
     /// The dropdown's own "show all tabs" item expands the strip: the rows stop scrolling and wrap, so the
     /// tabs that were off the edge are on screen and clickable where they lie.
     /// <para>

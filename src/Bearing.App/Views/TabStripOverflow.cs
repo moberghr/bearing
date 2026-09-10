@@ -6,6 +6,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Bearing.App.Controls;
 using Bearing.App.Input;
+using Avalonia.Threading;
 using Bearing.App.ViewModels;
 
 namespace Bearing.App.Views;
@@ -36,19 +37,25 @@ internal sealed class TabStripOverflow
     private const double ChevronWidth = 40;
 
     /// <summary>
-    /// How tall the expanded strip may grow before it scrolls vertically instead — about five rows. A strip
-    /// with fifty tabs must not eat the editor to show them all, and beyond a handful of rows the dropdown
-    /// and the picker are the better tools anyway.
+    /// How tall each row may grow while expanded before it scrolls vertically instead. A strip with fifty
+    /// tabs must not eat the editor to show them all, and beyond a handful of rows the dropdown and the
+    /// picker are the better tools anyway.
+    /// <para>
+    /// Per row, and the two rows are not worth the same: the caller gives the unpinned strip about five
+    /// rows and the pinned one two. One shared number was applied to each of them, so a full pinned row
+    /// above a full unpinned one could take twice the height the constant claimed — and pinning is for the
+    /// handful of scripts you keep, so its row is the one that does not need the room.
+    /// </para>
     /// </summary>
-    private const double ExpandedMaxHeight = 160;
+    internal const double ExpandedMaxHeight = 160;
+    internal const double ExpandedPinnedMaxHeight = 64;
 
     private readonly Button _chevron;
     // Plain Bottom, the placement the sidebar's own button menu uses. An edge-aligned mode is tempting for
     // a button in the corner and is one more thing to be wrong about a popup you cannot see in a test.
     private readonly MenuFlyout _menu = new() { Placement = PlacementMode.Bottom };
-    private readonly IReadOnlyList<(ScrollViewer Scroller, TabStripScroller Scrolling)> _rows;
+    private readonly IReadOnlyList<(ScrollViewer Scroller, TabStripScroller Scrolling, double MaxHeight)> _rows;
 
-    private bool _visible;
     private string _label = "";
     private string _tip = "";
 
@@ -65,7 +72,7 @@ internal sealed class TabStripOverflow
         Action toggleExpand,
         Action openPicker,
         Func<string, KeyGesture?> gesture,
-        params (ScrollViewer Scroller, TabStripScroller Scrolling)[] rows)
+        params (ScrollViewer Scroller, TabStripScroller Scrolling, double MaxHeight)[] rows)
     {
         _chevron = chevron;
         _rows = rows;
@@ -100,6 +107,15 @@ internal sealed class TabStripOverflow
 
     private readonly Action _refill;
 
+    /// <summary>
+    /// Fill the menu from the workspace as it is now. The window calls this when the tab list or the
+    /// selection moves, and once a view model is attached at all — the constructor runs before the window
+    /// has a <c>DataContext</c>, so the fill it does finds no workspace and leaves the menu empty. Without
+    /// this, opening the dropdown from the keyboard (Space on the focused button, which raises no pointer
+    /// press) showed an empty popup.
+    /// </summary>
+    public void Refresh() => _refill();
+
     private void Refill(
         Func<WorkspaceViewModel?> workspace,
         Action toggleExpand,
@@ -128,8 +144,9 @@ internal sealed class TabStripOverflow
     {
         IsExpanded = !IsExpanded;
 
-        foreach (var (scroller, _) in _rows)
+        foreach (var row in _rows)
         {
+            var scroller = row.Scroller;
             // Disabled, not Hidden: a disabled scrollbar is what constrains the strip to the viewport width,
             // and that constraint is what makes the WrapPanel wrap. Hidden leaves it measured at infinite
             // width — which is the whole reason the tabs used to be laid out past the edge and clipped (#65).
@@ -139,14 +156,17 @@ internal sealed class TabStripOverflow
             scroller.VerticalScrollBarVisibility = IsExpanded
                 ? ScrollBarVisibility.Auto
                 : ScrollBarVisibility.Disabled;
-            scroller.MaxHeight = IsExpanded ? ExpandedMaxHeight : double.PositiveInfinity;
+            scroller.MaxHeight = IsExpanded ? row.MaxHeight : double.PositiveInfinity;
             // Collapsing from a wrapped strip: the horizontal offset is stale (it was frozen at 0 while
             // wrapped), and the window scrolls the selection back into view straight after.
             if (!IsExpanded) scroller.Offset = scroller.Offset.WithX(0);
         }
 
         Sync();
-        _refill();   // the menu's last-but-one item says what it will do next, which just changed
+        // The menu's last-but-one item says what it will do next, which just changed — but this is reached
+        // *from* that item's own click, and refilling here would clear the presenter's items while the item
+        // that raised the click is still being dismissed. Posted, so it outlives its own event.
+        Dispatcher.UIThread.Post(_refill);
         return IsExpanded;
     }
 
@@ -161,13 +181,12 @@ internal sealed class TabStripOverflow
         // Summed across the rows rather than shown per row: one button answering "where is my tab" matches
         // the question, and two counts would make the user do the addition.
         var hidden = 0;
-        foreach (var (_, scrolling) in _rows) hidden += scrolling.HiddenCount(ChevronWidth);
+        foreach (var row in _rows) hidden += row.Scrolling.HiddenCount(ChevronWidth);
 
-        var (visible, label, tip) = TabOverflow.Chevron(hidden);
-        if (visible == _visible && label == _label && tip == _tip) return;
-        (_visible, _label, _tip) = (visible, label, tip);
+        var (label, tip) = TabOverflow.Chevron(hidden);
+        if (label == _label && tip == _tip) return;
+        (_label, _tip) = (label, tip);
 
-        _chevron.IsVisible = visible;
         _chevron.Content = label;
         ToolTip.SetTip(_chevron, tip);
     }

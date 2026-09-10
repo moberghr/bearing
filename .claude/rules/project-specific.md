@@ -326,9 +326,22 @@ Two halves, split at the testability seam:
 ## §9.12 — The tab strip: three routes to a tab, and a drag to reorder
 **The `▾ N` button is a dropdown of every open tab** — Visual Studio's document-well dropdown, in the same
 place: press it, point at a tab, go there. `Controls/TabOverflowMenu` fills it; it is attached as the
-button's own `Flyout` so Avalonia owns the open/close, and **refilled on every open** (`Opening`) because a
-tab list is not a fixed menu. Built-per-press, like `TabContextMenu`: which tab is selected, which is dirty
-and what the expand item should say are then simply true at build time.
+button's own `Flyout`, the shape `ResultExportButton` already used here, so Avalonia owns the open/close.
+
+- **Fill it before the open, never from `Opening`.** The presenter is created and measured around the open,
+  so items added inside that window are not in what it draws: the menu reported `IsOpen` with all 27 items
+  present and painted an **empty popup**. It is filled from the button's `PointerPressed` (tunnel, ahead of
+  the button's own handling), and kept current the rest of the time by `Refresh()` — which the window calls
+  when the tab rows or the selection change. Both halves are needed: the keyboard opens this too (Space on
+  the focused button raises no press), and the fill in the constructor finds no workspace, because the
+  window has no `DataContext` yet.
+- `TabStripOverflow` is therefore built **after** `_dispatcher`: it is handed `MenuGesture`, which reads the
+  live keymap through that field, and filling the menu before it is assigned would throw.
+- `Toggle` refreshes the menu **posted**, not inline — it is reached *from* the expand item's own click, and
+  refilling there clears the presenter's items while the item that raised the click is still dismissing.
+- A flyout test that asserts `IsOpen` and an item count passes through all of this. The one that does not is
+  `The_dropdown_renders_its_items_not_just_an_empty_popup`, which counts realized `MenuItem`s inside the
+  open popup (§4.3: a property is not a rendered thing).
 - The pinned tabs are listed first, behind a separator — the two groups the strip draws as two rows.
 - The active tab is marked with a tick in the **icon column**, not in the header text, so the marks line up
   down the list. A name over 44 chars is trimmed and its dirty dot survives the trim; the full path is the
@@ -346,7 +359,11 @@ two hang off the bottom of the dropdown rather than being their own buttons:
 
 **Expanding** swaps both rows' `HorizontalScrollBarVisibility` from `Hidden` to **`Disabled`** — that is what
 constrains the strip to the viewport, which is what makes its `WrapPanel` wrap — and takes a `MaxHeight`
-(~5 rows) with a vertical scrollbar past it. State lives in `Views/TabStripOverflow`.
+with a vertical scrollbar past it. State lives in `Views/TabStripOverflow`.
+- The cap is **per row and not the same for both**: about five rows for the strip, two for the pinned row.
+  One shared constant was applied to each of them, so a full pinned row above a full unpinned one could
+  take twice the height the constant claimed — and pinning is for the handful of scripts you keep, so its
+  row is the one that does not need the room.
 - The `ItemsPanel` is an explicit `WrapPanel` on both strips. Measured at infinite width (collapsed, inside
   the scroller) it is a `StackPanel` in every observable way; the expand is entirely "which of the two
   measurements the scroller asks for".
@@ -371,7 +388,21 @@ count decorates it only when there is one to report (`TabOverflow.Chevron`).
   toggles on the press itself), and on a ~100px tab they cover the right-hand third — a test that pressed
   the middle landed on the pin and asserted nothing. Same rule as a browser, whose ✕ is not a drag handle.
 - **The drop reads the pointer's row, then its X.** The expanded strip wraps, so row two repeats row one's
-  X range; X alone files every drop on it into row one. `TabReorder.Hit` does the row-then-column part.
+  X range; X alone files every drop on it into row one. `TabReorder.Hit` does the row-then-column part, and
+  a row the pointer is *in* beats one it merely touches: a `WrapPanel` puts row two's top exactly on row
+  one's bottom, and an inclusive test matched both on that line.
+- **A release outside the strip moves nothing.** "The nearest row, always" made every release a drop —
+  a tab dragged straight down into the editor was filed at the *end* of the strip, from a gesture that never
+  moved sideways. `DropTolerance` (48px) is the ceiling; inside it the nearest row still wins, because a row
+  is under 30px tall and a caret that blinks out whenever the hand wobbles reads as broken.
+- **Escape abandons a drag**, on the window in the tunnel phase ahead of the window's own Escape (which
+  cancels a running query), and it marks the event handled so that one does not also fire. This is the
+  thing a platform drag session would have given for free; not having it, with every release counting as a
+  drop, left no way at all to abort.
+- **Edge auto-scroll is a timer**, not a step per pointer-move: a pointer held still in the edge zone is how
+  you ask for a long scroll, and one step per move meant the only way to travel was to jiggle the mouse.
+  The row and direction are fields the tick reads, because a handler subscribed per move cannot be
+  unsubscribed — each closure is a different delegate — and the timer ends up with one handler per move.
 - **A slot in a row is not an index in `Tabs`.** The rows are two views over one master list, so a slot has
   to be translated through every tab's `IsPinned` — `TabReorder.TargetIndex`, in
   `ObservableCollection.Move`'s destination space (the list with the moved item already removed). Mixing

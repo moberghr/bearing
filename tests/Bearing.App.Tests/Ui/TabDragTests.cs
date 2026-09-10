@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
+using Avalonia.Media;
 using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Input;
@@ -230,6 +231,173 @@ public class TabDragTests
         Assert.Equal(workspace.Tabs.IndexOf(landsBefore) - 1, workspace.Tabs.IndexOf(tabs[0]));
         Assert.True(workspace.Tabs.IndexOf(tabs[0]) > 5,
             $"the tab stayed near the top of the list (index {workspace.Tabs.IndexOf(tabs[0])})");
+    });
+
+    // ---- abandoning a drag -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Released outside the strip, nothing moves. "The nearest row, always" made every release a drop, so
+    /// a tab dragged straight down into the editor was filed at the end of the strip — from a gesture that
+    /// never moved sideways.
+    /// </summary>
+    [Fact]
+    public Task A_drag_released_far_below_the_strip_moves_nothing() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(A_drag_released_far_below_the_strip_moves_nothing));
+        var workspace = shell.Vm.Workspace;
+        var tabs = FourTabs(shell);
+        var from = Label(shell, 0);
+        var into = new Point(from.X, from.Y + 300);   // deep in the editor
+
+        shell.Window.MouseDown(from, MouseButton.Left);
+        shell.Window.MouseMove(new Point(from.X + 8, from.Y), RawInputModifiers.LeftMouseButton);
+        shell.Window.MouseMove(into, RawInputModifiers.LeftMouseButton);
+        Assert.True(tabs[0].IsDragging, "the fixture must have started a drag");
+        shell.Window.MouseUp(into, MouseButton.Left);
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        Assert.Equal([tabs[0], tabs[1], tabs[2], tabs[3]], workspace.Tabs);
+        Assert.All(tabs, t => Assert.False(t.IsDragging));
+    });
+
+    /// <summary>
+    /// Escape abandons a drag in flight. It is the one thing a platform drag session would have given for
+    /// free, which is why dropping <c>DoDragDropAsync</c> meant owning it here.
+    /// </summary>
+    [Fact]
+    public Task Escape_abandons_a_drag_in_flight() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(Escape_abandons_a_drag_in_flight));
+        var workspace = shell.Vm.Workspace;
+        var tabs = FourTabs(shell);
+        var from = Label(shell, 0);
+        var target = At(shell, 3, 0.8);
+
+        shell.Window.MouseDown(from, MouseButton.Left);
+        shell.Window.MouseMove(new Point(from.X + 8, from.Y), RawInputModifiers.LeftMouseButton);
+        shell.Window.MouseMove(target, RawInputModifiers.LeftMouseButton);
+        Assert.True(tabs[0].IsDragging, "the fixture must have started a drag");
+
+        shell.Window.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, null);
+        shell.Pump();
+        Assert.False(tabs[0].IsDragging, "Escape did not end the drag");
+
+        // …and the release that follows must not resurrect it.
+        shell.Window.MouseUp(target, MouseButton.Left);
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        Assert.Equal([tabs[0], tabs[1], tabs[2], tabs[3]], workspace.Tabs);
+    });
+
+    // ---- the caret -------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The insertion caret is the whole of the gesture's feedback — where the tab will land — and it is
+    /// drawn into the window's overlay layer rather than the strip, so nothing about the tabs themselves
+    /// says whether it appeared.
+    /// </summary>
+    [Fact]
+    public Task The_insertion_caret_appears_during_a_drag_and_is_taken_down_after_it() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(The_insertion_caret_appears_during_a_drag_and_is_taken_down_after_it));
+        var tabs = FourTabs(shell);
+        var from = Label(shell, 0);
+        var target = At(shell, 2, 0.8);
+
+        Assert.Empty(Carets(shell));
+
+        shell.Window.MouseDown(from, MouseButton.Left);
+        shell.Window.MouseMove(new Point(from.X + 8, from.Y), RawInputModifiers.LeftMouseButton);
+        shell.Window.MouseMove(target, RawInputModifiers.LeftMouseButton);
+        shell.Pump();
+
+        var caret = Assert.Single(Carets(shell));
+        Assert.True(caret.IsVisible, "the caret is in the overlay but not shown");
+        Assert.True(caret.Bounds.Height > 0, $"the caret has no height: {caret.Bounds}");
+
+        shell.Window.MouseUp(target, MouseButton.Left);
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        Assert.Empty(Carets(shell));
+    });
+
+    /// <summary>The caret is the only 2px-wide border in the window's overlay layer.</summary>
+    private static Border[] Carets(ShellHarness shell)
+        => shell.Window.GetVisualDescendants()
+            .OfType<OverlayLayer>()
+            .SelectMany(l => l.Children.OfType<Border>())
+            .Where(b => b.Width == 2)
+            .ToArray();
+
+    // ---- the pinned row ---------------------------------------------------------------------------
+
+    [Fact]
+    public Task A_pinned_tab_reorders_within_its_own_row() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(A_pinned_tab_reorders_within_its_own_row));
+        var workspace = shell.Vm.Workspace;
+        var tabs = FourTabs(shell);
+        workspace.SetPinned(tabs[0], true);
+        workspace.SetPinned(tabs[1], true);
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        var pinned = Strip(shell, "PinnedTabStrip");
+        var first = pinned.ContainerFromIndex(0)!;
+        var second = pinned.ContainerFromIndex(1)!;
+        var from = first.TranslatePoint(new Point(first.Bounds.Width * 0.2, first.Bounds.Height / 2), shell.Window)!.Value;
+        var target = second.TranslatePoint(new Point(second.Bounds.Width * 0.8, second.Bounds.Height / 2), shell.Window)!.Value;
+
+        shell.Window.MouseDown(from, MouseButton.Left);
+        shell.Window.MouseMove(new Point(from.X + 8, from.Y), RawInputModifiers.LeftMouseButton);
+        shell.Window.MouseMove(target, RawInputModifiers.LeftMouseButton);
+        shell.Window.MouseUp(target, MouseButton.Left);
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        Assert.Equal([tabs[1], tabs[0]], workspace.PinnedTabs);
+        Assert.True(tabs[0].IsPinned, "reordering inside the pinned row must not unpin anything");
+    });
+
+    /// <summary>The other half of the cross-row gesture: dragging a pinned tab down onto the strip unpins
+    /// it, at the position it was dropped.</summary>
+    [Fact]
+    public Task A_pinned_tab_dragged_down_onto_the_strip_is_unpinned_there() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(A_pinned_tab_dragged_down_onto_the_strip_is_unpinned_there));
+        var workspace = shell.Vm.Workspace;
+        var tabs = FourTabs(shell);
+        workspace.SetPinned(tabs[0], true);
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        var pinned = Strip(shell, "PinnedTabStrip");
+        var carried = pinned.ContainerFromIndex(0)!;
+        var from = carried.TranslatePoint(new Point(carried.Bounds.Width * 0.2, carried.Bounds.Height / 2), shell.Window)!.Value;
+        // Onto the right half of what is now the first unpinned tab, so it lands after it.
+        var target = At(shell, 0, 0.8);
+
+        shell.Window.MouseDown(from, MouseButton.Left);
+        shell.Window.MouseMove(new Point(from.X, from.Y + 6), RawInputModifiers.LeftMouseButton);
+        shell.Window.MouseMove(target, RawInputModifiers.LeftMouseButton);
+        shell.Window.MouseUp(target, MouseButton.Left);
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        Assert.False(tabs[0].IsPinned, "the tab was not unpinned");
+        Assert.Empty(workspace.PinnedTabs);
+        Assert.False(workspace.HasPinnedTabs);
+        Assert.Equal([tabs[1], tabs[0], tabs[2], tabs[3]], workspace.UnpinnedTabs);
     });
 
     // ---- fixture ---------------------------------------------------------------------------------

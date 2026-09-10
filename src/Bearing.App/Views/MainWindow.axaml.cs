@@ -72,15 +72,6 @@ public partial class MainWindow : Window
         _resultsPane = new ResultsPaneController(WorkspaceGrid, ResultsSplitter, ResultsView);
         _tabScroll = new TabStripScroller(TabScroll, TabStrip);
         _pinnedTabScroll = new TabStripScroller(PinnedTabScroll, PinnedTabStrip);
-        // One button for both rows: it drops down every open tab, and "where is my tab" is not a question
-        // asked per row. Expanding the strip and the modal picker are the two items under the list.
-        // MenuGesture reads the live keymap, so the menu's right-hand column follows a rebinding in
-        // keybindings.json (and shows nothing for a command that ships unbound).
-        _tabOverflow = new TabStripOverflow(TabOverflowButton,
-            () => Vm?.Workspace, ToggleTabStripExpanded, OpenTabPicker, MenuGesture,
-            (PinnedTabScroll, _pinnedTabScroll), (TabScroll, _tabScroll));
-        _tabScroll.OverflowChanged += _tabOverflow.Sync;
-        _pinnedTabScroll.OverflowChanged += _tabOverflow.Sync;
         // Dragging a tab to a new position, and across the rows to pin or unpin it. Both rows, because the
         // drag can cross between them.
         _tabDrag = new TabDragReorder(this, () => Vm?.Workspace,
@@ -113,6 +104,19 @@ public partial class MainWindow : Window
         _dispatcher = new KeyDispatcher(keymap.Keymap, _commands);
         _keymapWarnings = keymap.Warnings;
         ResultsView.CommandDispatcher = _dispatcher;
+        // One button for both rows: it drops down every open tab, and "where is my tab" is not a question
+        // asked per row. Expanding the strip and the modal picker are the two items under the list.
+        //
+        // Built after the dispatcher rather than beside the other tab-strip parts: it is handed
+        // MenuGesture, which reads the live keymap through _dispatcher — so the menu's right-hand column
+        // follows a rebinding in keybindings.json, and filling the menu before that field is assigned
+        // would throw.
+        _tabOverflow = new TabStripOverflow(TabOverflowButton,
+            () => Vm?.Workspace, ToggleTabStripExpanded, OpenTabPicker, MenuGesture,
+            (PinnedTabScroll, _pinnedTabScroll, TabStripOverflow.ExpandedPinnedMaxHeight),
+            (TabScroll, _tabScroll, TabStripOverflow.ExpandedMaxHeight));
+        _tabScroll.OverflowChanged += _tabOverflow.Sync;
+        _pinnedTabScroll.OverflowChanged += _tabOverflow.Sync;
         SyncMenuGestures();
         // After the registry and the dispatcher, both of which the menu reads (labels from the commands,
         // gestures from the live keymap on open).
@@ -394,6 +398,7 @@ public partial class MainWindow : Window
         if (e.PropertyName == nameof(WorkspaceViewModel.SelectedTab))
         {
             LoadEditorFromSelectedTab();
+            _tabOverflow.Refresh();   // the tick in the dropdown marks this tab
             // Promote on a normal switch; TabNavigator ignores this while a Ctrl+Tab cycle is in flight
             // (that commits on modifier release).
             if (Vm?.Workspace.SelectedTab is { } t) _tabs.Promote(t);
@@ -425,7 +430,10 @@ public partial class MainWindow : Window
     }
 
     private void OnTabRowsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
-        => SyncTabStripSelection();
+    {
+        SyncTabStripSelection();
+        _tabOverflow.Refresh();   // the dropdown lists these rows; a keyboard open takes what is there
+    }
 
     /// <summary>
     /// Expand the strip so every tab is on screen at once, wrapped onto as many rows as it takes — or
