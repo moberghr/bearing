@@ -32,11 +32,24 @@ public sealed class EntraTokenProvider : IEntraTokenProvider
     public const string ResourceOptionKey = "entra.resource";
 
     /// <summary>The resource to mint for: the connection's explicit override, else its engine's audience.
-    /// Pure, so the per-engine choice is testable without invoking az.</summary>
+    /// Pure, so the per-engine choice is testable without invoking az.
+    /// <para>
+    /// The key is matched case-insensitively rather than by exact spelling: a bag deserialized from
+    /// project.json is an ordinary ordinal dictionary, so a hand-written <c>Entra.Resource</c> would
+    /// otherwise be ignored in silence and the token minted for the default audience.
+    /// </para>
+    /// </summary>
     public static string ResourceFor(ConnectionInfo info)
-        => info.Options.TryGetValue(ResourceOptionKey, out var r) && !string.IsNullOrWhiteSpace(r)
-            ? r.Trim()
-            : ProviderTraits.For(info).EntraResource;
+        => Override(info.Options) ?? ProviderTraits.For(info).EntraResource;
+
+    private static string? Override(IReadOnlyDictionary<string, string> options)
+    {
+        foreach (var (key, value) in options)
+            if (string.Equals(key, ResourceOptionKey, StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(value))
+                return value.Trim();
+        return null;
+    }
 
     private static readonly TimeSpan RunTimeout = TimeSpan.FromSeconds(30);
 

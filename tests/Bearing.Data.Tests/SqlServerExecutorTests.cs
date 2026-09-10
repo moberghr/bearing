@@ -218,6 +218,53 @@ public class SqlServerExecutorTests
         }
     }
 
+    /// <summary>
+    /// A batch that mixes writes with a read yields <b>only</b> the read's result set — measured, and the
+    /// assumption the batch breakdown's placement rests on.
+    /// <para>
+    /// The executor stamps <c>DescribeBatch</c>, which is computed from every <c>StatementCompleted</c> in
+    /// the run, onto each result with no columns. That is only honest if there is at most one such result
+    /// per batch, and there is: SqlClient produces a zero-column result set only when <em>nothing</em> in
+    /// the batch returned rows. So the breakdown never describes a batch wider than the result carrying it,
+    /// and the SELECT's own row count never appears in a write's message — there is no write message to
+    /// appear in.
+    /// </para>
+    /// <para>
+    /// Pinned because it is driver behaviour rather than ours: if a future SqlClient surfaced the writes as
+    /// their own result sets, each would silently claim the whole batch's counts.
+    /// </para>
+    /// </summary>
+    [SkippableFact]
+    public async Task A_batch_mixing_writes_and_a_read_yields_only_the_reads_result()
+    {
+        var provider = Provider();
+        await using var factory = provider.CreateConnectionFactory(Info(), Password);
+        await MsSqlTestServer.RequireAsync(factory);
+
+        var executor = provider.CreateQueryExecutor(factory);
+        const string tbl = "dbo.bearing_mixed_batch_test";
+        await executor.ExecuteAsync(
+            $"drop table if exists {tbl}; create table {tbl} (id int not null primary key, v int null);"
+            + $" insert into {tbl} (id) values (1), (2), (3);",
+            new QueryOptions(), CancellationToken.None);
+        try
+        {
+            var results = await executor.ExecuteAsync(
+                $"update {tbl} set v = 1; select id from {tbl} order by id; update {tbl} set v = 2 where id = 1;",
+                new QueryOptions(), CancellationToken.None);
+
+            var result = Assert.Single(results);
+            Assert.True(result.Success, result.Error?.Message);
+            Assert.Equal(3, result.Rows.Count);                 // the SELECT's rows, not a write's count
+            Assert.NotEmpty(result.Columns);
+            Assert.Null(result.Message);                        // no batch breakdown lands on a read
+        }
+        finally
+        {
+            await DropAsync(executor, tbl);
+        }
+    }
+
     /// <summary>SqlState carries the error <em>number</em> — SQL Server has no SQLSTATE of its own — and
     /// 208 is "Invalid object name". Pins the choice the executor documents, and the value
     /// <see cref="SqlServerProvider.Classify"/> is written against.</summary>

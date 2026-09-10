@@ -528,7 +528,11 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
         if (analyze && info.RequireWriteConfirmation && _dialogs is { } dialogs)
         {
-            var statements = WriteGuard.Describe(sql);
+            // The connection's dialect, as RunAsync does. This call site was the one left on the Postgres
+            // lexer, which has no notion of a [bracketed] identifier — so a T-SQL batch whose write sat
+            // behind one could be read as words and under-reported, and §1.2 does not allow the guard to be
+            // narrower for one dialect than another.
+            var statements = WriteGuard.Describe(ProviderTraits.For(info).Dialect, sql);
             if (statements.Any(s => s.IsRisky)
                 && !await dialogs.ConfirmWriteAsync(WriteConfirmation.ForBatch(info, statements)))
             {

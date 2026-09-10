@@ -76,19 +76,18 @@ internal static class ResultSetBuilder
         return results.Select(r => spans[r.StatementIndex!.Value].Text.Trim()).ToList();
     }
 
-    /// <summary>Result-column indices that are the primary key of their base table (for the PK badge).</summary>
+    /// <summary>Result-column indices that are the primary key of their base table (for the PK badge).
+    /// Through <see cref="ColumnOriginResolver"/> because SQL Server reports origin by name only — read off
+    /// <c>BaseTableId</c>, this asked the snapshot about table 0 and no SQL Server result ever had a
+    /// badge.</summary>
     public static IReadOnlyCollection<int> DetectPrimaryKeyColumns(
         ISchemaSnapshot? snapshot, IReadOnlyList<ColumnDescriptor> columns)
     {
         if (snapshot is null || columns.Count == 0) return Array.Empty<int>();
         var pks = new List<int>();
         for (var i = 0; i < columns.Count; i++)
-        {
-            var c = columns[i];
-            if (!c.HasBaseColumn) continue;
-            if (snapshot.ColumnsOf(c.BaseTableId).Any(pc => pc.Ordinal == c.BaseColumnOrdinal && pc.IsPrimaryKey))
+            if (ColumnOriginResolver.Resolve(snapshot, columns[i]) is { Column.IsPrimaryKey: true })
                 pks.Add(i);
-        }
         return pks;
     }
 

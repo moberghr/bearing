@@ -158,15 +158,31 @@ public sealed class ConnectionFieldModel
         return model;
     }
 
-    /// <summary>Option keys that came in on the edited connection and that this provider does not declare.
-    /// Preserved verbatim through <see cref="Apply"/>.</summary>
-    private readonly Dictionary<string, string> _carried = new(StringComparer.Ordinal);
+    /// <summary>
+    /// Option keys that came in on the edited connection and that this provider does not declare.
+    /// Preserved verbatim through <see cref="Apply"/>.
+    /// <para>
+    /// Case-insensitively, as the bag is read: the documented <c>entra.*</c> keys are looked up by name
+    /// rather than by exact spelling, so two spellings of one key must not survive here as two entries and
+    /// then be resolved by whichever the reader happens to meet first.
+    /// </para>
+    /// </summary>
+    private readonly Dictionary<string, string> _carried = new(StringComparer.OrdinalIgnoreCase);
 
     private void Carry(ConnectionInfo existing)
     {
         foreach (var (key, value) in existing.Options)
+        {
+            // The legacy TLS key is dropped, not carried — the one entry this dialog deliberately does not
+            // preserve. TlsPolicy.Resolve falls back to a bag `sslmode` whenever the field is still at its
+            // default (Prefer), so carrying a stale `sslmode: disable` from a pre-#23 project or a DBeaver
+            // import would let it outrank the mode the user just picked here: the record and the dialog
+            // would both read Prefer while the connection ran unencrypted. Per §1.4 a security setting has
+            // exactly one source of truth, and writing the field is what makes the field it.
+            if (string.Equals(key, TlsPolicy.LegacyOptionKey, StringComparison.OrdinalIgnoreCase)) continue;
             if (!Fields.Any(f => string.Equals(f.Key, key, StringComparison.OrdinalIgnoreCase)))
                 _carried[key] = value;
+        }
     }
 
     private static string ValueFor(ConnectionField field, ConnectionInfo? existing)
@@ -181,7 +197,24 @@ public sealed class ConnectionFieldModel
 
         // Everything else is an option. A key the connection doesn't carry falls back to the declared
         // default, which is also what Apply then declines to write back — see there.
-        return existing.Options.TryGetValue(field.Key, out var option) ? option : field.Default ?? "";
+        //
+        // Read case-insensitively, because Carry *excludes* a declared key case-insensitively: a persisted
+        // `Search_Path` against a field keyed `search_path` was excluded from _carried as a match and then
+        // missed by this ordinal read, so it was neither carried nor loaded and disappeared on the next
+        // save — the one thing this class's own doc promises cannot happen. (A key differing by more than
+        // case is a different key, and is carried verbatim.)
+        return OptionValue(existing.Options, field.Key) ?? field.Default ?? "";
+    }
+
+    /// <summary>An options-bag lookup that does not depend on the bag's comparer. A bag deserialized from
+    /// project.json is an ordinary ordinal dictionary however this dialog built it, so the case-insensitive
+    /// reading has to live in the lookup rather than in the container.</summary>
+    private static string? OptionValue(IReadOnlyDictionary<string, string> options, string key)
+    {
+        if (options.TryGetValue(key, out var exact)) return exact;
+        foreach (var (k, v) in options)
+            if (string.Equals(k, key, StringComparison.OrdinalIgnoreCase)) return v;
+        return null;
     }
 
     /// <summary>Read a field's current value, or null when this provider has no such field.</summary>
@@ -296,7 +329,7 @@ public sealed class ConnectionFieldModel
     /// </summary>
     public ConnectionInfo Apply(ConnectionInfo template)
     {
-        var options = new Dictionary<string, string>(_carried, StringComparer.Ordinal);
+        var options = new Dictionary<string, string>(_carried, StringComparer.OrdinalIgnoreCase);
         foreach (var field in Fields)
         {
             if (Intrinsic.Contains(field.Key)) continue;
@@ -305,14 +338,26 @@ public sealed class ConnectionFieldModel
             options[field.Key] = value;
         }
 
+        // Belt to Carry's braces: however such an entry got here — carried, or declared as a field by some
+        // future provider — the bag must not hold a TLS setting beside the typed one (see Carry).
+        options.Remove(TlsPolicy.LegacyOptionKey);
+
+        // Each intrinsic is written only when this provider declares a field for it. `Get` returning null
+        // means "this engine has no such box", which is not the same as an empty box: coercing it to ""
+        // (and the port to 0) blanked the template's endpoint for a provider that declares no fields at
+        // all, which is exactly what DemoProvider does.
         return template with
         {
             ProviderId = ProviderId,
-            Host = (Get("Host") ?? "").Trim(),
-            Port = Port,
-            Database = (Get("Database") ?? "").Trim(),
-            User = (Get("User") ?? "").Trim(),
+            Host = Get("Host") is { } host ? host.Trim() : template.Host,
+            Port = Has("Port") ? Port : template.Port,
+            Database = Get("Database") is { } database ? database.Trim() : template.Database,
+            User = Get("User") is { } user ? user.Trim() : template.User,
             Options = options,
         };
     }
+
+    /// <summary>Whether this provider declares a field with this key at all.</summary>
+    private bool Has(string key)
+        => Fields.Any(f => string.Equals(f.Key, key, StringComparison.OrdinalIgnoreCase));
 }

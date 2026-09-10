@@ -64,7 +64,11 @@ public sealed class CompletionEngine : ICompletionEngine
         // StackOverflowException cannot be caught in .NET — the `catch` below would not run, the process
         // would simply die and take the user's unsaved buffer with it. Completion is optional; a crash is
         // not, so deeply nested text gets no suggestions rather than a parse attempt.
-        if (PgParsing.TooDeeplyNested(parsed.Tokens.GetTokens()))
+        //
+        // Counted with *these* rules, not Postgres': the tokens are whatever `rules.Parse` produced, and
+        // measuring a T-SQL stream with PostgreSQL's token numbers reported ~0 for any depth — a guard
+        // that never fires in front of the parser it exists to protect.
+        if (ParseDepth.TooDeep(rules, parsed.Tokens.GetTokens()))
             return new CompletionResult(Array.Empty<Suggestion>(), caretOffset, 0);
 
         var caret = ResolveCaret(parsed.Tokens, caretOffset);
@@ -202,7 +206,7 @@ public sealed class CompletionEngine : ICompletionEngine
         var rules = _dialect().ParseRules;
         var parsed = rules.Parse(sql);
         parsed.Tokens.Fill();
-        if (PgParsing.TooDeeplyNested(parsed.Tokens.GetTokens())) return new HashSet<CompletionIntent>();
+        if (ParseDepth.TooDeep(rules, parsed.Tokens.GetTokens())) return new HashSet<CompletionIntent>();
 
         var caret = ResolveCaret(parsed.Tokens, caretOffset);
         parsed.PrimeForCompletion();

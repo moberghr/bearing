@@ -432,4 +432,115 @@ public class ConnectionFieldModelTests
         Assert.Equal("reckless", field.Candidates[0]);
         Assert.Equal(4, field.Candidates.Count);
     }
+
+    // ---- The legacy TLS key is the one option a save must not preserve (§1.4) -----------------
+
+    /// <summary>
+    /// A pre-#23 project (or a DBeaver import) carries <c>sslmode</c> in the bag and no <c>Tls</c> field.
+    /// <see cref="TlsPolicy.Resolve"/> falls back to that entry whenever the field is still at its default,
+    /// so carrying it through a save let a stale <c>disable</c> outrank the mode the user had just picked:
+    /// the dialog and the stored record both read Prefer while the connection ran unencrypted, and the write
+    /// guard could not expose it because nothing about the SQL was different.
+    /// </summary>
+    [Fact]
+    public void Saving_drops_a_legacy_sslmode_entry_rather_than_carrying_it()
+    {
+        var existing = Blank with
+        {
+            Host = "db.example.com",
+            Options = new Dictionary<string, string>
+            {
+                ["sslmode"] = "disable",
+                ["search_path"] = "app",
+            },
+        };
+
+        var saved = ConnectionFieldModel.For(Opt, existing).Apply(existing with { Tls = TlsMode.Prefer });
+
+        Assert.DoesNotContain("sslmode", saved.Options.Keys);
+        Assert.Equal(TlsMode.Prefer, TlsPolicy.Resolve(saved));   // the field, not the bag
+        Assert.Equal("app", saved.Options["search_path"]);        // every other key still carried
+    }
+
+    /// <summary>However it is spelled: the bag is read case-insensitively, so dropping only the lower-case
+    /// spelling would leave the same override in place under a different one.</summary>
+    [Theory]
+    [InlineData("SSLMode")]
+    [InlineData("SslMode")]
+    public void The_legacy_key_is_dropped_whatever_its_case(string key)
+    {
+        var existing = Blank with
+        {
+            Options = new Dictionary<string, string> { [key] = "disable" },
+        };
+
+        var saved = ConnectionFieldModel.For(Opt, existing).Apply(existing with { Tls = TlsMode.Require });
+
+        Assert.Empty(saved.Options);
+        Assert.Equal(TlsMode.Require, TlsPolicy.Resolve(saved));
+    }
+
+    // ---- Case, and providers that declare nothing -------------------------------------------------
+
+    /// <summary>
+    /// <c>Carry</c> excludes a declared key case-insensitively, so the load has to read one the same way.
+    /// A persisted <c>Search_Path</c> against a field keyed <c>search_path</c> was excluded from
+    /// <c>_carried</c> as a match and then missed by an ordinal load — so it was neither carried nor loaded,
+    /// and disappeared on the next save, which is precisely what the model's own doc says it cannot do.
+    /// (A key that differs by more than case, <c>SearchPath</c>, is a different key: it is carried
+    /// verbatim, which is the other half of the same promise.)
+    /// </summary>
+    [Fact]
+    public void An_option_key_in_another_case_is_loaded_rather_than_dropped()
+    {
+        var existing = Blank with
+        {
+            Options = new Dictionary<string, string> { ["Search_Path"] = "reporting" },
+        };
+
+        var model = ConnectionFieldModel.For(Opt, existing);
+
+        Assert.Equal("reporting", model.Get("search_path"));
+        Assert.Equal("reporting", model.Apply(existing).Options["search_path"]);
+    }
+
+    /// <summary>
+    /// A provider that declares no fields must leave the template's endpoint alone. <c>Get</c> returning
+    /// null means "this engine has no such box", which is not an empty box — coercing it wrote
+    /// <c>Host = ""</c> and <c>Port = 0</c> over a perfectly good template, which is what a save in a demo
+    /// session did (DemoProvider declares none).
+    /// </summary>
+    [Fact]
+    public void A_provider_that_declares_no_fields_leaves_the_endpoint_alone()
+    {
+        var template = Blank with { Host = "kept", Port = 4242, Database = "keptdb", User = "keptuser" };
+
+        var saved = ConnectionFieldModel.For(new FieldlessProvider(), template).Apply(template);
+
+        Assert.Equal("kept", saved.Host);
+        Assert.Equal(4242, saved.Port);
+        Assert.Equal("keptdb", saved.Database);
+        Assert.Equal("keptuser", saved.User);
+        Assert.Equal("fieldless", saved.ProviderId);
+    }
+
+    /// <summary>An engine with no connection fields at all — what <c>DemoProvider</c> is.</summary>
+    private sealed class FieldlessProvider : IDbProvider
+    {
+        public string Id => "fieldless";
+        public string DisplayName => "Fieldless";
+        public bool SupportsIntegratedAuth => false;
+        public bool SupportsEntraToken => false;
+        public DbErrorKind Classify(QueryError error) => DbErrorKind.Unknown;
+        public DbErrorKind ClassifyException(Exception exception) => DbErrorKind.Unknown;
+
+        public IReadOnlyList<ConnectionField> ConnectionFields { get; } = Array.Empty<ConnectionField>();
+
+        public IDbConnectionFactory CreateConnectionFactory(ConnectionInfo info, string? password)
+            => throw new NotSupportedException("declares fields only");
+        public IMetadataReader CreateMetadataReader(IDbConnectionFactory factory)
+            => throw new NotSupportedException("declares fields only");
+        public IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory)
+            => throw new NotSupportedException("declares fields only");
+    }
 }

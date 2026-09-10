@@ -212,4 +212,33 @@ public class UpdateDeleteTargetTests
         Assert.NotNull(target);
         Assert.Equal("id = 3", target.Where);
     }
+
+    /// <summary>
+    /// T-SQL's row-limited write. The reduction is dialect-blind (it lexes with <c>PgParsing</c>), and
+    /// <c>update top (10) Orders set …</c> reduced with <c>top</c> as the relation: the counted form built a
+    /// query the server rejected, and the no-WHERE form reported "every row in top" without asking anyone
+    /// — a wrong relation and a wrong row set, in the confirmation §1.5 exists to make trustworthy.
+    /// A TOP has no honest count in any case: its predicate does not decide the row set on its own.
+    /// </summary>
+    [Theory]
+    [InlineData("update top (10) Orders set Freight = 1 where OrderId = 5")]
+    [InlineData("update top (10) Orders set Freight = 1")]
+    [InlineData("update TOP (5) PERCENT Orders set Freight = 1 where OrderId = 5")]
+    [InlineData("delete top (5) from Orders where OrderId = 5")]
+    public void A_tsql_top_clause_declines(string statement)
+        => Assert.Null(UpdateDeleteTarget.TryReduce(statement));
+
+    /// <summary>
+    /// And the decline is the <c>TOP (</c> shape, not the word: a relation actually named <c>top</c> still
+    /// reduces, because it is followed by its <c>SET</c> rather than by a row count.
+    /// </summary>
+    [Fact]
+    public void A_relation_named_top_still_reduces()
+    {
+        var target = UpdateDeleteTarget.TryReduce("update top set x = 1 where id = 2");
+
+        Assert.NotNull(target);
+        Assert.Equal("top", target.Relation);
+        Assert.Equal("id = 2", target.Where);
+    }
 }
