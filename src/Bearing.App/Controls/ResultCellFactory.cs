@@ -324,11 +324,21 @@ public sealed class ResultCellFactory
         border.DetachedFromVisualTree += (_, _) => _selection.RemoveRestyleListener(Restyle);
 
         // Our press handler marks the event handled, so the DataGrid never gets to set its own current cell
-        // from the click. Focusing a grid that has *no* current cell makes Avalonia adopt the first column
-        // and scroll it into view — which is why clicking a cell while scrolled right sometimes threw the
-        // view back to the leftmost column. Handing it the clicked cell first makes that a no-op.
+        // from the click. Hand it the clicked one, or its current cell stays wherever it last was and
+        // BeginEdit / its own key handling act on a cell the user is not pointing at.
         // `CurrentItem` is internal in Avalonia 12, so the current *row* has to come from the selection; the
         // row highlight that would otherwise paint is already suppressed (ResultGridChrome).
+        //
+        // Focusing the grid used to throw a horizontally scrolled result back to column zero, and Avalonia
+        // was not the one doing it: our own GotFocus seed was (GridSelectionController.SeedActive). Fixed
+        // there — the seed now names the first cell already on screen and does not scroll.
+        //
+        // There is deliberately NO ScrollIntoView on this path any more. It used to be here as a corrective
+        // for the seed's jump, and once the seed stopped jumping the only thing it still did was scroll a
+        // cell clipped by the viewport edge fully into view — so clicking the sliver of a half-visible column
+        // slid the whole result sideways. A press is not a navigation: nothing the user clicks needs
+        // revealing, because they could already see it well enough to click it. Cursor motion still scrolls
+        // (GridSelectionController.MoveActive); a click never does.
         void FocusClickedCell()
         {
             if (index < grid.Columns.Count)
@@ -337,18 +347,6 @@ public sealed class ResultCellFactory
                 grid.CurrentColumn = grid.Columns[index];
             }
             grid.Focus();
-        }
-
-        // Corrective, on top of the above: whatever moved the viewport during the click — the DataGrid
-        // adopting a current cell, or the quick-stats bar appearing and re-measuring the grid — the cell you
-        // clicked ends up visible again. A no-op when nothing moved. Done twice because the two candidate
-        // causes land in different frames: the re-measure happens in the layout pass after this returns.
-        void KeepClickedCellInView()
-        {
-            if (index >= grid.Columns.Count) return;
-            var column = grid.Columns[index];
-            grid.ScrollIntoView(row, column);
-            Dispatcher.UIThread.Post(() => grid.ScrollIntoView(row, column), DispatcherPriority.Loaded);
         }
 
         border.AddHandler(InputElement.PointerPressedEvent, (_, e) =>
@@ -363,7 +361,6 @@ public sealed class ResultCellFactory
                 // marked handled — the flyout still has to open.
                 FocusClickedCell();
                 if (!_selection.IsSelected(result, row, index)) _selection.SelectSingle(result, row, index);
-                KeepClickedCellInView();
                 return;
             }
             if (!point.IsLeftButtonPressed) return;
@@ -374,7 +371,6 @@ public sealed class ResultCellFactory
             if (shift && _selection.CanExtendFrom(result)) _selection.ExtendTo(result, row, index);
             else if (ctrl) _selection.ToggleCell(result, row, index);
             else _selection.SelectSingleAndBeginDrag(result, row, index, e.Pointer, grid);
-            KeepClickedCellInView();
             e.Handled = true;
         }, RoutingStrategies.Bubble, handledEventsToo: true);
         return border;

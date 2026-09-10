@@ -69,33 +69,6 @@ public partial class MainWindow
     private static PointerUpdateKind PressKind(PointerPressedEventArgs e)
         => e.GetCurrentPoint(null).Properties.PointerUpdateKind;
 
-    /// <summary>Whether a pressed visual is (or is inside) a tab's ✕.</summary>
-    private static bool IsCloseAffordance(object? source)
-        => source is Visual visual
-           && visual.FindAncestorOfType<Border>(includeSelf: true) is { Tag: "close" };
-
-    /// <summary>
-    /// Whether a pressed visual is (or is inside) a tab's pin toggle.
-    /// <para>
-    /// Separate from <see cref="IsCloseAffordance"/> rather than folded into one "is an affordance" check,
-    /// because the two do different things to the selection: closing must <b>not</b> select the tab first
-    /// (#87's neighbour rule would then pick from the wrong index), while pinning a tab you are not on is a
-    /// perfectly ordinary thing to want and selecting it would be a surprise. Both need the strip's tunnel
-    /// handler to leave them alone; only the reason differs.
-    /// </para>
-    /// </summary>
-    private static bool IsPinAffordance(object? source)
-        => source is Visual visual
-           && visual.FindAncestorOfType<Border>(includeSelf: true) is { Tag: "pin" };
-
-    /// <summary>The tab a pressed visual belongs to, found by walking up to its container.</summary>
-    private static (Control Target, EditorTabViewModel Tab)? Tab(object? source)
-        => source is Visual visual
-           && visual.FindAncestorOfType<TabStripItem>(includeSelf: true) is
-           { DataContext: EditorTabViewModel tab } item
-            ? (item, tab)
-            : null;
-
     /// <summary>
     /// Keyboard navigation inside a focused strip, pushed to the view model.
     /// <para>
@@ -188,15 +161,15 @@ public partial class MainWindow
         // neighbour rule (#87) picking from the wrong index. A *middle* press is not — the ✕ ignores
         // everything but the left button (#66), so returning here made the close gesture do nothing on the
         // one target it most obviously aims at, while working two pixels away.
-        if (IsCloseAffordance(e.Source)
+        if (TabHeaderParts.IsCloseAffordance(e.Source)
             && TabPointerGestures.ActivatesCloseButton(PressKind(e))) return;
         // Likewise the pin toggle, which has its own handler. Different reason from the ✕ above: pinning a
         // tab you are not currently on is an ordinary thing to want, and dragging the selection along with
         // it would be a surprise — a middle-click on the pin is still the header's close gesture, so the
         // same left-button-only condition applies.
-        if (IsPinAffordance(e.Source)
+        if (TabHeaderParts.IsPinAffordance(e.Source)
             && TabPointerGestures.ActivatesCloseButton(PressKind(e))) return;
-        if (Tab(e.Source) is not (var target, var tab)) return;
+        if (TabHeaderParts.Tab(e.Source) is not (var target, var tab)) return;
         SelectTabFromHeader(target, tab, e);
         if (!TabPointerGestures.ClosesTab(e.GetCurrentPoint(target).Properties.PointerUpdateKind)) return;
         // The inline rename box lives in this same panel, and on X11 a middle-click in a text box pastes the

@@ -174,4 +174,114 @@ public class WriteConfirmationTests
     [Fact]
     public void An_empty_batch_has_nothing_to_be_unsure_about()
         => Assert.True(WriteConfirmation.ForBatch(Conn(), Array.Empty<StatementRisk>()).GuardIsDialectAware);
+
+    // ---- row impact (#112 / #100) ---------------------------------------------------------------------
+
+    private static WriteConfirmation WithImpacts(string sql, params (int Index, RowImpact Impact)[] impacts)
+        => WriteConfirmation.ForBatch(Conn(), WriteGuard.Describe(sql),
+            impacts.ToDictionary(x => x.Index, x => x.Impact));
+
+    [Fact]
+    public void A_counted_write_says_how_many_rows_and_where()
+    {
+        var target = UpdateDeleteTarget.TryReduce("update payment set amount = 1 where amount > 10")!;
+        var confirmation = WithImpacts("update payment set amount = 1 where amount > 10;",
+            (0, RowImpact.Counted(target, 3412)));
+
+        var impact = Assert.Single(confirmation.Impacts);
+        // Grouped, and grouped invariantly — "3.412 rows" and "3,412 rows" are prompts about different
+        // numbers, and the plan window already settled this for the same reason.
+        Assert.Equal("This will update 3,412 rows in payment.", impact.Text);
+        Assert.False(impact.IsAlarming);
+    }
+
+    [Fact]
+    public void One_row_is_not_pluralised()
+    {
+        var target = UpdateDeleteTarget.TryReduce("delete from payment where payment_id = 7")!;
+        Assert.Equal("This will delete 1 row in payment.", RowImpact.Counted(target, 1).Text);
+    }
+
+    [Fact]
+    public void Zero_rows_is_a_real_answer()
+    {
+        // The wrong-tab mistake has a mirror: a statement you expected to hit something and that matches
+        // nothing. Reporting that as no number at all would hide it.
+        var target = UpdateDeleteTarget.TryReduce("delete from payment where payment_id = 7")!;
+        var impact = RowImpact.Counted(target, 0);
+        Assert.Equal("This will delete 0 rows in payment.", impact.Text);
+        Assert.False(impact.IsAlarming);
+    }
+
+    [Fact]
+    public void A_statement_with_no_where_clause_says_every_row_and_says_it_loudly()
+    {
+        // #100. Not "0 rows", not silence — the one case where the absence of a predicate *is* the finding.
+        var target = UpdateDeleteTarget.TryReduce("delete from payment")!;
+        var impact = RowImpact.Every(target);
+
+        Assert.Equal("This will delete every row in payment.", impact.Text);
+        Assert.True(impact.IsAlarming);
+    }
+
+    [Fact]
+    public void A_count_that_could_not_be_taken_says_so_rather_than_showing_nothing()
+    {
+        // "No number" and "zero" must not look the same, and a slow count must not be indistinguishable
+        // from a statement the reducer declined.
+        var target = UpdateDeleteTarget.TryReduce("delete from payment where amount > 1")!;
+        var impact = RowImpact.Uncounted(target);
+
+        Assert.Equal("Could not count the rows this will delete in payment in time.", impact.Text);
+        Assert.True(impact.IsAlarming);
+    }
+
+    [Fact]
+    public void A_batch_with_no_counts_reads_exactly_as_it_did_before()
+    {
+        var confirmation = WriteConfirmation.ForBatch(Conn(), WriteGuard.Describe("drop table snapshot;"));
+
+        Assert.Empty(confirmation.Impacts);
+        Assert.Null(confirmation.ImpactCaveat);
+        Assert.All(confirmation.Statements, s => Assert.Null(s.Impact));
+    }
+
+    [Fact]
+    public void Several_writes_carry_the_caveat_that_the_counts_predate_the_batch()
+    {
+        // Counted before anything ran, so a statement that a previous one feeds is counted against rows that
+        // will no longer be there. Saying so is cheaper than pretending the numbers are independent.
+        var first = UpdateDeleteTarget.TryReduce("delete from payment where amount < 1")!;
+        var second = UpdateDeleteTarget.TryReduce("delete from rental where return_date is null")!;
+        var confirmation = WithImpacts(
+            "delete from payment where amount < 1; delete from rental where return_date is null;",
+            (0, RowImpact.Counted(first, 12)), (1, RowImpact.Counted(second, 40)));
+
+        Assert.Equal(2, confirmation.Impacts.Count);
+        Assert.Equal("Counted before the batch runs — an earlier statement can change what a later one matches.",
+            confirmation.ImpactCaveat);
+    }
+
+    [Fact]
+    public void A_single_write_needs_no_such_caveat()
+    {
+        var target = UpdateDeleteTarget.TryReduce("delete from payment where amount < 1")!;
+        var confirmation = WithImpacts("select 1; delete from payment where amount < 1;",
+            (1, RowImpact.Counted(target, 12)));
+
+        Assert.Equal(1, confirmation.RiskyCount);
+        Assert.Null(confirmation.ImpactCaveat);
+    }
+
+    [Fact]
+    public void An_impact_is_attached_to_the_statement_it_describes()
+    {
+        // Keyed by index, so a batch that mixes reads and writes cannot hang a count on the wrong line.
+        var target = UpdateDeleteTarget.TryReduce("delete from payment where amount < 1")!;
+        var confirmation = WithImpacts("select 1 from film; delete from payment where amount < 1;",
+            (1, RowImpact.Counted(target, 12)));
+
+        Assert.Null(confirmation.Statements[0].Impact);
+        Assert.NotNull(confirmation.Statements[1].Impact);
+    }
 }

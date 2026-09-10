@@ -110,6 +110,10 @@ public sealed partial class ResultView : UserControl
     /// <summary>Invoked to discard a result set's pending edits (the [Discard] button).</summary>
     public Func<ResultSetViewModel, Task>? DiscardChanges { get; set; }
 
+    /// <summary>Invoked to show the generated DML for a result set's pending edits (#114 — the [SQL] button
+    /// and <c>grid.showSql</c>). The host owns the window and the new-tab route; this view only asks.</summary>
+    public Func<ResultSetViewModel, Task>? ShowPendingSql { get; set; }
+
     /// <summary>Report a one-line outcome to the shell's status bar (what a paste wrote, what it dropped).</summary>
     public Action<string>? Status { get; set; }
 
@@ -210,6 +214,9 @@ public sealed partial class ResultView : UserControl
             canRun: () => HasPendingEdits()));
         r.Register(new KeyCommand(CommandIds.GridDiscard, "Discard changes", KeyScope.Grid, "Grid",
             async () => { if (GridTarget() is { } t && DiscardChanges is { } f) await f(t.Result); },
+            canRun: () => HasPendingEdits()));
+        r.Register(new KeyCommand(CommandIds.GridShowSql, "Show pending SQL", KeyScope.Grid, "Grid",
+            async () => { if (GridTarget() is { } t && ShowPendingSql is { } f) await f(t.Result); },
             canRun: () => HasPendingEdits()));
         r.Register(KeyCommand.Sync(CommandIds.GridClearSelection, "Clear selection", KeyScope.Grid, "Grid",
             () => _selection.ClearAndNotify(),

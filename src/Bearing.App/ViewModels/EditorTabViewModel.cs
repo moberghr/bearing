@@ -145,6 +145,14 @@ public sealed partial class EditorTabViewModel : ObservableObject
     /// a feature discoverable that was previously only reachable by right-click, Alt+P or the palette.</summary>
     public string PinTooltip => IsPinned ? "Unpin tab (Alt+P)" : "Pin tab (Alt+P)";
 
+    /// <summary>
+    /// True while this tab is being dragged to a new position in the strip. The header dims, so the tab that
+    /// is moving is distinguishable from the one under the insertion caret — the tab itself stays where it
+    /// was until the pointer is released (nothing reorders mid-drag), and without the dim there is nothing to
+    /// say which of the two the drag is carrying.
+    /// </summary>
+    [ObservableProperty] private bool _isDragging;
+
     /// <summary>Begin a run: publish the busy flag and a fresh cancellation source, returning its token.
     /// The caller has already ensured this tab isn't already running (one operation per tab).</summary>
     internal CancellationToken BeginRun()

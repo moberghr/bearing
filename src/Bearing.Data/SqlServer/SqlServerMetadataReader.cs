@@ -334,7 +334,10 @@ public sealed class SqlServerMetadataReader : IMetadataReader
         var constraints = await ReadConstraintsAsync(conn, tableId, indexes, ct).ConfigureAwait(false);
         var triggers = await ReadTriggersAsync(conn, tableId, ct).ConfigureAwait(false);
 
-        return new TableDetails(constraints, indexes, triggers);
+        // No policies: SQL Server's row-level security lives in sys.security_policies, which is unread for
+        // the same reason GetDatabaseObjectsAsync is empty — the query has not been run against a live
+        // server (§4.2). TableDetails' Columns / Rules / Comment extras are unpopulated here too.
+        return new TableDetails(constraints, indexes, triggers, []);
     }
 
     /// <summary>Column id → name for one relation, so a composed definition can name its columns.</summary>
@@ -644,6 +647,46 @@ public sealed class SqlServerMetadataReader : IMetadataReader
                 r.IsDBNull(1) ? null : r.GetInt64(1) * PageBytes));
         return list;
     }
+
+    /// <summary>
+    /// Not read for SQL Server yet — the interface's documented "no answer for a kind" arm (§9.9), so the
+    /// tree simply shows no Sequences / Types / Extensions / Policies groups on a SQL Server database.
+    /// <para>
+    /// SQL Server does have counterparts for some of these (<c>sys.sequences</c>, <c>sys.types</c> where
+    /// <c>is_user_defined = 1</c>, and row-level security through <c>sys.security_policies</c>), so this is
+    /// a gap rather than an absence. It is left empty deliberately instead of guessed at: §4.2 is explicit
+    /// that a provider read is reported only after its container has run it, and these queries have not
+    /// been measured against a live server.
+    /// </para>
+    /// </summary>
+    public Task<DatabaseObjectKinds> GetDatabaseObjectsAsync(CancellationToken ct)
+        => Task.FromResult(DatabaseObjectKinds.Empty);
+
+    /// <summary>
+    /// Not read for SQL Server yet, for <see cref="GetDatabaseObjectsAsync"/>'s reason. The server's
+    /// principals live in <c>sys.server_principals</c> (logins) and <c>sys.database_principals</c> (users
+    /// and database roles) — two catalogs at two scopes onto one <see cref="RoleInfo"/>, which is a mapping
+    /// decision to make with a live server in front of it, not from the documentation.
+    /// </summary>
+    public Task<IReadOnlyList<RoleInfo>> GetRolesAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<RoleInfo>>([]);
+
+    /// <summary>
+    /// Unreachable while <see cref="GetRolesAsync"/> is empty — the tree only asks for the grants of a role
+    /// it listed. <see cref="RoleGrants.NotVisible"/> rather than an empty grant list so that if it ever is
+    /// reached it cannot state that a role has no privileges here, which nothing has checked.
+    /// </summary>
+    public Task<RoleGrants> GetRoleGrantsAsync(string roleName, CancellationToken ct)
+        => Task.FromResult(RoleGrants.NotVisible);
+
+    /// <summary>
+    /// Not read for SQL Server yet. The nearest counterpart is a filegroup (<c>sys.filegroups</c> +
+    /// <c>sys.database_files</c>), which is per database rather than cluster-wide — so it is not the same
+    /// object at the same scope, and mapping it onto the server node would put a database's storage where a
+    /// Postgres user expects the cluster's.
+    /// </summary>
+    public Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<SchemaObjectInfo>>([]);
 
     /// <summary>Bracket-quote for a composed definition. The dialect owns this rule, but
     /// <c>Bearing.Data</c> does not reference <c>Bearing.Sql</c> (§2.2) — and the rule is two characters

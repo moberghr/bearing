@@ -95,6 +95,30 @@
   <StreamGeometry x:Key="Icon.ForeignKey">M4,12 h12 M12,8 l4,4 l-4,4</StreamGeometry>
   <StreamGeometry x:Key="Icon.Reference">M20,12 h-12 M12,8 l-4,4 l4,4</StreamGeometry>
 
+  <!-- The per-database object kinds (#119). Each one is a silhouette rather than a letter, so it reads at
+       13px in a tree row: a sequence counts up, a type is a labelled tag, an extension is a plug-in block,
+       and a policy is a shield — the only one of the four that is about being kept out of something. -->
+  <StreamGeometry x:Key="Icon.Sequence">M5,17 h3 v-3 M10,14 h3 v-4 M15,10 h4 v-3</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Type">M4,7 h10 a2,2 0 0 1 2,2 v6 a2,2 0 0 1 -2,2 h-10 z M18,10 l2,2 l-2,2</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Extension">M6,7 h5 v-2 h2 v2 h5 v10 h-12 z M11,17 v2 h2 v-2</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Policy">M12,4 l7,3 v5 a8,9 0 0 1 -7,8 a8,9 0 0 1 -7,-8 v-5 z</StreamGeometry>
+
+  <!-- A role (#120): a head-and-shoulders silhouette, which reads as "who" at 13px where a key would
+       read as a constraint. -->
+  <StreamGeometry x:Key="Icon.Role">M12,7 a3,3 0 1 0 0,6 a3,3 0 1 0 0,-6 M5,20 a7,7 0 0 1 14,0</StreamGeometry>
+
+  <!-- The long-tail kinds. Each is a silhouette rather than a letterform, so it still reads at 13px:
+       a rule rewrites (a loop), a partition is a divided block, replication flows one way, a foreign server
+       is two-way, a collation orders, a cast converts, an operator combines, text search magnifies. -->
+  <StreamGeometry x:Key="Icon.Rule">M7,9 a5,5 0 1 1 0,6 M7,9 h-2 M7,9 v-2 M17,15 h2 M17,15 v2</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Partition">M4,6 h16 v12 h-16 z M4,12 h16 M12,12 v6</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Publication">M12,4 v12 M8,12 l4,4 l4,-4 M5,20 h14</StreamGeometry>
+  <StreamGeometry x:Key="Icon.ForeignServer">M4,10 h12 M13,7 l3,3 l-3,3 M20,15 h-12 M11,12 l-3,3 l3,3</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Collation">M5,17 l4,-10 l4,10 M6.5,13.5 h5 M16,8 v9 M16,17 l3,-3 M16,17 l-3,-3</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Cast">M4,12 h12 M13,9 l3,3 l-3,3 M19,7 v10</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Operator">M5,10 h6 M5,14 h6 M13,12 h6 M16,9 v6</StreamGeometry>
+  <StreamGeometry x:Key="Icon.TextSearch">M5,8 h9 M5,12 h6 M5,16 h4 M16,14 a3,3 0 1 0 0.01,0 M18.5,16.5 l2.5,2.5</StreamGeometry>
+
   <StreamGeometry x:Key="Icon.Snippet">M10,5 h-2 a2,2 0 0 0 -2,2 v3 a2,2 0 0 1 -2,2 a2,2 0 0 1 2,2 v3 a2,2 0 0 0 2,2 h2 M14,5 h2 a2,2 0 0 1 2,2 v3 a2,2 0 0 0 2,2 a2,2 0 0 0 -2,2 v3 a2,2 0 0 1 -2,2 h-2</StreamGeometry>
 
 </ResourceDictionary>

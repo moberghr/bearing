@@ -10,6 +10,7 @@ using CommunityToolkit.Mvvm.Input;
 using Bearing.App.Connections;
 using Bearing.App.Workspace;
 using Bearing.Core.Data;
+using Bearing.Core.Schema;
 using Bearing.Core.Workspace;
 using Bearing.Data.Postgres;
 
@@ -121,6 +122,86 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     /// <summary>Root rows of the connections tree — folders (#80) and the server nodes filed at the root,
     /// <b>after</b> <see cref="ConnectionFilter"/>. What the tree binds to.</summary>
     public ObservableCollection<SchemaNodeViewModel> ServerNodes { get; } = new();
+
+    /// <summary>
+    /// The schema tree's selected row. Two-way bound, so a view-model can <em>set</em> it — which is what
+    /// "go to table" and "go to definition" do (#117), the same way the scripts tree's selection is set by
+    /// "Reveal in Scripts".
+    /// </summary>
+    [ObservableProperty] private SchemaNodeViewModel? _selectedSchemaNode;
+
+    /// <summary>
+    /// The schema snapshot for the selected tab, loading it if it has never been read (#117).
+    /// <para>
+    /// The fallback the "go to" commands need: an empty picker reads as "this database has no tables", which
+    /// is never what a missing snapshot means. It only ever uses a session that is <b>already live</b> —
+    /// offering to load a schema must not become a reason to connect (and possibly prompt for a credential)
+    /// behind a keystroke the user thinks is a search box.
+    /// </para>
+    /// </summary>
+    public async Task<ISchemaSnapshot?> EnsureSnapshotForSelectedTabAsync()
+    {
+        if (Selected is not { } tab || _ctx.EffectiveConnection(tab) is not { } info) return null;
+        if (_ctx.Sessions.TryGetSnapshot(info.Id, info.Database) is { } cached) return cached;
+        if (_ctx.Sessions.TryGet(SessionKey.For(info)) is not { } session) return null;
+
+        try { return await _ctx.Sessions.EnsureSchemaAsync(session, CancellationToken.None); }
+        catch (Exception) { return null; }   // the caller says so; a failed read is not an error to surface twice
+    }
+
+    /// <summary>
+    /// Reveal a relation in the schema tree (#117): expand down to it and select it.
+    /// <para>
+    /// Awaited level by level, because schema nodes load their children on first expand — the databases of
+    /// the server, then the relations of the database, then (for a column) the columns of the relation. So
+    /// unlike the scripts tree's reveal this cannot be a pure walk; the matching at each level is
+    /// <see cref="SchemaTreeReveal"/>'s and the descent is here.
+    /// </para>
+    /// <para>
+    /// Returns what stopped it rather than a bool: "this connection is not in the tree", "that database has
+    /// no such relation" and "it worked" are three different things to tell the user, and a bool would
+    /// collapse them into the same unhelpful message (the same reasoning as
+    /// <c>PgTestServer.RequireAsync</c>'s, §4.2).
+    /// </para>
+    /// </summary>
+    public async Task<SchemaRevealResult> RevealRelationAsync(SchemaTreeReveal.Target target)
+    {
+        // The filter can be hiding the row we are about to select. Cleared first — a reveal the user asked
+        // for should not fail because of a search they typed earlier.
+        if (ConnectionFilter.Length > 0) ConnectionFilter = "";
+
+        if (SchemaTreeReveal.ServerFor(ServerNodes, target.ConnectionId) is not { } server)
+            return SchemaRevealResult.NoConnection;
+
+        server.IsExpanded = true;
+        await server.EnsureChildrenAsync();
+        if (SchemaTreeReveal.DatabaseUnder(server, target.Database) is not { } database)
+            return SchemaRevealResult.NoDatabase;
+
+        database.IsExpanded = true;
+        await database.EnsureChildrenAsync();
+        if (SchemaTreeReveal.RelationUnder(database, target.Schema, target.Name) is not { } relation)
+            return SchemaRevealResult.NoRelation;
+
+        if (target.Column is null)
+        {
+            SelectedSchemaNode = relation;
+            return SchemaRevealResult.Revealed;
+        }
+
+        relation.IsExpanded = true;
+        await relation.EnsureChildrenAsync();
+        if (SchemaTreeReveal.ColumnUnder(relation, target.Column) is not { } column)
+        {
+            // The relation is the closest true answer, so it is selected rather than nothing: a column the
+            // snapshot does not have is still a table worth landing on.
+            SelectedSchemaNode = relation;
+            return SchemaRevealResult.NoColumn;
+        }
+
+        SelectedSchemaNode = column;
+        return SchemaRevealResult.Revealed;
+    }
 
     /// <summary>Folder paths the user has collapsed, owned by the project's <see cref="ProjectWorkspace"/>
     /// so it survives a project switch the way the pane width does and rides to disk in session.json.

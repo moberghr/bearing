@@ -48,6 +48,9 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The execution concern (run/page/count/FK-nav/inline-edit), exposed as <see cref="Execution"/>.</summary>
     private readonly ExecutionViewModel _execution;
 
+    /// <summary>The dialog surface, kept because the history export has to ask two questions (#113).</summary>
+    private readonly IDialogService? _dialogs;
+
     private IProviderRegistry _providers => _ctx.Providers;
     private IProjectStore _projectStore => _ctx.ProjectStore;
     private ISessionStore _sessionStore => _ctx.SessionStore;
@@ -72,6 +75,7 @@ public sealed partial class ShellViewModel : ObservableObject
     {
         _ctx = new WorkspaceContext(providers, projectStore, sessionStore, queryLog, recentProjects, secretStore,
             credentialPrompt: credentialPrompt, entraTokens: entraTokens, settings: settings);
+        _dialogs = dialogs;
         _ctx.Status = text => StatusText = text;
         EditorFontSize = _ctx.Settings.EditorFontSize;
         InspectorFontSize = _ctx.Settings.InspectorFontSize;
@@ -218,6 +222,70 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>Search the query log (feeds the History panel VM); stays on the shell — it only touches the log.</summary>
     public Task<IReadOnlyList<QueryLogEntry>> SearchHistoryAsync(string? text, CancellationToken ct)
         => _queryLog.SearchAsync(new QueryLogQuery { Text = text }, ct);
+
+    /// <summary>
+    /// Export the query history as an audit report (#113) — <i>what ran against which connection, when</i>.
+    /// <para>
+    /// Two questions, in this order: what to cover, then where to put it. The date range is pushed down to
+    /// the store (it is the one filter SQL can apply without dropping rows it cannot classify) and everything
+    /// else is applied by <see cref="QueryLogReport"/>, which also writes the notes that keep the file honest
+    /// about the period, the single user, and the redaction setting (§1.3).
+    /// </para>
+    /// </summary>
+    public async Task ExportHistoryAsync()
+    {
+        if (_dialogs is not { } dialogs) return;
+
+        var connections = _connections.Connections.ToList();
+        var names = connections.Select(c => c.Name).Distinct(StringComparer.Ordinal)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+        var environments = connections
+            .Select(c => c.Environment)
+            .Where(e => !string.IsNullOrWhiteSpace(e))
+            .Select(e => e!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(e => e, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (await dialogs.ShowAuditExportAsync(names, environments) is not { } request) return;
+
+        // Everything that can fail is inside the try — the store read included. A locked or corrupt log
+        // used to throw out of here, through the sidebar's async-void click handler, into the unhandled-
+        // exception path: a crash report for what §5.2 says must reach the status bar.
+        try
+        {
+            // Unbounded on purpose: an audit report covers its period, however many rows that is. The
+            // history panel's 200-row ceiling is a screenful, which is a different question.
+            var entries = await _queryLog.SearchAsync(
+                new QueryLogQuery { From = request.Filter.From, To = request.Filter.To, Limit = null },
+                CancellationToken.None);
+
+            var report = QueryLogReport.Build(
+                entries, request.Filter, connections, _ctx.Settings.QueryLogRedactLiterals);
+
+            if (await dialogs.PickExportFileAsync(
+                    QueryLogReport.SuggestedName(DateTime.Now, request.Format), request.Format) is not { } path)
+                return;
+
+            StatusText = $"Exporting {report.Table.Rows.Count:N0} executions…";
+            // Off the dispatcher, like the result export: a long history is seconds of pure formatting.
+            var written = await Task.Run(() => ResultExport.WriteReport(
+                path, report.Table, request.Format, "Audit report", report.Notes));
+
+            // Names every file, because a CSV's notes are a sibling file the user would otherwise not know
+            // to hand over with it.
+            var files = string.Join(" + ", written.Select(Path.GetFileName));
+            StatusText = report.Table.Rows.Count == 0
+                // An empty period is itself an answer to an audit question, so it is reported as a written
+                // file rather than as a failure.
+                ? $"Exported an empty report — nothing ran in that period ({files})."
+                : $"Exported {report.Table.Rows.Count:N0} executions to {files}.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Export failed: {ex.Message}";
+        }
+    }
 
     // Internal helpers used by the project/session partials; the real work lives in the child VMs.
     private void RefreshConnections() => _connections.RefreshConnections();

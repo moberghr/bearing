@@ -117,28 +117,29 @@ public class WiringTests : IDisposable
             .Where(m => m is not null)
             .SelectMany(m => m!.Items.OfType<MenuItem>());
 
-    // ---- #65: the tab strip's overflow chevron ----------------------------------------------------
+    // ---- #65: the tab strip's end button — the tab dropdown and its count -------------------------
 
     [Fact]
-    public Task The_chevron_stays_hidden_while_every_tab_fits() => _ui.Run(async () =>
+    public Task The_button_carries_no_count_while_every_tab_fits() => _ui.Run(async () =>
     {
-        // The chevron is the only overflow affordance now, so it appearing when nothing has overflowed would
-        // be a standing lie — and the reason the scrollbar was replaced was that it said "there is more"
-        // without saying more of what.
-        using var shell = await ShellHarness.ShowAsync(nameof(The_chevron_stays_hidden_while_every_tab_fits));
+        // It is a dropdown of the open tabs now, so it stays put — but the *count* still may not claim tabs
+        // are hidden when none are. That claim is what retired the scrollbar before it.
+        using var shell = await ShellHarness.ShowAsync(nameof(The_button_carries_no_count_while_every_tab_fits));
         var workspace = shell.Vm.Workspace;
         workspace.Tabs.Clear();
         workspace.NewTab("-- one");
         workspace.NewTab("-- two");
         shell.Pump();
 
-        Assert.False(Chevron(shell).IsVisible);
+        var chevron = Chevron(shell);
+        Assert.True(chevron.IsVisible, "the dropdown is the strip's permanent affordance");
+        Assert.DoesNotContain("0", chevron.Content as string ?? "");
     });
 
     [Fact]
     public Task Enough_tabs_light_the_chevron_and_it_carries_the_count() => _ui.Run(async () =>
     {
-        // "» 4" — the count is the message. A bare chevron would say only the half the scrollbar already said.
+        // "▾ 4" — the caret is the dropdown, the count is what the strip cannot show you.
         using var shell = await ShellHarness.ShowAsync(nameof(Enough_tabs_light_the_chevron_and_it_carries_the_count));
         var workspace = shell.Vm.Workspace;
         workspace.Tabs.Clear();
@@ -152,7 +153,7 @@ public class WiringTests : IDisposable
         Assert.True(chevron.IsVisible, "40 tabs in a 700px window did not overflow");
 
         var label = chevron.Content as string ?? "";
-        Assert.Contains("»", label);
+        Assert.Contains("▾", label);
         // The number has to be a real count, not the tab total and not zero.
         var digits = new string(label.Where(char.IsDigit).ToArray());
         Assert.True(int.TryParse(digits, out var hidden), $"no count on the chevron: {label}");
@@ -160,18 +161,20 @@ public class WiringTests : IDisposable
     });
 
     [Fact]
-    public Task The_chevron_opens_a_list_of_every_tab_not_just_the_hidden_ones() => _ui.Run(async () =>
+    public Task Ctrl_E_opens_a_list_of_every_tab_not_just_the_hidden_ones() => _ui.Run(async () =>
     {
         // Every tab on purpose: a picker whose contents change as you resize the window is one you cannot
         // learn. The chevron's count says how many are hidden; the list is the whole set.
-        using var shell = await ShellHarness.ShowAsync(nameof(The_chevron_opens_a_list_of_every_tab_not_just_the_hidden_ones));
+        // The keystroke, not the chevron: pressing the chevron expands the strip now (below), and the modal
+        // list stayed on Ctrl+E.
+        using var shell = await ShellHarness.ShowAsync(nameof(Ctrl_E_opens_a_list_of_every_tab_not_just_the_hidden_ones));
         var workspace = shell.Vm.Workspace;
         workspace.Tabs.Clear();
         for (var i = 1; i <= 12; i++) workspace.NewTab($"-- tab {i}");
         shell.Window.Width = 600;
         shell.Pump();
 
-        ClickChevron(shell);
+        OpenTabPicker(shell);
         shell.Pump();
         Dispatcher.UIThread.RunJobs();
         shell.Pump();
@@ -200,7 +203,7 @@ public class WiringTests : IDisposable
         shell.Window.Width = 600;
         shell.Pump();
 
-        ClickChevron(shell);
+        OpenTabPicker(shell);
         shell.Pump();
         Dispatcher.UIThread.RunJobs();
         shell.Pump();
@@ -274,20 +277,260 @@ public class WiringTests : IDisposable
         => shell.Window.GetVisualDescendants().OfType<Button>().First(b => b.Name == "TabOverflowButton");
 
     /// <summary>
-    /// Click the chevron, having first checked it is actually on screen.
+    /// Press the strip's end button with the pointer, and return the dropdown it opened.
     /// <para>
-    /// The precondition is the point, and it was missing: <c>RaiseEvent(Button.ClickEvent)</c> runs the
-    /// handler whether the button is visible or not, so a sabotage test that forced the chevron permanently
-    /// hidden still saw both picker tests pass. They were testing the picker while claiming to test the
-    /// affordance that reaches it.
+    /// A real press, not <c>RaiseEvent(Button.ClickEvent)</c>, for two reasons. The button opens its own
+    /// <c>Flyout</c> from <c>OnClick</c>, which a raised event skips entirely — so a raised click would
+    /// assert against a menu nobody opened. And the precondition is the point: a raised event runs whether
+    /// the button is on screen or not, so a sabotage that hid it permanently used to leave these tests
+    /// green.
     /// </para>
     /// </summary>
-    private static void ClickChevron(ShellHarness shell)
+    private static MenuFlyout OpenTabDropdown(ShellHarness shell)
     {
         var chevron = Chevron(shell);
-        Assert.True(chevron.IsVisible, "the chevron is not visible, so a user could not have clicked it");
-        chevron.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Assert.True(chevron.IsVisible, "the button is not visible, so a user could not have pressed it");
+        var at = chevron.TranslatePoint(
+            new Point(chevron.Bounds.Width / 2, chevron.Bounds.Height / 2), shell.Window);
+        Assert.NotNull(at);
+
+        shell.Window.MouseDown(at!.Value, MouseButton.Left);
+        shell.Window.MouseUp(at.Value, MouseButton.Left);
+        shell.Pump();
+
+        var menu = Assert.IsType<MenuFlyout>(chevron.Flyout);
+        Assert.True(menu.IsOpen, "the press did not open the dropdown");
+        return menu;
     }
+
+    /// <summary>
+    /// Pick one item out of an open dropdown.
+    /// <para>
+    /// The menu is dismissed afterwards, because a raised <c>Click</c> does not do it the way a real pick
+    /// does — and a flyout left open swallows the next press on the button as a dismiss, so the second
+    /// visit in a test would find nothing open.
+    /// </para>
+    /// </summary>
+    private static void Pick(MenuFlyout menu, string header)
+    {
+        var item = Assert.Single(menu.Items.OfType<MenuItem>(), i => i.Header as string == header);
+        item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        menu.Hide();
+    }
+
+    /// <summary>
+    /// Ctrl+E, through the editor, which is where focus sits in the running app. Not a direct call to the
+    /// command: <c>KeybindingTests</c> proves the keymap resolves the gesture and cannot prove the keystroke
+    /// ever reaches the window — the editor's tunnel handler and AvaloniaEdit's own bindings both sit in
+    /// between (the reason <c>PaneShortcutTests</c> exists).
+    /// </summary>
+    private static void OpenTabPicker(ShellHarness shell)
+    {
+        var editor = shell.Window.GetVisualDescendants().OfType<TextEditor>().First(e => e.Name == "Editor");
+        editor.TextArea.Focus();
+        shell.Pump();
+        Assert.True(editor.TextArea.IsFocused, "the editor never took focus, so the keystroke proves nothing");
+        shell.Window.KeyPress(Key.E, RawInputModifiers.Control, PhysicalKey.E, null);
+    }
+
+    // ---- the dropdown: every open tab, and the two other routes to one ---------------------------
+
+    /// <summary>
+    /// Pressing the button lists every open tab, and picking one goes to it. The list is built at open time
+    /// from the live workspace, so this is the wiring that makes it not a fixed menu.
+    /// </summary>
+    [Fact]
+    public Task The_button_drops_down_every_open_tab_and_picking_one_goes_to_it() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(The_button_drops_down_every_open_tab_and_picking_one_goes_to_it));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        for (var i = 1; i <= 12; i++) workspace.NewTab($"-- tab {i}").DisplayName = $"tab-{i:00}";
+        var wanted = workspace.Tabs[9];
+        workspace.SelectedTab = workspace.Tabs[0];
+        shell.Window.Width = 700;
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        var menu = OpenTabDropdown(shell);
+
+        // Every tab, plus the two footer items — a list whose contents changed with the window would be one
+        // you could not learn.
+        Assert.Equal(workspace.Tabs.Count + 2, menu.Items.OfType<MenuItem>().Count());
+        Pick(menu, "tab-10");
+        shell.Pump();
+
+        Assert.Same(wanted, workspace.SelectedTab);
+    });
+
+    /// <summary>
+    /// …and the dropdown actually <b>renders</b>. This is the half a flyout test can silently miss: the
+    /// menu reported <c>IsOpen</c> and held every item while the popup on screen was empty, because the
+    /// presenter had been created and measured before the items existed. Asserting a property is not
+    /// asserting that anything was drawn (§4.3).
+    /// </summary>
+    [Fact]
+    public Task The_dropdown_renders_its_items_not_just_an_empty_popup() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(The_dropdown_renders_its_items_not_just_an_empty_popup));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        for (var i = 1; i <= 6; i++) workspace.NewTab($"-- tab {i}").DisplayName = $"tab-{i}";
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        OpenTabDropdown(shell);
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        var presenter = Popups(shell).OfType<MenuFlyoutPresenter>().FirstOrDefault();
+        Assert.NotNull(presenter);
+        var realized = presenter!.GetVisualDescendants().OfType<MenuItem>().Count();
+        Assert.True(realized >= workspace.Tabs.Count,
+            $"the popup drew {realized} items for {workspace.Tabs.Count} tabs");
+        Assert.True(presenter.Bounds.Height > 0 && presenter.Bounds.Width > 0,
+            $"the popup measured {presenter.Bounds}");
+    });
+
+    /// <summary>
+    /// The list is there before anyone has pressed the button, because the keyboard can open it too —
+    /// Tab to it, Space — and that path raises no pointer press. It used to be filled only from the press,
+    /// and the fill at construction time runs before the window has a <c>DataContext</c>, so a keyboard
+    /// open showed an empty popup.
+    /// </summary>
+    [Fact]
+    public Task The_dropdown_is_filled_before_anyone_presses_it() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(The_dropdown_is_filled_before_anyone_presses_it));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        for (var i = 1; i <= 4; i++) workspace.NewTab($"-- tab {i}");
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        var menu = Assert.IsType<MenuFlyout>(Chevron(shell).Flyout);
+
+        // Every tab plus the two footer items, with no press anywhere in this test.
+        Assert.Equal(workspace.Tabs.Count + 2, menu.Items.OfType<MenuItem>().Count());
+    });
+
+    /// <summary>
+    /// Picking the expand item must not pull the menu apart underneath the click that picked it. The
+    /// toggle refreshes the list (its own label flips to "Collapse"), and doing that inline would clear
+    /// the presenter's items while the item that raised the click was still being dismissed.
+    /// </summary>
+    [Fact]
+    public Task The_expand_item_survives_its_own_click() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(The_expand_item_survives_its_own_click));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        for (var i = 1; i <= 8; i++) workspace.NewTab($"-- tab {i}");
+        shell.Window.Width = 700;
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        var menu = OpenTabDropdown(shell);
+        var item = Assert.Single(menu.Items.OfType<MenuItem>(),
+            i => i.Header as string == "Show all tabs in the strip");
+
+        // Raised without dismissing the menu first — the shape a real pick has.
+        item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        Assert.NotEmpty(menu.Items.OfType<MenuItem>());   // nothing cleared under the click
+
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        // …and the deferred refresh did happen, so the item now offers the way back.
+        Assert.Contains(menu.Items.OfType<MenuItem>(), i => i.Header as string == "Collapse the tab strip");
+        menu.Hide();
+    });
+
+    /// <summary>
+    /// The dropdown's own "show all tabs" item expands the strip: the rows stop scrolling and wrap, so the
+    /// tabs that were off the edge are on screen and clickable where they lie.
+    /// <para>
+    /// Two halves, each failing on its own for a different reason: the strip has to have grown past one row
+    /// (it wrapped) and nothing may be left beyond the right edge (it is not still scrolling).
+    /// </para>
+    /// </summary>
+    [Fact]
+    public Task The_dropdowns_expand_item_wraps_the_strip() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(The_dropdowns_expand_item_wraps_the_strip));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        for (var i = 1; i <= 24; i++) workspace.NewTab($"-- tab {i}");
+        shell.Window.Width = 700;
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        var scroller = TabScroll(shell);
+        var oneRow = scroller.Bounds.Height;
+        Assert.True(scroller.Extent.Width > scroller.Viewport.Width + 1,
+            "the fixture must overflow, or there is nothing to expand");
+
+        Pick(OpenTabDropdown(shell), "Show all tabs in the strip");
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        Assert.True(scroller.Bounds.Height > oneRow,
+            $"the strip did not grow: still {scroller.Bounds.Height:0.#}px");
+        Assert.True(scroller.Extent.Width <= scroller.Viewport.Width + 1,
+            $"tabs are still off the right edge: extent {scroller.Extent.Width:0.#} > viewport {scroller.Viewport.Width:0.#}");
+    });
+
+    [Fact]
+    public Task The_item_then_offers_the_way_back() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(The_item_then_offers_the_way_back));
+        var workspace = shell.Vm.Workspace;
+        workspace.Tabs.Clear();
+        for (var i = 1; i <= 24; i++) workspace.NewTab($"-- tab {i}");
+        shell.Window.Width = 700;
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        var scroller = TabScroll(shell);
+        var oneRow = scroller.Bounds.Height;
+
+        Pick(OpenTabDropdown(shell), "Show all tabs in the strip");
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+        Assert.True(scroller.Bounds.Height > oneRow, "the fixture must expand before it can collapse");
+
+        // The item says what it will do to the strip as it is now, so the second visit reads the other way.
+        Pick(OpenTabDropdown(shell), "Collapse the tab strip");
+        shell.Pump();
+        Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        Assert.Equal(oneRow, scroller.Bounds.Height, 1);
+    });
+
+    /// <summary>
+    /// Every visual in the window's popups. A flyout's presenter is not in the window's own tree — it lives
+    /// under the popup host — so the search starts from the open popup roots.
+    /// </summary>
+    private static IEnumerable<Visual> Popups(ShellHarness shell)
+        => shell.Window.GetVisualDescendants()
+            .OfType<Popup>()
+            .Where(p => p.IsOpen && p.Child is not null)
+            .SelectMany(p => p.Child!.GetSelfAndVisualDescendants())
+            .Concat(shell.Window.GetVisualDescendants());
+
+    private static ScrollViewer TabScroll(ShellHarness shell)
+        => shell.Window.GetVisualDescendants().OfType<ScrollViewer>().First(s => s.Name == "TabScroll");
 
     // ---- #23: the connection dialog's encryption default -----------------------------------------
 

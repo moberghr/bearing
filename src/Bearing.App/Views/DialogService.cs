@@ -32,6 +32,12 @@ public sealed class DialogService : IDialogService
             ? new ConfirmWriteDialog(request).ShowDialog<bool>(window)
             : Task.FromResult(true);
 
+    public Task<AuditExportRequest?> ShowAuditExportAsync(
+        IReadOnlyList<string> connectionNames, IReadOnlyList<string> environments)
+        => Owner is { } window
+            ? new AuditExportDialog(connectionNames, environments).ShowDialog<AuditExportRequest?>(window)
+            : Task.FromResult<AuditExportRequest?>(null);   // no window → nothing was asked, so nothing is written
+
     public Task<bool> ConfirmCancelRunningAsync(int runningCount, string? tabName = null)
         => Owner is { } window
             ? new ConfirmCancelRunningDialog(runningCount, tabName).ShowDialog<bool>(window)

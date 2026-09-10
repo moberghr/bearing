@@ -19,9 +19,11 @@ namespace Bearing.App.Controls;
 /// hands in rather than something this control works out from grid state (#32). The commit group is bound to
 /// <see cref="ResultSetViewModel.HasPendingChanges"/>, so it tracks edits made anywhere (a cell commit, a
 /// checkbox toggle, a keyboard delete) without this toolbar being told.
-/// <para>There is no Script/preview button: Save now shows the generated DML in its confirmation, so the
-/// preview is on the path to committing rather than a step the user had to remember to take. Export moved
-/// out to <see cref="ResultExportButton"/> — it applies to read-only results too, which never render this.</para>
+/// <para>The commit group also carries <b>SQL</b> (#114), which opens the generated DML in its own window
+/// with a route out of the app — the clipboard, or a new editor tab. Save still shows the same statements in
+/// its confirmation, so this is not the old mandatory preview step returning: it is the way to <i>take</i>
+/// the SQL somewhere, which a dialog offering only commit and cancel could not do. Export moved out to
+/// <see cref="ResultExportButton"/> — it applies to read-only results too, which never render this.</para>
 /// </summary>
 public static class ResultEditToolbar
 {
@@ -37,7 +39,8 @@ public static class ResultEditToolbar
         Action onAddRow,
         Action onDelete,
         Func<Task> onSave,
-        Func<Task> onDiscard)
+        Func<Task> onDiscard,
+        Func<Task> onShowSql)
     {
         var add = ResultChrome.SubtleButton("＋ Add", "Add row (Alt+Insert)");
         add.Click += (_, _) => onAddRow();
@@ -49,13 +52,14 @@ public static class ResultEditToolbar
         var bar = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         bar.Children.Add(add);
         bar.Children.Add(delete);
-        bar.Children.Add(PendingGroup(result, onSave, onDiscard));
+        bar.Children.Add(PendingGroup(result, onSave, onDiscard, onShowSql));
         return bar;
     }
 
-    /// <summary>● N pending · Discard (red outline) · ✓ Save (green fill) — visible only while the result has
-    /// pending changes.</summary>
-    private static Control PendingGroup(ResultSetViewModel result, Func<Task> onSave, Func<Task> onDiscard)
+    /// <summary>● N pending · SQL · Discard (red outline) · ✓ Save (green fill) — visible only while the
+    /// result has pending changes.</summary>
+    private static Control PendingGroup(
+        ResultSetViewModel result, Func<Task> onSave, Func<Task> onDiscard, Func<Task> onShowSql)
     {
         var dot = new TextBlock
         {
@@ -72,6 +76,11 @@ public static class ResultEditToolbar
             Foreground = Res("Text.Primary"),
         };
         pending.Bind(TextBlock.TextProperty, new Binding(nameof(ResultSetViewModel.PendingText)));
+
+        // Reads before it commits or destroys, so it sits left of both — and subtle, because looking at the
+        // SQL is not a step anyone is required to take (Save shows it too).
+        var showSql = ResultChrome.SubtleButton("SQL", "Show the SQL for the pending changes (Ctrl+Alt+P)");
+        showSql.Click += async (_, _) => await onShowSql();
 
         var discard = new Button
         {
@@ -108,6 +117,7 @@ public static class ResultEditToolbar
         };
         group.Children.Add(dot);
         group.Children.Add(pending);
+        group.Children.Add(showSql);
         group.Children.Add(discard);
         group.Children.Add(save);
         group.Bind(Visual.IsVisibleProperty, new Binding(nameof(ResultSetViewModel.HasPendingChanges)));

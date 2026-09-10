@@ -118,13 +118,55 @@ internal static class ResultsHarness
         return (rs, rs.Rows);
     }
 
+    /// <summary>
+    /// Wide and tall like <see cref="WideEditableResult"/>, but with every non-key column <b>numeric</b> so
+    /// the quick-stats bar can actually qualify.
+    /// <para>
+    /// Needed as its own fixture because <c>WideEditableResult</c>'s only number is its primary key, and
+    /// <c>GridSelectionOps.MeasureValues</c> excludes PK and FK columns — so no selection in it can ever
+    /// make the bar appear, and a test that thought it was measuring the bar was measuring nothing.
+    /// </para>
+    /// <para>
+    /// The column names are long on purpose: initial widths come from text measurement (#30), so this is
+    /// what makes the grid overflow horizontally as well as vertically.
+    /// </para></summary>
+    public static (ResultSetViewModel Result, ObservableCollection<object?[]> Rows) WideNumericResult(
+        int columns = 12, int rows = 40)
+    {
+        var descriptors = new List<ColumnDescriptor> { new("id", "int4", typeof(int)) };
+        for (var c = 1; c <= columns; c++)
+            descriptors.Add(new ColumnDescriptor($"amount_in_minor_units_{c}", "numeric", typeof(decimal)));
+
+        var data = new List<object?[]>(rows);
+        for (var r = 0; r < rows; r++)
+        {
+            var row = new object?[columns + 1];
+            row[0] = r + 1;
+            for (var c = 1; c <= columns; c++) row[c] = decimal.Divide(1000 * (r + 1) + c, 100);
+            data.Add(row);
+        }
+
+        var result = new QueryResult(descriptors, data, data.Count, TimeSpan.Zero, null, null, false);
+        var rs = new ResultSetViewModel(result, "select * from amounts", pageable: false)
+        {
+            PrimaryKeyColumns = [0],
+        };
+        return (rs, rs.Rows);
+    }
+
+    /// <summary>Whether a result's quick-stats bar is on screen, read off the "N cells" label it builds
+    /// rather than off the view model — the claim is that the bar is <i>rendered</i>.</summary>
+    public static bool StatsBarVisible(Visual view)
+        => view.GetVisualDescendants().OfType<TextBlock>()
+            .Any(t => t.IsEffectivelyVisible && t.Text is { } text && text.EndsWith(" cells"));
+
     /// <summary>The single grid a one-result view built (its region-focus target).</summary>
     public static DataGrid Grid(ResultView view)
         => (DataGrid)(view.FocusableGrid ?? throw new InvalidOperationException("the view built no grid"));
 
     /// <summary>Where a realized cell sits inside the grid's own coordinate space — the position that must not
     /// move when the viewport is meant to stay put (#60).</summary>
-    public static Point PositionIn(Border cell, Visual grid)
+    public static Point PositionIn(Visual cell, Visual grid)
         => cell.TranslatePoint(default, grid)
            ?? throw new InvalidOperationException("cell is not connected to the grid's visual tree");
 
