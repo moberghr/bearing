@@ -345,6 +345,25 @@ the case the user sees.
   `SelectBand` therefore takes a `cursor` separate from its `origin`: the origin stays the **anchor**, so a
   later Shift+click still extends from where the band starts, and only the cursor is pulled into view
   (`InViewRow` / `InViewColumn`).
+- **A commit does not reveal either.** The post-commit `ScrollIntoView` in `WireEditing` was the twin of
+  `KeepClickedCellInView` and went the same way: the causes it was written for (the grid re-adopting a
+  current cell, the row re-tinting, the cell's content swapping) do not move the viewport, and what it still
+  did was reveal a clipped cell — so committing an edit in the sliver of a half-visible column slid the
+  result 304 → 250, the same jump, from a commit instead of a click.
+- **One Tab is one scroll.** Avalonia's `DataGrid_KeyUp` answers a Tab *release* with
+  `ScrollSlotIntoView(…, forceHorizontalScroll: true)` aimed at the DataGrid's **own** current cell — which
+  is not our cursor (we own cell selection, §9.2; only a click and `BeginEdit` ever set the grid's), so it is
+  wherever the last click left it. Tabbing scrolled twice per keystroke and disagreed with itself: 304 → 153
+  on the key down, then → 56 on the release. `WireSelection` claims Tab's **KeyUp** in the tunnel phase, as
+  it already claims the KeyDown. A cell editor's Tab is left alone (`e.Source is not TextBox`).
+  - `HeadlessWindowExtensions.KeyPress` is key-**down** only. That is why no test could see this: the
+    release has to be sent with `KeyRelease` explicitly.
+- **`BeginEditActive` is the one keystroke still allowed to scroll, and it must stay that way.**
+  `grid.BeginEdit()` needs a *realized* cell to put an editor in: with the cursor scrolled out of view and
+  that `ScrollIntoView` removed, F2 opens no editor at all and reports nothing — measured both ways.
+  Revealing the cell you asked to edit is part of executing the command. The cursor can be off screen at all
+  only because the wheel and the scrollbar move the viewport without moving it; every other route keeps the
+  two together.
 - Two traps for the next test here:
   - a fixture that scrolls with `ScrollIntoView(row, col)` and then clicks *that same cell* restores the
     identical offset by accident and passes over the bug — click a different cell;
