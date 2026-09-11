@@ -67,8 +67,16 @@ public static class ColumnWidths
     /// <param name="maxInlineChars">Length past which a value grows the inspect affordance. Any newline does
     /// too, which is the case that hurt: a document with a short first line sizes its column to
     /// <see cref="Min"/>, and an unreserved glyph then leaves the text a few pixels.</param>
+    /// <param name="display">
+    /// The step between a cell's value and the text it draws, when the two differ — today only digit
+    /// grouping (<see cref="NumberGrouping"/>). Applied to the <i>candidates</i> only: a column has to be
+    /// measured against what it renders, or the commas clip the value they were added to make readable. The
+    /// affordance question deliberately keeps reading the raw text, because that is what the cell itself
+    /// tests, and a threshold the two sides answered differently is how a glyph ends up unreserved.
+    /// </param>
     public static ColumnSample Sample(
-        IReadOnlyList<object?[]> rows, int index, int maxInlineChars, int sample = SampleRows)
+        IReadOnlyList<object?[]> rows, int index, int maxInlineChars, int sample = SampleRows,
+        Func<string, string>? display = null)
     {
         var best = new List<string>();
         var anyInspectable = false;
@@ -76,9 +84,10 @@ public static class ColumnWidths
         for (var r = 0; r < count; r++)
         {
             var row = rows[r];
-            var text = CellFormat.Display(index < row.Length ? row[index] : null);
-            anyInspectable |= text.Length > maxInlineChars || text.Contains('\n');
+            var raw = CellFormat.Display(index < row.Length ? row[index] : null);
+            anyInspectable |= raw.Length > maxInlineChars || raw.Contains('\n');
 
+            var text = display is null ? raw : display(raw);
             var newline = text.IndexOf('\n');
             if (newline >= 0) text = text[..newline];
             if (text.Length > ScanCap) text = text[..ScanCap];

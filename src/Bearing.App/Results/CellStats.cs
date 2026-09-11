@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using Bearing.App.Formatting;
 
 namespace Bearing.App.Results;
 
@@ -65,6 +66,20 @@ public static class CellStats
         return new CellStatistics(nums.Count, nums.Sum(), nums.Average(), nums.Min(), nums.Max());
     }
 
-    /// <summary>Format a stat number: rounded to ≤2 dp, locale grouped (e.g. 1,234.5).</summary>
-    public static string Format(double value) => value.ToString("#,##0.##", CultureInfo.CurrentCulture);
+    /// <summary>
+    /// Format a stat number: rounded to ≤2 dp, grouped the same way the cells above it are.
+    /// <para>
+    /// Both halves used to be the machine's culture (<c>"#,##0.##"</c> over <c>CurrentCulture</c>), which put
+    /// the bar in a different convention from the grid it summarises: on a comma-decimal locale it read
+    /// <c>1.234,5</c> directly under cells reading <c>1,234.5</c>. It also grouped when the user had turned
+    /// grouping off. Going through <c>NumberGrouping</c> answers both — one convention per view, and one
+    /// switch.
+    /// </para>
+    /// <para>
+    /// Grouping is safe here in a way it is not in a cell: this is a computed aggregate that is never copied
+    /// back into a cell, re-parsed, or written anywhere. Nothing round-trips it.
+    /// </para>
+    /// </summary>
+    public static string Format(double value)
+        => NumberGrouping.Apply(value.ToString("0.##", CultureInfo.InvariantCulture));
 }

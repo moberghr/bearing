@@ -212,6 +212,19 @@ public static class SettingsCatalog
             Get = s => s.GridFontSize,
             Set = (s, v) => s with { GridFontSize = v },
         },
+        new BoolSetting
+        {
+            Key = "results.groupNumbers",
+            CategoryId = Results,
+            Title = "Group digits in numeric columns",
+            Description = "Show 1,234,567.89 in the result grid rather than 1234567.89. Display only — what "
+                        + "you copy, export or edit is always the ungrouped value, so a number still reads "
+                        + "back as the same number. The comma is fixed rather than the OS culture's: the "
+                        + "decimal point already is, and mixing the two conventions makes 1.234.567,89.",
+            Keywords = "thousands separator comma grouping digits number format numeric readable magnitude",
+            Get = s => s.GroupNumbersInResults,
+            Set = (s, v) => s with { GroupNumbersInResults = v },
+        },
         new StringSetting
         {
             Key = "results.displayTimeZone",
