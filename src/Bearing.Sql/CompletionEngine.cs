@@ -71,7 +71,7 @@ public sealed class CompletionEngine : ICompletionEngine
         if (ParseDepth.TooDeep(rules, parsed.Tokens.GetTokens()))
             return new CompletionResult(Array.Empty<Suggestion>(), caretOffset, 0);
 
-        var caret = ResolveCaret(parsed.Tokens, caretOffset);
+        var caret = ResolveCaret(rules, parsed.Tokens, caretOffset);
         var aliasSlot = CaretIsInAliasSlot(rules, schema, parsed.Tokens.GetTokens(), caret.TokenIndex);
 
         parsed.PrimeForCompletion();
@@ -208,7 +208,7 @@ public sealed class CompletionEngine : ICompletionEngine
         parsed.Tokens.Fill();
         if (ParseDepth.TooDeep(rules, parsed.Tokens.GetTokens())) return new HashSet<CompletionIntent>();
 
-        var caret = ResolveCaret(parsed.Tokens, caretOffset);
+        var caret = ResolveCaret(rules, parsed.Tokens, caretOffset);
         parsed.PrimeForCompletion();
 
         var core = new CodeCompletionCore(parsed.Parser, rules.PreferredRules.ToHashSet(),
@@ -670,7 +670,8 @@ public sealed class CompletionEngine : ICompletionEngine
 
     private readonly record struct CaretResolution(int TokenIndex, int ReplacementStart, int ReplacementLength);
 
-    private static CaretResolution ResolveCaret(Antlr4.Runtime.BufferedTokenStream stream, int caret)
+    private static CaretResolution ResolveCaret(
+        ISqlParseRules rules, Antlr4.Runtime.BufferedTokenStream stream, int caret)
     {
         var tokens = stream.GetTokens();
         var eof = tokens.Count > 0 ? tokens[^1] : null;
@@ -687,7 +688,7 @@ public sealed class CompletionEngine : ICompletionEngine
 
             if (caret <= endExclusive)
             {
-                if (IsWord(t))
+                if (IsWord(rules, t))
                     return new CaretResolution(t.TokenIndex, start, endExclusive - start);
 
                 // Sitting exactly at the end of a non-word token means the caret is *past* it, not on it:
@@ -707,12 +708,29 @@ public sealed class CompletionEngine : ICompletionEngine
 
     /// <summary>
     /// True when the token under the caret is a partially-typed name the completion should overwrite.
-    /// A quoted identifier counts — including the unterminated <c>"__Mig</c> the user is mid-way
-    /// through typing, which the lexer still hands back as one token starting with a quote. Without
-    /// that, accepting an item appended instead of replacing: <c>"__Mig"__MigrationHistory"</c>.
+    /// <para>
+    /// <b>The grammar answers first.</b> How many identifier forms a dialect has, and how each is spelled,
+    /// is its own business — Postgres has two and T-SQL four — and this was the last place in the engine
+    /// still deciding it from the text. Measured: the caret inside <c>[Order Details]</c> or <c>#tmp</c>
+    /// reported a <b>zero-length</b> replacement, because the test below rejects anything starting with
+    /// <c>[</c>, <c>#</c> or <c>@</c>. Accepting a suggestion there inserted rather than replaced, so
+    /// picking <c>Customers</c> produced <c>[Order DetCustomersails]</c>. <c>@id</c> is correctly excluded
+    /// and stays so — no dialect counts a variable as an identifier, and a table name must not overwrite
+    /// one.
+    /// </para>
+    /// <para>
+    /// The text test is kept underneath rather than replaced, because it covers what no token type can: the
+    /// unterminated <c>"__Mig</c> the user is mid-way through typing, which the PostgreSQL lexer hands back
+    /// as one token starting with a quote but not as a quoted identifier. Without it, accepting an item
+    /// appended instead of replacing: <c>"__Mig"__MigrationHistory"</c>. T-SQL has no equivalent to gain
+    /// here — its lexer emits no token at all for an unterminated <c>[Order Det</c>, so the caret cannot
+    /// see it however this answers.
+    /// </para>
     /// </summary>
-    private static bool IsWord(Antlr4.Runtime.IToken t)
+    private static bool IsWord(ISqlParseRules rules, Antlr4.Runtime.IToken t)
     {
+        if (rules.IsIdentifier(t.Type)) return true;
+
         var s = t.Text;
         if (string.IsNullOrEmpty(s)) return false;
         if (s[0] == '"') return true;

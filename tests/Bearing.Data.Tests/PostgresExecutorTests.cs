@@ -22,11 +22,6 @@ public class PostgresExecutorTests
 
     /// <summary>The count wrapper the App layer builds before calling the executor: <c>CountAsync</c>
     /// runs an already-shaped count query and never generates one (same contract as
-    /// <c>ExecutePageAsync</c>), so the dialect's wrap is applied here exactly as production applies it.
-    /// Pairing them in the test is the point — a wrap the server rejects is a dialect bug, not an
-    /// executor bug, and this is where the two meet.</summary>
-    /// <summary>The count wrapper the App layer builds before calling the executor: <c>CountAsync</c>
-    /// runs an already-shaped count query and never generates one (same contract as
     /// <c>ExecutePageAsync</c>). Non-null here by construction — every fixture below is a plain SELECT,
     /// and the dialect only refuses shapes that cannot sit in a derived table (a CTE, a query hint,
     /// FOR JSON/XML). Asserted rather than suppressed so a fixture that drifts into one of those

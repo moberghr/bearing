@@ -396,6 +396,7 @@ internal sealed class FakeSnapshot : ISchemaSnapshot
     public IReadOnlyList<string> SearchPath => System.Array.Empty<string>();
     public IReadOnlyList<TableInfo> Tables => System.Array.Empty<TableInfo>();
     public IReadOnlyList<ColumnInfo> ColumnsOf(long tableId) => System.Array.Empty<ColumnInfo>();
+    public TableInfo? TableById(long id) => null;
     public TableInfo? ResolveTable(string? schema, string name) => null;
     public IReadOnlyList<ForeignKeyInfo> ForeignKeysTouching(long tableId) => System.Array.Empty<ForeignKeyInfo>();
 }

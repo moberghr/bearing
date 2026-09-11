@@ -43,8 +43,6 @@ public sealed class PostgresDialect : ISqlDialect
     /// this engine's batches for real and may report a plain SELECT as safe.</summary>
     public bool HasDialectAwareGuard => true;
 
-    /// <summary>The vendored PostgreSQL lexer, which reads this engine for real — unchanged from
-    /// before a second dialect existed.</summary>
     /// <summary>The vendored PostgreSQL lexer, which is what these two have always used — so neither
     /// answer changes for this engine by the questions becoming per-dialect.</summary>
     public bool InStringLiteral(string sql, int offset) => SqlStringLiterals.Contains(sql, offset);
@@ -52,6 +50,8 @@ public sealed class PostgresDialect : ISqlDialect
     /// <inheritdoc cref="InStringLiteral"/>
     public string RedactLiterals(string? sql) => SqlRedactor.Redact(sql);
 
+    /// <summary>The vendored PostgreSQL lexer, which reads this engine for real — unchanged from
+    /// before a second dialect existed.</summary>
     public IReadOnlyList<StatementRisk> DescribeStatements(string sql)
         => WriteGuard.DescribeWithPostgresLexer(sql, RiskyVerbs);
 

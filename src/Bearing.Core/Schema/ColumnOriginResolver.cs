@@ -29,6 +29,22 @@ public sealed record ColumnOrigin(TableInfo Table, ColumnInfo Column);
 /// </summary>
 public static class ColumnOriginResolver
 {
+    /// <summary>
+    /// Every column's origin, in result order, nulls for the ones that have none.
+    /// <para>
+    /// The form to reach for when a caller needs more than one, which is every caller that decides an
+    /// affordance for a whole result set. Resolving inside the per-column loop instead made the FK pass
+    /// re-resolve all of them once per column per foreign key — and a name origin costs a case-folded
+    /// catalog lookup, not a field compare.
+    /// </para>
+    /// </summary>
+    public static ColumnOrigin?[] ResolveAll(ISchemaSnapshot snapshot, IReadOnlyList<ColumnDescriptor> columns)
+    {
+        var origins = new ColumnOrigin?[columns.Count];
+        for (var i = 0; i < columns.Count; i++) origins[i] = Resolve(snapshot, columns[i]);
+        return origins;
+    }
+
     /// <summary>The catalog table + column behind <paramref name="column"/>, or null when it is an
     /// expression, is not in the snapshot, or names a table in another database.</summary>
     public static ColumnOrigin? Resolve(ISchemaSnapshot snapshot, ColumnDescriptor column)
@@ -37,7 +53,7 @@ public static class ColumnOriginResolver
 
         if (column.BaseTableId != 0 && column.BaseColumnOrdinal > 0)
         {
-            var byId = FindTable(snapshot, column.BaseTableId);
+            var byId = snapshot.TableById(column.BaseTableId);
             if (byId is null) return null;
             var at = ColumnAt(snapshot.ColumnsOf(byId.Id), column.BaseColumnOrdinal);
             return at is null ? null : new ColumnOrigin(byId, at);
@@ -51,13 +67,6 @@ public static class ColumnOriginResolver
         if (byName is null) return null;
         var named = ColumnNamed(snapshot.ColumnsOf(byName.Id), column.BaseColumnName!);
         return named is null ? null : new ColumnOrigin(byName, named);
-    }
-
-    private static TableInfo? FindTable(ISchemaSnapshot snapshot, long tableId)
-    {
-        foreach (var t in snapshot.Tables)
-            if (t.Id == tableId) return t;
-        return null;
     }
 
     private static ColumnInfo? ColumnAt(IReadOnlyList<ColumnInfo> cols, int ordinal)

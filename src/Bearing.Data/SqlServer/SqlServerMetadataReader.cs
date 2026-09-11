@@ -331,7 +331,7 @@ public sealed class SqlServerMetadataReader : IMetadataReader
 
         var columns = await ColumnNamesAsync(conn, tableId, ct).ConfigureAwait(false);
         var indexes = await ReadIndexesAsync(conn, tableId, columns, ct).ConfigureAwait(false);
-        var constraints = await ReadConstraintsAsync(conn, tableId, indexes, ct).ConfigureAwait(false);
+        var constraints = await ReadConstraintsAsync(conn, tableId, indexes, columns, ct).ConfigureAwait(false);
         var triggers = await ReadTriggersAsync(conn, tableId, ct).ConfigureAwait(false);
 
         // No policies: SQL Server's row-level security lives in sys.security_policies, which is unread for
@@ -437,16 +437,23 @@ public sealed class SqlServerMetadataReader : IMetadataReader
         Dictionary<int, string> columns)
     {
         if (name.Length == 0) return "";
-        var names = ordinals
-            .Select(o => columns.TryGetValue(o, out var n) ? SqlServerIdentifierQuote(n) : $"?{o}")
-            .ToList();
+        var names = ColumnList(ordinals, columns);
         var clustered = typeDesc.Contains("CLUSTERED", StringComparison.OrdinalIgnoreCase)
                         && !typeDesc.Contains("NONCLUSTERED", StringComparison.OrdinalIgnoreCase)
             ? "clustered "
             : "";
         return $"create {(unique ? "unique " : "")}{clustered}index {SqlServerIdentifierQuote(name)} "
-             + $"({string.Join(", ", names)})";
+             + $"({names})";
     }
+
+    /// <summary>
+    /// Key columns as a parenthesised, quoted list — <c>([a], [b])</c>. An unknown ordinal renders as
+    /// <c>?n</c> rather than being dropped, so a column the reader could not name is visible instead of
+    /// silently shortening the key.
+    /// </summary>
+    private static string ColumnList(IReadOnlyList<int> ordinals, Dictionary<int, string> columns)
+        => "(" + string.Join(", ", ordinals
+            .Select(o => columns.TryGetValue(o, out var n) ? SqlServerIdentifierQuote(n) : $"?{o}")) + ")";
 
     /// <summary>
     /// Key, check and foreign-key constraints. The key-constraint definition is composed from its index's
@@ -454,7 +461,8 @@ public sealed class SqlServerMetadataReader : IMetadataReader
     /// server's own text and so is used as-is.
     /// </summary>
     private static async Task<List<ConstraintInfo>> ReadConstraintsAsync(
-        SqlConnection conn, long tableId, IReadOnlyList<IndexInfo> indexes, CancellationToken ct)
+        SqlConnection conn, long tableId, IReadOnlyList<IndexInfo> indexes,
+        Dictionary<int, string> columns, CancellationToken ct)
     {
         var list = new List<ConstraintInfo>();
 
@@ -462,7 +470,7 @@ public sealed class SqlServerMetadataReader : IMetadataReader
             select kc.object_id, kc.name, rtrim(kc.type), kc.unique_index_id
             from sys.key_constraints kc
             where kc.parent_object_id = @id
-            order by kc.type desc, kc.name
+            order by case rtrim(kc.type) when 'PK' then 0 else 1 end, kc.name
             """;
         await using (var cmd = new SqlCommand(keySql, conn))
         {
@@ -479,7 +487,7 @@ public sealed class SqlServerMetadataReader : IMetadataReader
                     Name: r.GetString(1),
                     Kind: kind,
                     Ordinals: ordinals,
-                    Definition: ComposeKeyConstraint(kind, backing)));
+                    Definition: ComposeKeyConstraint(kind, ordinals, columns)));
             }
         }
 
@@ -531,13 +539,22 @@ public sealed class SqlServerMetadataReader : IMetadataReader
         return list;
     }
 
-    private static string ComposeKeyConstraint(ConstraintKind kind, IndexInfo? backing)
+    /// <summary>
+    /// A key constraint's definition, composed from the backing index's <em>ordinals</em> — never by
+    /// re-parsing the index's own rendered text.
+    /// <para>
+    /// It used to recover the column list with <c>LastIndexOf('(')</c> over that text, which a bracket-quoted
+    /// name containing a parenthesis breaks: for columns <c>[x]</c> and <c>[a(b]</c> the index renders as
+    /// <c>create index [i] ([x], [a(b])</c>, the search lands inside the second name, and the constraint
+    /// came out as <c>primary key (b])</c>. The ordinals were in hand the whole time.
+    /// </para>
+    /// </summary>
+    private static string ComposeKeyConstraint(
+        ConstraintKind kind, IReadOnlyList<int> ordinals, Dictionary<int, string> columns)
     {
-        if (backing is null) return "";
-        var inner = backing.Definition;
-        var open = inner.LastIndexOf('(');
-        var cols = open >= 0 ? inner[open..] : "";
-        return kind == ConstraintKind.PrimaryKey ? $"primary key {cols}".TrimEnd() : $"unique {cols}".TrimEnd();
+        if (ordinals.Count == 0) return "";
+        var cols = ColumnList(ordinals, columns);
+        return kind == ConstraintKind.PrimaryKey ? $"primary key {cols}" : $"unique {cols}";
     }
 
     /// <summary>Triggers on the relation. <c>object_definition</c> gives the real CREATE TRIGGER text — a

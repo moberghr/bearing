@@ -33,9 +33,22 @@ public static class ForeignKeyResolver
     /// </summary>
     public static ForeignKeyTarget? Resolve(
         ISchemaSnapshot snapshot, IReadOnlyList<ColumnDescriptor> columns, int clickedColumn)
+        => Resolve(snapshot, columns, ColumnOriginResolver.ResolveAll(snapshot, columns), clickedColumn);
+
+    /// <summary>
+    /// The same, for a caller that has already resolved the set's origins — which is what
+    /// <c>ResultSetBuilder.DetectForeignKeyColumns</c> does, asking this once per column. Resolving them
+    /// per call there was quadratic in columns with a case-folded catalog lookup inside, on the pass that
+    /// runs before the grid renders.
+    /// </summary>
+    /// <param name="origins">One entry per column of <paramref name="columns"/>, in order.</param>
+    public static ForeignKeyTarget? Resolve(
+        ISchemaSnapshot snapshot, IReadOnlyList<ColumnDescriptor> columns,
+        IReadOnlyList<ColumnOrigin?> origins, int clickedColumn)
     {
         if (clickedColumn < 0 || clickedColumn >= columns.Count) return null;
-        if (ColumnOriginResolver.Resolve(snapshot, columns[clickedColumn]) is not { } clicked) return null;
+        if (origins.Count != columns.Count) return null;
+        if (origins[clickedColumn] is not { } clicked) return null;
         var tableId = clicked.Table.Id;
         var ordinal = clicked.Column.Ordinal;
 
@@ -49,7 +62,7 @@ public static class ForeignKeyResolver
             // than indexing off the end of the shorter list (this used to throw IndexOutOfRange mid-click).
             if (fk.ParentOrdinals.Count != fk.ReferencedOrdinals.Count) continue;
 
-            var refTable = FindTable(snapshot, fk.ReferencedTableId);
+            var refTable = snapshot.TableById(fk.ReferencedTableId);
             if (refTable is null) continue;
             var refCols = snapshot.ColumnsOf(fk.ReferencedTableId);
 
@@ -59,7 +72,7 @@ public static class ForeignKeyResolver
             for (var i = 0; i < fk.ParentOrdinals.Count; i++)
             {
                 var refName = NameOf(refCols, fk.ReferencedOrdinals[i]);
-                var sourceIndex = FindResultColumn(snapshot, columns, tableId, fk.ParentOrdinals[i]);
+                var sourceIndex = FindResultColumn(origins, tableId, fk.ParentOrdinals[i]);
                 if (refName is null || sourceIndex < 0) { complete = false; break; }
                 sourceIndices[i] = sourceIndex;
                 refNames[i] = refName;
@@ -78,22 +91,13 @@ public static class ForeignKeyResolver
         return null;
     }
 
-    private static TableInfo? FindTable(ISchemaSnapshot snapshot, long tableId)
-    {
-        foreach (var t in snapshot.Tables)
-            if (t.Id == tableId) return t;
-        return null;
-    }
-
     /// <summary>Index of the result column whose origin is (<paramref name="tableId"/>,
-    /// <paramref name="ordinal"/>) — resolved per column, so a composite key is found whichever form the
-    /// provider reported it in.</summary>
-    private static int FindResultColumn(
-        ISchemaSnapshot snapshot, IReadOnlyList<ColumnDescriptor> columns, long tableId, int ordinal)
+    /// <paramref name="ordinal"/>) — read off the resolved origins, so a composite key is found whichever
+    /// form the provider reported it in.</summary>
+    private static int FindResultColumn(IReadOnlyList<ColumnOrigin?> origins, long tableId, int ordinal)
     {
-        for (var i = 0; i < columns.Count; i++)
-            if (ColumnOriginResolver.Resolve(snapshot, columns[i]) is { } o
-                && o.Table.Id == tableId && o.Column.Ordinal == ordinal)
+        for (var i = 0; i < origins.Count; i++)
+            if (origins[i] is { } o && o.Table.Id == tableId && o.Column.Ordinal == ordinal)
                 return i;
         return -1;
     }

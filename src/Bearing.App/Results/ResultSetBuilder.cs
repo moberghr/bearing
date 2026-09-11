@@ -84,10 +84,10 @@ internal static class ResultSetBuilder
         ISchemaSnapshot? snapshot, IReadOnlyList<ColumnDescriptor> columns)
     {
         if (snapshot is null || columns.Count == 0) return Array.Empty<int>();
+        var origins = ColumnOriginResolver.ResolveAll(snapshot, columns);
         var pks = new List<int>();
-        for (var i = 0; i < columns.Count; i++)
-            if (ColumnOriginResolver.Resolve(snapshot, columns[i]) is { Column.IsPrimaryKey: true })
-                pks.Add(i);
+        for (var i = 0; i < origins.Length; i++)
+            if (origins[i] is { Column.IsPrimaryKey: true }) pks.Add(i);
         return pks;
     }
 
@@ -96,9 +96,12 @@ internal static class ResultSetBuilder
         ISchemaSnapshot? snapshot, IReadOnlyList<ColumnDescriptor> columns)
     {
         if (snapshot is null || columns.Count == 0) return Array.Empty<int>();
+        // Origins once for the whole set, not once per column: this asks the resolver a question per
+        // column, and each answer used to re-resolve every column of the result.
+        var origins = ColumnOriginResolver.ResolveAll(snapshot, columns);
         var fks = new List<int>();
         for (var i = 0; i < columns.Count; i++)
-            if (ForeignKeyResolver.Resolve(snapshot, columns, i) is not null) fks.Add(i);
+            if (ForeignKeyResolver.Resolve(snapshot, columns, origins, i) is not null) fks.Add(i);
         return fks;
     }
 

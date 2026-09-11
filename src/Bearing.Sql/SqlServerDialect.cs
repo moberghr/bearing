@@ -135,11 +135,6 @@ public sealed class SqlServerDialect : ISqlDialect
               + $" order by (select null) offset {offset} rows fetch next {limit} rows only";
     }
 
-    /// <summary>Total rows of an arbitrary query, with the same inner-ORDER BY repair as
-    /// <see cref="Wrap"/>.</summary>
-    /// <summary>Split and classify a batch with <see cref="TSqlWriteGuard"/> — T-SQL's own lexical
-    /// rules, so a delimited name, a keyword inside a string literal and an @-prefixed variable
-    /// cannot trip the guard, while a GO-separated batch splits correctly.</summary>
     /// <summary>Answered from <see cref="TSqlLiterals"/> over the T-SQL scanner. Both were measurably
     /// wrong while the PostgreSQL lexer answered them on this dialect — see that type for what each
     /// cost.</summary>
@@ -148,6 +143,9 @@ public sealed class SqlServerDialect : ISqlDialect
     /// <inheritdoc cref="InStringLiteral"/>
     public string RedactLiterals(string? sql) => TSqlLiterals.RedactLiterals(sql);
 
+    /// <summary>Split and classify a batch with <see cref="TSqlWriteGuard"/> — T-SQL's own lexical
+    /// rules, so a delimited name, a keyword inside a string literal and an @-prefixed variable
+    /// cannot trip the guard, while a GO-separated batch splits correctly.</summary>
     public IReadOnlyList<StatementRisk> DescribeStatements(string sql)
         => TSqlWriteGuard.Describe(sql, RiskyVerbs);
 
@@ -167,6 +165,9 @@ public sealed class SqlServerDialect : ISqlDialect
     /// </summary>
     public ISqlParseRules ParseRules => TSqlParseRules.Instance;
 
+    /// <summary>Total rows of an arbitrary query, with the same inner-ORDER BY repair as
+    /// <see cref="Wrap"/>, and the same refusal: null for a shape that cannot sit in a derived
+    /// table.</summary>
     public string? CountWrap(string sql)
     {
         if (HoistableCte(sql) is { } cte)

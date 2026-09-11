@@ -134,7 +134,19 @@ public class SqlServerConnectionOptionsTests
         await MsSqlTestServer.RequireAsync(plain);
 
         await using var factory = provider.CreateConnectionFactory(
-            Info(new() { ["Initial Catalog"] = "no_such_database_here", ["Server"] = "no.such.host" }), Password);
+            Info(new()
+            {
+                ["Initial Catalog"] = "no_such_database_here",
+                ["Server"] = "no.such.host",
+                // The less obvious spellings of "somewhere else", enumerated against the builder rather
+                // than recalled: a failover partner is another server, and AttachDbFilename and its two
+                // synonyms attach a local .mdf as the database.
+                ["Failover Partner"] = "no.such.partner",
+                ["AttachDbFilename"] = @"C:\no\such\file.mdf",
+                ["Extended Properties"] = @"C:\no\such\file.mdf",
+                ["Initial File Name"] = @"C:\no\such\file.mdf",
+            }),
+            Password);
         var executor = provider.CreateQueryExecutor(factory);
 
         var result = Assert.Single(await executor.ExecuteAsync(

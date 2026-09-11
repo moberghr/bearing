@@ -174,6 +174,66 @@ public class SqlServerMetadataTests
         }
     }
 
+    /// <summary>
+    /// Key constraints: the primary key comes first, and its column list is composed from the backing
+    /// index's ordinals rather than recovered from the index's own rendered text.
+    /// <para>
+    /// Both halves were wrong, and both are invisible without a fixture built to show them. The order was
+    /// <c>kc.type desc</c>, which sorts <c>'UQ'</c> above <c>'PK'</c> — so the unique constraint listed
+    /// first, the opposite of the index query beside it. And the definition was recovered with
+    /// <c>LastIndexOf('(')</c> over <c>create index [i] ([x], [a(b])</c>, which lands inside a column name
+    /// that contains a parenthesis: the key rendered as <c>primary key (b])</c>. A bracketed name may hold
+    /// very nearly anything, so this fixture holds the character that breaks the parse.
+    /// </para>
+    /// </summary>
+    [SkippableFact]
+    public async Task Key_constraints_list_the_primary_key_first_and_name_their_own_columns()
+    {
+        var provider = new ProviderRegistry().Get(SqlServerProvider.ProviderId);
+        await using var factory = provider.CreateConnectionFactory(Info(), Password);
+        await MsSqlTestServer.RequireAsync(factory);
+
+        var exec = provider.CreateQueryExecutor(factory);
+        var reader = provider.CreateMetadataReader(factory);
+        const string tbl = "bearing_meta_keys";
+        var drop = $"drop table if exists dbo.{tbl};";
+
+        await exec.ExecuteAsync(drop, new QueryOptions(), CancellationToken.None);
+        var created = Assert.Single(await exec.ExecuteAsync(
+            $"""
+            create table dbo.{tbl} (
+                [x] int not null,
+                [a(b] int not null,
+                [u] int not null,
+                constraint pk_{tbl} primary key ([x], [a(b]),
+                constraint uq_{tbl} unique ([u]));
+            """, new QueryOptions(), CancellationToken.None));
+        Assert.True(created.Success, created.Error?.Message);
+
+        try
+        {
+            var snapshot = await reader.LoadSnapshotAsync(MsSqlTestServer.Database, CancellationToken.None);
+            var table = snapshot.Tables.Single(t => t.Name == tbl);
+            var details = await reader.GetTableDetailsAsync(table.Id, CancellationToken.None);
+
+            var keys = details.Constraints
+                .Where(c => c.Kind is ConstraintKind.PrimaryKey or ConstraintKind.Unique)
+                .ToList();
+
+            Assert.Equal(2, keys.Count);
+            Assert.Equal(ConstraintKind.PrimaryKey, keys[0].Kind);   // PK before UQ, as the index list does
+            Assert.Equal(ConstraintKind.Unique, keys[1].Kind);
+
+            // The parenthesis inside the second column's name is intact, and both key columns are named.
+            Assert.Equal("primary key ([x], [a(b])", keys[0].Definition);
+            Assert.Equal("unique ([u])", keys[1].Definition);
+        }
+        finally
+        {
+            await exec.ExecuteAsync(drop, new QueryOptions(), CancellationToken.None);
+        }
+    }
+
     [SkippableFact]
     public async Task Reads_routines_with_their_arguments_and_kind()
     {
