@@ -69,9 +69,41 @@ public static class SchemaTreeReveal
     /// arrive pre-populated, so reaching into one costs nothing and needs no expand.
     /// </summary>
     public static IEnumerable<RelationNodeViewModel> RelationsUnder(SchemaNodeViewModel database)
+        => database.Children.SelectMany(Descend).OfType<RelationNodeViewModel>();
+
+    /// <summary>
+    /// A node and every relation row beneath it that already exists — through group buckets and through a
+    /// schema folder that has been opened, at any depth.
+    /// <para>
+    /// Recursive because full mode puts relations three levels down (#132): database, Schemas, the schema,
+    /// Tables, the row. It deliberately does not descend into a relation (whose children are its columns),
+    /// and it forces nothing to load — an unopened schema folder holds only its placeholder, which is why
+    /// <c>RevealRelationAsync</c> expands the path itself before asking.
+    /// </para>
+    /// </summary>
+    private static IEnumerable<SchemaNodeViewModel> Descend(SchemaNodeViewModel node)
+    {
+        yield return node;
+        if (node is RelationNodeViewModel) yield break;
+        foreach (var child in node.Children)
+            foreach (var descendant in Descend(child))
+                yield return descendant;
+    }
+
+    /// <summary>
+    /// The schema folders under a loaded database row — the ones directly under it (full mode with one
+    /// schema) and the ones inside the Schemas group.
+    /// <para>
+    /// <b>Not empty in simple mode</b>, which also builds a Schemas group: simple mode's relations are inline
+    /// as well, so a reveal that opened a schema folder there would materialise a second set of rows for
+    /// relations already on screen, and leave a folder hanging open that the user never asked for. That is why
+    /// <c>RevealRelationAsync</c> looks for the row first and only descends when it is not already there.
+    /// </para>
+    /// </summary>
+    public static IEnumerable<SchemaNodeViewModel> SchemaFoldersUnder(SchemaNodeViewModel database)
         => database.Children
             .SelectMany(c => c is SchemaGroupNodeViewModel group ? group.Children : [c])
-            .OfType<RelationNodeViewModel>();
+            .Where(c => c is SchemaFolderNodeViewModel);
 
     /// <summary>
     /// The relation row for <paramref name="schema"/>.<paramref name="name"/>, or null.

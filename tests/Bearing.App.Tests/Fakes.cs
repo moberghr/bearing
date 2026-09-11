@@ -50,6 +50,52 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
     /// concurrent runs across tabs). Otherwise each session gets a fresh no-op <see cref="FakeExecutor"/>.</summary>
     public IQueryExecutor? Executor;
     public IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory) => Executor ?? new FakeExecutor();
+
+    /// <summary>When set, every session built by this provider shares this one (so an activity-panel test can
+    /// script what the server reports). Otherwise each session gets a fresh, quiet <see cref="FakeActivity"/>.</summary>
+    public IServerActivity? Activity;
+    public IServerActivity CreateServerActivity(IDbConnectionFactory factory) => Activity ?? new FakeActivity();
+}
+
+/// <summary>
+/// A scriptable <c>pg_stat_activity</c> (#101): hand it the backends to report, make a read fail or hang, and
+/// read back which pids were asked about. Counts reads so a test can assert a poll happened — or, more often,
+/// that one did not.
+/// </summary>
+internal sealed class FakeActivity : IServerActivity
+{
+    public IReadOnlyList<BackendActivity> Backends = [];
+    public bool SeesAllSessions = true;
+    public Exception? Throws;
+    public TaskCompletionSource? Gate;
+    public int Reads;
+
+    public readonly List<int> Cancelled = [];
+    public readonly List<int> Terminated = [];
+
+    /// <summary>What each read asked for, in order — so a test can assert the narrowing, not just the rows.</summary>
+    public readonly List<ActivityFilter> Filters = [];
+
+    public async Task<ServerActivity> GetActivityAsync(ActivityFilter filter, CancellationToken ct)
+    {
+        Filters.Add(filter);
+        Interlocked.Increment(ref Reads);
+        if (Gate is { } gate) await gate.Task.WaitAsync(ct);
+        if (Throws is { } ex) throw ex;
+        return new ServerActivity(Backends, SeesAllSessions);
+    }
+
+    public Task<bool> CancelBackendAsync(int pid, CancellationToken ct)
+    {
+        Cancelled.Add(pid);
+        return Task.FromResult(true);
+    }
+
+    public Task<bool> TerminateBackendAsync(int pid, CancellationToken ct)
+    {
+        Terminated.Add(pid);
+        return Task.FromResult(true);
+    }
 }
 
 internal sealed class FakeFactory : IDbConnectionFactory
@@ -497,6 +543,25 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
     {
         SavePickerCalls++;
         return Task.FromResult(_saveAsPath);
+    }
+
+    /// <summary>What the next backend confirmation answers (#101). Defaults to <b>false</b>, matching the real
+    /// headless default: a test that means to kill a backend has to say so.</summary>
+    public bool BackendActionAnswer { get; set; }
+
+    /// <summary>Every backend action that was put to the user, in order — so a test can assert what the
+    /// confirmation was asked about, not just that one happened.</summary>
+    public List<Bearing.App.Services.BackendAction> BackendActions { get; } = new();
+
+    /// <summary>Runs while the confirmation is "open". A modal dialog can sit there for minutes, so this is
+    /// how a test makes the world change under it — the idle sweep, a Disconnect, a connection edit.</summary>
+    public Action? WhileConfirmingBackendAction { get; set; }
+
+    public Task<bool> ConfirmBackendActionAsync(Bearing.App.Services.BackendAction request)
+    {
+        BackendActions.Add(request);
+        WhileConfirmingBackendAction?.Invoke();
+        return Task.FromResult(BackendActionAnswer);
     }
 
     /// <summary>Where the next export picker "lands". Null = the user cancelled the picker.</summary>

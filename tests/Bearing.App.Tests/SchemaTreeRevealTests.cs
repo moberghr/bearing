@@ -278,6 +278,31 @@ public class SchemaTreeRevealTests : IDisposable
     }
 
     [Fact]
+    public async Task A_reveal_in_simple_mode_leaves_the_schema_folders_shut()
+    {
+        // The descent into a schema exists for full mode, where the relation is three levels down and the
+        // schema is lazy. Simple mode has the row inline *and* builds a Schemas level, so descending
+        // unconditionally opened a folder nobody asked for and built a second set of nodes for relations
+        // already on screen — every F12, every time.
+        var (_, vm, conn) = NewVm();
+
+        var result = await vm.RevealRelationAsync(
+            new SchemaTreeReveal.Target(conn.Id, "app", "public", "film"));
+
+        Assert.Equal(SchemaRevealResult.Revealed, result);
+
+        var server = SchemaTreeReveal.ServerFor(vm.ServerNodes, conn.Id)!;
+        var database = SchemaTreeReveal.DatabaseUnder(server, "app")!;
+        var folders = SchemaTreeReveal.SchemaFoldersUnder(database).ToList();
+
+        // The level is there — this is a two-schema database, so the group was built.
+        Assert.NotEmpty(folders);
+        Assert.All(folders, f => Assert.False(f.IsExpanded));
+        // And none of them was made to load: an unopened folder still holds only its placeholder.
+        Assert.All(folders, f => Assert.IsType<MessageNodeViewModel>(f.Children.Single()));
+    }
+
+    [Fact]
     public async Task A_filter_hiding_the_row_is_cleared_rather_than_failing_the_reveal()
     {
         // A search typed earlier is not a reason for a reveal the user just asked for to find nothing.

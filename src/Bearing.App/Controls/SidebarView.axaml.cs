@@ -69,6 +69,10 @@ public partial class SidebarView : UserControl
             if (Vm?.SidePaneOpen != true) return null;
             if (SchemaTree.IsVisible) return SchemaTree;
             if (ScriptsTree.IsVisible) return ScriptsTree;
+            // The activity panel is a control of its own, so its list is reached through it rather than by
+            // an x:Name here. Without this F6 would skip the panel entirely (#101).
+            if (this.FindControl<ActivityPanelView>("ActivityPanel") is { IsVisible: true } activity)
+                return activity.FindControl<ListBox>("BackendList");
             return null;
         }
     }
@@ -444,6 +448,12 @@ public partial class SidebarView : UserControl
 
     /// <summary>Raised by the panel's context menu and its empty state; the shell owns the import flow.</summary>
     public System.Action? ImportConnectionsRequested { get; set; }
+
+    private void OnImportFromInstalledClick(object? sender, RoutedEventArgs e)
+        => ImportFromInstalledRequested?.Invoke();
+
+    /// <summary>Raised by the dev-only "from the installed Bearing" item; the shell owns the flow.</summary>
+    public System.Action? ImportFromInstalledRequested { get; set; }
 
     private async void OnPasteConnectionAtRootClick(object? sender, RoutedEventArgs e)
         => await PasteConnectionsAsync(null, overrideFolder: true);

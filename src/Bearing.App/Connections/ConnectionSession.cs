@@ -13,13 +13,14 @@ namespace Bearing.App.Connections;
 public sealed class ConnectionSession : IAsyncDisposable
 {
     public ConnectionSession(ConnectionInfo info, IDbConnectionFactory factory, IQueryExecutor executor, IMetadataReader metadata,
-        DateTimeOffset? credentialExpiresAt = null)
+        IServerActivity activity, DateTimeOffset? credentialExpiresAt = null)
     {
         ConnectionId = info.Id;
         Info = info;
         Factory = factory;
         Executor = executor;
         Metadata = metadata;
+        Activity = activity;
         CredentialExpiresAt = credentialExpiresAt;
     }
 
@@ -39,6 +40,10 @@ public sealed class ConnectionSession : IAsyncDisposable
     public IDbConnectionFactory Factory { get; }
     public IQueryExecutor Executor { get; }
     public IMetadataReader Metadata { get; }
+
+    /// <summary>The server's sessions, and the two actions on one (#101). Reached from a leased session so a
+    /// panel polling it can never be the reason a connection is opened (§1.5).</summary>
+    public IServerActivity Activity { get; }
 
     /// <summary>Schema for completion; null until the first <see cref="IConnectionSessionManager.EnsureSchemaAsync"/>.</summary>
     public ISchemaSnapshot? Snapshot { get; internal set; }

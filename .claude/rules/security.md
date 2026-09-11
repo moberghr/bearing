@@ -162,3 +162,69 @@ field to land in:
   mappings are not read at all.
 
 WHEN adding a catalog read, check what the catalog holds before selecting `*` or an options bag.
+
+## §1.9 — The two session-level safety settings ride the startup packet, and a `SET` cannot replace it (#99 / #105)
+
+`ConnectionInfo.ReadOnly` asks the server to refuse writes; `ConnectionInfo.StatementTimeoutSeconds` asks it
+to cancel a statement that outruns a limit. Both are **fields**, not `Options` entries, for §1.4's reason —
+and `options` is **reserved** in `PostgresConnectionString`, because that keyword is the whole packet rather
+than one entry in it, so a bag key in a shared `project.json` would not merge with what we composed, it would
+replace it and turn read-only back off.
+
+**Both issues proposed a `SET`, and neither can be done that way.** `PostgresConnectionString.StartupOptionsFor`
+composes `-c default_transaction_read_only=on -c statement_timeout=<ms>` instead. A pool holds up to
+`MaxPoolSize` physical connections per (connection, database) and every read path opens one straight from the
+data source, so a `SET` reaches the one socket it was issued on and none of the others — and the idle sweep
+plus Npgsql's own pruning means those sockets come and go under a live session. The connection would be
+read-only or not depending on which socket a statement landed on. Postgres applies the startup packet to
+**every** physical connection before it can run anything, which is the only mechanism here that is true of.
+`SessionPolicyTests` pins it against a live server with ten concurrent statements, which is the test a `SET`
+would fail. **Do not "simplify" this into a `SET`.**
+
+- **Read-only is not a privilege boundary, and must never be described as one.** `default_transaction_read_only`
+  is a `USERSET` GUC, so a user who types `SET default_transaction_read_only = off` or `BEGIN READ WRITE` lifts
+  it. It stops mistakes, which is what #99 is for. The boundary a user cannot lift is a role without write
+  privileges, and that is the server admin's to grant — the same line §1.4 draws between `Require` encrypting
+  and the Verify modes checking identity.
+- **A read-only connection refuses rather than confirms** (`WriteRefusal`, ahead of the write-guard prompt in
+  `ExecutionViewModel`). This is a deliberate §1.2 posture change, approved: there is nothing to confirm when
+  the answer is already no. The guard itself is **not** narrowed — the refusal reads the verdict it already
+  produces, and `WriteGuard.Describe` is still what produces it.
+- The client-side refusal is the *early* half, never the enforcement. The lexer misses a function that writes,
+  dynamic SQL in a `DO` block, `COPY … TO`; the server catches those. Both halves are wanted.
+- **The grid stops offering edits through the reason it already had.** `EditabilityResolver.ResolveWithReason`
+  takes the connection's read-only state and reports it **first**, ahead of every reason about the result's
+  shape — so all ~20 `IsEditable` gates and the existing lock chip follow from `EditTarget` being null. The
+  reason's wording has to compose with the chip's own `"Read-only — {reason}"` prefix.
+- **Read-only never touches the beacon.** §9.3a gives the beacon connection *state* in its silhouette and
+  nothing else; a connection can be read-only and disconnected. It is marked in `StatusTip` and the tab
+  tooltip instead — not in `StatusLabel`, whose width is reserved so the toggle beside it does not shift.
+- **These settings are part of what defines a live pool, and nothing more.** `SameConnection` (pool reuse)
+  and `SamePool` (evict on save) compare them, as neutral values rather than as the composed packet. Both are
+  needed and for different reasons: `SameConnection` only rebuilds on the next full connect, while `TryGet` —
+  which Fetch all rows, Count total, grid paging and FK navigation all reach through a lease — compares
+  nothing at all. Found by review: without the evict, adding a timeout and then clicking Fetch all rows on
+  the result already on screen ran unbounded off the old pool while the status bar reported the limit.
+- **`SamePool` is separate from `SameNetwork`, and the split is the point.** `SameNetwork` answers "is this
+  the same server, reached the same way", and it has three jobs that are not about the pool: keeping a schema
+  tree node and its expansion, keeping the cached completion snapshot, and matching an incoming import to an
+  existing connection. Folding the pool question into it — the first attempt, caught by review — made
+  changing a statement timeout collapse the tree, throw away the snapshot, and re-import as a duplicate. A
+  changed *network target* invalidates the catalog; a changed *pool setting* does not.
+- **The timeout is clamped, not just validated.** `statement_timeout` is milliseconds in an `int`, so
+  `SessionPolicy.MaxTimeoutSeconds` is that ceiling in seconds. `project.json` is hand-editable and a value
+  like 3,000,000 overflowed the conversion negative, which Postgres refuses *at startup* — so a silly number
+  in a settings file stopped the connection opening at all rather than merely being ignored.
+- **`57014` has three causes and they are told apart in the App layer** (`Results/QueryErrorText`), because
+  attribution needs the `ConnectionInfo` the executor does not have: the user's own Esc (already reported by
+  the run path from its cancellation token), this connection's timeout, and a cancel from outside the app.
+  Matching the server's message text instead would break under `lc_messages`. `25006` names the connection's
+  read-only setting only when it is *ours* — a read-only server, role or enclosing transaction produces it
+  too, and nothing here checked which (§1.1).
+- **Every route that carries a result has to carry the connection**, or the attribution silently inverts:
+  the FK-navigation path omitted it and reported a configured timeout as "nothing in Bearing asked for this".
+- **Copy/paste and the project file must carry these fields.** `ConnectionClipboard.Entry` had been omitting
+  `Tls` since #23 — copying a Verify Full connection pasted one on the driver default — and the test named
+  `Every_non_secret_field_survives_the_round_trip` could not catch it, because it enumerated ten fields by
+  hand and the omitted one was omitted from the assertions too. It reflects over `ConnectionInfo` now, so the
+  next field fails until it is carried.

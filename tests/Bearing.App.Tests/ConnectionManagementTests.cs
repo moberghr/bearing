@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -364,10 +365,27 @@ public class ConnectionClipboardTests
         Environment = "production",
         EnvironmentColor = "#E5484D",
         RequireWriteConfirmation = true,
+        // A mode set on the *field*, which is what the dialog writes. The bag entry stays too, because the
+        // legacy path still has to work — but it is deliberately a different mode from the field, so a
+        // payload that dropped the field could not pass by accidentally resolving the bag instead. That is
+        // exactly how the omission below went unnoticed.
+        Tls = TlsMode.VerifyFull,
+        ReadOnly = true,
+        StatementTimeoutSeconds = 30,
         CredentialKind = CredentialKind.EntraToken,
         Options = new Dictionary<string, string> { ["sslmode"] = "require" },
     };
 
+    /// <summary>
+    /// Every non-secret field, established <b>by construction</b> rather than by a hand-written list.
+    /// <para>
+    /// The list version of this test named ten fields and passed for months while the payload silently
+    /// dropped <c>Tls</c> — copying a Verify Full connection pasted one on the driver default. It could not
+    /// have caught that: the omitted field was omitted from the assertions too. Reflecting over the record
+    /// means the next field added to <see cref="ConnectionInfo"/> fails here until it is carried, which is
+    /// the only version of this test that does what its name says.
+    /// </para>
+    /// </summary>
     [Fact]
     public void Every_non_secret_field_survives_the_round_trip()
     {
@@ -376,17 +394,60 @@ public class ConnectionClipboardTests
         Assert.True(ConnectionClipboard.TryRead(ConnectionClipboard.Write(new[] { source }), out var read));
 
         var got = read.Single();
-        Assert.Equal(source.Name, got.Name);
-        Assert.Equal(source.Host, got.Host);
-        Assert.Equal(source.Port, got.Port);
-        Assert.Equal(source.Database, got.Database);
-        Assert.Equal(source.User, got.User);
-        Assert.Equal(source.Folder, got.Folder);
-        Assert.Equal(source.Environment, got.Environment);
-        Assert.Equal(source.EnvironmentColor, got.EnvironmentColor);
-        Assert.Equal(source.RequireWriteConfirmation, got.RequireWriteConfirmation);
-        Assert.Equal(source.CredentialKind, got.CredentialKind);
-        Assert.Equal("require", got.Options["sslmode"]);
+
+        // Id is the one deliberate exception: it is the secret-store lookup key, and a payload that could
+        // express one could leak one. The_id_is_never_carried_across covers that directly.
+        var carried = typeof(ConnectionInfo).GetProperties()
+            .Where(p => p.Name != nameof(ConnectionInfo.Id))
+            .ToList();
+        Assert.NotEmpty(carried);
+
+        foreach (var property in carried)
+        {
+            var expected = property.GetValue(source);
+            var actual = property.GetValue(got);
+
+            if (property.Name == nameof(ConnectionInfo.Options))
+            {
+                // The bag is a dictionary, so compare its entries rather than its reference.
+                Assert.Equal("require", ((IReadOnlyDictionary<string, string>)actual!)["sslmode"]);
+                continue;
+            }
+
+            Assert.Equal(expected, actual);
+        }
+    }
+
+    [Fact]
+    public void A_copied_connection_keeps_the_encryption_and_safety_settings_it_had()
+    {
+        // Named separately because it is the bug rather than the invariant: these three decide whether the
+        // session is encrypted (#23) and whether the server will accept a write on it (#99 / #105), so a
+        // paste that quietly relaxed any of them is the worst outcome copy/paste has.
+        var source = Conn();
+
+        Assert.True(ConnectionClipboard.TryRead(ConnectionClipboard.Write(new[] { source }), out var read));
+
+        var got = read.Single();
+        Assert.Equal(TlsMode.VerifyFull, got.Tls);
+        Assert.True(got.ReadOnly);
+        Assert.Equal(30, got.StatementTimeoutSeconds);
+    }
+
+    [Fact]
+    public void A_connection_still_carrying_its_mode_in_the_bag_pastes_as_the_mode_it_runs_on()
+    {
+        // An older project (or a DBeaver import) has no Tls field set and an sslmode entry instead. Copying
+        // it must not paste the untouched default: the mode it actually connects under is the resolved one.
+        var legacy = Conn() with
+        {
+            Tls = TlsPolicy.Default,
+            Options = new Dictionary<string, string> { ["sslmode"] = "verify-full" },
+        };
+
+        Assert.True(ConnectionClipboard.TryRead(ConnectionClipboard.Write(new[] { legacy }), out var read));
+
+        Assert.Equal(TlsMode.VerifyFull, TlsPolicy.Resolve(read.Single()));
     }
 
     [Fact]

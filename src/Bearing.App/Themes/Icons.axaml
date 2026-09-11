@@ -27,6 +27,9 @@
 
   <!-- History: a clock -->
   <StreamGeometry x:Key="Icon.History">M4,12 a8,8 0 1 1 16,0 a8,8 0 1 1 -16,0 M12,7 v5.3 l3.5,2</StreamGeometry>
+  <!-- Activity (#101): a pulse trace. A heartbeat rather than a list, because what the panel is for is
+       noticing that something is still running — the same reading a monitor gets glanced at for. -->
+  <StreamGeometry x:Key="Icon.Activity">M3,12 h4 l2.5,-6 l4,12 l2.5,-6 h5</StreamGeometry>
 
   <!-- Settings: a cog — closed 6-tooth outline (tips r=9.8, roots r=7.0, arc between teeth) + centre hole.
        Detached radial spokes were tried first and read as a brightness/light-dark toggle, not a cog. -->

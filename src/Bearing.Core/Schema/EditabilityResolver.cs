@@ -34,9 +34,22 @@ public static class EditabilityResolver
     /// Like <see cref="Resolve"/> but, when the result is NOT editable, also returns a short
     /// human-readable reason (for the read-only lock affordance). <c>Reason</c> is null when editable.
     /// </summary>
+    /// <param name="connectionReadOnly">
+    /// Whether the connection this result came from is marked read-only (#99). Checked <b>first</b>, ahead of
+    /// every reason about the result's shape: it is true whatever that shape is, and "the connection is
+    /// read-only" is the more useful sentence than "no primary key found" for a result nobody could have
+    /// edited anyway. Reporting it here rather than at each of the ~20 edit gates is what keeps the answer to
+    /// "why can't I edit this" in one place, and reuses the lock chip that already renders it.
+    /// </param>
     public static (EditTarget? Target, string? Reason) ResolveWithReason(
-        ISchemaSnapshot snapshot, IReadOnlyList<ColumnDescriptor> columns)
+        ISchemaSnapshot snapshot, IReadOnlyList<ColumnDescriptor> columns, bool connectionReadOnly = false)
     {
+        // Worded to compose with the lock chip, which prefixes every reason with "Read-only — ": saying
+        // "the connection is read-only" there rendered as "Read-only — the connection is read-only." And it
+        // names the setting, because unlike every other reason here this one is something the user can turn
+        // off — which is the only actionable fact the case has.
+        if (connectionReadOnly)
+            return (null, "this connection refuses writes; turn read-only off in its settings to edit.");
         if (columns.Count == 0) return (null, "no columns to edit.");
 
         // All columns must originate from the same base table.

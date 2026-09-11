@@ -68,6 +68,40 @@
 
     <Separator Margin="0,4"/>
 
+    <!-- Safety. One group with Encryption above it, because a production connection's settings are read
+         together: what the transport guarantees, whether the server will accept a write at all (#99), and how
+         long it will run one (#105). The write-guard checkbox used to sit below the Environment block, which
+         put the whole colour picker between two halves of the same decision. -->
+    <TextBlock Text="Safety" Opacity="0.8"/>
+
+    <CheckBox x:Name="ConfirmWritesBox"
+              Content="Confirm before running writes / destructive DDL on this connection"/>
+
+    <!-- Read-only asks the *server* to refuse writes rather than asking the user about them. Deliberately not
+         described as prevention: it is a USERSET setting a SET can lift, so it stops mistakes and is not a
+         substitute for a role without write privileges (see SessionPolicy). -->
+    <CheckBox x:Name="ReadOnlyBox" IsCheckedChanged="OnSafetyToggled"
+              Content="Read-only — the server refuses writes on this connection"/>
+
+    <StackPanel Orientation="Horizontal" Spacing="6">
+      <TextBlock Text="Statement timeout" Opacity="0.8" VerticalAlignment="Center"/>
+      <TextBox x:Name="StatementTimeoutBox" Width="70" PlaceholderText="0"
+               TextChanged="OnTimeoutChanged"/>
+      <TextBlock Text="seconds — 0 for no limit" Opacity="0.6" VerticalAlignment="Center"/>
+    </StackPanel>
+
+    <!-- What these two leave open, in their own words — the same treatment and the same register as the TLS
+         block above it (§1.1: the posture is surfaced, never silent). Absent when neither is set, rather than
+         saying something reassuring about a connection with no safety settings at all. -->
+    <Border x:Name="SafetyNote" IsVisible="False"
+            Background="#2F2B22" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
+            Padding="8,6" Margin="0,4,0,0">
+      <TextBlock x:Name="SafetyNoteText" TextWrapping="Wrap"
+                 Foreground="{DynamicResource Warn.Amber}" FontSize="12"/>
+    </Border>
+
+    <Separator Margin="0,4"/>
+
     <TextBlock Text="Environment" Opacity="0.8"/>
     <StackPanel Orientation="Horizontal" Spacing="6">
       <TextBox x:Name="EnvBox" Width="150" PlaceholderText="label, e.g. production"/>
@@ -90,9 +124,6 @@
       <Button Content="Staging"    Tag="#D29922" Click="OnPresetColorClick" Background="#D29922" Foreground="White" Padding="8,2"/>
       <Button Content="Production" Tag="#E5484D" Click="OnPresetColorClick" Background="#E5484D" Foreground="White" Padding="8,2"/>
     </StackPanel>
-
-    <CheckBox x:Name="ConfirmWritesBox" Margin="0,4,0,0"
-              Content="Confirm before running writes / destructive DDL on this connection"/>
 
     <!-- Wraps: a failed Test reports a driver message whose useful half (SQLSTATE, host, TLS/auth detail) is
          past column 440 and used to be clipped off the edge of this fixed-width dialog. SizeToContent="Height"

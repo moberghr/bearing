@@ -479,6 +479,7 @@ public partial class MainWindow
     }
     private void OnMenuSchemaClick(object? sender, RoutedEventArgs e) => Vm?.ShowPanel(SidePanel.Schema);
     private void OnMenuScriptsClick(object? sender, RoutedEventArgs e) => Vm?.ShowPanel(SidePanel.Scripts);
+    private void OnMenuActivityClick(object? sender, RoutedEventArgs e) => Vm?.ShowPanel(SidePanel.Activity);
     private void OnAboutClick(object? sender, RoutedEventArgs e) => AboutDialog.Open(this);
 
     // Rail tile clicked: activate that panel, or collapse the pane if its tile is re-clicked while open.

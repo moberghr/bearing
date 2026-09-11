@@ -151,4 +151,42 @@ public class EditabilityResolverTests
         Assert.Null(target);
         Assert.Contains("expression", reason);
     }
+
+    [Fact]
+    public void A_read_only_connection_locks_a_result_that_is_otherwise_editable()
+    {
+        // #99: the grid must not offer an edit it would then be refused for. Reported here rather than at
+        // each of the ~20 edit gates, so "why can't I edit this" has one answer and reuses the lock chip.
+        var cols = new[]
+        {
+            new ColumnDescriptor("id", "int4", typeof(int), TestSchema.OrdersId, 1),
+            new ColumnDescriptor("total", "numeric", typeof(decimal), TestSchema.OrdersId, 3),
+        };
+
+        Assert.NotNull(EditabilityResolver.ResolveWithReason(Schema, cols).Target);
+
+        var (target, reason) = EditabilityResolver.ResolveWithReason(Schema, cols, connectionReadOnly: true);
+        Assert.Null(target);
+        Assert.Contains("refuses writes", reason);
+        // The chip prefixes this with "Read-only — ", so the reason must not repeat those words back.
+        Assert.DoesNotContain("is read-only", reason);
+        // And it says what to do about it, which no other reason here can offer.
+        Assert.Contains("turn read-only off", reason);
+    }
+
+    [Fact]
+    public void The_connection_outranks_every_reason_about_the_results_shape()
+    {
+        // A result with no primary key is uneditable twice over, and "the connection is read-only" is the
+        // more useful of the two sentences: it is the one the user can act on, and it is true of every result
+        // off that connection rather than of this one.
+        var cols = new[]
+        {
+            new ColumnDescriptor("name", "text", typeof(string), TestSchema.UsersId, 2),
+        };
+
+        var (_, reason) = EditabilityResolver.ResolveWithReason(Schema, cols, connectionReadOnly: true);
+        Assert.Contains("refuses writes", reason);
+        Assert.DoesNotContain("primary-key", reason);
+    }
 }

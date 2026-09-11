@@ -29,4 +29,7 @@ public sealed class PostgresProvider : IDbProvider
 
     public IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory)
         => new PostgresQueryExecutor((NpgsqlConnectionFactory)factory);
+
+    public IServerActivity CreateServerActivity(IDbConnectionFactory factory)
+        => new PostgresServerActivity((NpgsqlConnectionFactory)factory);
 }

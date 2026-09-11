@@ -101,6 +101,14 @@ public interface IDialogService
     /// <see cref="ConfirmCloseTabAsync"/>: a headless close still closes, but nothing headless deletes files.</summary>
     Task<ProjectRemoval> ConfirmRemoveProjectAsync(string name, string directory);
 
+    /// <summary>
+    /// Confirm cancelling or terminating a server backend (#101). True = do it. Implementations with no
+    /// window (headless/tests) return <b>false</b> — the same side of the line as
+    /// <see cref="ConfirmDeleteScriptAsync"/> rather than <see cref="ConfirmWriteAsync"/>: ending a session
+    /// belonging to someone who is not looking at this screen needs a real answer.
+    /// </summary>
+    Task<bool> ConfirmBackendActionAsync(BackendAction request);
+
     /// <summary>Prompt for a single line of text (rename, new folder/script, project name). Null if cancelled.</summary>
     Task<string?> ShowTextPromptAsync(string prompt, string initial = "");
 

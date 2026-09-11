@@ -36,6 +36,32 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         // sync. Both events are wired because they answer different questions — see OnServerLinkChanged.
         _ctx.Sessions.LiveChanged += OnSessionLiveChanged;
         _ctx.Sessions.LinkChanged += OnServerLinkChanged;
+
+        // The tree's shape is a stored preference (#132), so it survives a restart and reaches the panel from
+        // either end: this toggle, or the same setting in the settings window.
+        _schemaTreeMode = _ctx.Settings.SchemaTreeMode;
+        _ctx.SettingsService.Changed += settings => SchemaTreeMode = settings.SchemaTreeMode;
+    }
+
+    /// <summary>
+    /// How a database arranges its children (#132) — bound two-way by the panel header's toggle, and mirrored
+    /// from the stored setting so the settings window and the toggle cannot disagree.
+    /// </summary>
+    [ObservableProperty] private SchemaTreeMode _schemaTreeMode;
+
+    partial void OnSchemaTreeModeChanged(SchemaTreeMode value)
+    {
+        // Write through only when this is news to the store: the setter also runs when the settings window
+        // is the one that changed it, and writing back then would be a second identical save.
+        if (_ctx.Settings.SchemaTreeMode != value)
+            _ctx.SettingsService.Update(s => s with { SchemaTreeMode = value });
+
+        // Re-arrange what is already on screen. Each node rebuilds from the snapshot and kinds it already
+        // holds, so a change of shape costs no round trip (#132).
+        foreach (var database in _nodes.Values
+                     .SelectMany(server => server.Children)
+                     .OfType<DatabaseNodeViewModel>())
+            database.ApplyMode();
     }
 
     /// <summary>A session pool for one connection+database changed. The indicators no longer read pools
@@ -175,8 +201,28 @@ public sealed partial class ConnectionsViewModel : ObservableObject
 
         database.IsExpanded = true;
         await database.EnsureChildrenAsync();
-        if (SchemaTreeReveal.RelationUnder(database, target.Schema, target.Name) is not { } relation)
-            return SchemaRevealResult.NoRelation;
+
+        // In full mode the relation is three levels down and the schema holding it is lazy, so the row does
+        // not exist until the schema is opened (#132). Descended into only when the row is not already
+        // there, which is the whole of simple mode — its relations are inline, and it builds a Schemas group
+        // too, so descending unconditionally would open a folder nobody asked for and fill it with a second
+        // set of nodes for relations already on screen. Opening every schema would be a build per schema, so
+        // only the one the target names is opened — matched on name rather than title, for the reason
+        // RelationUnder is (a label is not an identity).
+        var relation = SchemaTreeReveal.RelationUnder(database, target.Schema, target.Name);
+        if (relation is null)
+        {
+            foreach (var schema in SchemaTreeReveal.SchemaFoldersUnder(database))
+            {
+                if (!string.Equals(schema.Title, target.Schema, StringComparison.OrdinalIgnoreCase)) continue;
+                schema.IsExpanded = true;
+                await schema.EnsureChildrenAsync();
+            }
+
+            relation = SchemaTreeReveal.RelationUnder(database, target.Schema, target.Name);
+        }
+
+        if (relation is null) return SchemaRevealResult.NoRelation;
 
         if (target.Column is null)
         {
@@ -232,6 +278,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     /// connection's environment hue (see ConnectionStatusView).</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(StatusLabel))]
+    [NotifyPropertyChangedFor(nameof(StatusTip))]
     [NotifyPropertyChangedFor(nameof(IsConnecting))]
     [NotifyPropertyChangedFor(nameof(IsDisconnected))]
     [NotifyPropertyChangedFor(nameof(ToggleTip))]
@@ -243,6 +290,31 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         ConnectionState.Connecting => "Connecting…",
         _ => "Disconnected",
     };
+
+    /// <summary>
+    /// The status group's tooltip: the state, plus the selected connection's safety settings when it has any
+    /// (#99 / #105). Separate from <see cref="StatusLabel"/> on purpose — that one is the label beside the
+    /// beacon, whose width is reserved for "Disconnected" so the toggle beside it does not shift, and a mark
+    /// appended there would move the toolbar every time the selected connection changed.
+    /// <para>
+    /// Read-only is <b>not</b> put on the beacon: §9.3a gives the beacon connection <i>state</i>, carried in
+    /// its silhouette, and read-only is not a state. A connection can be read-only and disconnected.
+    /// </para>
+    /// </summary>
+    public string StatusTip
+    {
+        get
+        {
+            var info = _ctx.SelectedTab is { } tab ? _ctx.EffectiveConnection(tab) : null;
+            if (info is null) return StatusLabel;
+
+            var marks = new List<string>(2);
+            if (SessionPolicy.IsReadOnly(info)) marks.Add("read-only");
+            if (SessionPolicy.TimeoutSeconds(info) > SessionPolicy.NoTimeout)
+                marks.Add($"statement timeout {SessionPolicy.TimeoutLabel(info)}");
+            return marks.Count == 0 ? StatusLabel : $"{StatusLabel} · {string.Join(" · ", marks)}";
+        }
+    }
 
     // IsConnecting / IsDisconnected drive the two style classes on the status view and the toggle; the
     // beacon reads State itself. There is deliberately no "IsLinked" any more — it existed only to pick
@@ -333,6 +405,9 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedTabConnection));
         OnPropertyChanged(nameof(ActiveConnectionColor));
         OnPropertyChanged(nameof(SelectedTabDatabase));
+        // StatusTip is derived from the selected tab's connection, not from State alone (#99 / #105), so a
+        // tab switch has to re-raise it or the tooltip describes the tab the user just left.
+        OnPropertyChanged(nameof(StatusTip));
         var tab = Selected;
         // No eager connect on tab switch — just reflect whatever session already exists. Connecting is
         // driven by an explicit action (the Connect toggle, running a query, expanding the schema tree).
@@ -363,7 +438,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         {
             Connections.Add(c);
             if (_nodes.TryGetValue(c.Id, out var node) && SameNetwork(node.Connection, c)) node.Adopt(c);
-            else _nodes[c.Id] = new ServerNodeViewModel(c, _ctx.Schema);
+            else _nodes[c.Id] = new ServerNodeViewModel(c, _ctx.Schema, () => SchemaTreeMode);
         }
 
         var root = ConnectionTree.Build(
@@ -419,7 +494,11 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     public void ApplyConnectionDisplay(EditorTabViewModel tab)
     {
         var info = tab.ConnectionId is { } id ? _ctx.FindConnection(id) : null;
-        tab.ConnectionDisplay = info?.Name;
+        // The tab beacon's tooltip. Marked here rather than in the header text, which is the script's name:
+        // the tooltip is where a tab already says which connection it is on (§9.12).
+        tab.ConnectionDisplay = info is null ? null
+            : SessionPolicy.IsReadOnly(info) ? $"{info.Name} · read-only"
+            : info.Name;
         tab.ConnectionColor = info?.EnvironmentColor;
         tab.DatabaseName ??= info?.Database; // default the active DB to the connection's own
         RefreshTabConnectionState(tab);
@@ -435,6 +514,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
             OnPropertyChanged(nameof(SelectedTabConnection));
             OnPropertyChanged(nameof(ActiveConnectionColor));
             OnPropertyChanged(nameof(SelectedTabDatabase));
+            OnPropertyChanged(nameof(StatusTip)); // the new connection's safety settings (#99 / #105)
             SyncStateFromLink(tab); // reflect the existing session; do not eagerly connect
             CrashReporter.Observe(RefreshTabDatabasesAsync(tab), "connections.refresh-databases");
         }
@@ -542,7 +622,13 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         var list = _ctx.Project.Manifest.Connections;
         var idx = list.FindIndex(c => c.Id == conn.Id);
         var networkChanged = true;
-        if (idx >= 0) { networkChanged = !SameNetwork(list[idx], conn); list[idx] = conn; }
+        var poolChanged = true;
+        if (idx >= 0)
+        {
+            networkChanged = !SameNetwork(list[idx], conn);
+            poolChanged = !SamePool(list[idx], conn);
+            list[idx] = conn;
+        }
         else list.Add(conn);
 
         var refusedSecret = false;
@@ -565,13 +651,21 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         }
         catch (Exception ex) { _ctx.SetStatus($"Saved connection but secret/store failed: {SafeErrorText.Of(ex)}"); }
 
-        // A changed network target means the cached schema describes a different server, so drop it too —
-        // eviction alone deliberately keeps it (that is what makes completion survive a mere disconnect).
-        if (networkChanged) { _ctx.Sessions.InvalidateSchema(conn.Id); await _ctx.Sessions.EvictConnectionAsync(conn.Id); }
+        // Two questions, and they are not the same one. A changed *network target* means the cached schema
+        // describes a different server, so drop that too — eviction alone deliberately keeps it, which is what
+        // makes completion survive a mere disconnect. A changed *pool setting* (#99 / #105) reaches the server
+        // in the startup packet and so is fixed for the life of the pool, but it says nothing about the
+        // catalog: turning read-only on must rebuild the pool without discarding the schema the tree and
+        // completion are using.
+        if (networkChanged) _ctx.Sessions.InvalidateSchema(conn.Id);
+        if (poolChanged) await _ctx.Sessions.EvictConnectionAsync(conn.Id);
         _ctx.DefaultConnectionId ??= conn.Id;
         RefreshConnections();
         foreach (var t in Tabs) if (t.ConnectionId == conn.Id) ApplyConnectionDisplay(t);
         OnPropertyChanged(nameof(SelectedTabConnection));
+        // Editing the selected tab's own connection changes what StatusTip reports (#99 / #105), and nothing
+        // else re-raises it on this path.
+        OnPropertyChanged(nameof(StatusTip));
         _ctx.SetStatus(refusedSecret
             ? $"Saved connection '{conn.Name}' — password not saved (no keyring); you'll be asked when connecting."
             : $"Saved connection '{conn.Name}'.");
@@ -982,10 +1076,33 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     /// was raised is not still reachable "the same way", and leaving its pool alone would keep the old socket
     /// while the UI reported the new setting (#23).
     /// </summary>
+    /// <remarks>
+    /// Deliberately <b>not</b> widened with the safety settings (#99 / #105), which also force a pool rebuild:
+    /// this predicate has three other jobs — keeping a tree node and its expansion, keeping the cached schema,
+    /// and matching an incoming import to an existing connection — and none of them is about the pool. Folding
+    /// the pool question in here made changing a statement timeout collapse the schema tree, throw away the
+    /// completion snapshot, and re-import as a duplicate. See <see cref="SamePool"/>.
+    /// </remarks>
     private static bool SameNetwork(ConnectionInfo a, ConnectionInfo b)
         => a.ProviderId == b.ProviderId && a.Host == b.Host && a.Port == b.Port
            && a.Database == b.Database && a.User == b.User
            && TlsPolicy.Resolve(a) == TlsPolicy.Resolve(b);
+
+    /// <summary>
+    /// Whether a live pool built from <paramref name="a"/> can go on serving <paramref name="b"/>.
+    /// <para>
+    /// Everything <see cref="SameNetwork"/> covers, plus the settings that reach the server in the startup
+    /// packet and so are fixed when the pool is built (#99 / #105). This is what decides whether saving evicts:
+    /// <c>SameConnection</c> only rebuilds on the next full connect, while <c>TryGet</c> — which Fetch all
+    /// rows, Count total, grid paging and FK navigation all reach through a lease — compares nothing at all.
+    /// Without it: run a query on production, add a 30 s timeout, save, then Fetch all rows on the result
+    /// already on screen, and it runs unbounded off the old pool while the status bar reports the limit.
+    /// </para>
+    /// </summary>
+    private static bool SamePool(ConnectionInfo a, ConnectionInfo b)
+        => SameNetwork(a, b)
+           && SessionPolicy.IsReadOnly(a) == SessionPolicy.IsReadOnly(b)
+           && SessionPolicy.TimeoutSeconds(a) == SessionPolicy.TimeoutSeconds(b);
 
     /// <summary>Build a throwaway connection and test it (for the dialog's Test button); nothing is persisted.
     /// For an Entra connection the token is minted through the resolver (ignoring the box); prompt / stored

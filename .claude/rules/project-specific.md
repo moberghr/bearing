@@ -508,3 +508,162 @@ count decorates it only when there is one to report (`TabOverflow.Chevron`).
 - `Nearest` picks the row **closest** to the pointer rather than the one under it: a row is under 30px tall,
   and a caret that blinks out whenever the hand strays above or below reads as a broken gesture. Crossing
   rows still takes moving onto the other one.
+
+## §9.13 — The activity panel is the only thing that polls a server, and it is the only thing that acts on one (#101)
+
+`pg_stat_activity`, refreshed every 2.5 s while the panel is on screen, with Cancel and Terminate on a row.
+It exists to close the loop 0.5.3 opened: a query that outran a timeout is told it "may still be running on
+the server", and there was no way to look.
+
+- **It is the first code in the app that executes a side-effecting Postgres function.** The standing
+  precedent is the opposite: `SequenceNodeViewModel.SetvalSql` only *copies* `setval(…)` to the clipboard so
+  it goes through the editor and the write guard, and §1.7 refuses to generate `GRANT` at all. That precedent
+  does not transfer here — a panel that copied `select pg_cancel_backend(12345)` to the clipboard would not
+  answer "my query is hung", which is the entire feature. It executes, and carries the confirmation instead.
+- **`IServerActivity` is a seam of its own, not three more methods on `IMetadataReader`.** That interface has
+  no mutating member — it is read-only by construction — and a reader that can end someone's session is a
+  different thing. The name is the point.
+- **Every action confirms, including on our own backends**, and the dialog's `IsCancel` button is also
+  `IsDefault` (the `ConfirmDeleteScriptDialog` treatment), so no single keystroke kills a session.
+  `IDialogService.ConfirmBackendActionAsync` defaults to **false** with no window — the delete side of that
+  line, not `ConfirmWriteAsync`'s.
+- **Terminate is refused on a read-only connection; Cancel is not.** The asymmetry is the decision. Neither
+  is blocked by #99 on its own — `pg_terminate_backend` is a function call, not a transactional write, so
+  `default_transaction_read_only` lets it straight through and the refusal has to be ours
+  (`WriteRefusal.ReasonForTerminate`). Cancelling stops a statement and leaves the session, and it is most
+  wanted on exactly the production connection most likely to be read-only.
+- **Polling starts and stops from `ShellViewModel.SyncPanelActivity`, hung off both `OnActivePanelChanged`
+  and `OnSidePaneOpenChanged`** — the same pair `RefreshHistoryIfShowing` uses, and for the same reason:
+  `[ObservableProperty]`'s setter short-circuits on an unchanged value, so collapsing the pane from the
+  Activity tile and re-opening it never changes `ActivePanel`. Hung off that one alone, the panel comes back
+  visible and frozen. There is a headless test for exactly that sequence.
+- **The read never connects and never blocks**: `Sessions.TryGet` (§1.5's rule — a panel refreshing itself
+  must not raise a credential prompt), a `SessionLease` taken **per read and released**, and a per-read
+  deadline under the interval so a slow server costs refreshes rather than queueing them. A tick arriving
+  while a read is in flight is skipped, not queued.
+- **An open panel does keep the pool warm, and that is correct.** The per-read lease is not what stops that —
+  `Lease` and `ReleaseLease` both stamp `LastUsedUtc`, so a session read every 2.5 s never goes idle. Sweeping
+  a pool that is being queried continuously would only make the next tick rebuild it. What the short lease
+  buys is that a *retired* session can still finish dying: a lease outstanding across ticks would block an
+  evict or a database switch from completing. The bound on the warmth is that polling stops the moment the
+  panel leaves the screen.
+- **An action re-resolves the session after its confirmation, not before.** A modal dialog can sit open for
+  minutes, and `Lease` does no validity check — so the idle sweep, a Disconnect or a connection edit can
+  dispose the session captured when the menu was opened, and the confirmed action then surfaces as an
+  `ObjectDisposedException` rather than doing anything. `SaveChangesAsync` takes its lease after its
+  confirmation for the same reason.
+- **A failed read keeps the rows it had.** The list refreshes under a pointer that may be on its way to a
+  row; clearing it on a blip is how a user terminates the wrong backend.
+- **Row identity is pid + `backend_start`.** A pid alone is reused by the server, and the selection drives
+  which backend the menu acts on.
+- **It lists one database, not the whole cluster, unless asked.** `pg_stat_activity` is cluster-wide, so an
+  unfiltered read returns every session on the host — other databases, other roles, other applications, and
+  the statement each is running. The default is the connection's own database; "Every database on this
+  server" widens it, which is what you want when hunting a lock holder and not what a panel opened beside
+  your own work should show unasked. The status line names the scope, because "2 sessions" is a different
+  claim about a database than about a server.
+- **Plainly idle backends are left out by default, and `idle in transaction` is never treated as idle.** On a
+  production database most sessions are an application server's pool between statements: nothing on them to
+  cancel, and enough of them to bury the handful doing something. `idle in transaction` holds locks and is the
+  row the panel most exists to show, so the filter is `state is distinct from 'idle'` — `is distinct from`,
+  because a state the role may not read is not thereby idle, and hiding it would assert something nobody
+  checked. The status line says "running" when the filter is on, since a count that quietly dropped rows is a
+  different number.
+- **The narrowing is an appended predicate, not `($1 is null or datname = $1)`.** §9.9's trap: a null-valued
+  untyped placeholder gives Postgres nothing to infer a type from and the read fails.
+- **Another session's statement is shown, formatted and syntax-coloured**, through the same read-only viewer
+  the history preview uses. It is the reason you would cancel a backend, so it should read as well here as in
+  the editor — and what the server returns is whatever the client sent, which for an ORM is one long line.
+  Formatted asynchronously (the formatter parses) with the raw text up first, so the pane is never blank and
+  a statement the formatter refuses simply stays as it arrived.
+- **The panel's own poll is never in the query log**, by construction: logging lives in
+  `ExecutionViewModel.LogExecution` and this does not go through it. The two *actions* are also not logged —
+  §1.3's log is the record of SQL the user ran, and a terminate is not a statement they typed. Recording
+  administrative acts against production is a real and separate question; it wants its own column rather than
+  a fake SQL row, and #113's report is where it would belong.
+- It is a control of its own (`Controls/ActivityPanelView`), not a fourth `DockPanel` in `SidebarView` —
+  §0.4/§9.1, and that file is already ~925 lines.
+- **The issue's column table does not fit.** A side panel is 262px and `pg_stat_activity` offers eight
+  columns, so the list carries the two lines you scan (pid · state · duration, then the statement) and the
+  rest goes to the detail pane under the splitter — the trade the History panel already makes.
+
+### §9.13a — A restricted role does not see other sessions *at all*
+
+Measured against PostgreSQL 18, because the plan had assumed otherwise and it changed the design: a role
+without `pg_read_all_stats` does **not** receive other sessions as rows with the detail columns blanked out.
+It does not receive the rows. At one moment, the superuser's read returned three client backends and the
+non-superuser's returned one.
+
+So nothing in the result set can reveal the absence — no count of hidden rows, no per-row flag — and a short
+list is indistinguishable from a quiet server. `ServerActivity.SeesAllSessions` is asked for separately
+(`current_setting('is_superuser')::bool or pg_has_role(current_user, 'pg_read_all_stats', 'member')`, two
+branches because a superuser is not a member of anything), and the panel's status line says which answer it
+is giving. This is §1.7's `RoleGrants.Visible` in a new place: "this server has one session" and "you are not
+allowed to see the others" are different answers.
+
+WHEN adding a read whose result depends on the connected role's privileges, establish what the server
+actually withholds before designing around it (§4.7, and this is the fourth instance).
+
+## §9.14 — A database node has two shapes, and one place that decides either (#132)
+
+The tree had grown to seventeen sibling groups under a database, a kind at a time across #119 and its
+follow-up. Each placement was right on its own (§9.9a); the sum was not. `AppSettings.SchemaTreeMode` now
+picks between:
+
+- **Simple** (the default) — today's shape: relations inline, Schemas / Views / Functions / Procedures beside
+  them, and the whole long tail behind one `Other objects` bucket.
+- **Full** — schema-first: `Schemas` → a schema → `Tables`, `Views`, `Functions`, `Procedures` and the
+  per-schema kinds, with the database-wide kinds in `Administer`.
+
+**Simple is the default, and that reverses the spec.** `SCHEMA_TREE.md` §1 says Full is; #132's own argument
+is only that the one-click-to-a-table view must still *exist*, and defaulting to Full would move relations
+three clicks deep for everyone on upgrade. What ships is additive.
+
+- **`Arrange()` is the only place either shape is built**, from `_snapshot` / `_routines` / `_kinds` /
+  `_sizes` the node already holds. A toggle re-arranges and **re-reads nothing** — a display preference must
+  not cost a round trip per database, and re-reading would race the late reads (§9.8).
+- **The mode is read live** (`Func<SchemaTreeMode>`), never captured. Storing it meant every construction
+  site had to remember to push the current value; a node built after a toggle was then silently stale.
+- **Expansion below the database row is not preserved across a toggle.** The two shapes are different nodes,
+  and pretending a relation three levels down is "the same row" as one inline is how §9.8's race returns.
+- **The kinds landing is handled differently per mode, and it has to be.** Simple *appends* the one bucket,
+  which keeps it non-disruptive. Full *re-arranges*, because its kind groups live inside each schema rather
+  than under the database — and a single-schema database has no schema row to refresh, so appending left
+  those groups permanently missing. Found by a test, not by reading.
+- **A single-schema database collapses the schema level in Full mode** rather than skipping it as Simple
+  does. Simple can skip because the relations are already inline; in Full the level is the only route to
+  them, so skipping would render a database with nothing in it.
+- **`SchemaTreeShape` holds the decisions** — which kinds are per-schema versus `Administer`, a schema's
+  group order, which schemas exist, and how a count renders — pure and testable without a browser or a
+  window (§2.5). The per-schema/Administer split is not invented: `SchemaObjectInfo.Schema` is empty for a
+  kind that has none.
+- **A schema list now counts the kinds too.** A schema holding only sequences was invisible while the level
+  was merely additive; in Full mode it would be unreachable.
+
+### §9.14a — Relations three levels down broke two one-level flattens
+
+Both `DatabaseNodeViewModel.Relations` (which the size read relabels) and `SchemaTreeReveal.RelationsUnder`
+(which "Go to table" / F12 walks, §9.11) flattened exactly one group level. That is enough for Simple's
+buckets and wrong for Full's `Schemas → schema → Tables → relation`. Both are recursive now, and both stop
+at what is **already materialised** — a schema folder loads on first expand, so descending into an unopened
+one would build rows nobody asked for.
+
+**And the deeper consequence: a size push has nothing to label.** In Full mode the relation rows under an
+unopened schema do not exist when the size read lands, so `FillSizesAsync` keeps the sizes
+(`_sizes`) as well as applying them, and rows ask for their own as they are built (`ApplyCachedSizes`). A
+one-shot pass would have left every relation under a later-opened schema unlabelled — and silently, since
+a missing size looks like a size that has not arrived.
+
+`RevealRelationAsync` therefore expands the named schema on the way down, and only that one: opening every
+schema to find one table would be a read per schema.
+
+### §9.14b — A count of nothing is an em-dash
+
+`SchemaGroupNodeViewModel` takes an explicit count now. A group whose read **landed and was empty** shows
+`—`; a group whose read has **not landed** is not built at all. So the mark only ever means "asked, and
+there are none" (§1.7, absences are typed). The one exception is a bucket standing for nothing whatever —
+an entirely empty long tail, or an `Administer` with no kinds — which is omitted rather than rendered as a
+row that says so, because that is the empty group #132 asks us not to draw.
+
+The `Other objects` bucket counts **the objects inside it**, not its thirteen sub-groups: "Other objects 14"
+is the number that says whether opening it is worth it.

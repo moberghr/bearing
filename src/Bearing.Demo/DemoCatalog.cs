@@ -292,6 +292,55 @@ public static class DemoCatalog
     ];
 
     /// <summary>
+    /// The server's sessions as the demo reports them (#101). Five client backends: two of ours (one running
+    /// a slow report, one idle), a colleague's session mid-write, an idle-in-transaction one — the state worth
+    /// noticing on a real server — and a backend waiting on a lock.
+    /// <para>
+    /// Durations are stated, not derived from a clock, which is why <see cref="BackendActivity.RunningFor"/>
+    /// is a <c>TimeSpan</c>: a fixture that computed them from <c>now()</c> would report a different number on
+    /// every run and every screenshot (§4.6).
+    /// </para>
+    /// <para>
+    /// <b>Only an <c>active</c> backend has a <c>RunningFor</c> here, because only an active backend has one
+    /// on a real server</b>, and the two have to agree: <c>query_start</c> survives the statement that set it,
+    /// so this fixture giving an idle row a running time was the only place the app's own wrong reading of
+    /// that column looked correct. The idle rows carry <c>StateFor</c> instead, which is what the panel shows
+    /// beside the state word. Listed in the order the real query returns them (active first, longest first,
+    /// then the rest by how long they have been where they are), so a capture from the demo is a capture of
+    /// the shape a server produces.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<BackendActivity> Activity() =>
+    [
+        new BackendActivity(Pid: 4101, BackendStart: DemoConnectedAt, User: "shop_app", Database: Database,
+            Application: "bearing", State: "active", WaitEvent: null,
+            RunningFor: TimeSpan.FromSeconds(184), StateFor: TimeSpan.FromSeconds(184), IsOurs: true,
+            Query: "select store_id, sum(amount) from shop.payment group by store_id order by 2 desc"),
+        new BackendActivity(Pid: 4219, BackendStart: DemoConnectedAt, User: "reporting", Database: Database,
+            Application: "psql", State: "active", WaitEvent: "Lock: transactionid",
+            RunningFor: TimeSpan.FromSeconds(63), StateFor: TimeSpan.FromSeconds(63), IsOurs: false,
+            Query: "delete from shop.metric where captured_at < now() - interval '90 days'"),
+        new BackendActivity(Pid: 4187, BackendStart: DemoConnectedAt, User: "reporting", Database: Database,
+            Application: "psql", State: "active", WaitEvent: null,
+            RunningFor: TimeSpan.FromSeconds(12), StateFor: TimeSpan.FromSeconds(12), IsOurs: false,
+            Query: "update shop.metric set value = value + 1 where id = 3"),
+        // The row the panel exists for: nothing is executing on it, and it has held its transaction — and
+        // whatever that insert locked — for forty-one minutes.
+        new BackendActivity(Pid: 4203, BackendStart: DemoConnectedAt, User: "shop_app", Database: Database,
+            Application: "etl-nightly", State: "idle in transaction", WaitEvent: "Client: ClientRead",
+            RunningFor: null, StateFor: TimeSpan.FromMinutes(41), IsOurs: false,
+            Query: "insert into shop.document (title) values ($1)"),
+        new BackendActivity(Pid: 4102, BackendStart: DemoConnectedAt, User: "shop_app", Database: Database,
+            Application: "bearing", State: "idle", WaitEvent: "Client: ClientRead",
+            RunningFor: null, StateFor: TimeSpan.FromSeconds(9), IsOurs: true,
+            Query: "select * from shop.store"),
+    ];
+
+    /// <summary>When every demo backend connected. One fixed instant rather than five, because nothing in the
+    /// panel reads it except row identity — and a pid is reused, which is what it is there to disambiguate.</summary>
+    private static readonly DateTimeOffset DemoConnectedAt = new(2026, 1, 1, 9, 0, 0, TimeSpan.Zero);
+
+    /// <summary>
     /// What a role may do on the demo database (#120). <c>shop_app</c> can read and write payments and read
     /// stores; <c>shop_readers</c> can only read; the superuser is reported as not visible, which is the
     /// third state a grants pane has to render (and the one an empty list would misrepresent).

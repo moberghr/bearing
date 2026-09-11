@@ -183,6 +183,7 @@ public partial class MainWindow : Window
             else if (Vm is not null) Vm.StatusText = "Opening a demo session in a new window…";
         };
         Sidebar.ImportConnectionsRequested = () => _ = ImportFromDBeaverAsync();
+        Sidebar.ImportFromInstalledRequested = () => _ = ImportFromInstalledAsync();
         Sidebar.EditorSyncRequested = LoadEditorFromSelectedTab;
         Sidebar.SqlPreviewRequested = _dialogs.ShowSqlPreview;
     }

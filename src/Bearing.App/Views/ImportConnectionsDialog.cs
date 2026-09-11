@@ -27,9 +27,15 @@ public sealed class ImportConnectionsDialog : Window
     private readonly List<(CheckBox Box, ConnectionInfo Connection)> _rows = new();
     private readonly CheckBox _updateExisting;
 
-    public ImportConnectionsDialog(DBeaverImportResult result, string sourcePath)
+    /// <param name="title">
+    /// What this import is. Parameterised because the review step is not DBeaver-specific — the same list,
+    /// the same checkboxes and the same "update what already points at this server" question serve importing
+    /// from another Bearing profile too.
+    /// </param>
+    public ImportConnectionsDialog(
+        DBeaverImportResult result, string sourcePath, string title = "Import connections from DBeaver")
     {
-        Title = "Import connections from DBeaver";
+        Title = title;
         Width = 620;
         SizeToContent = SizeToContent.Height;
         MinHeight = 260;

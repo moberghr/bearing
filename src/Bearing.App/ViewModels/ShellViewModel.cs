@@ -20,6 +20,8 @@ using Bearing.Core.Schema;
 using Bearing.Core.Workspace;
 using Bearing.Sql;
 
+using Bearing.Persistence.Import;
+
 namespace Bearing.App.ViewModels;
 
 /// <summary>
@@ -98,6 +100,7 @@ public sealed partial class ShellViewModel : ObservableObject
         _workspace = new WorkspaceViewModel(_ctx, _scripts, _connections, dialogs);
         _execution = new ExecutionViewModel(_ctx, dialogs);
         History = new HistoryPanelViewModel(SearchHistoryAsync, ColorForConnection);
+        Activity = new ActivityPanelViewModel(_ctx, dialogs);
         // Refresh from the log's own "the row is in" signal rather than from the execution path: Append
         // hands the entry to a background writer and returns, so reloading when a run finishes would race
         // the insert and usually miss the very row it refreshed for (#78). Posted because the writer raises
@@ -136,7 +139,18 @@ public sealed partial class ShellViewModel : ObservableObject
     [ObservableProperty] private SidePanel _activePanel = SidePanel.Schema;
 
     /// <summary>The inline history panel (day-grouped, filterable) shown when ActivePanel = History.</summary>
+    /// <summary>
+    /// Whether this build is running under a profile of its own rather than as the installed app — which is
+    /// what makes the "copy the installed app's connections" item worth offering, and what keeps it out of a
+    /// real installation.
+    /// </summary>
+    public bool IsSeparateProfile => InstalledProfileImport.IsSeparateProfile;
+
     public HistoryPanelViewModel History { get; }
+
+    /// <summary>The server activity panel (#101). Polls only while it is the panel on screen — see
+    /// <see cref="SyncPanelActivity"/>.</summary>
+    public ActivityPanelViewModel Activity { get; }
 
     /// <summary>
     /// The update strip, or null when this build has no updater wired (tests, headless construction). Set by
@@ -182,11 +196,29 @@ public sealed partial class ShellViewModel : ObservableObject
 
     partial void OnActivePanelChanged(SidePanel value)
     {
+        SyncPanelActivity();
         // Reveal is *not* done here — see ShowPanel. This handler only reacts to the panel actually changing.
         RefreshHistoryIfShowing();
     }
 
-    partial void OnSidePaneOpenChanged(bool value) => RefreshHistoryIfShowing();
+    partial void OnSidePaneOpenChanged(bool value)
+    {
+        SyncPanelActivity();
+        RefreshHistoryIfShowing();
+    }
+
+    /// <summary>
+    /// Start the activity panel polling when it is on screen and stop it when it is not (#101) — the only
+    /// thing in the app that queries a server on a timer, so it must not run for a panel nobody is looking at.
+    /// <para>
+    /// Hung off <b>both</b> change handlers for the same reason <see cref="RefreshHistoryIfShowing"/> is:
+    /// <c>[ObservableProperty]</c>'s setter short-circuits on an unchanged value, so collapsing the pane from
+    /// the Activity tile and re-opening it never changes <see cref="ActivePanel"/> and would otherwise leave
+    /// the panel visible and stopped.
+    /// </para>
+    /// </summary>
+    private void SyncPanelActivity()
+        => Activity.SetPolling(ActivePanel == SidePanel.Activity && SidePaneOpen);
 
     /// <summary>
     /// Reload the history panel when it is the one on screen. Hung off every route that can put it there —

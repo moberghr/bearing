@@ -3,13 +3,18 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Threading;
+using Bearing.App.Services;
 using Bearing.App.ViewModels;
+using Bearing.App.Views;
+using Bearing.App.Workspace;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.VisualTree;
 using Bearing.App.Theming;
 using Bearing.Core.Data;
+using Bearing.Core.Workspace;
 using Bearing.Demo;
 using Bearing.Sql;
 using Xunit;
@@ -114,6 +119,133 @@ public class LookProbe
             await shell.Vm.StartDemoAsync(shell.ProjectDirectory, DemoMode.WelcomeScript);
             shell.Pump();
             Write(shell.Window, dir, "demo-session.png");
+        });
+    }
+
+    /// <summary>
+    /// The server activity panel (#101), off the demo's fixed backends: the two-line rows, the accent on the
+    /// ones Bearing opened, and — in the second frame — the detail pane the 262px row could not carry.
+    /// </summary>
+    [SkippableFact]
+    public Task ActivityPanel()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(async () =>
+        {
+            // The demo registry, exactly as App.axaml.cs builds it for a --demo launch: without it the demo
+            // connection cannot resolve a provider, and the panel correctly reports a connection it never got.
+            var providers = new DemoProvider(DemoExecutor.Default(
+                sql => StatementSplitter.Split(sql).Select(span => span.Text).ToList()));
+            using var shell = await ShellHarness.ShowAsync(nameof(ActivityPanel), providers);
+            await shell.Vm.StartDemoAsync(shell.ProjectDirectory, DemoMode.WelcomeScript);
+            shell.Pump();
+
+            // The panel reads through an already-live session (§1.5) and never opens one itself, so the
+            // capture has to connect the way a user does: by running something. The demo provider answers
+            // without a socket.
+            await shell.Vm.Execution.ExecuteAsync("select id, store_id, amount, note from shop.payment;");
+            shell.Pump();
+
+            shell.Vm.ShowPanel(SidePanel.Activity);
+            await shell.Vm.Activity.RefreshAsync();
+            shell.Pump();
+            Write(shell.Window, dir, "activity-panel.png");
+
+            // A row selected: the splitter and the detail pane appear, which is where everything the row
+            // could not fit ends up.
+            shell.Vm.Activity.Selected = shell.Vm.Activity.Backends.First(b => b.Backend.State == "idle in transaction");
+            shell.Pump();
+            Write(shell.Window, dir, "activity-panel-selected.png");
+        });
+    }
+
+    /// <summary>The confirmation for the two destructive actions (#101), which every one of them raises.</summary>
+    [SkippableFact]
+    public Task BackendConfirmations()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(() =>
+        {
+            var connection = DemoMode.Connection;
+            var backend = DemoCatalog.Activity().First(b => b.State == "idle in transaction");
+
+            foreach (var (kind, name) in new[]
+                     {
+                         (BackendActionKind.Cancel, "confirm-cancel-backend.png"),
+                         (BackendActionKind.Terminate, "confirm-terminate-backend.png"),
+                     })
+            {
+                var dialog = new ConfirmBackendActionDialog(new BackendAction(kind, connection, backend));
+                dialog.Show();
+                ResultsHarness.Pump(dialog);
+                Write(dialog, dir, name);
+                dialog.Close();
+            }
+        });
+    }
+
+    /// <summary>The connection dialog's safety group (#99 / #105): the write guard, read-only and the
+    /// statement timeout read as one block under Encryption, with the note each combination produces.</summary>
+    [SkippableFact]
+    public Task ConnectionSafety()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(() =>
+        {
+            var dialog = new ConnectionDialog(existing: null, existingPassword: null,
+                test: (_, _, _) => Task.FromResult(false));
+            dialog.Show();
+            ResultsHarness.Pump(dialog);
+            Write(dialog, dir, "connection-safety-off.png");
+
+            // What the Production preset turns on, which is the state most connections that matter will be in.
+            var production = dialog.GetVisualDescendants().OfType<Button>()
+                .First(b => b.Content as string == "Production");
+            production.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            ResultsHarness.Pump(dialog);
+            Write(dialog, dir, "connection-safety-production.png");
+
+            dialog.Close();
+        });
+    }
+
+    /// <summary>
+    /// The two schema-tree shapes (#132), off the demo's fixed catalog: simple mode with the long tail behind
+    /// one bucket, and full mode with the schema level opened.
+    /// </summary>
+    [SkippableFact]
+    public Task SchemaTreeShapes()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(async () =>
+        {
+            var providers = new DemoProvider(DemoExecutor.Default(
+                sql => StatementSplitter.Split(sql).Select(span => span.Text).ToList()));
+            using var shell = await ShellHarness.ShowAsync(nameof(SchemaTreeShapes), providers);
+            await shell.Vm.StartDemoAsync(shell.ProjectDirectory, DemoMode.WelcomeScript);
+            shell.Pump();
+
+            var server = shell.Vm.Connections.ServerNodes.OfType<ServerNodeViewModel>().First();
+            server.IsExpanded = true;
+            await server.EnsureChildrenAsync();
+
+            var database = server.Children.OfType<DatabaseNodeViewModel>().First();
+            database.IsExpanded = true;
+            await database.EnsureChildrenAsync();
+            shell.Pump();
+            Write(shell.Window, dir, "schema-tree-simple.png");
+
+            shell.Vm.Connections.SchemaTreeMode = SchemaTreeMode.Full;
+            shell.Pump();
+
+            // Opened one level, which is the shape worth looking at: a schema and its groups.
+            foreach (var node in database.Children.SelectMany(c => new[] { c }.Concat(c.Children)))
+            {
+                node.IsExpanded = true;
+                await node.EnsureChildrenAsync();
+            }
+            shell.Pump();
+            Write(shell.Window, dir, "schema-tree-full.png");
         });
     }
 

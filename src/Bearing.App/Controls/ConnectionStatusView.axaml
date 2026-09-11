@@ -31,7 +31,7 @@
   <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" MinWidth="96"
               Classes.connecting="{Binding Connections.IsConnecting}"
               Classes.disconnected="{Binding Connections.IsDisconnected}"
-              ToolTip.Tip="{Binding Connections.StatusLabel}">
+              ToolTip.Tip="{Binding Connections.StatusTip}">
     <controls:ConnectionBeacon VerticalAlignment="Center"
                                Width="{Binding $parent[controls:ConnectionStatusView].BeaconSize}"
                                Height="{Binding $parent[controls:ConnectionStatusView].BeaconSize}"

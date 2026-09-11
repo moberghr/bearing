@@ -91,6 +91,8 @@ public partial class MainWindow
             () => Vm?.ShowPanel(SidePanel.Scripts)));
         r.Register(KeyCommand.Sync(CommandIds.PanelHistory, "Show History panel", KeyScope.Global, "View",
             () => Vm?.ShowPanel(SidePanel.History)));
+        r.Register(KeyCommand.Sync(CommandIds.PanelActivity, "Show Server activity panel", KeyScope.Global, "View",
+            () => Vm?.ShowPanel(SidePanel.Activity)));
         r.Register(new KeyCommand(CommandIds.HistoryExport, "Export query history as an audit report…",
             KeyScope.Global, "View", async () => { if (Vm is not null) await Vm.ExportHistoryAsync(); }));
         r.Register(new KeyCommand(CommandIds.ConnectionNew, "New connection…", KeyScope.Global, "Connection", async () => await AddConnectionAsync()));
