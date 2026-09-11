@@ -97,6 +97,11 @@
                   <Separator/>
                   <MenuItem Header="Import connections">
                     <MenuItem Header="From DBeaver…" Click="OnImportConnectionsClick"/>
+                    <!-- Dev builds only: a profile of its own starts with no connections, and this copies the
+                         installed app's across so the tree can be driven against real servers. IsVisible is
+                         bound to the profile check, so it cannot appear in an installation. -->
+                    <MenuItem Header="From the installed Bearing…" Click="OnImportFromInstalledClick"
+                              IsVisible="{Binding IsSeparateProfile}"/>
                   </MenuItem>
                 </ContextMenu>
               </TreeView.ContextMenu>

@@ -449,6 +449,12 @@ public partial class SidebarView : UserControl
     /// <summary>Raised by the panel's context menu and its empty state; the shell owns the import flow.</summary>
     public System.Action? ImportConnectionsRequested { get; set; }
 
+    private void OnImportFromInstalledClick(object? sender, RoutedEventArgs e)
+        => ImportFromInstalledRequested?.Invoke();
+
+    /// <summary>Raised by the dev-only "from the installed Bearing" item; the shell owns the flow.</summary>
+    public System.Action? ImportFromInstalledRequested { get; set; }
+
     private async void OnPasteConnectionAtRootClick(object? sender, RoutedEventArgs e)
         => await PasteConnectionsAsync(null, overrideFolder: true);
 

@@ -20,6 +20,8 @@ using Bearing.Core.Schema;
 using Bearing.Core.Workspace;
 using Bearing.Sql;
 
+using Bearing.Persistence.Import;
+
 namespace Bearing.App.ViewModels;
 
 /// <summary>
@@ -137,6 +139,13 @@ public sealed partial class ShellViewModel : ObservableObject
     [ObservableProperty] private SidePanel _activePanel = SidePanel.Schema;
 
     /// <summary>The inline history panel (day-grouped, filterable) shown when ActivePanel = History.</summary>
+    /// <summary>
+    /// Whether this build is running under a profile of its own rather than as the installed app — which is
+    /// what makes the "copy the installed app's connections" item worth offering, and what keeps it out of a
+    /// real installation.
+    /// </summary>
+    public bool IsSeparateProfile => InstalledProfileImport.IsSeparateProfile;
+
     public HistoryPanelViewModel History { get; }
 
     /// <summary>The server activity panel (#101). Polls only while it is the panel on screen — see

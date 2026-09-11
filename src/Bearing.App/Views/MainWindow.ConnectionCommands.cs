@@ -91,6 +91,51 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// Copy the installed app's connections into this profile (dev builds only).
+    /// <para>
+    /// A build running from source gets its own config, data and secret namespace via
+    /// <c>BEARING_PROFILE</c>, which is what stops it touching the real projects and query log — and which
+    /// leaves it with no connections at all. This brings them across so the app can be driven against the
+    /// servers it will actually meet, without typing them in again.
+    /// </para>
+    /// <para>
+    /// Reads only. No password comes with them: secrets are keyed per profile, so each copied connection
+    /// prompts on first connect.
+    /// </para>
+    /// </summary>
+    private async Task ImportFromInstalledAsync()
+    {
+        if (Vm is null) return;
+
+        var found = await InstalledProfileImport.ReadAsync();
+        if (found.Connections.Count == 0)
+        {
+            Vm.StatusText = found.Projects == 0
+                ? $"No projects found for the '{found.Profile}' profile — is the installed app set up?"
+                : $"The '{found.Profile}' profile has no connections to copy.";
+            return;
+        }
+
+        var review = new DBeaverImportResult(found.Connections, found.Folders, [], []);
+        var choice = await new ImportConnectionsDialog(
+                review,
+                $"the '{found.Profile}' profile",
+                $"Copy connections from the installed Bearing")
+            .ShowDialog<ImportChoice?>(this);
+        if (choice is null || choice.Connections.Count == 0) return;
+
+        var folders = choice.Connections
+            .Select(c => c.Folder)
+            .OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        await Vm.Connections.ImportConnectionsAsync(choice.Connections, folders, choice.UpdateExisting);
+        Vm.StatusText = $"Copied {choice.Connections.Count} connection(s) from '{found.Profile}'. "
+                      + "Passwords are not copied — each will ask on first connect.";
+    }
+
     private async Task BrowseAndImportAsync(string? startDir)
     {
         if (await _dialogs.PickImportFileAsync(startDir) is { } path) await ImportDBeaverFileAsync(path);
