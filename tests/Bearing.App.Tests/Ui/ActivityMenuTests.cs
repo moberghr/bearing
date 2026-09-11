@@ -40,6 +40,7 @@ public class ActivityMenuTests
         State: "active",
         WaitEvent: null,
         RunningFor: TimeSpan.FromSeconds(pid),
+        StateFor: TimeSpan.FromSeconds(pid),
         Query: $"select {pid}",
         IsOurs: false);
 

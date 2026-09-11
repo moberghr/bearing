@@ -7,13 +7,31 @@ namespace Bearing.Core.Data;
 /// <param name="BackendStart">When the backend connected. Part of the row's identity: a pid alone is reused
 /// by the server, and this list refreshes under a pointer that may be aiming at a row.</param>
 /// <param name="RunningFor">
-/// How long the current statement has been running, <b>as the server measured it</b> — null when the backend
-/// is not running one.
+/// How long the current statement has been running, <b>as the server measured it</b> — null unless the
+/// backend is <c>active</c>.
+/// <para>
+/// <b>Null for an idle backend is the whole point, and it has to be asked for.</b> <c>query_start</c> keeps
+/// the <em>last</em> statement's start after that statement finished, so a plain <c>now() - query_start</c>
+/// hands back a growing duration for a session executing nothing — and a backend that has sat
+/// <c>idle in transaction</c> for 41 minutes then reads as one that has been running a statement for 41
+/// minutes. The server is asked <c>case when state = 'active' then …</c> so the absence is a fact rather than
+/// something the caller has to remember to check. What that backend has been doing for 41 minutes is
+/// <see cref="StateFor"/>'s answer.
+/// </para>
 /// <para>
 /// A duration rather than a <c>query_start</c> timestamp the client subtracts from, for two reasons: it puts
 /// no clock skew between two machines into a number the user reads, and it lets the demo fixture state a
 /// duration without a clock (§4.6). Each poll brings a fresh value, so it advances at the poll's cadence and
 /// needs no second timer.
+/// </para>
+/// </param>
+/// <param name="StateFor">
+/// How long the backend has been in the state it reports — the one duration that means something for every
+/// row, and for an <c>active</c> one it is the running time again.
+/// <para>
+/// This is what makes hiding <see cref="RunningFor"/> from an idle backend affordable rather than a loss:
+/// "idle in transaction, for 41 minutes" is the sentence the panel exists to say, and it is a different
+/// sentence from "running for 41 minutes". Null when the role may not see the backend's details.
 /// </para>
 /// </param>
 /// <param name="IsOurs">
@@ -31,6 +49,7 @@ public sealed record BackendActivity(
     string? State,
     string? WaitEvent,
     TimeSpan? RunningFor,
+    TimeSpan? StateFor,
     string? Query,
     bool IsOurs);
 

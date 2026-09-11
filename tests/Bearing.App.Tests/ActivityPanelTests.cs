@@ -30,6 +30,11 @@ public class ActivityPanelTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
     }
 
+    /// <param name="seconds">
+    /// How long the backend has been doing what it is doing. It reaches <c>RunningFor</c> only for an
+    /// <c>active</c> row and <c>StateFor</c> always — which is how the server answers, since
+    /// <c>query_start</c> is guarded on the state and <c>state_change</c> is not.
+    /// </param>
     private static BackendActivity Backend(int pid, bool ours = false, string? query = "select 1",
         string? user = "app", string? state = "active", double? seconds = 3) => new(
         Pid: pid,
@@ -39,7 +44,8 @@ public class ActivityPanelTests : IDisposable
         Application: ours ? "bearing" : "psql",
         State: state,
         WaitEvent: null,
-        RunningFor: seconds is { } s ? TimeSpan.FromSeconds(s) : null,
+        RunningFor: seconds is { } s && state == "active" ? TimeSpan.FromSeconds(s) : null,
+        StateFor: seconds is { } t ? TimeSpan.FromSeconds(t) : null,
         Query: query,
         IsOurs: ours);
 
@@ -196,6 +202,64 @@ public class ActivityPanelTests : IDisposable
         await panel.RefreshAsync();
 
         Assert.Equal(202, panel.Selected?.Pid);
+    }
+
+    [Fact]
+    public async Task A_session_that_is_still_there_keeps_its_row_object()
+    {
+        // The list used to be cleared and rebuilt on every poll, which removed the selected item — so the
+        // list control wrote Selected = null back through its binding before the new rows existed, and the
+        // SQL pane below (which follows the selection) blanked and re-formatted itself twice every 2.5
+        // seconds, taking the caret, the selection and the scroll with it.
+        var (ctx, activity, dialogs, _) = NewPanel();
+        activity.Backends = [Backend(101), Backend(202)];
+        var panel = new ActivityPanelViewModel(ctx, dialogs);
+        await panel.RefreshAsync();
+
+        var row = panel.Backends.Single(b => b.Pid == 202);
+        panel.Selected = row;
+
+        var selectionChanges = 0;
+        panel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ActivityPanelViewModel.Selected)) selectionChanges++;
+        };
+
+        // The same two sessions, one of them a little further into its statement — and reordered, because
+        // that is what the list does.
+        activity.Backends = [Backend(202, seconds: 9), Backend(101, seconds: 4)];
+        await panel.RefreshAsync();
+
+        Assert.Same(row, panel.Selected);
+        Assert.Same(row, panel.Backends[0]);
+        Assert.Equal(0, selectionChanges);
+
+        // Kept, not frozen: the row carries the new reading and says so, or the list would show a duration
+        // that stopped advancing.
+        Assert.Contains("9", row.Header);
+        Assert.Equal(TimeSpan.FromSeconds(9), row.Elapsed);
+    }
+
+    [Fact]
+    public async Task A_row_that_starts_running_something_else_says_so_without_being_replaced()
+    {
+        // The other half of keeping the object: the pane and the list both read through the row, so a
+        // backend that moved on to another statement has to notify rather than be swapped out.
+        var (ctx, activity, dialogs, _) = NewPanel();
+        activity.Backends = [Backend(101, query: "select 1")];
+        var panel = new ActivityPanelViewModel(ctx, dialogs);
+        await panel.RefreshAsync();
+
+        var row = panel.Backends.Single();
+        var changed = new List<string?>();
+        row.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        activity.Backends = [Backend(101, query: "vacuum analyze payment")];
+        await panel.RefreshAsync();
+
+        Assert.Same(row, panel.Backends.Single());
+        Assert.Equal("vacuum analyze payment", row.Query);
+        Assert.Contains(nameof(BackendRowViewModel.Query), changed);
     }
 
     [Fact]

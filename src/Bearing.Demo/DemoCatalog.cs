@@ -300,29 +300,40 @@ public static class DemoCatalog
     /// is a <c>TimeSpan</c>: a fixture that computed them from <c>now()</c> would report a different number on
     /// every run and every screenshot (§4.6).
     /// </para>
+    /// <para>
+    /// <b>Only an <c>active</c> backend has a <c>RunningFor</c> here, because only an active backend has one
+    /// on a real server</b>, and the two have to agree: <c>query_start</c> survives the statement that set it,
+    /// so this fixture giving an idle row a running time was the only place the app's own wrong reading of
+    /// that column looked correct. The idle rows carry <c>StateFor</c> instead, which is what the panel shows
+    /// beside the state word. Listed in the order the real query returns them (active first, longest first,
+    /// then the rest by how long they have been where they are), so a capture from the demo is a capture of
+    /// the shape a server produces.
+    /// </para>
     /// </summary>
     public static IReadOnlyList<BackendActivity> Activity() =>
     [
         new BackendActivity(Pid: 4101, BackendStart: DemoConnectedAt, User: "shop_app", Database: Database,
             Application: "bearing", State: "active", WaitEvent: null,
-            RunningFor: TimeSpan.FromSeconds(184), IsOurs: true,
+            RunningFor: TimeSpan.FromSeconds(184), StateFor: TimeSpan.FromSeconds(184), IsOurs: true,
             Query: "select store_id, sum(amount) from shop.payment group by store_id order by 2 desc"),
-        new BackendActivity(Pid: 4102, BackendStart: DemoConnectedAt, User: "shop_app", Database: Database,
-            Application: "bearing", State: "idle", WaitEvent: "Client: ClientRead",
-            RunningFor: null, IsOurs: true,
-            Query: "select * from shop.store"),
-        new BackendActivity(Pid: 4187, BackendStart: DemoConnectedAt, User: "reporting", Database: Database,
-            Application: "psql", State: "active", WaitEvent: null,
-            RunningFor: TimeSpan.FromSeconds(12), IsOurs: false,
-            Query: "update shop.metric set value = value + 1 where id = 3"),
-        new BackendActivity(Pid: 4203, BackendStart: DemoConnectedAt, User: "shop_app", Database: Database,
-            Application: "etl-nightly", State: "idle in transaction", WaitEvent: "Client: ClientRead",
-            RunningFor: TimeSpan.FromMinutes(41), IsOurs: false,
-            Query: "insert into shop.document (title) values ($1)"),
         new BackendActivity(Pid: 4219, BackendStart: DemoConnectedAt, User: "reporting", Database: Database,
             Application: "psql", State: "active", WaitEvent: "Lock: transactionid",
-            RunningFor: TimeSpan.FromSeconds(63), IsOurs: false,
+            RunningFor: TimeSpan.FromSeconds(63), StateFor: TimeSpan.FromSeconds(63), IsOurs: false,
             Query: "delete from shop.metric where captured_at < now() - interval '90 days'"),
+        new BackendActivity(Pid: 4187, BackendStart: DemoConnectedAt, User: "reporting", Database: Database,
+            Application: "psql", State: "active", WaitEvent: null,
+            RunningFor: TimeSpan.FromSeconds(12), StateFor: TimeSpan.FromSeconds(12), IsOurs: false,
+            Query: "update shop.metric set value = value + 1 where id = 3"),
+        // The row the panel exists for: nothing is executing on it, and it has held its transaction — and
+        // whatever that insert locked — for forty-one minutes.
+        new BackendActivity(Pid: 4203, BackendStart: DemoConnectedAt, User: "shop_app", Database: Database,
+            Application: "etl-nightly", State: "idle in transaction", WaitEvent: "Client: ClientRead",
+            RunningFor: null, StateFor: TimeSpan.FromMinutes(41), IsOurs: false,
+            Query: "insert into shop.document (title) values ($1)"),
+        new BackendActivity(Pid: 4102, BackendStart: DemoConnectedAt, User: "shop_app", Database: Database,
+            Application: "bearing", State: "idle", WaitEvent: "Client: ClientRead",
+            RunningFor: null, StateFor: TimeSpan.FromSeconds(9), IsOurs: true,
+            Query: "select * from shop.store"),
     ];
 
     /// <summary>When every demo backend connected. One fixed instant rather than five, because nothing in the

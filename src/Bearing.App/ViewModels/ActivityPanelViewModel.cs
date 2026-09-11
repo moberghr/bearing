@@ -53,8 +53,10 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
         _timer.Tick += (_, _) => _ = RefreshAsync();
     }
 
-    /// <summary>The backends, newest read wins. Rebuilt per poll; see <see cref="Apply"/> for what survives.</summary>
+    /// <summary>The backends, newest read wins. Reconciled per poll rather than rebuilt; see
+    /// <see cref="Apply"/> for why.</summary>
     public ObservableCollection<BackendRowViewModel> Backends { get; } = [];
+
 
     [ObservableProperty] private BackendRowViewModel? _selected;
 
@@ -180,19 +182,49 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
     /// <summary>
     /// Fold a fresh read into the list, keeping the user's selection.
     /// <para>
-    /// Re-found by identity rather than by index, because the list reorders (it is sorted by how long each
-    /// statement has been running) and it refreshes every couple of seconds while a pointer may be on its way
-    /// to a row. Identity is pid <em>plus</em> when the backend connected: a pid on its own is reused by the
-    /// server, and reusing it here would silently move the selection to a different session.
+    /// Matched by identity rather than by index, because the list reorders (what is executing leads, longest
+    /// first) and it refreshes every couple of seconds while a pointer may be on its way to a row. Identity is
+    /// pid <em>plus</em> when the backend connected: a pid on its own is reused by the server, and reusing it
+    /// here would silently move the selection to a different session.
+    /// </para>
+    /// <para>
+    /// <b>A row that is still there is updated, not replaced</b>, and that is not an optimisation. Clearing
+    /// the collection removes the selected item, so the list control writes <c>Selected = null</c> back
+    /// through its binding before the new rows exist — and the SQL pane below, which follows the selection,
+    /// blanked and re-formatted itself twice every 2.5 seconds. Caret, selection and scroll went with it,
+    /// under a user in the middle of reading the statement they were deciding whether to cancel. Reconciling
+    /// keeps the same objects in place, so nothing downstream is told anything changed unless it did.
     /// </para>
     /// </summary>
     private void Apply(ServerActivity activity, ConnectionInfo info)
     {
         var keep = Selected?.Identity;
 
-        Backends.Clear();
-        foreach (var backend in activity.Backends) Backends.Add(new BackendRowViewModel(backend));
+        var existing = new Dictionary<(int, DateTimeOffset?), BackendRowViewModel>();
+        foreach (var row in Backends) existing.TryAdd(row.Identity, row);
 
+        var next = new List<BackendRowViewModel>(activity.Backends.Count);
+        foreach (var backend in activity.Backends)
+        {
+            if (existing.TryGetValue((backend.Pid, backend.BackendStart), out var row)) row.Update(backend);
+            else row = new BackendRowViewModel(backend);
+            next.Add(row);
+        }
+
+        // Gone first, then into the new order — the same shape SetRelationOrder uses on the schema tree, and
+        // for the same reason: Move raises a move rather than a remove-and-add, so a selected row survives it.
+        for (var i = Backends.Count - 1; i >= 0; i--)
+            if (!next.Contains(Backends[i])) Backends.RemoveAt(i);
+
+        for (var target = 0; target < next.Count; target++)
+        {
+            var current = Backends.IndexOf(next[target]);
+            if (current < 0) Backends.Insert(target, next[target]);
+            else if (current != target) Backends.Move(current, target);
+        }
+
+        // Normally a no-op now: the selected row is the same object it was, so this assignment changes
+        // nothing and notifies nobody. It still has to be here for the backend that has gone.
         Selected = keep is null ? null : Backends.FirstOrDefault(b => b.Identity == keep);
         Status = DescribeText(activity, info);
     }
@@ -307,14 +339,36 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
 }
 
 /// <summary>
-/// One backend as the panel lists it. A plain immutable projection, like <c>HistoryRowViewModel</c>: the list
-/// is rebuilt per poll, so a row never changes and never needs to notify.
+/// One backend as the panel lists it.
+/// <para>
+/// It notifies, unlike the immutable projections elsewhere (<c>HistoryRowViewModel</c>), because this row
+/// outlives the read that made it: <see cref="ActivityPanelViewModel.Apply"/> keeps the object and gives it
+/// the new reading, so that the list, the selection and the SQL pane are not disturbed by a poll that found
+/// the same session still there. A row whose contents could not change would have to be replaced instead,
+/// which is the thing that was disturbing them.
+/// </para>
 /// </summary>
-public sealed class BackendRowViewModel
+public sealed class BackendRowViewModel : ObservableObject
 {
     public BackendRowViewModel(BackendActivity backend) => Backend = backend;
 
-    public BackendActivity Backend { get; }
+    public BackendActivity Backend { get; private set; }
+
+    /// <summary>
+    /// Take a fresh reading of the same backend. Identity is not re-checked here — the caller matched on it
+    /// to find this row, and it is the one thing about the row that cannot change.
+    /// </summary>
+    internal void Update(BackendActivity backend)
+    {
+        if (Backend == backend) return;   // records compare by value: an unchanged session notifies nothing
+        Backend = backend;
+        OnPropertyChanged(nameof(Backend));
+        OnPropertyChanged(nameof(Header));
+        OnPropertyChanged(nameof(Elapsed));
+        OnPropertyChanged(nameof(Query));
+        OnPropertyChanged(nameof(Detail));
+        OnPropertyChanged(nameof(IsOurs));
+    }
 
     /// <summary>What makes this row the same row across a refresh. A pid alone is not enough — the server
     /// reuses them.</summary>
@@ -323,17 +377,30 @@ public sealed class BackendRowViewModel
     public int Pid => Backend.Pid;
     public bool IsOurs => Backend.IsOurs;
 
-    /// <summary>pid · state · how long, which is the line you scan down.</summary>
+    /// <summary>
+    /// pid · state · how long, which is the line you scan down.
+    /// <para>
+    /// The duration is <see cref="Elapsed"/>, so it reads against the state word beside it: on an
+    /// <c>active</c> row it is how long the statement has run, and on any other row how long the backend has
+    /// been in the state it names. It was <c>RunningFor</c> alone, which the server answered for idle
+    /// backends too — so an <c>idle in transaction</c> row read "4203 · idle in transaction · 41 min" about a
+    /// session that had not executed anything for 41 minutes.
+    /// </para>
+    /// </summary>
     public string Header
     {
         get
         {
             var parts = new List<string> { Backend.Pid.ToString() };
             if (!string.IsNullOrWhiteSpace(Backend.State)) parts.Add(Backend.State!);
-            if (Backend.RunningFor is { } elapsed) parts.Add(BackendAction.FormatElapsed(elapsed));
+            if (Elapsed is { } elapsed) parts.Add(BackendAction.FormatElapsed(elapsed));
             return string.Join(" · ", parts);
         }
     }
+
+    /// <summary>The one duration worth putting on the row: the statement's if there is one, otherwise how
+    /// long this backend has been where it is. Null only when the role could not see either.</summary>
+    public TimeSpan? Elapsed => Backend.RunningFor ?? Backend.StateFor;
 
     /// <summary>The statement, flattened to one line. Empty when the backend is running nothing — an idle
     /// session shows its last query, and a blank line is the honest rendering of no statement at all.</summary>

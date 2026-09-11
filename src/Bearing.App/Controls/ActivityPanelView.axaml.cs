@@ -31,6 +31,18 @@ public partial class ActivityPanelView : UserControl
     private ActivityPanelViewModel? Vm => DataContext as ActivityPanelViewModel;
 
     private ActivityPanelViewModel? _watched;
+
+    /// <summary>
+    /// The selected row itself, watched alongside the view model.
+    /// <para>
+    /// A poll that finds the same session keeps the row object and gives it the new reading
+    /// (<c>ActivityPanelViewModel.Apply</c>), so <c>Selected</c> does not change when a backend moves on to
+    /// another statement — the row does. Without this the pane would still be showing the previous statement
+    /// while the list row beside it showed the new one.
+    /// </para>
+    /// </summary>
+    private BackendRowViewModel? _watchedRow;
+
     private bool _highlighted;
 
     private void OnDataContextChanged(object? sender, EventArgs e)
@@ -38,13 +50,38 @@ public partial class ActivityPanelView : UserControl
         if (_watched is not null) _watched.PropertyChanged -= OnVmPropertyChanged;
         _watched = Vm;
         if (_watched is not null) _watched.PropertyChanged += OnVmPropertyChanged;
-        ShowSelectedSql();
+        WatchRow();
+        // Forced: a different view model's selection can carry the same pid and the same statement, and the
+        // pane must show the new panel's row rather than keep the old one's text on a matching key.
+        ShowSelectedSql(force: true);
     }
 
     private void OnVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(ActivityPanelViewModel.Selected)) ShowSelectedSql();
+        if (e.PropertyName != nameof(ActivityPanelViewModel.Selected)) return;
+        WatchRow();
+        ShowSelectedSql();
     }
+
+    private void WatchRow()
+    {
+        if (_watchedRow is not null) _watchedRow.PropertyChanged -= OnRowPropertyChanged;
+        _watchedRow = Vm?.Selected;
+        if (_watchedRow is not null) _watchedRow.PropertyChanged += OnRowPropertyChanged;
+    }
+
+    /// <summary>The selected backend has been re-read. Only the statement can change what the pane holds, and
+    /// <see cref="ShowSelectedSql"/> decides whether it actually did.</summary>
+    private void OnRowPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(BackendRowViewModel.Query)) ShowSelectedSql();
+    }
+
+    /// <summary>
+    /// What is currently in the viewer: which backend it came from, and the statement itself. Null when the
+    /// pane is empty. See <see cref="ShowSelectedSql"/> for why it is remembered.
+    /// </summary>
+    private (int Pid, DateTime? Since, string? Sql)? _shown;
 
     /// <summary>
     /// Put the selected backend's statement in the viewer, formatted and highlighted.
@@ -55,10 +92,25 @@ public partial class ActivityPanelView : UserControl
     /// doing it inline would stutter the panel's own refresh. The raw text goes up first so the pane is never
     /// blank, and a statement the formatter refuses simply stays as the server sent it.
     /// </para>
+    /// <para>
+    /// <b>Nothing is rewritten while the same statement is selected.</b> The panel rebuilds every row on each
+    /// poll, so <c>Selected</c> is a new object every 2.5 seconds and this runs again — and assigning
+    /// <c>Text</c> resets the caret, the selection and the scroll offset. The user reading a long statement,
+    /// or part-way through selecting a clause out of it, lost it twice a second-and-a-half. The key is the
+    /// backend's identity (a pid alone is reused) plus the statement, so a row that starts running something
+    /// else still refreshes.
+    /// </para>
     /// </summary>
-    private void ShowSelectedSql()
+    private void ShowSelectedSql(bool force = false)
     {
-        var sql = Vm?.Selected?.Backend.Query ?? "";
+        var selected = Vm?.Selected;
+        var key = selected is null
+            ? ((int, DateTime?, string?)?)null
+            : (selected.Pid, selected.Backend.BackendStart?.UtcDateTime, selected.Backend.Query);
+        if (!force && _shown == key) return;
+        _shown = key;
+
+        var sql = selected?.Backend.Query ?? "";
         BackendSql.Text = sql;
         if (sql.Length == 0) return;
 

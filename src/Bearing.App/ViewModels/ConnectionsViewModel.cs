@@ -203,18 +203,26 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         await database.EnsureChildrenAsync();
 
         // In full mode the relation is three levels down and the schema holding it is lazy, so the row does
-        // not exist until the schema is opened (#132). Opening every schema would be a read per schema, so
-        // only the one the target names is opened — and the search is by name rather than by title, for the
-        // reason RelationUnder is (a label is not an identity).
-        foreach (var schema in SchemaTreeReveal.SchemaFoldersUnder(database))
+        // not exist until the schema is opened (#132). Descended into only when the row is not already
+        // there, which is the whole of simple mode — its relations are inline, and it builds a Schemas group
+        // too, so descending unconditionally would open a folder nobody asked for and fill it with a second
+        // set of nodes for relations already on screen. Opening every schema would be a build per schema, so
+        // only the one the target names is opened — matched on name rather than title, for the reason
+        // RelationUnder is (a label is not an identity).
+        var relation = SchemaTreeReveal.RelationUnder(database, target.Schema, target.Name);
+        if (relation is null)
         {
-            if (!string.Equals(schema.Title, target.Schema, StringComparison.OrdinalIgnoreCase)) continue;
-            schema.IsExpanded = true;
-            await schema.EnsureChildrenAsync();
+            foreach (var schema in SchemaTreeReveal.SchemaFoldersUnder(database))
+            {
+                if (!string.Equals(schema.Title, target.Schema, StringComparison.OrdinalIgnoreCase)) continue;
+                schema.IsExpanded = true;
+                await schema.EnsureChildrenAsync();
+            }
+
+            relation = SchemaTreeReveal.RelationUnder(database, target.Schema, target.Name);
         }
 
-        if (SchemaTreeReveal.RelationUnder(database, target.Schema, target.Name) is not { } relation)
-            return SchemaRevealResult.NoRelation;
+        if (relation is null) return SchemaRevealResult.NoRelation;
 
         if (target.Column is null)
         {

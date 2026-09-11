@@ -196,12 +196,14 @@
                         <MenuItem Header="Edit…" Click="OnEditServer" IsVisible="{Binding IsServer}"/>
                         <MenuItem Header="Refresh metadata" Click="OnRefreshServer" IsVisible="{Binding IsServer}"/>
                         <!-- "Which table is eating the disk" is the question a tree sorted by name cannot
-                             answer (#76). On a database row only. -->
+                             answer (#76). On a database row, and only in the mode that has relation rows on
+                             it to move: in full mode they are nested inside each schema and these two did
+                             nothing at all (#132). -->
                         <MenuItem Header="Sort tables by size" Click="OnSortRelationsBySize"
-                                  IsVisible="{Binding IsDatabase}"/>
+                                  IsVisible="{Binding SortsRelations}"/>
                         <MenuItem Header="Sort tables by name" Click="OnSortRelationsByName"
-                                  IsVisible="{Binding IsDatabase}"/>
-                        <Separator IsVisible="{Binding IsDatabase}"/>
+                                  IsVisible="{Binding SortsRelations}"/>
+                        <Separator IsVisible="{Binding SortsRelations}"/>
                         <!-- Sequence rows (#119): the two statements you want when you have found one.
                              Copied rather than run — setting a sequence is how a primary key breaks, so it
                              goes through the editor and the write guard like any other statement. -->

@@ -29,6 +29,7 @@ public class BackendActionTests
         State: "active",
         WaitEvent: null,
         RunningFor: TimeSpan.FromMinutes(3),
+        StateFor: TimeSpan.FromMinutes(3),
         Query: query,
         IsOurs: ours);
 
@@ -75,11 +76,41 @@ public class BackendActionTests
     public void An_idle_backend_reports_no_elapsed_statement_rather_than_zero()
     {
         // §1.7's shape: an absence is typed. A session running nothing has no elapsed statement, which is not
-        // a statement that has run for no time.
-        var idle = Backend() with { RunningFor = null, State = "idle" };
+        // a statement that has run for no time. Nothing visible at all when the role could not see either
+        // duration — a made-up "Running for 0.0 s" would be the reassurance this dialog must never give.
+        var idle = Backend() with { RunningFor = null, StateFor = null, State = "idle" };
 
         Assert.Null(new BackendAction(BackendActionKind.Cancel, Conn(), idle).Running);
         Assert.NotNull(new BackendAction(BackendActionKind.Cancel, Conn(), Backend()).Running);
+    }
+
+    [Fact]
+    public void A_backend_that_is_stuck_rather_than_working_is_not_described_as_running()
+    {
+        // The row this panel most exists to show, and the sentence it used to get wrong. `query_start` keeps
+        // the *last* statement's start, so the server answers an unguarded subtraction with a growing number
+        // for a session executing nothing — and the confirmation said "Running for 41 min" about a backend
+        // that had not run anything for 41 minutes. The duration is real; what it measures is the state.
+        var stuck = Backend() with
+        {
+            State = "idle in transaction",
+            RunningFor = null,
+            StateFor = TimeSpan.FromMinutes(41),
+        };
+
+        var line = new BackendAction(BackendActionKind.Terminate, Conn(), stuck).Running;
+
+        Assert.Equal("Idle in transaction for 41 min 0 s", line);
+        Assert.DoesNotContain("Running", line!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_backend_that_is_working_still_says_so()
+    {
+        // The other half of the pair: guarding the idle case must not have cost the active one its sentence.
+        var line = new BackendAction(BackendActionKind.Cancel, Conn(), Backend()).Running;
+
+        Assert.Equal("Running for 3 min 0 s", line);
     }
 
     [Fact]

@@ -84,6 +84,55 @@ public class ServerActivityTests
         }
     }
 
+    [SkippableFact]
+    public async Task An_idle_backend_reports_no_running_statement_however_long_ago_its_last_one_was()
+    {
+        // The one fact this file exists to pin, and it can only be established here. `query_start` is NOT
+        // cleared when a statement finishes — it keeps the last one's start — so `now() - query_start` hands
+        // back a number that grows for a session executing nothing. The panel rendered that as
+        // "4203 · idle in transaction · 41 min" and the confirmation as "Running for 41 min", about a backend
+        // with no statement on it at all. Nothing in a fixture could have caught it: only the server knows
+        // what it leaves behind in that column.
+        var provider = Provider();
+        await using var factory = provider.CreateConnectionFactory(PgTestServer.Info(), PgTestServer.Password);
+        await PgTestServer.RequireAsync(factory);
+
+        var activity = provider.CreateServerActivity(factory);
+
+        // A second factory so the idle backend is unambiguously not the one doing the reading, and a marker
+        // in the text so it can be found among whatever else is on a shared server.
+        await using var idleFactory = provider.CreateConnectionFactory(
+            PgTestServer.Info("activity-idle"), PgTestServer.Password);
+        var other = provider.CreateQueryExecutor(idleFactory);
+
+        const string marker = "select 1 /* bearing-idle-probe */";
+        await other.ExecuteAsync(marker, new QueryOptions(), CancellationToken.None);
+
+        // Long enough that an unguarded now() - query_start would be a second or more, rather than a
+        // rounding error that an assertion might read as zero.
+        await Task.Delay(1200);
+
+        BackendActivity? idle = null;
+        var found = await WaitUntilAsync(async () =>
+        {
+            var read = await activity.GetActivityAsync(ActivityFilter.Everything, CancellationToken.None);
+            idle = read.Backends.FirstOrDefault(b =>
+                b.State == "idle" && b.Query?.Contains("bearing-idle-probe", StringComparison.Ordinal) == true);
+            return idle is not null;
+        });
+        Skip.If(!found, "the pooled backend never appeared as idle in pg_stat_activity");
+
+        // It still reports the statement it ran — that is the useful part of an idle row, and it is why the
+        // query column is not blanked. What it must not report is a duration for it.
+        Assert.Contains("bearing-idle-probe", idle!.Query!);
+        Assert.Null(idle.RunningFor);
+
+        // And the duration that does mean something for this row is there instead, so hiding the wrong one
+        // costs no information: this is what "idle for 1.4 s" is read off.
+        Assert.NotNull(idle.StateFor);
+        Assert.True(idle.StateFor > TimeSpan.Zero, $"state_for was {idle.StateFor}");
+    }
+
     // ---- acting --------------------------------------------------------------------------------
 
     [SkippableFact]

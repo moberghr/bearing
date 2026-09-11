@@ -91,8 +91,14 @@ public static class SchemaTreeReveal
     }
 
     /// <summary>
-    /// The schema folders under a loaded database row, if the tree is arranged schema-first. Empty in simple
-    /// mode, where relations are inline and there is nothing to open on the way (#132).
+    /// The schema folders under a loaded database row — the ones directly under it (full mode with one
+    /// schema) and the ones inside the Schemas group.
+    /// <para>
+    /// <b>Not empty in simple mode</b>, which also builds a Schemas group: simple mode's relations are inline
+    /// as well, so a reveal that opened a schema folder there would materialise a second set of rows for
+    /// relations already on screen, and leave a folder hanging open that the user never asked for. That is why
+    /// <c>RevealRelationAsync</c> looks for the row first and only descends when it is not already there.
+    /// </para>
     /// </summary>
     public static IEnumerable<SchemaNodeViewModel> SchemaFoldersUnder(SchemaNodeViewModel database)
         => database.Children

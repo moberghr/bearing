@@ -298,6 +298,89 @@ public class SchemaNodeTests
     }
 
     [Fact]
+    public async Task Sizes_land_on_the_rows_that_are_on_screen_not_on_ones_already_replaced()
+    {
+        // Both late reads start in the same hook and full mode's kinds read calls ReplaceChildren, so if the
+        // size read walks a list captured before the await it labels nodes that have been discarded — and
+        // every row the user can see stays unlabelled. Which way it went was decided by which catalog query
+        // answered first; here the kinds win by construction, which is the losing order.
+        var browser = new MultiSchemaBrowser
+        {
+            OneSchema = true,
+            SizeGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            Sizes = [new RelationSize(1, TotalBytes: 4096, TableBytes: 4096, IndexBytes: 0, ToastBytes: 0, EstimatedRows: 7)],
+        };
+        var db = Database(browser, SchemaTreeMode.Full);
+        var sized = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        db.SizesLoaded = () => sized.TrySetResult();
+
+        await db.EnsureChildrenAsync();
+        // The kinds read has already rearranged: one schema collapses the level, so these are its groups.
+        Assert.Equal(SchemaTreeShape.SchemaGroupTitles, db.Children.Select(c => c.Title));
+
+        browser.SizeGate.SetResult();
+        await Task.WhenAny(sized.Task, Task.Delay(5000));
+
+        var film = Group(db, "Tables").Children.Single();
+        Assert.Contains("4.0 kB", film.Detail);
+    }
+
+    [Fact]
+    public async Task A_schema_opened_before_the_sizes_land_is_labelled_when_they_do()
+    {
+        // The walk used to stop at anything that was not a group, and a schema folder is not one — so an
+        // expanded schema's relations were skipped in either mode. Opening it *after* the read lands was
+        // always fine (the rows ask for their cached size as they are built); this is the other order.
+        var browser = new MultiSchemaBrowser
+        {
+            SizeGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            Sizes = [new RelationSize(4, TotalBytes: 8192, TableBytes: 8192, IndexBytes: 0, ToastBytes: 0, EstimatedRows: 3)],
+        };
+        var db = Database(browser, SchemaTreeMode.Simple);
+        var sized = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        db.SizesLoaded = () => sized.TrySetResult();
+
+        await db.EnsureChildrenAsync();
+
+        // Opened while the size read is still out — simple mode builds a Schemas level too, and the rows in
+        // it are their own nodes, not the inline ones.
+        var audit = Group(db, "Schemas").Children.Single(c => c.Title == "audit");
+        await audit.EnsureChildrenAsync();
+        var events = audit.Children.OfType<RelationNodeViewModel>().Single(r => r.RelationName == "events");
+        Assert.Null(events.Size);
+
+        browser.SizeGate.SetResult();
+        await Task.WhenAny(sized.Task, Task.Delay(5000));
+
+        Assert.NotNull(events.Size);
+        Assert.Contains("8.0 kB", events.Detail);
+    }
+
+    [Fact]
+    public async Task The_sort_by_size_items_are_offered_only_where_they_can_act()
+    {
+        // SetRelationOrder moves the relation rows directly under the database, and full mode has none: they
+        // are three levels down inside each schema. The two menu items were still shown there and did
+        // nothing at all, which reads as a broken sort rather than as an inapplicable one.
+        var browser = new MultiSchemaBrowser();
+        var mode = SchemaTreeMode.Simple;
+        var db = new DatabaseNodeViewModel(Conn(), "app", isConnected: true, browser, () => mode);
+        await db.EnsureChildrenAsync();
+
+        Assert.True(db.SortsRelations);
+
+        var raised = new List<string?>();
+        db.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        mode = SchemaTreeMode.Full;
+        db.ApplyMode();
+
+        Assert.False(db.SortsRelations);
+        // And the menu is told, or it would keep offering them until the row was rebuilt.
+        Assert.Contains(nameof(SchemaNodeViewModel.SortsRelations), raised);
+    }
+
+    [Fact]
     public async Task A_table_three_levels_down_is_still_findable()
     {
         // What F12 / "go to table" walks (§9.11). The walk used to flatten exactly one group level, which is
@@ -328,6 +411,13 @@ public class SchemaNodeTests
         /// tests that are about arrangement are not also about them.</summary>
         public IReadOnlyList<RelationSize> Sizes = [];
         public DatabaseObjectKinds Kinds = DatabaseObjectKinds.Empty;
+
+        /// <summary>
+        /// Holds the size read until a test releases it. Both late reads start together (§9.8) and the kinds
+        /// one can rearrange the whole tree, so which of them lands first is a race the tree has to survive
+        /// either way — and a test cannot assert that without deciding the order itself.
+        /// </summary>
+        public TaskCompletionSource? SizeGate;
 
         /// <summary>How many times the catalog was asked. A re-arrange must not add to it (#132).</summary>
         public int ObjectCalls;
@@ -367,9 +457,12 @@ public class SchemaNodeTests
         public Task<string> GetViewDefinitionAsync(ConnectionInfo connection, string database, long tableId, CancellationToken ct)
             => Task.FromResult("select 1");
 
-        public Task<IReadOnlyList<RelationSize>> GetRelationSizesAsync(
+        public async Task<IReadOnlyList<RelationSize>> GetRelationSizesAsync(
             ConnectionInfo connection, string database, CancellationToken ct)
-            => Task.FromResult(Sizes);
+        {
+            if (SizeGate is { } gate) await gate.Task;
+            return Sizes;
+        }
 
         public Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(ConnectionInfo connection, CancellationToken ct)
             => Task.FromResult<IReadOnlyList<DatabaseSize>>([]);

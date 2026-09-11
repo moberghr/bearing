@@ -59,11 +59,33 @@ public sealed record BackendAction(BackendActionKind Kind, ConnectionInfo Connec
         }
     }
 
-    /// <summary>How long the statement has been running, or null when the backend is not running one. Absent
-    /// rather than zero: an idle session has no elapsed statement, which is not a statement of no length.</summary>
-    public string? Running => Backend.RunningFor is { } elapsed
-        ? "Running for " + FormatElapsed(elapsed)
-        : null;
+    /// <summary>
+    /// How long this backend has been doing whatever it is doing — "Running for 3 min 4 s" when a statement
+    /// is executing, and "Idle in transaction for 41 min" when one is not.
+    /// <para>
+    /// Two sentences rather than one, because they are two different facts and the confirmation is where
+    /// getting them mixed up costs something: a row that has held a transaction open for 41 minutes and a row
+    /// that has been executing for 41 minutes call for different decisions, and the dialog used to say
+    /// "Running for" about both (<see cref="BackendActivity.RunningFor"/>).
+    /// </para>
+    /// <para>
+    /// Null when the role could see neither, which is absence rather than zero: a session with no elapsed
+    /// statement is not a statement of no length.
+    /// </para>
+    /// </summary>
+    public string? Running
+    {
+        get
+        {
+            if (Backend.RunningFor is { } running) return "Running for " + FormatElapsed(running);
+            if (Backend.StateFor is not { } waiting) return null;
+            var state = Backend.State;
+            if (string.IsNullOrWhiteSpace(state)) return null;
+            // "idle in transaction" as the server spells it, sentence-cased — the state is the subject of
+            // this line, and lower-casing the server's own word would invent a second vocabulary for it.
+            return char.ToUpperInvariant(state[0]) + state[1..] + " for " + FormatElapsed(waiting);
+        }
+    }
 
     /// <summary>The statement itself, or null when the role could not see it or there is none.</summary>
     public string? Query => string.IsNullOrWhiteSpace(Backend.Query) ? null : Backend.Query;

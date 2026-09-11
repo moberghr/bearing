@@ -43,8 +43,17 @@ public sealed class PostgresServerActivity : IServerActivity
     /// polling itself is noise, and it is the one row the user can never act on.
     /// </para>
     /// <para>
-    /// The elapsed time is computed here rather than from a returned timestamp, so the number the user reads
-    /// is the server's own arithmetic and carries no clock difference between two machines.
+    /// The elapsed times are computed here rather than from returned timestamps, so the numbers the user reads
+    /// are the server's own arithmetic and carry no clock difference between two machines.
+    /// </para>
+    /// <para>
+    /// <b><c>running_for</c> is guarded on <c>state = 'active'</c>, and that guard is load-bearing.</b>
+    /// <c>query_start</c> is not cleared when a statement finishes — it keeps the <em>last</em> one's start —
+    /// so the unguarded subtraction reports a duration that grows for a backend executing nothing. Measured on
+    /// this suite's own server: a session sitting <c>idle in transaction</c> answered a plain
+    /// <c>now() - query_start</c> with a number that climbed second by second, which the panel then rendered
+    /// as "running for". <c>state_change</c> is the timestamp that does move with the state, so how long a
+    /// backend has been idle — or stuck in a transaction — is <c>state_for</c>.
     /// </para>
     /// </summary>
     private const string ActivitySql = """
@@ -55,7 +64,8 @@ public sealed class PostgresServerActivity : IServerActivity
                application_name,
                state,
                nullif(concat_ws(': ', wait_event_type, wait_event), '') as wait,
-               now() - query_start as running_for,
+               case when state = 'active' then now() - query_start end as running_for,
+               now() - state_change as state_for,
                query
         from pg_stat_activity
         where backend_type = 'client backend'
@@ -80,7 +90,21 @@ public sealed class PostgresServerActivity : IServerActivity
     /// </summary>
     private const string BusyPredicate = "\n  and state is distinct from 'idle'";
 
-    private const string ActivityOrder = "\norder by running_for desc nulls last, pid";
+    /// <summary>
+    /// What is executing, longest first; then what is not, longest in its state first.
+    /// <para>
+    /// Two keys rather than one, because with <c>running_for</c> now null for every non-active backend a
+    /// single <c>nulls last</c> would file a transaction that has been open for an hour below a query that
+    /// started a second ago. The active rows still lead — they are the ones with a statement to cancel — and
+    /// the rest rank among themselves by how long they have been in the state they are in, which is the
+    /// order the stuck ones want to be in.
+    /// </para>
+    /// </summary>
+    private const string ActivityOrder =
+        "\norder by case when state = 'active' then 0 else 1 end,"
+        + "\n         running_for desc nulls last,"
+        + "\n         state_for desc nulls last,"
+        + "\n         pid";
 
     public async Task<ServerActivity> GetActivityAsync(ActivityFilter filter, CancellationToken ct)
     {
@@ -114,9 +138,11 @@ public sealed class PostgresServerActivity : IServerActivity
                 Application: application,
                 State: r.IsDBNull(5) ? null : r.GetString(5),
                 WaitEvent: r.IsDBNull(6) ? null : r.GetString(6),
-                // Null when the backend is running nothing — idle, not instantaneous.
+                // Null when the backend is running nothing — idle, not instantaneous. The server decides
+                // that, not this reader: see ActivitySql's guard.
                 RunningFor: r.IsDBNull(7) ? null : r.GetFieldValue<TimeSpan>(7),
-                Query: r.IsDBNull(8) ? null : r.GetString(8),
+                StateFor: r.IsDBNull(8) ? null : r.GetFieldValue<TimeSpan>(8),
+                Query: r.IsDBNull(9) ? null : r.GetString(9),
                 IsOurs: string.Equals(application, OurApplicationName, StringComparison.Ordinal)));
         }
 

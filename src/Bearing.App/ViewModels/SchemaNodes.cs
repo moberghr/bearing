@@ -56,8 +56,19 @@ public abstract partial class SchemaNodeViewModel : ObservableObject
     /// <summary>Whether the node can be expanded (drives the placeholder + the expander arrow).</summary>
     public bool HasChildren { get; }
 
-    /// <summary>Whether this row is a database — for the context menu's size-ordering items (#76).</summary>
+    /// <summary>Whether this row is a database — for the context menu's database-only items.</summary>
     public virtual bool IsDatabase => false;
+
+    /// <summary>
+    /// Whether "Sort tables by size / name" (#76) would do anything on this row.
+    /// <para>
+    /// Separate from <see cref="IsDatabase"/> because a database in full mode has no relation rows of its own
+    /// — they are three levels down, inside each schema — so the two items were offered there and silently
+    /// did nothing (#132). A menu item that cannot act is worse than a missing one: it invites the user to
+    /// conclude the sort is broken.
+    /// </para>
+    /// </summary>
+    public virtual bool SortsRelations => false;
 
     /// <summary>Whether this row is a sequence — for the context menu's copy-nextval items (#119).</summary>
     public virtual bool IsSequence => false;
@@ -229,11 +240,6 @@ public abstract partial class SchemaNodeViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Swap in a fresh set of children without re-reading anything (#132). For a node that can arrange the
-    /// data it already holds more than one way — the generation is <b>not</b> bumped, because nothing was
-    /// invalidated: a late read still in flight is still about this load and may still land.
-    /// </summary>
-    /// <summary>
     /// Add one child to a node whose children are already attached, priming it the way the initial load
     /// does. The late reads used to call <c>Children.Add</c> straight, which left the appended group with no
     /// parent and outside the type-ahead's reach.
@@ -244,6 +250,11 @@ public abstract partial class SchemaNodeViewModel : ObservableObject
         AddChild(child);
     }
 
+    /// <summary>
+    /// Swap in a fresh set of children without re-reading anything (#132). For a node that can arrange the
+    /// data it already holds more than one way — the generation is <b>not</b> bumped, because nothing was
+    /// invalidated: a late read still in flight is still about this load and may still land.
+    /// </summary>
     protected void ReplaceChildren(IReadOnlyList<SchemaNodeViewModel> next)
     {
         Children.Clear();
@@ -550,9 +561,13 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
 
     private readonly string? _connectedLabel;
 
-    /// <summary>Lets the tree's one context menu show the size-ordering items on a database row only — the
-    /// same shape as <c>IsServer</c>, which the server-only items already bind.</summary>
+    /// <summary>Lets the tree's one context menu show the database-only items — the same shape as
+    /// <c>IsServer</c>, which the server-only items already bind.</summary>
     public override bool IsDatabase => true;
+
+    /// <summary>Only simple mode has relation rows directly under the database for
+    /// <see cref="SetRelationOrder"/> to move; full mode nests them inside each schema (#132).</summary>
+    public override bool SortsRelations => Mode == SchemaTreeMode.Simple;
 
     /// <summary>
     /// The two reads that happen <em>after</em> the tree is on screen, never before.
@@ -566,7 +581,7 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
     /// </summary>
     protected override void OnChildrenAttached()
     {
-        _ = FillSizesAsync(Children.ToList());
+        _ = FillSizesAsync();
         _ = FillObjectKindsAsync(_defaultSchema);
     }
 
@@ -618,6 +633,9 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
     /// </summary>
     internal void ApplyMode()
     {
+        // Raised whether or not there are children to rearrange: the context menu's sort items are bound to
+        // SortsRelations, which the mode decides, and a collapsed database still carries that menu.
+        OnPropertyChanged(nameof(SortsRelations));
         if (_snapshot is null) return;   // not expanded yet: the next load picks the new mode up by itself
         ReplaceChildren(Arrange());
     }
@@ -912,7 +930,7 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
     /// failure: sizes are a nicety, and a permission error or a slow catalog must not turn an expanded tree
     /// into an error message.
     /// </summary>
-    private async Task FillSizesAsync(IReadOnlyList<SchemaNodeViewModel> children)
+    private async Task FillSizesAsync()
     {
         var generation = LoadGeneration;
         IReadOnlyList<RelationSize> sizes;
@@ -928,7 +946,11 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
         _sizes.Clear();
         foreach (var size in sizes) _sizes[size.TableId] = size;
 
-        foreach (var relation in Relations(children))
+        // Walked off the live Children, not off a snapshot taken before the await. Both late reads start
+        // together and the kinds one calls ReplaceChildren in full mode, so a captured list is the set of
+        // rows that read may already have discarded — sizes would land on nodes nobody can see while the
+        // rows on screen stayed unlabelled, decided by which catalog query answered first.
+        foreach (var relation in Relations(Children))
             if (_sizes.TryGetValue(relation.TableId, out var size)) relation.ApplySize(size);
 
         // If the user asked for size order before the sizes existed, this is when it can be honoured.
@@ -1000,9 +1022,12 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
     private static IEnumerable<SchemaNodeViewModel> Flatten(SchemaNodeViewModel node)
     {
         yield return node;
-        // Only through groups. A relation's own children are its columns, and a schema folder that has never
-        // been expanded holds nothing but a "Loading…" placeholder.
-        if (node is not SchemaGroupNodeViewModel) yield break;
+        // Everything except a relation, whose own children are its columns. Stopping at anything but a group
+        // was the bug: a schema folder is not a group, so an expanded schema's relations were skipped — in
+        // either mode — and a schema the user opened before the size read landed never got labelled. An
+        // unexpanded folder costs nothing to walk into; it holds only its "Loading…" placeholder, and this
+        // forces no load.
+        if (node is RelationNodeViewModel) yield break;
         foreach (var child in node.Children)
             foreach (var descendant in Flatten(child))
                 yield return descendant;
