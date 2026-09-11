@@ -66,4 +66,18 @@ public class ConnectionEndpointTests
         var info = Conn("db.example", 5433, "reporting");
         Assert.Equal($"{info.Host}:{info.Port}/{info.Database}", ConnectionEndpoint.Address(info));
     }
+    /// <summary>The second exception to "the port is always shown", alongside a port of zero. A SQL Server
+    /// named instance is resolved by the SQL Browser service, which hands back whatever dynamic port that
+    /// instance listens on — so the configured port is not the address, and printing it sends the reader to
+    /// check a number that had nothing to do with their failure.</summary>
+    [Fact]
+    public void A_named_instance_drops_the_port()
+    {
+        var info = Conn(host: @"SQLPROD\SALES", port: 1433, database: "sales");
+        Assert.Equal(@"SQLPROD\SALES", ConnectionEndpoint.HostPort(info));
+        Assert.Equal(@"SQLPROD\SALES/sales", ConnectionEndpoint.Address(info));
+        Assert.True(ConnectionEndpoint.IsNamedInstance(@"SQLPROD\SALES"));
+        Assert.False(ConnectionEndpoint.IsNamedInstance("sqlprod"));
+        Assert.False(ConnectionEndpoint.IsNamedInstance(null));
+    }
 }

@@ -2,7 +2,7 @@
 
   <!--
     Bearing.Sql: the SQL parsing + completion core.
-      * ANTLR4 PostgreSQL grammar (grammars-v4), generated at build time by Antlr4BuildTasks.
+      * ANTLR4 PostgreSQL and T-SQL grammars (grammars-v4), generated at build time by Antlr4BuildTasks.
       * antlr4-c3 CodeCompletionCore (vendored C# port) to compute candidates at the caret.
     Kept free of Npgsql / Avalonia so the completion engine is unit-testable in isolation.
   -->
@@ -21,6 +21,18 @@
       project too. Drop the property temporarily after updating vendor/grammars-v4 to re-read the warnings.
     -->
     <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);ANT01</MSBuildWarningsAsMessages>
+
+    <!--
+      CS0108 = "member hides inherited member", raised three times inside the GENERATED TSqlParser.cs
+      (Alter_message_typeContext, Message_statementContext, KeywordContext). T-SQL has an EMPTY keyword, so
+      ANTLR emits an `EMPTY()` token accessor on each context that can hold one — and that hides
+      ParserRuleContext.EMPTY from the runtime. Nothing calls either, and the collision is a name clash
+      between a vendored grammar's keyword list and the ANTLR runtime, not a mistake in it.
+      Scope note, as above: suppression is per-project, so this hides any future CS0108 in this project's
+      own source too. Bearing.Sql is static helpers with no inheritance, which is what makes that
+      acceptable here; drop the property temporarily after updating vendor/grammars-v4 to re-read it.
+    -->
+    <NoWarn>$(NoWarn);CS0108</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -41,6 +53,23 @@
     <Antlr4 Include="..\..\vendor\grammars-v4\postgresql\PostgreSQLParser.g4">
       <Listener>false</Listener>
       <Visitor>true</Visitor>
+    </Antlr4>
+  </ItemGroup>
+
+  <!--
+    T-SQL grammar (grammars-v4 sql/tsql), for SQL Server completion and folding. Cheaper to vendor
+    than the PostgreSQL one above: it declares no superClass, so it needs none of the hand-written
+    base classes, and `caseInsensitive = true` in its lexer means no keyword-casing scaffolding
+    either. Lexer before parser, the same tokenVocab ordering Antlr4BuildTasks resolves for Postgres.
+  -->
+  <ItemGroup>
+    <Antlr4 Include="..\..\vendor\grammars-v4\tsql\TSqlLexer.g4">
+      <Listener>false</Listener>
+      <Visitor>false</Visitor>
+    </Antlr4>
+    <Antlr4 Include="..\..\vendor\grammars-v4\tsql\TSqlParser.g4">
+      <Listener>false</Listener>
+      <Visitor>false</Visitor>
     </Antlr4>
   </ItemGroup>
 

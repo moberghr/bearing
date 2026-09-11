@@ -125,13 +125,14 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         if (batch.Count > 0 || truncated) yield return new RowBatch(batch, truncated);
     }
 
-    public async Task<long?> CountAsync(string sql, CancellationToken ct)
+    public async Task<long?> CountAsync(string countSql, CancellationToken ct)
     {
-        var wrapped = $"select count(*) from (\n{StripTrailingSemicolon(sql)}\n) as _sq";
+        // The caller (PageSql.CountWrap, through the connection's dialect) already shaped the wrapper; we
+        // just run it, exactly as ExecutePageAsync runs a page the caller shaped.
         try
         {
             await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
-            await using var cmd = new NpgsqlCommand(wrapped, conn);
+            await using var cmd = new NpgsqlCommand(countSql, conn);
             var scalar = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
             return scalar is null or DBNull ? null : Convert.ToInt64(scalar);
         }
@@ -224,12 +225,6 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
 
         for (var i = 0; i < results.Count; i++) results[i] = results[i] with { StatementIndex = i };
         return results;
-    }
-
-    private static string StripTrailingSemicolon(string sql)
-    {
-        var s = sql.TrimEnd();
-        return s.EndsWith(';') ? s[..^1] : s;
     }
 
     private static async Task<QueryResult> ReadResultSetAsync(

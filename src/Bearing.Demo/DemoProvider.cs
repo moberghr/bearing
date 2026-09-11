@@ -42,6 +42,26 @@ public sealed class DemoProvider : IDbProvider, IProviderRegistry
     public string DisplayName => "Demo";
     public IReadOnlyList<ConnectionField> ConnectionFields => Array.Empty<ConnectionField>();
 
+    /// <summary>False, and not because the demo could not pretend: a demo session opens no socket, so a
+    /// credential kind is a promise about an authentication that never happens. The connect dialog offers
+    /// neither, which is honest — and a demo session replaces the registry wholesale anyway, so the dialog
+    /// is not normally reachable with this provider selected.</summary>
+    public bool SupportsIntegratedAuth => false;
+
+    /// <inheritdoc cref="SupportsIntegratedAuth"/>
+    public bool SupportsEntraToken => false;
+
+    /// <summary>
+    /// Always <see cref="DbErrorKind.Unknown"/>. The demo executor fails only where a fixture told it to,
+    /// and those failures carry no engine code to place on the scale — there is no engine. Returning
+    /// Unknown is the honest answer: it makes the App layer fall back to showing the message, which is all
+    /// a scripted failure has.
+    /// </summary>
+    public DbErrorKind Classify(QueryError error) => DbErrorKind.Unknown;
+
+    /// <inheritdoc cref="Classify"/>
+    public DbErrorKind ClassifyException(Exception exception) => DbErrorKind.Unknown;
+
     /// <summary>
     /// Resolves this provider, and only this provider. A demo session's registry holds nothing else, so a
     /// request for "postgres" is a bug worth hearing about rather than something to silently serve fake rows

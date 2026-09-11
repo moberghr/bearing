@@ -126,34 +126,18 @@ public static class PgParsing
     public const int MaxNestingDepth = 1000;
 
     /// <summary>
-    /// The deepest bracket / CASE nesting in the token stream. Counted iteratively over tokens, so it is
-    /// safe on exactly the input the parser is not.
+    /// The deepest bracket / CASE nesting in a <b>PostgreSQL</b> token stream. Kept for the callers that
+    /// are Postgres by construction — the formatter lexes and parses with this grammar and nothing else —
+    /// and delegating to <see cref="ParseDepth"/> so there is one implementation rather than two that can
+    /// disagree. A caller that may be handed either grammar's tokens must go through
+    /// <see cref="ParseDepth"/> with the connection's rules; counting a T-SQL stream here reads unrelated
+    /// keywords and answers ~0.
     /// </summary>
     public static int NestingDepth(IEnumerable<IToken> tokens)
-    {
-        var depth = 0;
-        var deepest = 0;
-        foreach (var token in tokens)
-        {
-            switch (token.Type)
-            {
-                case PostgreSQLLexer.OPEN_PAREN:
-                case PostgreSQLLexer.OPEN_BRACKET:
-                case PostgreSQLLexer.CASE:
-                    if (++depth > deepest) deepest = depth;
-                    break;
-                case PostgreSQLLexer.CLOSE_PAREN:
-                case PostgreSQLLexer.CLOSE_BRACKET:
-                case PostgreSQLLexer.END_P:
-                    if (depth > 0) depth--;   // unbalanced input is normal mid-edit; never go negative
-                    break;
-            }
-        }
-        return deepest;
-    }
+        => ParseDepth.Of(PgParseRules.Instance, tokens);
 
     /// <summary>Whether <paramref name="tokens"/> is nested too deeply to hand to the parser
-    /// (<see cref="MaxNestingDepth"/>).</summary>
+    /// (<see cref="MaxNestingDepth"/>). PostgreSQL tokens — see <see cref="NestingDepth"/>.</summary>
     public static bool TooDeeplyNested(IEnumerable<IToken> tokens) => NestingDepth(tokens) > MaxNestingDepth;
 
     /// <summary>The same, lexing the text first. Use the token overload where the caller has already

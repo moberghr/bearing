@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using Bearing.App.Connections;
 using Bearing.App.Results;
 using Bearing.App.Services;
 using Bearing.App.ViewModels;
@@ -450,6 +451,80 @@ public class TableFormatsTests
         Assert.DoesNotContain(CopyFormat.Tsv, CopyRenderer.Alternatives);
     }
 
+    // ---- Copy as ▸ SQL follows the grid's engine ----
+
+    [Fact]
+    public void Sql_insert_uses_the_result_engines_literals_and_quoting()
+    {
+        var rs = TwoColumnResult();
+        var block = TableBlock.ForResult(rs);
+
+        var pg = TableFormats.SqlInsert(block, ProviderTraits.Postgres, "public", "t");
+        Assert.Contains("\"public\".\"t\"", pg);
+        Assert.Contains("true", pg);
+
+        var ms = TableFormats.SqlInsert(block, ProviderTraits.SqlServer, "dbo", "t");
+        Assert.Contains("[dbo].[t]", ms);
+        // A bit column is 1/0 in T-SQL; `true` is a syntax error there.
+        Assert.Contains("1", ms);
+        Assert.DoesNotContain("true", ms);
+    }
+
+    [Fact]
+    public void Binary_copies_as_a_t_sql_constant_not_a_postgres_string()
+    {
+        // The bad case this fix exists for. Postgres renders bytea as the quoted string '02'; pasted
+        // into SSMS that CHARACTER string is implicitly converted to varbinary, so the INSERT succeeds and
+        // stores the bytes of the six characters instead of the two intended ones — wrong data, no error.
+        var result = new QueryResult(
+            new[] { new ColumnDescriptor("b", "varbinary", typeof(byte[])) },
+            new object?[][] { new object?[] { new byte[] { 0x01, 0x02 } } },
+            RowCount: 1, TimeSpan.Zero, null, null, false);
+        var rs = new ResultSetViewModel(result, "select b from t", pageable: false);
+        var block = TableBlock.ForResult(rs);
+
+        var ms = TableFormats.InList(block, ProviderTraits.SqlServer);
+        Assert.Equal("0x0102", ms);
+        Assert.DoesNotContain("'", ms);
+
+        // Postgres keeps its own form, unchanged — a quoted bytea hex string.
+        var pg2 = TableFormats.InList(block, ProviderTraits.Postgres);
+        Assert.StartsWith("'", pg2);
+        Assert.EndsWith("0102'", pg2);
+        Assert.NotEqual(pg2, ms);
+    }
+
+    [Fact]
+    public void The_renderer_takes_the_engine_from_the_result_set()
+    {
+        // CopyRenderer has only the result to go on, which is why the traits ride on it.
+        var rs = TwoColumnResult();
+        var onSqlServer = new ResultSetViewModel(
+            new QueryResult(rs.Columns, rs.Rows.ToArray(), 1, TimeSpan.Zero, null, null, false),
+            "select * from t", pageable: false) { Traits = ProviderTraits.SqlServer };
+
+        var rendered = CopyRenderer.Render(
+            onSqlServer, TableBlock.ForResult(onSqlServer), CopyFormat.SqlInsert);
+        // No edit target, so the table name is the placeholder — but it is bracketed, and the bit
+        // column is 1 rather than true, which is what proves the engine came from the result.
+        Assert.Contains("[", rendered);
+        Assert.DoesNotContain("true", rendered);
+        Assert.DoesNotContain("\"", rendered);
+    }
+
+    private static ResultSetViewModel TwoColumnResult()
+    {
+        var result = new QueryResult(
+            new[]
+            {
+                new ColumnDescriptor("id", "int", typeof(int)),
+                new ColumnDescriptor("flag", "bit", typeof(bool)),
+            },
+            new object?[][] { new object?[] { 1, true } },
+            RowCount: 1, TimeSpan.Zero, null, null, false);
+        return new ResultSetViewModel(result, "select id, flag from t", pageable: false);
+    }
+
     // ---- escaping ---------------------------------------------------------------------------------
 
     /// <summary>
@@ -515,5 +590,6 @@ public class TableFormatsTests
         Assert.DoesNotContain("<script>", html);
         Assert.Contains("&lt;script&gt;", html);
         Assert.Contains("&amp;", html);
+
     }
 }

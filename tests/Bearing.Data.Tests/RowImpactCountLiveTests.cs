@@ -51,7 +51,7 @@ public class RowImpactCountLiveTests
             Assert.NotNull(target);
             Assert.False(target.EveryRow);
 
-            var counted = await exec.CountAsync(target.RowsSql, CancellationToken.None);
+            var counted = await exec.CountAsync(CountSql(target), CancellationToken.None);
             Assert.Equal(expected, counted);
 
             // …and the server agrees when the statement actually runs.
@@ -86,7 +86,7 @@ public class RowImpactCountLiveTests
 
             // The count is not taken for this case, but the query it would run must still be the whole
             // table — that is what makes "every row" the same claim as a count of it.
-            Assert.Equal(10, await exec.CountAsync(target.RowsSql, CancellationToken.None));
+            Assert.Equal(10, await exec.CountAsync(CountSql(target), CancellationToken.None));
 
             var run = await exec.ExecuteAsync($"delete from {Table}", new QueryOptions(), CancellationToken.None);
             Assert.Equal(10, run[0].RowCount);
@@ -114,8 +114,18 @@ public class RowImpactCountLiveTests
         Assert.NotNull(target);
 
         await Assert.ThrowsAnyAsync<Exception>(
-            () => exec.CountAsync(target.RowsSql, CancellationToken.None));
+            () => exec.CountAsync(CountSql(target), CancellationToken.None));
     }
+
+    /// <summary>
+    /// The count query as the app builds it: <see cref="UpdateDeleteTarget.RowsSql"/> wrapped by the
+    /// connection's dialect, because <see cref="IQueryExecutor.CountAsync"/> runs the text it is handed and
+    /// does not wrap it. Handing it <c>RowsSql</c> bare returns the first column of the first row, which is
+    /// a plausible-looking number and the one failure this suite exists to catch.
+    /// </summary>
+    private static string CountSql(UpdateDeleteTarget target)
+        => PostgresDialect.Instance.CountWrap(target.RowsSql)
+           ?? throw new InvalidOperationException($"Postgres refused to wrap: {target.RowsSql}");
 
     private static async Task Seed(IQueryExecutor exec)
     {

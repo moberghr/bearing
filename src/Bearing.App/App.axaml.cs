@@ -87,7 +87,9 @@ public partial class App : Application
                 // The dialect's own lexer decides what a literal is; the store only knows it was handed a
                 // string (§2.2). Read once at startup, so a mid-session flip cannot leave half the log
                 // redacted and half not.
-                redactSql: settings.Current.QueryLogRedactLiterals ? Bearing.Sql.SqlRedactor.Redact : null);
+                redactSql: settings.Current.QueryLogRedactLiterals
+                    ? (providerId, sql) => Connections.ProviderTraits.For(providerId).Dialect.RedactLiterals(sql)
+                    : null);
             IRecentProjects recentProjects = _demo?.RecentProjects ?? new FileRecentProjects();
 
             var vm = new ShellViewModel(providers, projectStore, sessionStore, queryLog, recentProjects,

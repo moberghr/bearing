@@ -64,7 +64,7 @@ public class QueryLogPrivacyTests : IDisposable
     {
         // Not just the row the panel reads back — the bytes. A redaction that only hid the value from the UI
         // would leave the log exactly as exposed as before.
-        await using (var log = new SqliteQueryLog(DbPath, redactSql: Fake))
+        await using (var log = new SqliteQueryLog(DbPath, redactSql: (_, sql) => Fake(sql)))
         {
             var stored = await RoundTripAsync(log, "select * from t where email = 'ada@example.com'");
             Assert.DoesNotContain("ada@example.com", stored.SqlText);
@@ -84,7 +84,7 @@ public class QueryLogPrivacyTests : IDisposable
     {
         // A history panel showing the verbatim SQL of a row stored redacted would be the more misleading of
         // the two, so redaction happens at the boundary rather than in the insert.
-        await using var log = new SqliteQueryLog(DbPath, redactSql: _ => "select '?'");
+        await using var log = new SqliteQueryLog(DbPath, redactSql: (_, _) => "select '?'");
         var seen = new TaskCompletionSource<string>();
         log.Appended += e => seen.TrySetResult(e.SqlText);
 
@@ -99,7 +99,7 @@ public class QueryLogPrivacyTests : IDisposable
     {
         // The one outcome this feature exists to prevent. Storing the original because redaction failed would
         // be a silent opt-out at exactly the wrong moment.
-        await using var log = new SqliteQueryLog(DbPath, redactSql: _ => throw new InvalidOperationException("boom"));
+        await using var log = new SqliteQueryLog(DbPath, redactSql: (_, _) => throw new InvalidOperationException("boom"));
 
         var stored = await RoundTripAsync(log, "select * from t where email = 'ada@example.com'");
 
@@ -112,7 +112,7 @@ public class QueryLogPrivacyTests : IDisposable
     {
         // The FTS index is built over the stored text, so a redacted log still finds statements by shape —
         // which is what makes the setting usable rather than just safe.
-        await using var log = new SqliteQueryLog(DbPath, redactSql: s => s.Replace("'ada'", "'?'"));
+        await using var log = new SqliteQueryLog(DbPath, redactSql: (_, sql) => sql.Replace("'ada'", "'?'"));
         await RoundTripAsync(log, "select * from customers where name = 'ada'");
 
         var hits = await log.SearchAsync(new QueryLogQuery { Text = "customers" }, CancellationToken.None);

@@ -109,9 +109,10 @@ public static class CopyRenderer
         CopyFormat.Json => TableFormats.Json(block),
         CopyFormat.Html => TableFormats.Html(block),
         CopyFormat.HtmlWithQuery => TableFormats.Html(block, result.ExecutedSql),
-        CopyFormat.InList => TableFormats.InList(block),
+        // The result carries the engine it came from, so the pasted SQL is valid where the rows live.
+        CopyFormat.InList => TableFormats.InList(block, result.Traits),
         CopyFormat.SqlInsert => TableFormats.SqlInsert(
-            block, result.EditTarget?.Schema, result.EditTarget?.Table ?? UnknownTable),
+            block, result.Traits, result.EditTarget?.Schema, result.EditTarget?.Table ?? UnknownTable),
         // Tsv keeps its own gap-preserving shape (see TableBlock.ForSelection) and is produced by
         // GridSelectionOps straight off the selection, so it never reaches here.
         _ => TableFormats.Csv(block),
