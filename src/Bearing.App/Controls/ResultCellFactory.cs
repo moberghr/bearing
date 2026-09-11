@@ -9,6 +9,7 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Bearing.App.Formatting;
 using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using static Bearing.App.Controls.Tokens;
@@ -125,7 +126,12 @@ public sealed class ResultCellFactory
     private static double InitialWidth(ResultSetViewModel result, int index)
     {
         var column = result.Columns[index];
-        var sample = ColumnWidths.Sample(result.Rows, index, MaxInlineChars);
+        // Sampled through the same display step the cell applies, or a grouped value is measured three
+        // characters short per comma and ellipsizes itself — #73's failure reached from the other direction.
+        // The affordance half of the sample still reads the raw text, exactly as the cell does.
+        var sample = ColumnWidths.Sample(
+            result.Rows, index, MaxInlineChars,
+            display: CellStats.IsNumeric(column.ClrType) ? NumberGrouping.Apply : null);
         // Every path that draws a glyph has to be reserved for, not just the always-on ones: a value past
         // MaxInlineChars, or any multiline value, grows the inspect affordance too. The multiline case is the
         // one that broke — the widest value stops at the first line, so a document with a short first line
@@ -163,10 +169,14 @@ public sealed class ResultCellFactory
     private Control ValueContent(ResultSetViewModel result, int index, object?[]? row, bool isJsonCol, bool numeric)
     {
         var isNull = row is null || index >= row.Length || row[index] is null;
-        var text = ResultChrome.ValueText(GridSelectionOps.CellText(row, index), isNull, numeric);
+        // The raw form is the cell's value everywhere except the glyphs on screen: it is what the clipboard,
+        // the exports and the in-cell editor read (GridSelectionOps.CellText), and it is what the inline /
+        // inspectable threshold is measured against, so a comma can never push a value over it.
+        var raw = GridSelectionOps.CellText(row, index);
+        var text = ResultChrome.ValueText(
+            Shown(raw, numeric), isNull, numeric, invalid: WillFailOnSave(result, index, row));
         if (isNull) return text;
 
-        var raw = GridSelectionOps.CellText(row, index);
         if (!isJsonCol && raw.Length <= MaxInlineChars && !raw.Contains('\n')) return text;
 
         var expand = ResultChrome.InspectAffordance();
@@ -201,7 +211,14 @@ public sealed class ResultCellFactory
 
         // Same text treatment as every other cell (#61) — a NULL here used to render bright and upright, the
         // one column where "(null)" looked like a real value. numeric: false is deliberate; see ValueText.
-        var value = ResultChrome.ValueText(GridSelectionOps.CellText(row, index), isNull: !hasValue, numeric: false);
+        //
+        // Grouping is asked separately, and the two questions really are different: ValueText's `numeric` is
+        // about *colour*, and a foreign key deliberately declines the code colour because the badge and the
+        // jump glyph already set it apart. Digit grouping is about reading a magnitude, and an FK is a number
+        // on screen like any other — so it follows the column's CLR type, not the colour decision.
+        var value = ResultChrome.ValueText(
+            Shown(GridSelectionOps.CellText(row, index), CellStats.IsNumeric(result.Columns[index].ClrType)),
+            isNull: !hasValue, numeric: false, invalid: WillFailOnSave(result, index, row));
 
         var jump = ResultChrome.JumpAffordance();
         jump.IsVisible = hasValue;
@@ -372,6 +389,25 @@ public sealed class ResultCellFactory
 
     private static object? ValueAt(object?[]? row, int index)
         => row is not null && index < row.Length ? row[index] : null;
+
+    /// <summary>
+    /// What a cell <i>draws</i>, as opposed to what it holds: <paramref name="raw"/> with digit groups when
+    /// the column is numeric and the setting is on.
+    /// <para>
+    /// The only place the grouped form is produced, and it goes straight into a <c>TextBlock</c> — nothing
+    /// reads it back. Every other consumer of a cell (the clipboard, the CSV and xlsx exports, the generated
+    /// DML, the cell inspector, the in-cell editor's seed) calls <c>GridSelectionOps.CellText</c> and gets the
+    /// raw invariant text, which is what keeps a copied number re-parseable — see
+    /// <see cref="NumberGrouping"/> and <c>CellFormat.TryParseNumber</c>.
+    /// </para>
+    /// </summary>
+    private static string Shown(string raw, bool numeric) => numeric ? NumberGrouping.Apply(raw) : raw;
+
+    /// <summary>Whether this cell holds a pending edit that the column's type cannot take, so the save will
+    /// be rejected by the server. Only asked of an editable result — nothing else can hold one.</summary>
+    private static bool WillFailOnSave(ResultSetViewModel result, int index, object?[]? row)
+        => result.IsEditable && row is not null && index < row.Length
+        && ResultEditModel.WillReachServerAsText(row[index], result.Columns[index].ClrType);
 
     /// <summary>Draw (or clear) a cell's selection ring.
     /// <para>

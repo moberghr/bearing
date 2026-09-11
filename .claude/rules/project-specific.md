@@ -401,6 +401,56 @@ of a row the user had just successfully clicked. `TreeChrome` rewrites the reque
   aiming at the row's own left edge misses the panel entirely once it is scrolled, and then passes while
   hitting nothing.
 
+## §9.10c — Digit grouping is a layer over the cell text, never a change to it
+
+`AppSettings.GroupNumbersInResults` (on by default) draws a numeric cell as `1,234,567.89`.
+`Formatting/NumberGrouping` produces that form. It has exactly **three** callers, and the count is the
+invariant: `ResultCellFactory.Shown` (into the cell's `TextBlock`, where nothing reads it back),
+`ResultCellFactory.InitialWidth` (measuring that same text, see below) and `CellStats.Format` (the
+quick-stats bar). A fourth is a design question, not a refactor.
+
+- **Never in `CellFormat.Display`.** That text is what the clipboard, the CSV and xlsx exports,
+  `Copy as ▸ SQL`, the generated DML, the cell inspector and the in-cell editor's seed all carry, and what
+  `ResultEditModel.Coerce` parses back — invariantly, with `AllowThousands` deliberately **off**
+  (`CellFormat.TryParseNumber`). A comma reaching any of them is #26's class of bug: `1,234` re-read without
+  `AllowThousands` is refused outright, and `9,5` re-read *with* it is **95**. The xlsx path never sees
+  display text at all — numbers are written as typed cells off the boxed value, so they still sum in Excel.
+- **The separator is a fixed comma, not the OS culture's.** The decimal point is already invariant, so
+  grouping by culture gives `1.234.567.89` on a comma-decimal locale — one character with two meanings in
+  one number. Both halves follow one convention or the display is unreadable. (The quick-stats bar is the
+  one place that *does* group per culture, and correctly: `CellStats.Format` output is a computed
+  aggregate that is never copied back into a cell or re-parsed.)
+- **It operates on the rendered string**, not by re-formatting the value: the value is already text by
+  then whatever its type, and a textual insert cannot change a digit. Anything that is not sign-then-digits
+  followed by end/`.`/`E` is returned untouched — `NaN`, `Infinity`, the null token, an integer part of
+  three digits or fewer.
+- **Which columns reach it is `CellStats.IsNumeric`'s set**, which does not include `BigInteger` — so a
+  `numeric` too large for `decimal` draws ungrouped. Left that way on purpose: the same set decides the code
+  colour and which columns the stats bar aggregates, and `CellStats.TryParseNumber` has no `BigInteger` arm.
+- **The quick-stats bar goes through the same helper** and so obeys the same switch. It used to format with
+  `"#,##0.##"` over `CurrentCulture`, which made it disagree with the cells it summarises — `1.234,5` under
+  `1,234.5` on hr-HR — and group even with the setting off. Grouping is safe *there* in a way it is not in
+  a cell: an aggregate is never copied back into a cell or re-parsed.
+- **A refused numeric edit is drawn amber** (`ResultEditModel.WillReachServerAsText` →
+  `ResultChrome.ValueText(invalid: true)`), because grouping took away the only signal such a cell had: in a
+  column drawing `1,234` for 1234, a user who types back what they read gets a string `TryParseNumber`
+  refuses, which then renders identically to a correct value and fails only at save.
+  **Do not "fix" this by accepting the grouped form.** Under a comma-decimal locale `1,234` means 1.234, so
+  reading it as 1234 is a *thousandfold* write — #26's bug, an order of magnitude larger. The ambiguity
+  cannot be resolved from the text, so the value stays refused and the cell says so.
+- **A grouped column has to be *measured* grouped.** `ColumnWidths.Sample` takes the same `display` step the
+  cell applies, or the commas clip the value they were added to make readable — #73 reached from the other
+  direction. The affordance half of that sample deliberately still reads the **raw** text, because that is
+  what the cell tests: a threshold the two sides answered differently is how a glyph ends up unreserved.
+- **Grouping follows the column's CLR type, not the colour decision.** A foreign key groups even though
+  `ResultChrome.ValueText` passes `numeric: false` for it — that flag is about the code colour, which an FK
+  declines because the badge and jump glyph already set it apart. Reading a magnitude is a different
+  question from being marked as an identifier. A *text* column holding `1234567` is not grouped: a product
+  code is not a magnitude.
+- `NumberGrouping.Enabled` is app-global and set from settings at startup and on change, exactly as
+  `CellFormat.Zone` is — and like it, `Apply` also takes the flag explicitly so a test states the setting it
+  means rather than mutating shared state and hoping about ordering (§4.5).
+
 ## §9.11 — Go to table / go to definition (#117)
 Two halves, split at the testability seam:
 - `Bearing.Sql.GoToDefinition.Resolve(sql, caret, snapshot)` is pure. Scoped to the statement under the

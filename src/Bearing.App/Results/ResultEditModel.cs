@@ -167,16 +167,46 @@ internal static class ResultEditModel
         return list;
     }
 
+    /// <summary>
+    /// Whether a pending cell value will be sent to the server as <b>raw text</b> despite the column not
+    /// being a text one — that is, whether <see cref="Coerce"/> gave up on it and the write will fail.
+    /// <para>
+    /// It exists because digit grouping took away the only signal such a cell had. A numeric column draws
+    /// <c>1,234</c> for 1234, and <c>CellFormat.TryParseNumber</c> refuses that exact string on purpose
+    /// (<c>AllowThousands</c> is off — see #26) — so a user who types back what they just read gets a cell
+    /// that is indistinguishable from a correct one and learns otherwise only when the batch fails.
+    /// </para>
+    /// <para>
+    /// <b>The fix is emphatically not to accept the grouped form.</b> Under a comma-decimal locale
+    /// <c>1,234</c> means 1.234, so reading it as 1234 would be a thousandfold write — the same class of bug
+    /// as #26's tenfold one and larger. The ambiguity is real and unresolvable from the text, so the value
+    /// stays refused and the cell says so instead.
+    /// </para>
+    /// </summary>
+    internal static bool WillReachServerAsText(object? value, Type clrType)
+    {
+        if (value is not string s) return false;                          // already typed
+        var t = Nullable.GetUnderlyingType(clrType) ?? clrType;
+        if (t == typeof(string)) return false;                            // text column: raw text is correct
+        if (s.Length == 0 || CellFormat.IsNullToken(s)) return false;     // both mean NULL, not a failure
+        return Coerce(s, t) is string;
+    }
+
     /// <summary>Coerce a grid string back to the column's CLR type. The "(null)" token ⇒ NULL; an empty
     /// string stays empty for text columns and ⇒ NULL for others. Falls back to the raw string (letting
-    /// the DB reject it) when parsing fails.</summary>
+    /// the DB reject it) when parsing fails.
+    /// <para>
+    /// Internal rather than private because it is also the only sound answer to "will this pending edit
+    /// reach the server as raw text" — the question <see cref="WillReachServerAsText"/> asks so the grid can
+    /// mark the cell. A second predicate saying the same thing would drift from this one.
+    /// </para></summary>
     /// <param name="utcColumn">
     /// True for a <c>timestamptz</c> column (#77). Its displayed text may have been converted into the
     /// display zone, so parsing it back has to undo that: a UTC 15:00 shown as 18:00+03:00 and edited must
     /// write back 15:00 UTC, not 18:00. Text without an offset is then a wall time in the zone the user was
     /// looking at, which is what they typed.
     /// </param>
-    private static object? Coerce(object? value, Type clrType, bool utcColumn = false)
+    internal static object? Coerce(object? value, Type clrType, bool utcColumn = false)
     {
         if (value is not string s) return value; // unchanged cells keep their typed value
         if (CellFormat.IsNullToken(s)) return null;

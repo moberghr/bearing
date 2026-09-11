@@ -70,6 +70,9 @@ public partial class App : Application
             // zone id means TimeZoneInfo, and Core holds abstractions and records only (§2.1, #77).
             Formatting.DisplayTimeZone.InstallSettingsHooks();
             Formatting.CellFormat.Zone = Formatting.DisplayTimeZone.Resolve(settings.Current.DisplayTimeZone);
+            // Grouped digits are a layer *over* CellFormat.Display, not a change to it — the grouped form
+            // never leaves the cell's TextBlock (see NumberGrouping).
+            Formatting.NumberGrouping.Enabled = settings.Current.GroupNumbersInResults;
             // The demo registry holds the demo provider *instead of* Postgres, not beside it: that is what
             // makes the fake unreachable from any normal connection flow, since in an ordinary session it is
             // not in the graph at all.
@@ -109,6 +112,7 @@ public partial class App : Application
                 // The zone reaches the grid the same way a font size does — the cell text is built in code,
                 // so the results have to be re-rendered rather than left to a binding (#77).
                 Formatting.CellFormat.Zone = Formatting.DisplayTimeZone.Resolve(s.DisplayTimeZone);
+                Formatting.NumberGrouping.Enabled = s.GroupNumbersInResults;
                 Dispatcher.UIThread.Post(window.RefreshTypeScale);
             };
             LogStartup("window constructed");

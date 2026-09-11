@@ -96,6 +96,17 @@ public sealed record AppSettings
     public int UiFontSize { get; init; } = 12;
 
     /// <summary>
+    /// Whether the results grid separates a number's digits into groups of three (<c>1,234,567.89</c>).
+    /// <para>
+    /// <b>Display only.</b> Copies, exports, the generated DML and the in-cell editor all carry the
+    /// ungrouped value — see <c>Bearing.App.Formatting.NumberGrouping</c> for why that separation is not
+    /// optional. On by default: the comma is what makes an order of magnitude readable at a glance, which is
+    /// the whole reason to look at a numeric column.
+    /// </para>
+    /// </summary>
+    public bool GroupNumbersInResults { get; init; } = true;
+
+    /// <summary>
     /// The zone <c>timestamptz</c> values are displayed in (#77). <c>UTC</c> by default, which keeps every
     /// existing display identical — the same instant, now with its offset shown — and <c>system</c> for the
     /// machine's own zone. An id the machine cannot resolve falls back to UTC rather than to a guess.
