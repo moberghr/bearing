@@ -78,6 +78,19 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
 
     partial void OnWholeServerChanged(bool value) => _ = RefreshAsync();
 
+    /// <summary>
+    /// Whether to list backends sitting plainly idle.
+    /// <para>
+    /// Off by default. On a production database most sessions are an application server's pool between
+    /// statements: there is nothing on them to cancel, and a few hundred of them bury the handful that are
+    /// doing something. <c>idle in transaction</c> is <b>not</b> hidden by this — it holds locks, and it is
+    /// the row the panel most exists to show.
+    /// </para>
+    /// </summary>
+    [ObservableProperty] private bool _includeIdle;
+
+    partial void OnIncludeIdleChanged(bool value) => _ = RefreshAsync();
+
     /// <summary>True while the panel should be re-reading — i.e. it is the active panel and the pane is open.
     /// The shell sets this; the panel does not know about the rail.</summary>
     public bool IsPolling { get; private set; }
@@ -143,7 +156,7 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
             // rebuild it — and the bound on it is that polling stops the moment the panel is not on screen.
             using var lease = _ctx.Sessions.Lease(session);
             var activity = await lease.Session.Activity.GetActivityAsync(
-                WholeServer ? null : info.Database, cts.Token);
+                new ActivityFilter(WholeServer ? null : info.Database, IncludeIdle), cts.Token);
             Apply(activity, info);
         }
         catch (OperationCanceledException)
@@ -220,13 +233,16 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
         var sessions = count == 1 ? "1 session" : $"{count} sessions";
         // Named, because "2 sessions" is a different claim about a database than about a server.
         var where = WholeServer ? "on this server" : $"on {info.Database}";
+        // Said, not implied: a count that has quietly dropped the idle ones is a different number, and the
+        // user should not have to remember which switch is on to read it.
+        var kind = IncludeIdle ? "" : " running";
 
         if (!activity.SeesAllSessions)
             return count == 0
-                ? $"No other sessions of your own {where}. {info.User} can't see other roles' sessions."
+                ? $"No{kind} sessions of your own {where}. {info.User} can't see other roles' sessions."
                 : $"{sessions} of your own {where}. {info.User} can't see other roles' sessions.";
 
-        return count == 0 ? $"No other sessions {where}." : $"{sessions} {where}.";
+        return count == 0 ? $"No{kind} sessions {where}." : $"{sessions}{kind} {where}.";
     }
 
     // ---- acting on a backend --------------------------------------------------------------------

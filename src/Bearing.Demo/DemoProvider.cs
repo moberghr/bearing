@@ -82,11 +82,13 @@ public sealed class DemoActivity : IServerActivity
 {
     private readonly HashSet<int> _gone = [];
 
-    public Task<ServerActivity> GetActivityAsync(string? database, CancellationToken ct)
+    public Task<ServerActivity> GetActivityAsync(ActivityFilter filter, CancellationToken ct)
         => Task.FromResult(new ServerActivity(
             DemoCatalog.Activity()
                 .Where(b => !_gone.Contains(b.Pid))
-                .Where(b => database is null || b.Database == database)
+                .Where(b => filter.Database is null || b.Database == filter.Database)
+                // "idle in transaction" is not idle: it is the state the panel exists to surface.
+                .Where(b => filter.IncludeIdle || b.State != "idle")
                 .ToList(),
             SeesAllSessions: true));
 

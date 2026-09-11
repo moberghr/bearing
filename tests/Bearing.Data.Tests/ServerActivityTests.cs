@@ -44,7 +44,7 @@ public class ServerActivityTests
 
             // The connection doing the reading is excluded: it is the one row the user can never act on, and
             // a panel that polls itself reports its own poll.
-            var read = await activity.GetActivityAsync(database: null, CancellationToken.None);
+            var read = await activity.GetActivityAsync(ActivityFilter.Everything, CancellationToken.None);
             var self = await CurrentPidAsync(executor);
             Assert.DoesNotContain(read.Backends, b => b.Pid == self);
         }
@@ -138,7 +138,7 @@ public class ServerActivityTests
         await Swallow(running);
 
         var gone = await WaitUntilAsync(async () =>
-            !(await activity.GetActivityAsync(database: null, CancellationToken.None)).Backends.Any(b => b.Pid == pid));
+            !(await activity.GetActivityAsync(ActivityFilter.Everything, CancellationToken.None)).Backends.Any(b => b.Pid == pid));
         Assert.True(gone, "the terminated backend was still listed");
     }
 
@@ -187,7 +187,7 @@ public class ServerActivityTests
             var running = adminExec.ExecuteAsync("select pg_sleep(20)", new QueryOptions(), busy.Token);
             try
             {
-                var seen = await probe.GetActivityAsync(database: null, CancellationToken.None);
+                var seen = await probe.GetActivityAsync(ActivityFilter.Everything, CancellationToken.None);
 
                 Assert.False(seen.SeesAllSessions);
                 Assert.DoesNotContain(seen.Backends, b => b.User == PgTestServer.User);
@@ -195,7 +195,7 @@ public class ServerActivityTests
                 // And the admin, at the same moment, does see it — otherwise the assertion above would pass
                 // on a quiet server and prove nothing.
                 var adminActivity = provider.CreateServerActivity(admin);
-                var all = await adminActivity.GetActivityAsync(database: null, CancellationToken.None);
+                var all = await adminActivity.GetActivityAsync(ActivityFilter.Everything, CancellationToken.None);
                 Assert.True(all.SeesAllSessions);
                 Assert.Contains(all.Backends, b => b.User == PgTestServer.User);
             }
@@ -222,7 +222,7 @@ public class ServerActivityTests
         BackendActivity? found = null;
         await WaitUntilAsync(async () =>
         {
-            var read = await activity.GetActivityAsync(database: null, CancellationToken.None);
+            var read = await activity.GetActivityAsync(ActivityFilter.Everything, CancellationToken.None);
             found = read.Backends.FirstOrDefault(b => b.IsOurs && (extra is null || extra(b)));
             return found is not null;
         });
@@ -234,7 +234,7 @@ public class ServerActivityTests
         int? pid = null;
         await WaitUntilAsync(async () =>
         {
-            var read = await activity.GetActivityAsync(database: null, CancellationToken.None);
+            var read = await activity.GetActivityAsync(ActivityFilter.Everything, CancellationToken.None);
             pid = read.Backends
                 .FirstOrDefault(b => b.Query?.Contains(queryFragment, StringComparison.Ordinal) == true)?.Pid;
             return pid is not null;

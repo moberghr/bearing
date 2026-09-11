@@ -110,7 +110,7 @@ public class ActivityPanelTests : IDisposable
 
         Assert.Contains("of your own", panel.Status);
         Assert.Contains("reporting", panel.Status);       // names the role that cannot see them
-        Assert.DoesNotContain("No other sessions", panel.Status);
+        Assert.DoesNotContain("No running sessions", panel.Status);
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public class ActivityPanelTests : IDisposable
         var blind = panel.Status;
 
         Assert.NotEqual(quiet, blind);
-        Assert.Contains("No other sessions", quiet);
+        Assert.Contains("No running sessions", quiet);
         Assert.Contains("can't see other roles", blind);
     }
 
@@ -243,13 +243,13 @@ public class ActivityPanelTests : IDisposable
         var panel = new ActivityPanelViewModel(ctx, dialogs);
 
         await panel.RefreshAsync();
-        Assert.Equal(conn.Database, activity.Scopes.Single());
+        Assert.Equal(conn.Database, activity.Filters.Single().Database);
 
         panel.WholeServer = true;
-        await WaitUntil(() => activity.Scopes.Count > 1);
+        await WaitUntil(() => activity.Filters.Count > 1);
 
         // Null is the whole server, and it only happens because it was asked for.
-        Assert.Null(activity.Scopes.Last());
+        Assert.Null(activity.Filters.Last().Database);
     }
 
     [Fact]
@@ -266,6 +266,35 @@ public class ActivityPanelTests : IDisposable
         panel.WholeServer = true;
         await WaitUntil(() => panel.Status.Contains("this server"));
         Assert.Contains("this server", panel.Status);
+    }
+
+    [Fact]
+    public async Task Idle_sessions_are_left_out_until_asked_for()
+    {
+        // A production database is mostly an application server's pool between statements: nothing on those
+        // backends to cancel, and enough of them to bury the ones doing something.
+        var (ctx, activity, dialogs, _) = NewPanel();
+        var panel = new ActivityPanelViewModel(ctx, dialogs);
+
+        await panel.RefreshAsync();
+        Assert.False(activity.Filters.Single().IncludeIdle);
+
+        panel.IncludeIdle = true;
+        await WaitUntil(() => activity.Filters.Count > 1);
+        Assert.True(activity.Filters.Last().IncludeIdle);
+    }
+
+    [Fact]
+    public void An_idle_in_transaction_backend_is_not_an_idle_one()
+    {
+        // The asymmetry that matters. It holds locks, it is the state worth noticing on a real server, and
+        // it is the row this panel most exists to show — so the tidy-up that hides idle must not take it.
+        Assert.NotEqual("idle", Backend(1, state: "idle in transaction").State);
+
+        // And the demo fixture keeps one, so the default view is never empty of the interesting case.
+        var demo = Bearing.Demo.DemoCatalog.Activity();
+        Assert.Contains(demo, b => b.State == "idle in transaction");
+        Assert.Contains(demo, b => b.State == "idle");
     }
 
     // ---- polling -------------------------------------------------------------------------------

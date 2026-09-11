@@ -45,6 +45,14 @@
               Content="Every database on this server"
               ToolTip.Tip="Off: only sessions on this tab's database. On: every session on the host, whoever opened it."/>
 
+    <!-- A pooled connection between statements has nothing to cancel, and a production app server keeps
+         hundreds. "idle in transaction" is not idle for this purpose and is never hidden. -->
+    <CheckBox DockPanel.Dock="Top" Margin="2,0,2,6"
+              IsChecked="{Binding IncludeIdle, Mode=TwoWay}"
+              FontSize="{DynamicResource Font.Small}"
+              Content="Include idle sessions"
+              ToolTip.Tip="Off: only sessions running something, waiting, or idle in transaction."/>
+
     <!-- One line carrying count, empty, restricted, disconnected, stale and error. The panel never shows a
          bare empty list: "no sessions" and "you may not see them" are different answers (§1.7). -->
     <TextBlock DockPanel.Dock="Bottom" Text="{Binding Status}" FontSize="{DynamicResource Font.Small}"

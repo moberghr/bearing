@@ -56,6 +56,26 @@ public sealed record BackendActivity(
 public sealed record ServerActivity(IReadOnlyList<BackendActivity> Backends, bool SeesAllSessions);
 
 /// <summary>
+/// What to ask the server for (#101). Both narrowings exist because the honest unfiltered answer is
+/// unreadable on a production host: every database, and a connection pool's worth of sessions doing nothing.
+/// </summary>
+/// <param name="Database">One database, or null for every database on the server.</param>
+/// <param name="IncludeIdle">
+/// Whether to include backends sitting plainly <c>idle</c>.
+/// <para>
+/// Off by default. An idle backend is a pooled connection between statements — there is nothing on it to
+/// cancel, and on an application server there are hundreds. <b><c>idle in transaction</c> is not idle</b> for
+/// this purpose and is never hidden: it holds locks, it is the state worth noticing, and burying it would
+/// remove the row the panel most exists to show.
+/// </para>
+/// </param>
+public sealed record ActivityFilter(string? Database, bool IncludeIdle = false)
+{
+    /// <summary>Everything the server will say, unnarrowed — what a test or an audit wants.</summary>
+    public static ActivityFilter Everything { get; } = new(null, IncludeIdle: true);
+}
+
+/// <summary>
 /// Reading the server's sessions, and acting on one (#101).
 /// <para>
 /// A seam of its own rather than three more members on <see cref="IMetadataReader"/>, which has no mutating
@@ -68,17 +88,13 @@ public interface IServerActivity
 {
     /// <summary>
     /// The server's client backends, and whether this role could see all of them.
-    /// </summary>
-    /// <param name="database">
-    /// Narrow to one database, or null for every database on the server.
     /// <para>
-    /// <c>pg_stat_activity</c> is cluster-wide, so the unfiltered read returns every session on the host —
-    /// other databases, other roles, other applications, and the statement each is running. That is the right
-    /// answer when hunting a lock holder and the wrong default for a panel you open beside your own work, so
-    /// the caller says which it wants.
+    /// <c>pg_stat_activity</c> is cluster-wide and includes every pooled connection between statements, so the
+    /// unfiltered read is every session on the host, most of them with nothing to say. The caller narrows it;
+    /// see <see cref="ActivityFilter"/>.
     /// </para>
-    /// </param>
-    Task<ServerActivity> GetActivityAsync(string? database, CancellationToken ct);
+    /// </summary>
+    Task<ServerActivity> GetActivityAsync(ActivityFilter filter, CancellationToken ct);
 
     /// <summary>
     /// Cancel whatever statement <paramref name="pid"/> is running; the session survives and the client sees

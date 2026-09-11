@@ -562,6 +562,13 @@ the server", and there was no way to look.
   server" widens it, which is what you want when hunting a lock holder and not what a panel opened beside
   your own work should show unasked. The status line names the scope, because "2 sessions" is a different
   claim about a database than about a server.
+- **Plainly idle backends are left out by default, and `idle in transaction` is never treated as idle.** On a
+  production database most sessions are an application server's pool between statements: nothing on them to
+  cancel, and enough of them to bury the handful doing something. `idle in transaction` holds locks and is the
+  row the panel most exists to show, so the filter is `state is distinct from 'idle'` — `is distinct from`,
+  because a state the role may not read is not thereby idle, and hiding it would assert something nobody
+  checked. The status line says "running" when the filter is on, since a count that quietly dropped rows is a
+  different number.
 - **The narrowing is an appended predicate, not `($1 is null or datname = $1)`.** §9.9's trap: a null-valued
   untyped placeholder gives Postgres nothing to infer a type from and the read fails.
 - **Another session's statement is shown, formatted and syntax-coloured**, through the same read-only viewer

@@ -73,12 +73,12 @@ internal sealed class FakeActivity : IServerActivity
     public readonly List<int> Cancelled = [];
     public readonly List<int> Terminated = [];
 
-    /// <summary>The database each read asked for, in order — null meaning the whole server.</summary>
-    public readonly List<string?> Scopes = [];
+    /// <summary>What each read asked for, in order — so a test can assert the narrowing, not just the rows.</summary>
+    public readonly List<ActivityFilter> Filters = [];
 
-    public async Task<ServerActivity> GetActivityAsync(string? database, CancellationToken ct)
+    public async Task<ServerActivity> GetActivityAsync(ActivityFilter filter, CancellationToken ct)
     {
-        Scopes.Add(database);
+        Filters.Add(filter);
         Interlocked.Increment(ref Reads);
         if (Gate is { } gate) await gate.Task.WaitAsync(ct);
         if (Throws is { } ex) throw ex;

@@ -73,9 +73,16 @@ public sealed class PostgresServerActivity : IServerActivity
     /// </summary>
     private const string DatabasePredicate = "\n  and datname = $1";
 
+    /// <summary>
+    /// Drops backends sitting plainly idle. <c>is distinct from</c> rather than <c>&lt;&gt;</c> so a null state
+    /// survives: a row whose state the role may not read is not thereby an idle one, and hiding it would be
+    /// this panel asserting something it never checked.
+    /// </summary>
+    private const string BusyPredicate = "\n  and state is distinct from 'idle'";
+
     private const string ActivityOrder = "\norder by running_for desc nulls last, pid";
 
-    public async Task<ServerActivity> GetActivityAsync(string? database, CancellationToken ct)
+    public async Task<ServerActivity> GetActivityAsync(ActivityFilter filter, CancellationToken ct)
     {
         // One connection, two commands — the shape GetTableDetailsAsync already uses for reads that belong
         // together. Not one query with the flag cross-joined on: this read legitimately returns no rows (a
@@ -87,11 +94,14 @@ public sealed class PostgresServerActivity : IServerActivity
             seesAll = await probe.ExecuteScalarAsync(ct).ConfigureAwait(false) is true;
 
         var backends = new List<BackendActivity>();
-        var sql = database is null
-            ? ActivitySql + ActivityOrder
-            : ActivitySql + DatabasePredicate + ActivityOrder;
+        // Narrowed on the server rather than after the fact: on a host with a few hundred pooled connections
+        // the difference is what crosses the wire every 2.5 seconds.
+        var sql = ActivitySql
+                  + (filter.Database is null ? "" : DatabasePredicate)
+                  + (filter.IncludeIdle ? "" : BusyPredicate)
+                  + ActivityOrder;
         await using var cmd = new NpgsqlCommand(sql, conn);
-        if (database is not null) cmd.Parameters.AddWithValue(database);
+        if (filter.Database is not null) cmd.Parameters.AddWithValue(filter.Database);
         await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await r.ReadAsync(ct).ConfigureAwait(false))
         {
