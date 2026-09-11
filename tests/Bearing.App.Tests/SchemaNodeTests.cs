@@ -7,6 +7,8 @@ using Bearing.App.Connections;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
+using Bearing.Core.Workspace;
+using Bearing.App.Workspace;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -186,26 +188,170 @@ public class SchemaNodeTests
     }
 
     /// <summary>Objects spread over three schemas, so prefixing and ordering are observable.</summary>
+    // ---- #132: the two shapes -------------------------------------------------------------------
+
+    private static DatabaseNodeViewModel Database(MultiSchemaBrowser browser, SchemaTreeMode mode)
+        => new(Conn(), "app", isConnected: true, browser, () => mode);
+
+    private static SchemaGroupNodeViewModel Group(SchemaNodeViewModel node, string title)
+        => node.Children.OfType<SchemaGroupNodeViewModel>().Single(g => g.Title == title);
+
+    [Fact]
+    public async Task Full_mode_puts_the_schemas_first_and_the_relations_inside_them()
+    {
+        var db = Database(new MultiSchemaBrowser(), SchemaTreeMode.Full);
+        await db.EnsureChildrenAsync();
+
+        // No relations at this level at all: that is the trade full mode makes.
+        Assert.Empty(db.Children.OfType<RelationNodeViewModel>());
+        Assert.Equal(["Schemas"], db.Children.Select(c => c.Title));
+
+        var schemas = Group(db, "Schemas");
+        Assert.Equal(["public", "audit", "billing"], schemas.Children.Select(c => c.Title));
+
+        // A schema is lazy — it holds a placeholder until it is opened, which is what keeps a database with
+        // two thousand relations cheap.
+        var publicSchema = schemas.Children.First();
+        Assert.IsType<MessageNodeViewModel>(publicSchema.Children.Single());
+
+        await publicSchema.EnsureChildrenAsync();
+        // The full set, in the shape helper's order — the kinds are there too, because the (empty) kind
+        // read has landed, and an empty kind is a row with an em-dash rather than an absent one.
+        Assert.Equal(SchemaTreeShape.SchemaGroupTitles, publicSchema.Children.Select(c => c.Title));
+        Assert.Equal(["film"], Group(publicSchema, "Tables").Children.Select(c => c.Title));
+    }
+
+    [Fact]
+    public async Task A_group_that_came_back_empty_says_so_rather_than_being_left_out()
+    {
+        // Inside a schema the set of rows is fixed, so it can be scanned; an em-dash is how a kind with
+        // nothing in it differs from one whose read has not landed (#132).
+        var db = Database(new MultiSchemaBrowser { ViewsAndRoutines = false }, SchemaTreeMode.Full);
+        await db.EnsureChildrenAsync();
+
+        var publicSchema = Group(db, "Schemas").Children.First();
+        await publicSchema.EnsureChildrenAsync();
+
+        Assert.Equal("—", Group(publicSchema, "Views").Detail);
+        Assert.Equal("—", Group(publicSchema, "Procedures").Detail);
+        Assert.Equal("1", Group(publicSchema, "Tables").Detail);
+    }
+
+    [Fact]
+    public async Task A_single_schema_database_collapses_the_schema_level()
+    {
+        // Simple mode skips the Schemas row for one schema because the relations are already inline. Here
+        // the level is the only route to them, so it collapses instead: the schema's groups move up.
+        var db = Database(new MultiSchemaBrowser { OneSchema = true }, SchemaTreeMode.Full);
+        await db.EnsureChildrenAsync();
+
+        Assert.DoesNotContain("Schemas", db.Children.Select(c => c.Title));
+        Assert.Equal(SchemaTreeShape.SchemaGroupTitles, db.Children.Select(c => c.Title));
+        Assert.Equal(["film"], Group(db, "Tables").Children.Select(c => c.Title));
+    }
+
+    [Fact]
+    public async Task Switching_mode_rearranges_what_is_already_there_and_reads_nothing()
+    {
+        // The whole reason the node keeps what it read: a display preference must not cost a round trip per
+        // database, and re-reading would also race the late reads (§9.8).
+        var browser = new MultiSchemaBrowser();
+        var mode = SchemaTreeMode.Simple;
+        var db = new DatabaseNodeViewModel(Conn(), "app", isConnected: true, browser, () => mode);
+
+        await db.EnsureChildrenAsync();
+        Assert.Contains(db.Children, c => c is RelationNodeViewModel);
+        var callsAfterLoad = browser.ObjectCalls;
+
+        mode = SchemaTreeMode.Full;
+        db.ApplyMode();
+
+        Assert.Equal(["Schemas"], db.Children.Select(c => c.Title));
+        Assert.Equal(callsAfterLoad, browser.ObjectCalls);
+
+        // And back again, to the shape it started in.
+        mode = SchemaTreeMode.Simple;
+        db.ApplyMode();
+        Assert.Contains(db.Children, c => c is RelationNodeViewModel);
+        Assert.Equal(callsAfterLoad, browser.ObjectCalls);
+    }
+
+    [Fact]
+    public async Task A_relation_under_a_schema_opened_later_still_gets_its_size()
+    {
+        // The repair full mode needed. The size read relabels the rows that exist, and in full mode the rows
+        // under an unopened schema do not — so a one-shot pass would leave every one of them unlabelled.
+        var browser = new MultiSchemaBrowser { Sizes = [new RelationSize(1, TotalBytes: 2048, TableBytes: 2048, IndexBytes: 0, ToastBytes: 0, EstimatedRows: 12)] };
+        var db = Database(browser, SchemaTreeMode.Full);
+        var landed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        db.SizesLoaded = () => landed.TrySetResult();
+
+        await db.EnsureChildrenAsync();
+        await Task.WhenAny(landed.Task, Task.Delay(5000));
+
+        // Opened after the sizes landed, which is the case that used to lose them.
+        var publicSchema = Group(db, "Schemas").Children.First();
+        await publicSchema.EnsureChildrenAsync();
+
+        var film = Group(publicSchema, "Tables").Children.Single();
+        Assert.Contains("2.0 kB", film.Detail);
+    }
+
+    [Fact]
+    public async Task A_table_three_levels_down_is_still_findable()
+    {
+        // What F12 / "go to table" walks (§9.11). The walk used to flatten exactly one group level, which is
+        // enough for simple mode's buckets and not for full mode's schemas.
+        var db = Database(new MultiSchemaBrowser(), SchemaTreeMode.Full);
+        await db.EnsureChildrenAsync();
+
+        // Not yet: the schema holding it has never been opened, so the row genuinely does not exist. The
+        // walk must not force it into being — that is the caller's job, and it is why RevealRelationAsync
+        // expands the schema on the way down.
+        Assert.Null(SchemaTreeReveal.RelationUnder(db, "audit", "events"));
+
+        var audit = Group(db, "Schemas").Children.Single(c => c.Title == "audit");
+        await audit.EnsureChildrenAsync();
+
+        var found = SchemaTreeReveal.RelationUnder(db, "audit", "events");
+        Assert.NotNull(found);
+        Assert.Equal("events", found!.RelationName);
+    }
+
     private sealed class MultiSchemaBrowser : ISchemaBrowser
     {
         public string[] SearchPath = new[] { "public" };
         public bool ViewsAndRoutines = true;
+        public bool OneSchema;
+
+        /// <summary>Sizes the late read reports, and kinds for the buckets. Both default to nothing, so the
+        /// tests that are about arrangement are not also about them.</summary>
+        public IReadOnlyList<RelationSize> Sizes = [];
+        public DatabaseObjectKinds Kinds = DatabaseObjectKinds.Empty;
+
+        /// <summary>How many times the catalog was asked. A re-arrange must not add to it (#132).</summary>
+        public int ObjectCalls;
 
         public Task<IReadOnlyList<string>> GetDatabasesAsync(ConnectionInfo connection, CancellationToken ct)
             => Task.FromResult<IReadOnlyList<string>>(new[] { "app" });
 
         public Task<DatabaseObjects> GetObjectsAsync(ConnectionInfo connection, string database, CancellationToken ct)
         {
-            var tables = new[]
-            {
-                new TableInfo(1, "public", "film", RelationKind.Table),
-                new TableInfo(3, "audit", "film", RelationKind.Table),
-                new TableInfo(4, "audit", "events", RelationKind.Table),
-                new TableInfo(5, "billing", "invoice", RelationKind.Table),
-            };
+            ObjectCalls++;
+            var tables = OneSchema
+                ? [new TableInfo(1, "public", "film", RelationKind.Table)]
+                : new[]
+                {
+                    new TableInfo(1, "public", "film", RelationKind.Table),
+                    new TableInfo(3, "audit", "film", RelationKind.Table),
+                    new TableInfo(4, "audit", "events", RelationKind.Table),
+                    new TableInfo(5, "billing", "invoice", RelationKind.Table),
+                };
             if (ViewsAndRoutines)
                 tables = tables.Append(new TableInfo(2, "public", "film_list", RelationKind.View)).ToArray();
-            var schemas = SearchPath.Concat(new[] { "public", "audit", "billing" }).Distinct().ToArray();
+            var schemas = OneSchema
+                ? SearchPath.Concat(["public"]).Distinct().ToArray()
+                : SearchPath.Concat(["public", "audit", "billing"]).Distinct().ToArray();
             var snapshot = new SchemaSnapshot(database, schemas, tables, Array.Empty<ColumnInfo>(),
                 Array.Empty<ForeignKeyInfo>(), searchPath: SearchPath);
             var routines = ViewsAndRoutines
@@ -223,7 +369,7 @@ public class SchemaNodeTests
 
         public Task<IReadOnlyList<RelationSize>> GetRelationSizesAsync(
             ConnectionInfo connection, string database, CancellationToken ct)
-            => Task.FromResult<IReadOnlyList<RelationSize>>([]);
+            => Task.FromResult(Sizes);
 
         public Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(ConnectionInfo connection, CancellationToken ct)
             => Task.FromResult<IReadOnlyList<DatabaseSize>>([]);
@@ -232,7 +378,7 @@ public class SchemaNodeTests
         /// group they never assert on would only add noise to the trees they build.</summary>
         public Task<DatabaseObjectKinds> GetDatabaseObjectKindsAsync(
             ConnectionInfo connection, string database, CancellationToken ct)
-            => Task.FromResult(DatabaseObjectKinds.Empty);
+            => Task.FromResult(Kinds);
 
         /// <summary>#120's roles. Empty here: these fixtures exist for other questions, and a Roles group
         /// they never assert on would only add noise to the trees they build.</summary>

@@ -16,8 +16,11 @@ namespace Bearing.App.Results;
 internal static class ResultSetBuilder
 {
     /// <summary>Wrap raw query results into pageable/FK-aware/editable view models (shared by run + navigation).</summary>
+    /// <param name="connectionReadOnly">Whether the connection is marked read-only (#99), in which case no
+    /// result off it is editable and the lock chip says so.</param>
     public static List<ResultSetViewModel> BuildResultSets(
-        IReadOnlyList<QueryResult> results, string sql, ISchemaSnapshot? snapshot)
+        IReadOnlyList<QueryResult> results, string sql, ISchemaSnapshot? snapshot,
+        bool connectionReadOnly = false)
     {
         var pageable = results.Count == 1 && results[0].Success && results[0].Columns.Count > 0;
         var statements = StatementsBehind(results, sql);
@@ -27,7 +30,7 @@ internal static class ResultSetBuilder
                 // Resolve editability (with a lock reason) only for row-returning results with a schema.
                 var (target, reason) = snapshot is null || r.Columns.Count == 0
                     ? (null, null)
-                    : EditabilityResolver.ResolveWithReason(snapshot, r.Columns);
+                    : EditabilityResolver.ResolveWithReason(snapshot, r.Columns, connectionReadOnly);
                 var vm = new ResultSetViewModel(r, statements?[i] ?? sql, pageable)
                 {
                     ForeignKeyColumns = DetectForeignKeyColumns(snapshot, r.Columns),
@@ -104,11 +107,23 @@ internal static class ResultSetBuilder
     /// <paramref name="wallClock"/> is supplied it is the honest end-to-end time the caller measured
     /// (connect-from-pool + execute + read), which is what the user actually waited for — preferred over
     /// the per-set server duration so the status bar never under-reports a slow run.</summary>
-    public static string DescribeResults(IReadOnlyList<QueryResult> results, TimeSpan? wallClock = null)
+    /// <param name="connection">The connection the run went to, so a cancellation or a refused write can be
+    /// explained in terms of that connection's own safety settings (#99 / #105). Null leaves the server's
+    /// wording as it was.</param>
+    /// <param name="userCancelled">True when the user asked for the cancel, so a 57014 is not blamed on a
+    /// statement timeout that did not fire.</param>
+    public static string DescribeResults(IReadOnlyList<QueryResult> results, TimeSpan? wallClock = null,
+        ConnectionInfo? connection = null, bool userCancelled = false)
     {
         var firstError = results.FirstOrDefault(r => !r.Success);
         if (firstError is not null)
+        {
+            // A setting of ours that produced this error explains it better than the server's own text, which
+            // says "canceling statement due to statement timeout" without saying whose or how long.
+            if (QueryErrorText.Explain(firstError.Error, connection, userCancelled) is { } explained)
+                return explained;
             return $"Error{(firstError.Error?.SqlState is { } s ? $" [{s}]" : "")}: {firstError.Error?.Message}";
+        }
 
         // Status bar is timing-focused — the row count lives on the result's meta row, not here.
         if (results.Count == 1 && results[0].Columns.Count == 0)

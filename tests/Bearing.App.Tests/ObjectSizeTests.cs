@@ -275,9 +275,11 @@ public class ObjectSizeTests
     }
 
     [Fact]
-    public async Task A_database_whose_size_is_unknown_says_nothing_rather_than_zero()
+    public async Task A_database_whose_size_is_unknown_says_so_rather_than_going_blank()
     {
-        // pg_database_size raises for a database the user cannot connect to, so null is a normal answer.
+        // #133. A null size used to leave the row's detail empty, which is indistinguishable from three
+        // other states: the read not having arrived yet (it is late by design, #76), the read having failed,
+        // and a database that genuinely has no size. It was reported as a bug because it reads as one.
         var browser = new SizeBrowser();
         var server = new ServerNodeViewModel(Conn(), browser);
         var landed = new TaskCompletionSource();
@@ -286,8 +288,36 @@ public class ObjectSizeTests
         await server.EnsureChildrenAsync();
         await landed.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var other = server.Children.OfType<DatabaseNodeViewModel>().SingleOrDefault(d => d.Database == "postgres");
-        if (other is not null) Assert.DoesNotContain("B", other.Detail ?? "");
+        var other = server.Children.OfType<DatabaseNodeViewModel>().Single(d => d.Database == "postgres");
+
+        Assert.False(string.IsNullOrWhiteSpace(other.Detail), "an unknown size left the row blank");
+        Assert.Contains("not visible", other.Detail);
+
+        // Not zero, which is a lie, and not a byte count of any kind.
+        Assert.DoesNotContain("0 B", other.Detail);
+        Assert.DoesNotContain("bytes", other.Detail, StringComparison.OrdinalIgnoreCase);
+
+        // The row stays terse; the reason is under the pointer. And it says only what was checked — the
+        // privilege — rather than asserting a cause nobody looked for (§1.7).
+        Assert.NotNull(other.DetailTip);
+        Assert.Contains("CONNECT", other.DetailTip);
+    }
+
+    [Fact]
+    public async Task A_database_that_does_report_a_size_carries_no_tooltip()
+    {
+        // The tip exists for the absence. A row whose detail already explains itself must not grow one, or
+        // the pointer would find an explanation on every database on the server.
+        var browser = new SizeBrowser();
+        var server = new ServerNodeViewModel(Conn(), browser);
+        var landed = new TaskCompletionSource();
+        server.DatabaseSizesLoaded = landed.SetResult;
+
+        await server.EnsureChildrenAsync();
+        await landed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var demo = server.Children.OfType<DatabaseNodeViewModel>().Single(d => d.Database == DemoCatalog.Database);
+        Assert.Null(demo.DetailTip);
     }
 
     // ---- ordering by size -----------------------------------------------------------------------

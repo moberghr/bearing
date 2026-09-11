@@ -53,6 +53,11 @@ public sealed class DialogService : IDialogService
             ? new ConfirmDeleteScriptDialog(fileName).ShowDialog<bool>(window)
             : Task.FromResult(false); // no window → do nothing; a delete needs a real answer
 
+    public Task<bool> ConfirmBackendActionAsync(BackendAction request)
+        => Owner is { } window
+            ? new ConfirmBackendActionDialog(request).ShowDialog<bool>(window)
+            : Task.FromResult(false); // no window → do nothing; someone else's session needs a real answer
+
     public Task<ProjectRemoval> ConfirmRemoveProjectAsync(string name, string directory)
         => Owner is { } window
             ? new ConfirmRemoveProjectDialog(name, directory).ShowDialog<ProjectRemoval>(window)

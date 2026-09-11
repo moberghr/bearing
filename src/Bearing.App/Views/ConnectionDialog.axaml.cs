@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
@@ -60,6 +61,12 @@ public partial class ConnectionDialog : Window
             EnvBox.Text = existing.Environment ?? "";
             EnvColorBox.Text = existing.EnvironmentColor ?? "";
             ConfirmWritesBox.IsChecked = existing.RequireWriteConfirmation;
+            ReadOnlyBox.IsChecked = existing.ReadOnly;
+            // 0 is "no limit" and shows as an empty box, whose placeholder says 0 — a bare "0" in a field
+            // reads as a limit of zero seconds, which is the one thing it does not mean (§1.7).
+            StatementTimeoutBox.Text = existing.StatementTimeoutSeconds > SessionPolicy.NoTimeout
+                ? existing.StatementTimeoutSeconds.ToString(CultureInfo.InvariantCulture)
+                : "";
             // Resolve rather than read the field: a project written before the field existed, or a DBeaver
             // import, still carries the mode in the options bag (#23).
             InitTls(TlsPolicy.Resolve(existing));
@@ -76,6 +83,7 @@ public partial class ConnectionDialog : Window
             InitTls(TlsPolicy.DefaultFor(HostBox.Text));
         }
         UpdateCredentialVisibility();
+        UpdateSafetyNote();
     }
 
     private CredentialKind SelectedCredentialKind() => CredentialKindBox.SelectedIndex switch
@@ -159,6 +167,56 @@ public partial class ConnectionDialog : Window
         TlsWarningText.Text = TlsPolicy.Advice(mode);
     }
 
+    /// <summary>Seconds in the timeout box, or <see cref="SessionPolicy.NoTimeout"/> for empty or
+    /// unreadable. Unreadable reads as no limit rather than as some default: inventing a timeout nobody typed
+    /// would cancel the user's query for them — but it is <em>said</em> rather than swallowed, see
+    /// <see cref="UnreadableTimeout"/>.</summary>
+    private int TypedTimeoutSeconds()
+        => int.TryParse((StatementTimeoutBox.Text ?? "").Trim(), NumberStyles.Integer,
+               CultureInfo.InvariantCulture, out var seconds) && seconds > SessionPolicy.NoTimeout
+            // Clamped here as well as in SessionPolicy.TimeoutSeconds, so the record that is saved and the
+            // sentence the note shows are both the value the server will actually be given. Reading a
+            // "cancels after 2000000000 s" note off a connection that will send 2147483 s is the drift this
+            // method's own doc claims cannot happen.
+            ? Math.Min(seconds, SessionPolicy.MaxTimeoutSeconds)
+            : SessionPolicy.NoTimeout;
+
+    /// <summary>
+    /// The text in the timeout box when it is neither a duration nor empty — "30s", "1e3", a value past
+    /// <c>int</c> — or null when it reads fine. Empty and "0" are both legitimately no limit.
+    /// <para>
+    /// Surfaced rather than swallowed: falling back to no timeout is the right value (§1.1 — never invent a
+    /// setting nobody asked for), but doing it silently leaves a box that visibly reads like a limit above a
+    /// connection saved without one. The posture has to be visible, which is the same rule the keychain and
+    /// TLS blocks in this dialog follow.
+    /// </para>
+    /// </summary>
+    private string? UnreadableTimeout()
+    {
+        var text = (StatementTimeoutBox.Text ?? "").Trim();
+        if (text.Length == 0) return null;
+        var parsed = int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds);
+        return parsed && seconds >= SessionPolicy.NoTimeout ? null : text;
+    }
+
+    private void OnSafetyToggled(object? sender, RoutedEventArgs e) => UpdateSafetyNote();
+
+    private void OnTimeoutChanged(object? sender, TextChangedEventArgs e) => UpdateSafetyNote();
+
+    /// <summary>The safety group's note, from the same pure policy the record is built with — so what the
+    /// dialog claims and what the connection does cannot drift apart.</summary>
+    private void UpdateSafetyNote()
+    {
+        var advice = SessionPolicy.Advice(ReadOnlyBox.IsChecked == true, TypedTimeoutSeconds());
+        if (UnreadableTimeout() is { } typed)
+            advice = $"“{typed}” isn't a whole number of seconds, so this connection will be saved "
+                     + "with no statement timeout. Enter seconds (30), or leave it empty for no limit."
+                     + (advice.Length > 0 ? "\n" + advice : "");
+
+        SafetyNote.IsVisible = advice.Length > 0;
+        SafetyNoteText.Text = advice;
+    }
+
     /// <summary>
     /// The options bag, minus the <c>sslmode</c> the typed field now owns (#23). Stripped rather than left
     /// alongside: two sources of truth for a security setting is how one of them ends up ignored, and the bag
@@ -188,9 +246,19 @@ public partial class ConnectionDialog : Window
         {
             EnvBox.Text = label;
         }
-        // Production defaults to guarded; the user can still uncheck it. Deliberately not unset when moving
-        // back to a lesser preset — dropping a write guard is the user's call, not a side effect of a click.
-        if (label == "production") ConfirmWritesBox.IsChecked = true;
+        // Production defaults to the whole safety group: guarded, read-only, and a server-side timeout
+        // (#99 / #105). Read-only is the one that makes "the safe answer is the default" true rather than
+        // aspirational — someone who needs to write to production unticks it deliberately. Deliberately not
+        // unset when moving back to a lesser preset: dropping a safety setting is the user's call, not a
+        // side effect of a click.
+        if (label == "production")
+        {
+            ConfirmWritesBox.IsChecked = true;
+            ReadOnlyBox.IsChecked = true;
+            if (TypedTimeoutSeconds() == SessionPolicy.NoTimeout)
+                StatementTimeoutBox.Text = SessionPolicy.PresetTimeoutSeconds.ToString(CultureInfo.InvariantCulture);
+            UpdateSafetyNote();
+        }
     }
 
     // The hex box is what gets saved; the picker is a second way to fill it. Each pushes into the other, so
@@ -231,6 +299,8 @@ public partial class ConnectionDialog : Window
         Environment = string.IsNullOrWhiteSpace(EnvBox.Text) ? null : EnvBox.Text!.Trim(),
         EnvironmentColor = string.IsNullOrWhiteSpace(EnvColorBox.Text) ? null : EnvColorBox.Text!.Trim(),
         RequireWriteConfirmation = ConfirmWritesBox.IsChecked == true,
+        ReadOnly = ReadOnlyBox.IsChecked == true,
+        StatementTimeoutSeconds = TypedTimeoutSeconds(),
         CredentialKind = SelectedCredentialKind(),
         Tls = SelectedTls(),
         // Not editable here, so carried rather than rebuilt: filing lives in the tree, and Options is

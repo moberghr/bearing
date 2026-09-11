@@ -169,16 +169,28 @@ public sealed partial class ExecutionViewModel : ObservableObject
         var info = _ctx.EffectiveConnection(tab);
         if (info is null) { _ctx.SetStatus("Connection no longer exists."); return; }
 
+        // Describe (not FindRiskyStatements) so the prompt below can list the statements it is about to run —
+        // the verbs alone can't answer "what exactly lands on prod". Computed once and shared with both the
+        // refusal and the confirmation, which ask different questions of the same verdict — but only when one
+        // of them can act on it: lexing every batch on a connection that neither refuses nor confirms would
+        // tax every Run in the app for two settings it does not have.
+        var risks = info.ReadOnly || info.RequireWriteConfirmation
+            ? WriteGuard.Describe(sql)
+            : [];
+
+        // Read-only connection: refuse, don't ask (#99). Ahead of the confirmation because it is independent
+        // of RequireWriteConfirmation — a read-only connection refuses whether or not it also prompts — and
+        // because there is nothing to confirm when the answer is already no. The server would refuse this
+        // anyway; getting there first is what turns a 25006 into a sentence naming the user's own setting.
+        if (WriteRefusal.Reason(info, risks) is { } refused) { _ctx.SetStatus(refused); return; }
+
         // Production write-guard: confirm before writing data / altering schema on a guarded connection.
-        // Describe (not FindRiskyStatements) so the prompt can list the statements it is about to run — the
-        // verbs alone can't answer "what exactly lands on prod".
         if (info.RequireWriteConfirmation && _dialogs is { } dialogs)
         {
-            var statements = WriteGuard.Describe(sql);
-            if (statements.Any(s => s.IsRisky))
+            if (risks.Any(s => s.IsRisky))
             {
-                var impacts = await CountRowImpactsAsync(statements);
-                if (!await dialogs.ConfirmWriteAsync(WriteConfirmation.ForBatch(info, statements, impacts)))
+                var impacts = await CountRowImpactsAsync(risks);
+                if (!await dialogs.ConfirmWriteAsync(WriteConfirmation.ForBatch(info, risks, impacts)))
                 {
                     _ctx.SetStatus("Cancelled — write not confirmed.");
                     return;
@@ -334,9 +346,11 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // Results always route to the tab that started the run, never to whichever tab is focused now.
             // A tab that has since been closed (or dropped by a project switch) is dead but harmless to
             // assign to — RunFinished is what tells the user the run ended, with TabStillOpen false.
-            tab.SetFreshResults(ResultSetBuilder.BuildResultSets(results, sql, session.Snapshot));
+            tab.SetFreshResults(ResultSetBuilder.BuildResultSets(
+                results, sql, session.Snapshot, SessionPolicy.IsReadOnly(info)));
             LogExecution(info, sql, results);
-            var summary = ResultSetBuilder.DescribeResults(results, wall.Elapsed);
+            var summary = ResultSetBuilder.DescribeResults(
+                results, wall.Elapsed, info, ct.IsCancellationRequested);
             // On success, lead with the connection so the status bar reads e.g. "pagila (local) · 88 ms".
             RunFinished(tab, results.Any(r => !r.Success) ? summary : $"{info.Name} · {summary}");
             return results.Any(r => !r.Success) ? RunOutcome.Failed : RunOutcome.Success;
@@ -471,11 +485,24 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
         var request = analyze ? ExplainSql.Measured(sql) : ExplainSql.Plan(sql);
 
+        // EXPLAIN ANALYZE runs the statement, so a read-only connection refuses one over a write (#99) — and
+        // WriteGuard already scans an EXPLAIN's interior, so `explain analyze delete …` is caught here rather
+        // than by the server. A plain EXPLAIN executes nothing and a measured SELECT is a read: both still run
+        // on a read-only connection, which is what #99 asks for.
+        var risks = analyze && (info.ReadOnly || info.RequireWriteConfirmation)
+            ? WriteGuard.Describe(sql)
+            : [];
+
+        if (analyze && WriteRefusal.Reason(info, risks) is { } refused)
+        {
+            _ctx.SetStatus(refused);
+            return null;
+        }
+
         if (analyze && info.RequireWriteConfirmation && _dialogs is { } dialogs)
         {
-            var statements = WriteGuard.Describe(sql);
-            if (statements.Any(s => s.IsRisky)
-                && !await dialogs.ConfirmWriteAsync(WriteConfirmation.ForBatch(info, statements)))
+            if (risks.Any(s => s.IsRisky)
+                && !await dialogs.ConfirmWriteAsync(WriteConfirmation.ForBatch(info, risks)))
             {
                 _ctx.SetStatus("Cancelled — EXPLAIN ANALYZE runs the statement, and it wasn't confirmed.");
                 return null;
@@ -728,8 +755,13 @@ public sealed partial class ExecutionViewModel : ObservableObject
         {
             RunStatus(tab, "Opening referenced row…");
             var results = await session.Executor.ExecuteAsync(sql, new QueryOptions { MaxRows = PageSize }, ct);
-            tab.PushResults(ResultSetBuilder.BuildResultSets(results, sql, session.Snapshot));
-            RunFinished(tab, ResultSetBuilder.DescribeResults(results));
+            var info = _ctx.EffectiveConnection(tab);
+            tab.PushResults(ResultSetBuilder.BuildResultSets(
+                results, sql, session.Snapshot, info is not null && SessionPolicy.IsReadOnly(info)));
+            // The connection has to travel here too, or a 57014 from its own statement timeout reads as
+            // "nothing in Bearing asked for this" — a confident wrong answer about a limit we set (#105).
+            RunFinished(tab, ResultSetBuilder.DescribeResults(
+                results, null, info, ct.IsCancellationRequested));
         }, "Navigation cancelled.", "Navigation failed");
     }
 
@@ -746,11 +778,22 @@ public sealed partial class ExecutionViewModel : ObservableObject
         var changes = ResultEditModel.BuildPendingChanges(rs, target);
         if (changes.Count == 0) { rs.ClearPending(); return; }
 
+        var connection = _ctx.EffectiveConnection(tab);
+
+        // A read-only connection refuses the save (#99). A backstop rather than the affordance: the grid does
+        // not offer an edit on one at all — EditabilityResolver reports it and the lock chip says why — so
+        // pending changes here mean the connection was marked read-only after they were made.
+        if (connection is not null && WriteRefusal.ReasonForEdits(connection) is { } refused)
+        {
+            _ctx.SetStatus(refused);
+            return;
+        }
+
         // Every inline save confirms, showing the DML it is about to commit — this is the whole preview
         // flow (there is no separate [Preview SQL] step any more), so it can't be conditional on the
         // connection's write guard. A guarded connection gets the extra warning line, not the only prompt.
         // Ahead of the lease: a modal dialog must not hold a session open while the user reads it.
-        if (_ctx.EffectiveConnection(tab) is { } connection && _dialogs is { } dialogs
+        if (connection is not null && _dialogs is { } dialogs
             && !await dialogs.ConfirmWriteAsync(WriteConfirmation.ForEdits(connection, WriteStatements(changes))))
         {
             _ctx.SetStatus("Cancelled — save not confirmed.");

@@ -25,6 +25,19 @@
               <Button Grid.Column="2" Content="＋" Padding="6,0" Click="OnAddConnectionClick"
                       ToolTip.Tip="Add connection"/>
             </Grid>
+
+            <!-- How a database arranges its contents (#132). Its own row rather than the caption row: two
+                 pills plus the folder and the add button do not fit a 260px pane, and squeezing them in
+                 would be paid for by the caption. Same pill treatment as the History panel's filters, and
+                 the same two-way EnumToBool binding - the one shape in this file that already does this. -->
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="2,0,2,6">
+              <RadioButton Theme="{StaticResource PillToggle}" GroupName="schematree" Content="Simple"
+                           ToolTip.Tip="Tables inline, with the rarer object kinds behind one bucket"
+                           IsChecked="{Binding Connections.SchemaTreeMode, Converter={StaticResource EnumToBool}, ConverterParameter=Simple, Mode=TwoWay}"/>
+              <RadioButton Theme="{StaticResource PillToggle}" GroupName="schematree" Content="Full"
+                           ToolTip.Tip="Schema first, then a group per kind inside it"
+                           IsChecked="{Binding Connections.SchemaTreeMode, Converter={StaticResource EnumToBool}, ConverterParameter=Full, Mode=TwoWay}"/>
+            </StackPanel>
             <!-- Narrows the panel to matching connections (name, host:port, database, user, environment).
                  Distinct from the type-ahead below and deliberately so: this box says which *servers* are on
                  screen, the type-ahead jumps between matches *inside* what is expanded. Substring, not fuzzy
@@ -236,7 +249,10 @@
                     <TextBox Classes="inline" Text="{Binding RenameDraft, Mode=TwoWay}"
                              IsVisible="{Binding IsRenaming}" MinWidth="90" VerticalAlignment="Center"
                              KeyDown="OnConnectionRenameKeyDown" LostFocus="OnConnectionRenameLostFocus"/>
-                    <TextBlock Text="{Binding Detail}" VerticalAlignment="Center" FontSize="{DynamicResource Font.Small}" Foreground="{DynamicResource Text.Dim}"/>
+                    <!-- DetailTip is null on almost every row, and a null tip shows nothing — it is there for
+                         the absences, which must stay short on the row (#133). -->
+                    <TextBlock Text="{Binding Detail}" VerticalAlignment="Center" FontSize="{DynamicResource Font.Small}"
+                               Foreground="{DynamicResource Text.Dim}" ToolTip.Tip="{Binding DetailTip}"/>
                     </StackPanel>
                   </DockPanel>
                 </TreeDataTemplate>
@@ -372,6 +388,14 @@
               </TreeView.DataTemplates>
             </TreeView>
           </DockPanel>
+
+          <!-- ===== Server activity panel (#101) ===== -->
+          <!-- A control of its own: this file is already long enough that §0.4/§9.1 say to extract rather
+               than add, and the panel is self-contained. DataContext is narrowed to its own view model, so
+               the control binds against that rather than reaching through the shell. -->
+          <controls:ActivityPanelView x:Name="ActivityPanel" DataContext="{Binding Activity}"
+                                      IsVisible="{Binding $parent[UserControl].((vm:ShellViewModel)DataContext).ActivePanel,
+                                                  Converter={StaticResource EnumToBool}, ConverterParameter=Activity}"/>
 
           <!-- ===== History panel (design §4): day-grouped, filterable ===== -->
           <DockPanel Margin="8,8,6,6"

@@ -41,11 +41,21 @@ public class SchemaBreadthTests
         return db;
     }
 
+    /// <summary>The group rows directly under a node — what the arrangement tests assert on.</summary>
     private static IReadOnlyList<string> Groups(SchemaNodeViewModel node)
         => node.Children.OfType<SchemaGroupNodeViewModel>().Select(g => g.Title).ToList();
 
+    /// <summary>
+    /// A group by title, at any depth. Most of these tests are about what a <em>row</em> says, and #132 moved
+    /// the long tail inside a bucket without changing any of it — so they look through, and the shape is
+    /// asserted on its own terms elsewhere.
+    /// </summary>
     private static SchemaGroupNodeViewModel Group(SchemaNodeViewModel node, string title)
-        => node.Children.OfType<SchemaGroupNodeViewModel>().Single(g => g.Title == title);
+        => AllGroups(node).Single(g => g.Title == title);
+
+    private static IEnumerable<SchemaGroupNodeViewModel> AllGroups(SchemaNodeViewModel node)
+        => node.Children.OfType<SchemaGroupNodeViewModel>()
+            .SelectMany(g => new[] { g }.Concat(AllGroups(g)));
 
     // ---- 1. column defaults, identity, generated, collation ------------------------------------------
 
@@ -272,17 +282,21 @@ public class SchemaBreadthTests
     {
         var db = await Database(new BreadthBrowser());
 
+        // #132: what used to be seventeen sibling rows. Schemas still leads — it is structural, and a level
+        // that arrives below the object kinds it organises reads as an afterthought — and everything from
+        // Sequences down now sits inside one bucket.
+        Assert.Equal(["Schemas", "Views", "Functions", "Procedures", "Other objects"], Groups(db));
+
+        // Nothing was dropped on the way in: every kind is still its own group, in the same order, one level
+        // further down.
         Assert.Equal(
             [
-                // Schemas leads: it is structural, and a level that arrives below the object kinds it
-                // organises reads as an afterthought.
-                "Schemas", "Views", "Functions", "Procedures",
-                "Sequences", "Types", "Extensions", "Policies",
-                "Publications", "Subscriptions", "Foreign servers", "Event triggers",
-                "Collations", "Casts", "Operators", "Operator classes", "Text search",
+                "Sequences", "Types", "Policies", "Collations", "Operators", "Operator classes", "Text search",
+                "Extensions", "Event triggers", "Publications", "Subscriptions", "Foreign servers", "Casts",
             ],
-            Groups(db));
-        Assert.All(db.Children.OfType<SchemaGroupNodeViewModel>(), g => Assert.False(g.IsExpanded));
+            Groups(Group(db, "Other objects")));
+
+        Assert.All(AllGroups(db), g => Assert.False(g.IsExpanded));
     }
 
     [Fact]
@@ -380,7 +394,7 @@ public class SchemaBreadthTests
         Assert.Equal(
             Groups(db).Distinct().Count(),
             Groups(db).Count);
-        Assert.Single(Groups(db), g => g == "Sequences");
+        Assert.Single(Groups(db), g => g == "Other objects");
     }
 
     // ---- helpers -------------------------------------------------------------------------------------

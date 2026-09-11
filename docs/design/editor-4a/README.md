@@ -150,7 +150,7 @@ No rail, no side panel, no results — pure editing.
 
 ## State (MVVM)
 - `ActiveConnection` (enum/object → drives `ConnectionBrush`, host, db, env label).
-- `ActivePanel` (`Schema | Scripts | History`).
+- `ActivePanel` (`Schema | Scripts | History | Activity`).
 - `OpenDropdown` (`None | Server | Database`).
 - `IsMenuVisible` (Alt toggle).
 - `IsFocusMode`.

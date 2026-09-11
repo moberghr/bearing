@@ -153,6 +153,7 @@
         <MenuItem Header="Schema" Click="OnMenuSchemaClick"/>
         <MenuItem Header="Scripts" Click="OnMenuScriptsClick"/>
         <MenuItem Header="History" Click="OnHistoryClick"/>
+        <MenuItem Header="Server activity" Click="OnMenuActivityClick"/>
       </MenuItem>
       <MenuItem Header="_Query">
         <MenuItem x:Name="MenuRun" Header="Run" Click="OnRunClick"/>
@@ -402,6 +403,16 @@
                 </MultiBinding>
               </RadioButton.IsChecked>
               <controls:LineIcon Data="{StaticResource Icon.History}"/>
+            </RadioButton>
+            <RadioButton Classes="rail" Theme="{StaticResource RailTile}" GroupName="rail" Tag="Activity"
+                         ToolTip.Tip="Server activity" Click="OnRailTileClick">
+              <RadioButton.IsChecked>
+                <MultiBinding Converter="{StaticResource PanelActive}" ConverterParameter="Activity">
+                  <Binding Path="ActivePanel"/>
+                  <Binding Path="SidePaneOpen"/>
+                </MultiBinding>
+              </RadioButton.IsChecked>
+              <controls:LineIcon Data="{StaticResource Icon.Activity}"/>
             </RadioButton>
           </StackPanel>
           <Button Grid.Row="2" Classes="rail" Theme="{StaticResource RailButton}" ToolTip.Tip="Settings"

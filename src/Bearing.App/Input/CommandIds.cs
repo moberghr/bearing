@@ -57,6 +57,7 @@ public static class CommandIds
     public const string PanelConnections = "panel.connections";
     public const string PanelScripts = "panel.scripts";
     public const string PanelHistory = "panel.history";
+    public const string PanelActivity = "panel.activity";
 
     /// <summary>Export the query history as an audit report (#113). No default binding — it is a deliberate,
     /// occasional action, reachable from the palette and the History panel's own button.</summary>

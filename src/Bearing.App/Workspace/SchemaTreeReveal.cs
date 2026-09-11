@@ -69,9 +69,35 @@ public static class SchemaTreeReveal
     /// arrive pre-populated, so reaching into one costs nothing and needs no expand.
     /// </summary>
     public static IEnumerable<RelationNodeViewModel> RelationsUnder(SchemaNodeViewModel database)
+        => database.Children.SelectMany(Descend).OfType<RelationNodeViewModel>();
+
+    /// <summary>
+    /// A node and every relation row beneath it that already exists — through group buckets and through a
+    /// schema folder that has been opened, at any depth.
+    /// <para>
+    /// Recursive because full mode puts relations three levels down (#132): database, Schemas, the schema,
+    /// Tables, the row. It deliberately does not descend into a relation (whose children are its columns),
+    /// and it forces nothing to load — an unopened schema folder holds only its placeholder, which is why
+    /// <c>RevealRelationAsync</c> expands the path itself before asking.
+    /// </para>
+    /// </summary>
+    private static IEnumerable<SchemaNodeViewModel> Descend(SchemaNodeViewModel node)
+    {
+        yield return node;
+        if (node is RelationNodeViewModel) yield break;
+        foreach (var child in node.Children)
+            foreach (var descendant in Descend(child))
+                yield return descendant;
+    }
+
+    /// <summary>
+    /// The schema folders under a loaded database row, if the tree is arranged schema-first. Empty in simple
+    /// mode, where relations are inline and there is nothing to open on the way (#132).
+    /// </summary>
+    public static IEnumerable<SchemaNodeViewModel> SchemaFoldersUnder(SchemaNodeViewModel database)
         => database.Children
             .SelectMany(c => c is SchemaGroupNodeViewModel group ? group.Children : [c])
-            .OfType<RelationNodeViewModel>();
+            .Where(c => c is SchemaFolderNodeViewModel);
 
     /// <summary>
     /// The relation row for <paramref name="schema"/>.<paramref name="name"/>, or null.

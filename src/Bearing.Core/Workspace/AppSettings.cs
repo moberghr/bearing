@@ -35,6 +35,10 @@ public sealed record AppSettings
     /// <summary>When editor buffers are written to disk without an explicit Save. See <see cref="Workspace.AutosaveMode"/>.</summary>
     public AutosaveMode AutosaveMode { get; init; } = AutosaveMode.OnEdit;
 
+    /// <summary>How a database node arranges its children in the schema tree (#132). See
+    /// <see cref="Workspace.SchemaTreeMode"/>.</summary>
+    public SchemaTreeMode SchemaTreeMode { get; init; } = SchemaTreeMode.Simple;
+
     /// <summary>Base point size of the SQL editor text.</summary>
     public int EditorFontSize { get; init; } = 14;
 
@@ -151,6 +155,30 @@ public sealed record AppSettings
 /// its file in the scratch folder is the buffer's only home, not a convenience.
 /// </para>
 /// </summary>
+/// <summary>
+/// How a database node arranges its children in the schema tree (#132).
+/// <para>
+/// The two shapes answer different questions and neither wins outright, which is why this is a setting and
+/// not a ruling. <see cref="Simple"/> is one click from a database to a table, which is what nearly every
+/// expand is for; <see cref="Full"/> is a legible hierarchy on a server whose schemas mean something.
+/// </para>
+/// </summary>
+public enum SchemaTreeMode
+{
+    /// <summary>
+    /// Relations inline, with the long tail of object kinds behind a single bucket. The default, and
+    /// deliberately: it is the shape the tree already had, so upgrading changes nobody's muscle memory, and
+    /// §9.9a's "one click to a table" survives as the out-of-box behaviour rather than as an option.
+    /// </summary>
+    Simple,
+
+    /// <summary>
+    /// Schema-first: schemas, then a group per kind inside each. Relations are three levels down, which is
+    /// the cost of a tree you can read on a server with a dozen schemas.
+    /// </summary>
+    Full,
+}
+
 public enum AutosaveMode
 {
     /// <summary>Write shortly after typing stops (debounced). The default.</summary>

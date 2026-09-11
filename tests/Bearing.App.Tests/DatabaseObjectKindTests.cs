@@ -46,8 +46,17 @@ public class DatabaseObjectKindTests
     private static IReadOnlyList<string> Groups(DatabaseNodeViewModel db)
         => db.Children.OfType<SchemaGroupNodeViewModel>().Select(g => g.Title).ToList();
 
-    private static SchemaGroupNodeViewModel Group(DatabaseNodeViewModel db, string title)
-        => db.Children.OfType<SchemaGroupNodeViewModel>().Single(g => g.Title == title);
+    /// <summary>
+    /// A group by title, wherever the current shape puts it. These tests are about what a <em>row</em> says,
+    /// not about where its group sits, so they look through the buckets #132 introduced rather than pinning a
+    /// depth — the arrangement itself is asserted deliberately, in its own tests.
+    /// </summary>
+    private static SchemaGroupNodeViewModel Group(SchemaNodeViewModel node, string title)
+        => AllGroups(node).Single(g => g.Title == title);
+
+    private static IEnumerable<SchemaGroupNodeViewModel> AllGroups(SchemaNodeViewModel node)
+        => node.Children.OfType<SchemaGroupNodeViewModel>()
+            .SelectMany(g => new[] { g }.Concat(AllGroups(g)));
 
     // ---- the groups -----------------------------------------------------------------------------------
 
@@ -56,13 +65,19 @@ public class DatabaseObjectKindTests
     {
         var db = await Expanded(new KindBrowser());
 
-        // Every kind the fixture reports, in the order the tree appends them. The long-tail kinds and the
-        // Schemas level are asserted in SchemaBreadthTests, whose fixture carries them.
-        Assert.Equal(["Views", "Functions", "Procedures", "Sequences", "Types", "Extensions", "Policies"],
-            Groups(db).Where(g => g != "Schemas").Take(7));
+        // Simple mode (#132): the relations stay inline with Views, Functions and Procedures beside them,
+        // and every rarer kind moves inside one bucket. Seventeen sibling rows became at most five.
+        Assert.Equal(["Views", "Functions", "Procedures", "Other objects"],
+            db.Children.OfType<SchemaGroupNodeViewModel>().Select(g => g.Title).Where(t => t != "Schemas"));
+
+        // The kinds are still each their own group — one level further in, and still in kind order.
+        Assert.Equal(["Sequences", "Types", "Policies"],
+            Group(db, "Other objects").Children.OfType<SchemaGroupNodeViewModel>()
+                .Select(g => g.Title).Where(t => t is "Sequences" or "Types" or "Policies"));
+
         // Collapsed, like Views and Functions already were: these are the "look it up when you need it" half
         // of a database, and expanding them by default would bury the tables.
-        Assert.All(db.Children.OfType<SchemaGroupNodeViewModel>(), g => Assert.False(g.IsExpanded));
+        Assert.All(AllGroups(db), g => Assert.False(g.IsExpanded));
     }
 
     [Fact]

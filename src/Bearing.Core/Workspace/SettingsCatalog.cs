@@ -263,6 +263,26 @@ public static class SettingsCatalog
         },
 
         // ---- Connections -----------------------------------------------------------------------
+        new EnumSetting
+        {
+            Key = "connections.schemaTreeMode",
+            CategoryId = Connections,
+            Title = "Schema tree layout",
+            Description = "How a database arranges its contents in the Connections panel. Also switchable "
+                        + "from the panel's own header.",
+            Keywords = "schema tree explorer grouping navigator simple full hierarchy",
+            Options =
+            [
+                new(nameof(SchemaTreeMode.Simple), "Simple",
+                    "Tables inline, one click from the database, with the rarer object kinds behind a single "
+                    + "“Other objects” bucket."),
+                new(nameof(SchemaTreeMode.Full), "Full",
+                    "Schema first, then a group per kind inside it. Longer to reach a table; easier to read "
+                    + "on a server with several schemas."),
+            ],
+            Get = s => s.SchemaTreeMode.ToString(),
+            Set = (s, v) => s with { SchemaTreeMode = Enum.Parse<SchemaTreeMode>(v) },
+        },
         new IntSetting
         {
             Key = "connections.idleTimeoutMinutes",

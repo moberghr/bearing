@@ -1,0 +1,107 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Bearing.App.ViewModels"
+             xmlns:ae="using:AvaloniaEdit"
+             x:Class="Bearing.App.Controls.ActivityPanelView"
+             x:DataType="vm:ActivityPanelViewModel">
+
+  <UserControl.Styles>
+    <!-- A class toggled from the row's own IsOurs rather than a bool-to-brush converter: the accent is a
+         theme token, and a converter would have to reach into the theme to find it. -->
+    <Style Selector="Border.row">
+      <Setter Property="BorderBrush" Value="Transparent"/>
+    </Style>
+    <Style Selector="Border.row.ours">
+      <Setter Property="BorderBrush" Value="{DynamicResource Accent.Brand}"/>
+    </Style>
+  </UserControl.Styles>
+
+  <!-- The server activity panel (#101). Its own control rather than a fourth DockPanel inside SidebarView,
+       which is already ~925 lines and which §0.4/§9.1 say to extract from rather than grow.
+
+       The shape is the History panel's, and deliberately: a side panel is 262px, which is nowhere near
+       enough for the eight columns pg_stat_activity offers. So the list carries the two lines you scan
+       (pid · state · duration, then the statement) and the rest goes to the detail pane under the splitter,
+       which is the same trade the History panel already makes with its preview. -->
+  <DockPanel Margin="8,8,6,6">
+
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="2,0,2,6">
+      <TextBlock Text="ACTIVITY" FontSize="{DynamicResource Font.Small}" FontWeight="Bold"
+                 VerticalAlignment="Center" Foreground="{DynamicResource Text.Dim}"/>
+      <!-- Refreshing on demand as well as on the timer: when you have just cancelled something you want to
+           know now, not in two and a half seconds. -->
+      <Button Grid.Column="1" Content="Refresh" Click="OnRefreshClick"
+              Background="Transparent" BorderThickness="0" Padding="6,1"
+              FontSize="{DynamicResource Font.Small}" Foreground="{DynamicResource Text.Dim}"
+              ToolTip.Tip="Re-read the sessions now"/>
+    </Grid>
+
+    <!-- pg_stat_activity is cluster-wide, so the unfiltered read is every session on the host: other
+         databases, other roles, other applications, and what each is running. This tab's database is the
+         default; widening is a deliberate act, for when you are hunting whoever holds the lock. -->
+    <CheckBox DockPanel.Dock="Top" Margin="2,0,2,6"
+              IsChecked="{Binding WholeServer, Mode=TwoWay}"
+              FontSize="{DynamicResource Font.Small}"
+              Content="Every database on this server"
+              ToolTip.Tip="Off: only sessions on this tab's database. On: every session on the host, whoever opened it."/>
+
+    <!-- One line carrying count, empty, restricted, disconnected, stale and error. The panel never shows a
+         bare empty list: "no sessions" and "you may not see them" are different answers (§1.7). -->
+    <TextBlock DockPanel.Dock="Bottom" Text="{Binding Status}" FontSize="{DynamicResource Font.Small}"
+               Foreground="{DynamicResource Text.Faint}" TextWrapping="Wrap" Margin="2,4,2,0"/>
+
+    <Grid RowDefinitions="*,Auto,Auto">
+      <ListBox x:Name="BackendList" Classes="history" Grid.Row="0"
+               ItemsSource="{Binding Backends}"
+               SelectedItem="{Binding Selected, Mode=TwoWay}"
+               Background="Transparent" BorderThickness="0">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:BackendRowViewModel">
+            <!-- A backend Bearing opened is marked with the brand accent on its left edge: on a server with
+                 a dozen sessions it is usually the one you came looking for. Colour only — the row says
+                 "opened by Bearing" in its detail line too, so the mark is never the only carrier. -->
+            <Border Classes="row" Classes.ours="{Binding IsOurs}" BorderThickness="2,0,0,0" Padding="4,1,0,1">
+              <StackPanel Spacing="1">
+                <TextBlock Text="{Binding Header}" FontSize="{DynamicResource Font.Small}"
+                           FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                <TextBlock Text="{Binding Query}" FontSize="{DynamicResource Font.Caption}"
+                           FontFamily="{DynamicResource MonoFontFamily}"
+                           Foreground="{DynamicResource Text.Dim}" TextTrimming="CharacterEllipsis"/>
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+        <ListBox.ContextMenu>
+          <ContextMenu>
+            <MenuItem Header="Cancel statement" Click="OnCancelClick"
+                      ToolTip.Tip="Stop what this backend is running; the session stays open"/>
+            <MenuItem Header="Terminate session…" Click="OnTerminateClick"
+                      ToolTip.Tip="Disconnect this backend entirely"/>
+          </ContextMenu>
+        </ListBox.ContextMenu>
+      </ListBox>
+
+      <GridSplitter Grid.Row="1" Height="4" ResizeDirection="Rows" Background="{DynamicResource Border}"
+                    IsVisible="{Binding Selected, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+
+      <Border Grid.Row="2" Margin="0,6,0,0" VerticalAlignment="Stretch"
+              Background="{DynamicResource Bg.Window}" BorderBrush="{DynamicResource Border}"
+              BorderThickness="1" CornerRadius="6"
+              IsVisible="{Binding Selected, Converter={x:Static ObjectConverters.IsNotNull}}">
+        <DockPanel Margin="6">
+          <TextBlock DockPanel.Dock="Top" Text="BACKEND" FontSize="{DynamicResource Font.Caption}"
+                     FontWeight="Bold" Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,4"/>
+          <!-- Everything the 262px row could not fit: role, database, application, wait event. -->
+          <TextBlock DockPanel.Dock="Top" Text="{Binding Selected.Detail}" TextWrapping="Wrap"
+                     FontSize="{DynamicResource Font.Small}" Foreground="{DynamicResource Text.Dim}"
+                     Margin="0,0,0,6"/>
+          <!-- The same read-only SQL viewer the history preview uses (#48): syntax-highlighted like every
+               other SQL surface in the app, run through the formatter first, and still selectable. The
+               statement is why you would cancel a backend, so it should be as readable here as in the
+               editor. Filled from code-behind, where the highlighter install lives. -->
+          <ae:TextEditor x:Name="BackendSql" FontSize="{DynamicResource Font.Small}" BorderThickness="0"/>
+        </DockPanel>
+      </Border>
+    </Grid>
+  </DockPanel>
+</UserControl>

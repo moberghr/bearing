@@ -18,6 +18,11 @@ public interface IDbProvider
     IDbConnectionFactory CreateConnectionFactory(ConnectionInfo info, string? password);
     IMetadataReader CreateMetadataReader(IDbConnectionFactory factory);
     IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory);
+
+    /// <summary>The server's own sessions, and the two actions on one (#101). Separate from
+    /// <see cref="IMetadataReader"/> because that one is read-only by construction — see
+    /// <see cref="IServerActivity"/>.</summary>
+    IServerActivity CreateServerActivity(IDbConnectionFactory factory);
 }
 
 /// <summary>Opens/pools underlying connections; hides the concrete ADO.NET driver.</summary>

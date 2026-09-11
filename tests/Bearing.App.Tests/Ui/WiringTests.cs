@@ -822,6 +822,58 @@ public class WiringTests : IDisposable
         dialog.Close();
     });
 
+    // ---- #99 / #105: the connection dialog's safety group ----------------------------------------
+
+    [Fact]
+    public Task The_production_preset_turns_on_the_whole_safety_group() => _ui.Run(() =>
+    {
+        // "The safe answer is the default" is what read-only makes true rather than aspirational — someone
+        // who needs to write to production unticks it deliberately. Asserted through the preset because that
+        // is the only route that turns these on without the user finding them.
+        var dialog = NewConnectionDialog();
+        var readOnly = dialog.GetVisualDescendants().OfType<CheckBox>().First(c => c.Name == "ReadOnlyBox");
+        var timeout = dialog.GetVisualDescendants().OfType<TextBox>().First(t => t.Name == "StatementTimeoutBox");
+
+        Assert.False(readOnly.IsChecked);
+        Assert.True(string.IsNullOrEmpty(timeout.Text));
+
+        Preset(dialog, "Production");
+        Assert.True(readOnly.IsChecked);
+        Assert.Equal("30", timeout.Text);
+
+        // A lesser preset does not take them away again: dropping a safety setting is the user's call, not a
+        // side effect of a click — the same rule the write guard already follows.
+        Preset(dialog, "Local");
+        Assert.True(readOnly.IsChecked);
+        Assert.Equal("30", timeout.Text);
+        dialog.Close();
+    });
+
+    [Fact]
+    public Task The_safety_note_says_what_the_settings_leave_open() => _ui.Run(() =>
+    {
+        // Asserted against SessionPolicy.Advice rather than against a literal, so the dialog cannot end up
+        // describing the connection differently from the policy the record is built with.
+        var dialog = NewConnectionDialog();
+        var note = dialog.GetVisualDescendants().OfType<Border>().First(b => b.Name == "SafetyNote");
+        var noteText = dialog.GetVisualDescendants().OfType<TextBlock>().First(t => t.Name == "SafetyNoteText");
+        var readOnly = dialog.GetVisualDescendants().OfType<CheckBox>().First(c => c.Name == "ReadOnlyBox");
+
+        // Absent on a connection with no safety settings, rather than saying something reassuring about one.
+        Assert.False(note.IsVisible);
+
+        readOnly.IsChecked = true;
+        Pump(dialog);
+
+        Assert.True(note.IsVisible);
+        Assert.Equal(SessionPolicy.Advice(readOnly: true, timeoutSeconds: 0), noteText.Text);
+
+        // And it does not overclaim: read-only is a USERSET setting a SET can lift, so the note has to say so
+        // rather than calling it prevention.
+        Assert.Contains("SET", noteText.Text);
+        dialog.Close();
+    });
+
     private static void Preset(Window dialog, string label)
     {
         var button = dialog.GetVisualDescendants().OfType<Button>()
