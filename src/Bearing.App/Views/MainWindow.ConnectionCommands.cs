@@ -19,6 +19,9 @@ public partial class MainWindow
 
     private async void OnImportDBeaverClick(object? sender, RoutedEventArgs e) => await ImportFromDBeaverAsync();
 
+    private async void OnImportFromInstalledClick(object? sender, RoutedEventArgs e)
+        => await ImportFromInstalledAsync();
+
     /// <summary>settings.open: the application settings dialog. Edits apply and persist as they're made,
     /// so there is nothing to save here; the window only reports back when the user asked to jump to the
     /// keyboard-shortcuts editor instead.</summary>
@@ -100,8 +103,10 @@ public partial class MainWindow
     /// servers it will actually meet, without typing them in again.
     /// </para>
     /// <para>
-    /// Reads only. No password comes with them: secrets are keyed per profile, so each copied connection
-    /// prompts on first connect.
+    /// Reads only, as far as the source profile is concerned. Saved passwords <b>do</b> come with the
+    /// connections (approved 2026-09-12): they are read from the installed profile's credential store and
+    /// written under this profile's key, so an imported connection connects without prompting. See
+    /// <see cref="InstalledProfileImport"/> for what that trades away.
     /// </para>
     /// </summary>
     private async Task ImportFromInstalledAsync()
@@ -131,9 +136,17 @@ public partial class MainWindow
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        await Vm.Connections.ImportConnectionsAsync(choice.Connections, folders, choice.UpdateExisting);
-        Vm.StatusText = $"Copied {choice.Connections.Count} connection(s) from '{found.Profile}'. "
-                      + "Passwords are not copied — each will ask on first connect.";
+        var outcome = await Vm.Connections.ImportConnectionsAsync(
+            choice.Connections, folders, choice.UpdateExisting);
+        var passwords = await Vm.Connections.CarryPasswordsAsync(found.Profile, outcome.Landed);
+
+        // What the import *did*, not how many rows were ticked: with "update existing" off and every
+        // connection already here, all of them are skipped and "copied 12 connections" would be a plain
+        // falsehood — over the accurate line ImportConnectionsAsync had just written.
+        Vm.StatusText = (outcome.Added + outcome.Updated == 0
+                            ? $"Nothing to copy from '{found.Profile}' — every connection is already here."
+                            : $"From '{found.Profile}': {outcome.Counts}.")
+                      + (passwords is null ? "" : " " + passwords);
     }
 
     private async Task BrowseAndImportAsync(string? startDir)

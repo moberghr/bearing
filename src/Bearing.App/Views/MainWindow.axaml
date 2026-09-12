@@ -137,6 +137,10 @@
         <Separator/>
         <MenuItem Header="Import connections">
           <MenuItem x:Name="MenuImportDBeaver" Header="From DBeaver…" Click="OnImportDBeaverClick"/>
+          <!-- Dev builds only (IsSeparateProfile), like the two menus in the connections panel. The three
+               lists are meant to carry the same sources; this one had been left behind. -->
+          <MenuItem x:Name="MenuImportInstalled" Header="From the installed Bearing…"
+                    Click="OnImportFromInstalledClick" IsVisible="{Binding IsSeparateProfile}"/>
         </MenuItem>
         <Separator/>
         <MenuItem x:Name="MenuCloseTab" Header="Close Tab" Click="OnCloseCurrentTabClick"/>

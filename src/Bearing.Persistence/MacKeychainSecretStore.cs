@@ -25,7 +25,17 @@ namespace Bearing.Persistence;
 /// </summary>
 public sealed class MacKeychainSecretStore : ISecretStore
 {
-    private static string Service => BearingPaths.AppDirName;
+    /// <summary>
+    /// The profile whose namespace this store reads and writes — <see cref="BearingPaths.AppDirName"/>
+    /// (the <c>BEARING_PROFILE</c> isolation) unless a caller names another. The one caller that names
+    /// another is the installed-profile import, which copies a saved password from the installed app's
+    /// namespace into this one; every ordinary construction leaves it alone and so stays isolated.
+    /// </summary>
+    private readonly string _profile;
+
+    public MacKeychainSecretStore(string? profile = null) => _profile = profile ?? BearingPaths.AppDirName;
+
+    private string Service => _profile;
 
     public bool IsSecure => true;
 

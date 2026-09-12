@@ -12,6 +12,7 @@ using Bearing.App.Workspace;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
 using Bearing.Core.Workspace;
+using Bearing.Persistence.Import;
 
 namespace Bearing.App.ViewModels;
 
@@ -44,10 +45,27 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     }
 
     /// <summary>
-    /// How a database arranges its children (#132) — bound two-way by the panel header's toggle, and mirrored
+    /// How a database arranges its children (#132) — flipped by the panel header's icon toggle, and mirrored
     /// from the stored setting so the settings window and the toggle cannot disagree.
     /// </summary>
-    [ObservableProperty] private SchemaTreeMode _schemaTreeMode;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SchemaTreeModeTip))]
+    private SchemaTreeMode _schemaTreeMode;
+
+    /// <summary>
+    /// The header toggle's tooltip: the shape in force, and the one a click switches to. The control is a
+    /// single icon, so this is the only place it can say which of the two modes it is currently showing —
+    /// the glyph alone is a shape, not a label.
+    /// </summary>
+    public string SchemaTreeModeTip => SchemaTreeMode == SchemaTreeMode.Full
+        ? "Tree shape: Full — schema first, then a group per kind inside it. Click for Simple."
+        : "Tree shape: Simple — tables inline, with the rarer object kinds behind one bucket. Click for Full.";
+
+    /// <summary>Flips the tree between its two shapes (§9.14). Two values, so the toggle is the whole
+    /// control — there is no third state a cycle would have to reach.</summary>
+    [RelayCommand]
+    private void ToggleSchemaTreeMode()
+        => SchemaTreeMode = SchemaTreeMode == SchemaTreeMode.Full ? SchemaTreeMode.Simple : SchemaTreeMode.Full;
 
     partial void OnSchemaTreeModeChanged(SchemaTreeMode value)
     {
@@ -674,7 +692,33 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     // ---- import (#72) ----------------------------------------------------------------------------
 
     /// <summary>What an import did, for the status line and the summary dialog.</summary>
-    public sealed record ImportOutcome(int Added, int Updated, int Skipped);
+    /// <param name="Landed">Where each imported connection ended up: the id it carried in the source, and the
+    /// id it has here. They differ for a match updated in place, which keeps its own id — and the id is the
+    /// secret-store key, so a caller carrying passwords across needs both halves. Added and updated only; a
+    /// skipped connection was left exactly as it was, secret included.</param>
+    public sealed record ImportOutcome(
+        int Added, int Updated, int Skipped, IReadOnlyList<ImportedConnection>? Landed = null)
+    {
+        public IReadOnlyList<ImportedConnection> Landed { get; init; } = Landed ?? [];
+
+        /// <summary>The counts as a phrase — "2 added, 1 updated" — or empty when the import did nothing.
+        /// No leading capital and no full stop, so a caller can build the sentence it needs; both the status
+        /// line and the save message go through this, or the two would drift apart.</summary>
+        public string Counts
+        {
+            get
+            {
+                var parts = new List<string>();
+                if (Added > 0) parts.Add($"{Added} added");
+                if (Updated > 0) parts.Add($"{Updated} updated");
+                if (Skipped > 0) parts.Add($"{Skipped} already present");
+                return string.Join(", ", parts);
+            }
+        }
+    }
+
+    /// <summary>One imported connection's two ids — see <see cref="ImportOutcome.Landed"/>.</summary>
+    public sealed record ImportedConnection(Guid SourceId, Guid LocalId);
 
     /// <summary>
     /// Add imported connections to the project, declaring their folders alongside so the grouping arrives
@@ -697,6 +741,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     {
         if (_ctx.Project is null) return new ImportOutcome(0, 0, 0);
         var manifest = _ctx.Project.Manifest;
+        var landed = new List<ImportedConnection>();
 
         foreach (var folder in folders ?? Array.Empty<string>())
         {
@@ -717,6 +762,9 @@ public sealed partial class ConnectionsViewModel : ObservableObject
                     Name = UniqueName(incoming.Name, alwaysSuffix: false),
                     Folder = FolderPath.Normalize(incoming.Folder),
                 });
+                // The id travels with it, so here the two halves are the same — recorded anyway, because the
+                // caller must not have to know which branch a given connection took.
+                landed.Add(new ImportedConnection(incoming.Id, incoming.Id));
                 added++;
                 continue;
             }
@@ -732,6 +780,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
                 CredentialKind = existing.CredentialKind,
                 Folder = FolderPath.Normalize(incoming.Folder),
             };
+            landed.Add(new ImportedConnection(incoming.Id, existing.Id));
             updated++;
         }
 
@@ -739,18 +788,48 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         RefreshConnections();
         _ctx.DefaultConnectionId ??= manifest.Connections.FirstOrDefault()?.Id;
         OnPropertyChanged(nameof(SelectedTabConnection));
-        return new ImportOutcome(added, updated, skipped);
+        return new ImportOutcome(added, updated, skipped, landed);
+    }
+
+    /// <summary>
+    /// Carry the saved passwords for a just-imported set of connections out of another profile's credential
+    /// store into this one (approved 2026-09-12 — see <c>InstalledProfileImport</c> for what the isolation
+    /// was buying and what copying costs). Returns the sentence to append to the import's status line, or
+    /// null when there is nothing to say.
+    /// </summary>
+    public async Task<string?> CarryPasswordsAsync(
+        string profile, IReadOnlyList<ImportedConnection> landed, CancellationToken ct = default)
+    {
+        if (_ctx.Secrets is not { } target || _ctx.Project is null || landed.Count == 0) return null;
+
+        // Only a StoredPassword connection ever reads the secret store (CredentialResolver). Writing one for
+        // a Prompt or Entra connection would put a real password in the keychain that nothing would ever
+        // read — and report it as copied, while the user kept being asked. The *local* kind decides, because
+        // that is the record that will be resolved: an update deliberately keeps the kind already here.
+        var carried = landed
+            .Select(c => (c, local: _ctx.Project.Manifest.Connections.FirstOrDefault(x => x.Id == c.LocalId)))
+            .Where(p => p.local is not null && p.local.CredentialKind == CredentialKind.StoredPassword)
+            .Select(p => (p.c.SourceId, p.c.LocalId))
+            .ToList();
+
+        var carry = await InstalledProfileImport.CopyPasswordsAsync(carried, target, profile, ct: ct);
+
+        // Each clause is a different fact and they can all be true at once: some copied, some wrote over a
+        // password only this profile had, some had nothing to copy, and some failed. Silence about any of
+        // them is what turns "it prompted me anyway" into a mystery.
+        var parts = new List<string>();
+        if (carry.Copied > 0) parts.Add($"{carry.Copied} saved password(s) copied across");
+        if (carry.Replaced > 0) parts.Add($"{carry.Replaced} replaced one saved here");
+        if (carry.WithoutPassword > 0) parts.Add($"{carry.WithoutPassword} had none saved");
+        if (carry.Failed > 0) parts.Add($"{carry.Failed} could not be copied: {carry.Refused}");
+        else if (carry.Refused is { } why) parts.Add($"none could be copied: {why}");
+        return parts.Count == 0 ? null : string.Join("; ", parts) + ".";
     }
 
     private static string Describe(int added, int updated, int skipped)
     {
-        var parts = new List<string>();
-        if (added > 0) parts.Add($"{added} added");
-        if (updated > 0) parts.Add($"{updated} updated");
-        if (skipped > 0) parts.Add($"{skipped} already present");
-        return parts.Count == 0
-            ? "Nothing to import."
-            : $"Imported connections: {string.Join(", ", parts)}.";
+        var counts = new ImportOutcome(added, updated, skipped).Counts;
+        return counts.Length == 0 ? "Nothing to import." : $"Imported connections: {counts}.";
     }
 
     // ---- connection management (#56) -------------------------------------------------------------

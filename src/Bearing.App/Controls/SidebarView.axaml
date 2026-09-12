@@ -15,29 +15,34 @@
           <!-- ===== Connections / servers panel (connection → databases → objects tree) ===== -->
           <DockPanel Margin="8,8,6,6"
                      IsVisible="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=Schema}">
-            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" Margin="2,0,2,6">
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto,Auto" Margin="2,0,2,6">
               <TextBlock Grid.Column="0" Text="CONNECTIONS" FontSize="{DynamicResource Font.Small}" FontWeight="Bold"
                          Foreground="{DynamicResource Text.Dim}" VerticalAlignment="Center"/>
+              <!-- How a database arranges its contents (§9.14). One icon button rather than the pair of
+                   Simple/Full pills this used to be: the pills needed a row of their own, and a row of chrome
+                   is a poor trade for a preference set once and then left alone. The glyph shows the shape
+                   that is *in force* — flat rows, or rows that step in — and the tip names it and says what a
+                   click switches to, which is the one thing an icon-only control cannot say by itself. -->
               <Button Grid.Column="1" Classes="rail" Theme="{StaticResource RailButton}" Width="26" Height="26"
+                      Command="{Binding Connections.ToggleSchemaTreeModeCommand}"
+                      ToolTip.Tip="{Binding Connections.SchemaTreeModeTip}">
+                <Panel>
+                  <controls:LineIcon Data="{StaticResource Icon.TreeFlat}" Width="20" Height="20"
+                                     IsVisible="{Binding Connections.SchemaTreeMode,
+                                                 Converter={StaticResource EnumToBool}, ConverterParameter=Simple}"/>
+                  <controls:LineIcon Data="{StaticResource Icon.TreeNested}" Width="20" Height="20"
+                                     IsVisible="{Binding Connections.SchemaTreeMode,
+                                                 Converter={StaticResource EnumToBool}, ConverterParameter=Full}"/>
+                </Panel>
+              </Button>
+              <Button Grid.Column="2" Classes="rail" Theme="{StaticResource RailButton}" Width="26" Height="26"
                       Click="OnNewConnectionFolderClick" ToolTip.Tip="New folder">
                 <controls:LineIcon Data="{StaticResource Icon.Folder}" Width="20" Height="20"/>
               </Button>
-              <Button Grid.Column="2" Content="＋" Padding="6,0" Click="OnAddConnectionClick"
+              <Button Grid.Column="3" Content="＋" Padding="6,0" Click="OnAddConnectionClick"
                       ToolTip.Tip="Add connection"/>
             </Grid>
 
-            <!-- How a database arranges its contents (#132). Its own row rather than the caption row: two
-                 pills plus the folder and the add button do not fit a 260px pane, and squeezing them in
-                 would be paid for by the caption. Same pill treatment as the History panel's filters, and
-                 the same two-way EnumToBool binding - the one shape in this file that already does this. -->
-            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="2,0,2,6">
-              <RadioButton Theme="{StaticResource PillToggle}" GroupName="schematree" Content="Simple"
-                           ToolTip.Tip="Tables inline, with the rarer object kinds behind one bucket"
-                           IsChecked="{Binding Connections.SchemaTreeMode, Converter={StaticResource EnumToBool}, ConverterParameter=Simple, Mode=TwoWay}"/>
-              <RadioButton Theme="{StaticResource PillToggle}" GroupName="schematree" Content="Full"
-                           ToolTip.Tip="Schema first, then a group per kind inside it"
-                           IsChecked="{Binding Connections.SchemaTreeMode, Converter={StaticResource EnumToBool}, ConverterParameter=Full, Mode=TwoWay}"/>
-            </StackPanel>
             <!-- Narrows the panel to matching connections (name, host:port, database, user, environment).
                  Distinct from the type-ahead below and deliberately so: this box says which *servers* are on
                  screen, the type-ahead jumps between matches *inside* what is expanded. Substring, not fuzzy
@@ -74,6 +79,11 @@
                 <Button.Flyout>
                   <MenuFlyout Placement="Bottom">
                     <MenuItem Header="From DBeaver…" Click="OnImportConnectionsClick"/>
+                    <!-- Dev builds only, and gated on the same profile check as the tree's context menu.
+                         This is where a first run actually stands — the tree is empty, so the blank-space
+                         menu that used to be this item's only home is the one thing nobody right-clicks. -->
+                    <MenuItem Header="From the installed Bearing…" Click="OnImportFromInstalledClick"
+                              IsVisible="{Binding IsSeparateProfile}"/>
                   </MenuFlyout>
                 </Button.Flyout>
               </Button>
