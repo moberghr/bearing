@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Controls.Platform;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using Bearing.App.Services;
@@ -24,7 +25,21 @@ namespace Bearing.App;
 
 public partial class App : Application
 {
-    public override void Initialize() => AvaloniaXamlLoader.Load(this);
+    public override void Initialize()
+    {
+        // A submenu ("Copy as ▸", "Export ▸", the schema tree's "Import connections ▸") opens on hover
+        // only after Avalonia's DefaultMenuInteractionHandler.MenuShowDelay, which ships at 400 ms — long
+        // enough that pointing at one reads as the app not responding. Zero opens it on the frame the pointer
+        // arrives. Set here rather than in OnFrameworkInitializationCompleted so the headless UI tests get the
+        // same menus the app ships (§4.5): that method's body is guarded on a desktop lifetime.
+        //
+        // It is one value for two behaviours, so this is a trade, not a free win: the same delay times the
+        // *close* of a sibling's submenu, so a pointer sweeping down a menu past "Copy as" now flashes its
+        // submenu open and shut instead of ignoring it. Dial it to ~75 ms if that flash costs more than the
+        // wait did — it still reads as instant, and it swallows a sweep.
+        DefaultMenuInteractionHandler.MenuShowDelay = TimeSpan.Zero;
+        AvaloniaXamlLoader.Load(this);
+    }
 
     /// <summary>
     /// Recolor the app-wide <c>ConnectionBrush</c> from the active connection's environment hex.

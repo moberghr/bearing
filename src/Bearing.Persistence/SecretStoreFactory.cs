@@ -56,12 +56,21 @@ public static class SecretStoreFactory
             : new PlatformStoreProbe(null, failure, store.GetType().Name);
     }
 
+    /// <summary>
+    /// This platform's store keyed to <em>another</em> profile's namespace, for reading a secret the
+    /// installed app saved (<c>InstalledProfileImport</c>). Deliberately <b>not</b> probed: the probe writes
+    /// and deletes a throwaway secret, and doing that under a profile we are only ever reading from would be
+    /// the one write this import promises never to make. A caller therefore gets a store that may not work,
+    /// and finds out by using it — which is what it is about to do anyway.
+    /// </summary>
+    public static ISecretStore? UnprobedStoreFor(string profile) => PlatformStore(profile);
+
     /// <summary>Which store this OS would use, before asking whether it works.</summary>
-    private static ISecretStore? PlatformStore()
+    private static ISecretStore? PlatformStore(string? profile = null)
     {
-        if (OperatingSystem.IsLinux()) return new SecretToolSecretStore();
-        if (OperatingSystem.IsWindows()) return new WindowsCredentialSecretStore();
-        if (OperatingSystem.IsMacOS()) return new MacKeychainSecretStore();
+        if (OperatingSystem.IsLinux()) return new SecretToolSecretStore(profile);
+        if (OperatingSystem.IsWindows()) return new WindowsCredentialSecretStore(profile);
+        if (OperatingSystem.IsMacOS()) return new MacKeychainSecretStore(profile);
         return null;    // anything else (BSD, a container image without either) — nothing is stored there.
     }
 

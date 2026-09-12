@@ -19,6 +19,14 @@
        next to the clock and the cylinder, both of which are symmetric about (12,12). -->
   <StreamGeometry x:Key="Icon.Scripts">M6,3 h8 l4,4 v14 h-12 z M14,3 v4 h4 M8,12 h6 M8,15 h6 M8,18 h4</StreamGeometry>
 
+  <!-- The schema tree's two shapes (§9.14), drawn as the indent each one produces. They are the two
+       faces of one toggle in the connections header, so what has to be legible is the difference between
+       them and not either on its own: flat rows at one indent versus rows that step in. Deliberately not a
+       pair of nouns (a table, a folder) — the choice is about arrangement, and the same objects are in
+       both. -->
+  <StreamGeometry x:Key="Icon.TreeFlat">M5,7 h14 M5,12 h14 M5,17 h14</StreamGeometry>
+  <StreamGeometry x:Key="Icon.TreeNested">M5,7 h14 M10,12 h9 M15,17 h4</StreamGeometry>
+
   <!-- Folder -->
   <StreamGeometry x:Key="Icon.Folder">M4,7 h6 l2,2 h8 v9 h-16 z</StreamGeometry>
 
