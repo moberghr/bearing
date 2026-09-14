@@ -40,6 +40,21 @@ binary name.
 - `VelopackApp.Build().Run()` stays the first statement in `Bearing.Desktop/Program.cs` — `vpk pack` verifies
   it is in the entry assembly and refuses to package without it. Everything else about updating lives behind
   `Bearing.Core.Updates.IUpdateService` in `Bearing.Updates`.
+- **macOS is arm64-only and unsigned, and both are structural.** A Velopack channel holds one package per
+  version and `VelopackUpdateService` names no channel — so it reads Velopack's per-OS default, `osx`, and
+  an `osx-x64` pack would *replace* the arm64 one in that feed rather than sit beside it. Serving Intel is
+  a second channel plus an explicit channel in the updater, not a flag in `build/velopack.sh`. The `.app`
+  is ad-hoc signed by the .NET SDK (enough to execute on Apple Silicon, where an unsigned Mach-O will not
+  run at all) but not by a Developer ID, so Gatekeeper refuses it while quarantined — which is why the
+  Homebrew cask is installed `--no-quarantine` and carries a caveat saying so. Signing is three env vars
+  (`SIGN_APP_IDENTITY`, `SIGN_INSTALL_IDENTITY`, `NOTARY_PROFILE`) and nothing else; they are passed only
+  when set, because a build that claimed a signature it did not apply would be worse than an honest
+  unsigned one. `packaging/homebrew/bearing.rb` is the canonical cask, copied into the
+  `moberghr/homebrew-bearing` tap per release.
+- **The `.nupkg` name carries the channel for every channel but `win`.** `vpk` omits it there for Squirrel
+  back-compat and writes `-linux-`/`-osx-` for the others. The upload check looked for the unsuffixed name
+  on all three, and `--merge` puts them on one release — so the linux leg was verifying the *Windows*
+  package and would have passed a failed linux upload. `$PKG_CHANNEL_TAG` is set beside each channel.
 - Velopack builds publish **without** `PublishSingleFile` (deltas are per-file; one compressed exe makes every
   update a full ~65 MB download). `build/release.sh`'s single-file archive path is separate and unchanged.
 - Applying an update goes through the ordinary window close (`UpdateCoordinator.RestartToApply`), never
@@ -47,8 +62,9 @@ binary name.
 
 ## §9.6a — The release version is the git tag, and releases publish themselves
 A release is cut by **publishing a GitHub Release** — nothing else (#125, docs/RELEASING.md).
-`.github/workflows/release.yml` fires on `release: published`, tests, then builds and uploads both platforms
-from one runner.
+`.github/workflows/release.yml` fires on `release: published`, tests, then builds and uploads Windows and
+Linux from one runner and macOS from a second (it cannot be cross-built), sequentially — they share one
+release and one description.
 
 - **There is no `<Version>` property.** MinVer derives the version from the nearest `v*` tag and feeds
   `AssemblyInformationalVersion`, which is what `AppVersion` (and so `Help ▸ About` and the update check)

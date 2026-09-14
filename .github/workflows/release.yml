@@ -152,15 +152,80 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release view "${{ github.event.release.tag_name }}" --json assets --jq '.assets[].name'
 
-      - name: Withdraw the release if anything failed
-        # Publishing happens before the assets exist — that is the shape of the `release: published`
-        # trigger — so a failure anywhere above leaves a live release page with nothing on it. That is
-        # precisely what v0.5.4 is, and it is worse than no release: the tag looks used, the page says
-        # "Latest", and every installed copy stays where it is with no way to tell why.
-        #
-        # Back to draft, then. The tag survives, the notes survive, and re-running the workflow after a fix
-        # publishes it properly. Nothing here deletes anything.
-        if: failure()
+  publish-macos:
+    # macOS cannot be cross-built: Velopack needs codesign / xcrun / productbuild, so this leg is the only
+    # reason a second runner exists. One arch — osx-arm64, which is what macos-latest is — because a
+    # Velopack channel holds one package per version and the app reads the plain "osx" channel; see the
+    # header of build/velopack.sh.
+    #
+    # `needs: publish` rather than running beside it: both legs upload to the same release with --merge and
+    # both may set its description, and the "last writer wins, same content" that makes that safe is only
+    # true while the writers are sequential.
+    needs: publish
+    if: github.event_name == 'release'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install the Velopack CLI
+        run: |
+          dotnet tool install -g vpk
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Publish osx-arm64
+        # Unsigned and un-notarized: there is no Moberg Developer ID. The .NET SDK ad-hoc signs the
+        # apphost, which is enough to *execute* on Apple Silicon, but a quarantined ad-hoc bundle is
+        # refused by Gatekeeper — which is why the Homebrew cask is installed --no-quarantine
+        # (packaging/homebrew/README.md). WHEN a certificate exists, add SIGN_APP_IDENTITY /
+        # SIGN_INSTALL_IDENTITY / NOTARY_PROFILE here and nothing else changes.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH: "1"
+          RID: osx-arm64
+          SKIP_TESTS: "1"
+          PRERELEASE: ${{ github.event.release.prerelease && '1' || '0' }}
+        run: build/velopack.sh
+
+      - name: Show what shipped
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release view "${{ github.event.release.tag_name }}" --json assets --jq '.assets[].name'
+
+  withdraw:
+    # Publishing happens before the assets exist — that is the shape of the `release: published` trigger —
+    # so a failure in either publish leg leaves a live release page with nothing on it. That is precisely
+    # what v0.5.4 is, and it is worse than no release: the tag looks used, the page says "Latest", and
+    # every installed copy stays where it is with no way to tell why.
+    #
+    # Back to draft, then. The tag survives, the notes survive, and re-running the workflow after a fix
+    # publishes it properly. Nothing here deletes anything.
+    #
+    # A job rather than a step in `publish`, because `if: failure()` only sees its own job and the macOS
+    # leg must withdraw the release too. `always()` so it runs even though every job it needs has failed
+    # or been skipped — which is the only situation it exists for.
+    #
+    # `test` is in the list as well, and that closes a gap rather than adding one: a failing test skips
+    # `publish` entirely, so the withdraw step that used to live inside it never ran, and a release whose
+    # tests failed was left published with nothing on it. Exactly the state this is meant to prevent.
+    #
+    # A skipped job is not a failure — only an actual 'failure' result withdraws, so a manual cancel does
+    # not quietly unpublish someone's release.
+    needs: [test, publish, publish-macos]
+    if: >-
+      always() && github.event_name == 'release'
+      && (needs.test.result == 'failure'
+          || needs.publish.result == 'failure'
+          || needs['publish-macos'].result == 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Return the release to draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.release.tag_name }}
