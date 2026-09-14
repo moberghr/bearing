@@ -268,6 +268,10 @@ echo
 
 # --- Pack ---------------------------------------------------------------------
 echo "==> Packing"
+# Expanded below as ${ARR[@]+"${ARR[@]}"}, not "${ARR[@]}": macOS ships bash 3.2, where expanding an
+# EMPTY array the plain way is an unbound-variable error under `set -u`. Bash 5 on the Linux runner
+# accepts it, so this only ever fails on the one platform that cannot be cross-built — which is how it
+# reached a release. Same idiom for UPLOAD_ARGS below.
 EXTRA_PACK_ARGS=()
 case "$OS_FAMILY" in
   windows)
@@ -307,7 +311,7 @@ vpk "$DIRECTIVE" pack \
   --channel "$CHANNEL" \
   --outputDir "$RELEASE_DIR" \
   --releaseNotes "$NOTES" \
-  "${EXTRA_PACK_ARGS[@]}"
+  ${EXTRA_PACK_ARGS[@]+"${EXTRA_PACK_ARGS[@]}"}
 echo
 
 echo "==> Done"
@@ -328,7 +332,7 @@ if [[ "${PUBLISH:-0}" == "1" ]]; then
   vpk upload github \
     --repoUrl "$REPO_URL" --token "$TOKEN" \
     --channel "$CHANNEL" --outputDir "$RELEASE_DIR" \
-    --publish --merge "${UPLOAD_ARGS[@]}" \
+    --publish --merge ${UPLOAD_ARGS[@]+"${UPLOAD_ARGS[@]}"} \
     --releaseName "Bearing $VERSION" --tag "$TAG"
 
   # vpk carries the notes inside the package but leaves the GitHub release body to us. Set it here rather
