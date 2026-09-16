@@ -51,6 +51,16 @@ binary name.
   when set, because a build that claimed a signature it did not apply would be worse than an honest
   unsigned one. `packaging/homebrew/bearing.rb` is the canonical cask, copied into the
   `moberghr/homebrew-bearing` tap per release.
+- **The macOS leg runs on bash 3.2, and nothing else does.** macOS ships it, so an empty array expanded as
+  `"${ARR[@]}"` is an unbound-variable error there under `set -u` while bash 5 on the Linux runner expands
+  it to nothing. `v0.10.2` built its macOS package and then failed on the upload line for exactly that:
+  `UPLOAD_ARGS` is empty for a stable release. Every array in `build/velopack.sh` is expanded
+  `${ARR[@]+"${ARR[@]}"}`. The general shape — *the one platform that cannot be cross-built is also the one
+  running the old shell* — is why a macOS change cannot be assumed to work from a green Linux run.
+- **A workflow job that calls `gh` needs the repository, checkout or not.** The withdraw step assumed a
+  checkout while it lived inside `publish`; as a job of its own it had none, so `gh release edit` failed
+  with "not a git repository" and `v0.10.2` stayed published and empty — the job ran, reported the error it
+  was written to report, and did not do the one thing it exists for. `GH_REPO` is set on it now.
 - **The `.nupkg` name carries the channel for every channel but `win`.** `vpk` omits it there for Squirrel
   back-compat and writes `-linux-`/`-osx-` for the others. The upload check looked for the unsuffixed name
   on all three, and `--merge` puts them on one release — so the linux leg was verifying the *Windows*

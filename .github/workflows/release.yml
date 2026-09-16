@@ -229,6 +229,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.release.tag_name }}
+          # --repo, because this job deliberately does not check the repository out: `gh` otherwise
+          # resolves the repo from the git remote and fails with "not a git repository", which is what it
+          # did on v0.10.2 — the job ran, reported the error, and left the release published and empty.
+          # The withdraw step could assume a checkout while it lived inside `publish`; a job of its own
+          # cannot.
+          GH_REPO: ${{ github.repository }}
         run: |
           echo "::error::Release $TAG failed to publish its packages — returning it to draft."
           gh release edit "$TAG" --draft >/dev/null \
