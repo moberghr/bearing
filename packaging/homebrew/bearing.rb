@@ -42,10 +42,17 @@ cask "bearing" do
   # than leaving the user with "Bearing is damaged and can't be opened", which is what it looks like.
   caveats do
     <<~EOS
-      Bearing is not signed with an Apple Developer ID yet. If you installed without
-      --no-quarantine, macOS will refuse to open it; clear the flag with:
+      IF MACOS SAYS "Bearing is damaged and can't be opened" — it is not damaged. That is
+      Gatekeeper refusing an unsigned app that carries the quarantine flag. Clear it:
 
         xattr -dr com.apple.quarantine "#{appdir}/Bearing.app"
+
+      To avoid it next time, install with --no-quarantine, which Homebrew accepts only on the
+      command line and a cask cannot set for you:
+
+        brew install --cask --no-quarantine moberghr/bearing/bearing
+
+      Bearing has no Apple Developer ID yet, which is why either step is needed at all.
 
       Bearing updates itself from its GitHub Releases feed — `brew upgrade` is not needed.
     EOS
