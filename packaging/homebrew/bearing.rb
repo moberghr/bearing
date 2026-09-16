@@ -2,12 +2,9 @@ cask "bearing" do
   # Canonical source of the cask. The tap (moberghr/homebrew-bearing) holds a copy at Casks/bearing.rb;
   # edit this one and copy it over — see packaging/homebrew/README.md for the per-release steps.
   #
-  # PLACEHOLDER until the first release carrying a macOS asset. Both lines are wrong on purpose, and the
-  # sha256 is all zeroes rather than a `<replace-me>` token because a cask validates the field's *shape*:
-  # a non-hex value is a syntax error that makes the whole tap unloadable, while an unmatchable hash fails
-  # one install, loudly, which is the right failure for a cask with nothing to point at yet.
-  version "0.7.1"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  # These two are re-pointed per release and must move together — see the url note below.
+  version "0.10.3"
+  sha256 "dae0c1e1a3cb30c107a55dd1c5620dacf66f1437481dd42fdf9444d6e76382ab"
 
   # The zip carries no version in its name, so the tag in the URL is what selects the build.
   url "https://github.com/moberghr/bearing/releases/download/v#{version}/BearingSql-osx-Portable.zip"
