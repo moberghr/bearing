@@ -125,6 +125,33 @@ public sealed partial class TSqlParseRules : ISqlParseRules
     /// </summary>
     public int Lateral => TokenConstants.InvalidType;
 
+    /// <summary>
+    /// Parentheses, <c>CASE</c> and <c>BEGIN</c> — and deliberately <b>not</b> <c>[</c>: T-SQL's square
+    /// brackets delimit an identifier, which the lexer hands back as one <c>SQUARE_BRACKET_ID</c> token, so
+    /// there is no bracket nesting to count here at all.
+    /// <para>
+    /// <c>BEGIN</c> is paired with <c>END</c> because a <c>BEGIN … END</c> block is a level the parser
+    /// recurses through, and because <c>END</c> has to be a closer for <c>CASE</c> regardless — leaving
+    /// <c>BEGIN</c> out would let an ordinary procedure body decrement the depth of the parentheses around
+    /// it. It does over-count <c>BEGIN TRANSACTION</c> and <c>BEGIN TRY</c>, which no <c>END</c> of their
+    /// own closes; that direction is the safe one for a crash backstop, and it takes a thousand of them in
+    /// one buffer to reach the limit.
+    /// </para>
+    /// </summary>
+    public IReadOnlySet<int> NestOpeners { get; } = new HashSet<int>
+    {
+        TSqlParser.LR_BRACKET,
+        TSqlParser.CASE,
+        TSqlParser.BEGIN,
+    };
+
+    /// <inheritdoc />
+    public IReadOnlySet<int> NestClosers { get; } = new HashSet<int>
+    {
+        TSqlParser.RR_BRACKET,
+        TSqlParser.END,
+    };
+
     public int Using => TSqlParser.USING;
     public int Update => TSqlParser.UPDATE;
     public int Into => TSqlParser.INTO;

@@ -81,7 +81,6 @@ public class ProviderTraitsTests
     }
 }
 
-/// <summary>How the app names a connection's endpoint when it has to put it in a message.</summary>
 /// <summary>Which credential kinds a given engine can offer.</summary>
 public class CredentialKindOptionsTests
 {

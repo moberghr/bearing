@@ -167,6 +167,141 @@ public class TSqlStatementSplitterTests
         Assert.Single(SqlFolding.ComputeFoldRegions(Pg, sql));
     }
 
+    // ---- BEGIN … END: a semicolon inside a body is not a statement boundary ---------------------
+
+    /// <summary>
+    /// The failure this closes. Run sends the statement under the caret, and with a paren-only notion of
+    /// "top level" that was <c>create procedure p as begin select 1</c> — a fragment the server rejects,
+    /// for a procedure the user was looking at whole.
+    /// </summary>
+    [Fact]
+    public void A_procedure_body_is_one_statement()
+    {
+        const string sql = "create procedure p as begin select 1; select 2; end";
+
+        var span = Assert.Single(StatementSplitter.Split(Ss, sql));
+        Assert.Equal(sql, span.Text);
+    }
+
+    /// <summary>Nested blocks, and the statements either side of one: the body is whole and its
+    /// neighbours are still separate.</summary>
+    [Fact]
+    public void Statements_around_a_block_still_split()
+    {
+        const string sql = "select 0; if @x = 1 begin if @y = 2 begin select 1; end select 2; end; select 3";
+
+        var spans = StatementSplitter.Split(Ss, sql);
+
+        Assert.Equal(3, spans.Count);
+        Assert.Equal("select 0", spans[0].Text);
+        Assert.Equal("if @x = 1 begin if @y = 2 begin select 1; end select 2; end", spans[1].Text);
+        Assert.Equal("select 3", spans[2].Text);
+    }
+
+    /// <summary><c>BEGIN TRY</c> / <c>BEGIN CATCH</c> are blocks; their <c>END TRY</c> and
+    /// <c>END CATCH</c> are one <c>END</c> token with a word after it, so the closer needs no case of its
+    /// own.</summary>
+    [Fact]
+    public void A_try_catch_block_is_one_statement()
+    {
+        const string sql = "begin try select 1; select 2; end try begin catch select 3; end catch";
+
+        Assert.Single(StatementSplitter.Split(Ss, sql));
+    }
+
+    /// <summary>
+    /// The counter-case, and the reason <c>BEGIN</c> alone cannot be the opener: no <c>END</c> closes
+    /// <c>BEGIN TRANSACTION</c>, so counting it would swallow the rest of the script into one statement —
+    /// the same bug pointing the other way.
+    /// </summary>
+    [Fact]
+    public void Begin_transaction_is_a_statement_not_a_block()
+    {
+        const string sql = "begin transaction; update Orders set Freight = 1; commit";
+
+        var spans = StatementSplitter.Split(Ss, sql);
+
+        Assert.Equal(3, spans.Count);
+        Assert.Equal("begin transaction", spans[0].Text);
+        Assert.Equal("commit", spans[2].Text);
+    }
+
+    /// <summary>
+    /// <c>CASE … END</c> has to count as a block for the same reason: there is one <c>END</c> token for
+    /// both, so a <c>CASE</c> left uncounted would close a block that was never opened and put the split
+    /// back inside the next body.
+    /// </summary>
+    [Fact]
+    public void A_case_expression_does_not_unbalance_the_block_count()
+    {
+        const string sql = "select case when 1 = 1 then 'a' else 'b' end as c; "
+                         + "create procedure p as begin select 1; select 2; end";
+
+        var spans = StatementSplitter.Split(Ss, sql);
+
+        Assert.Equal(2, spans.Count);
+        Assert.Equal("select case when 1 = 1 then 'a' else 'b' end as c", spans[0].Text);
+        Assert.Equal("create procedure p as begin select 1; select 2; end", spans[1].Text);
+    }
+
+    /// <summary>A <c>CASE</c> inside a body keeps the body whole, and the body's own <c>END</c> still
+    /// closes it.</summary>
+    [Fact]
+    public void A_case_inside_a_body_is_counted_and_closed()
+    {
+        const string sql = "create procedure p as begin select case when 1 = 1 then 1 end; select 2; end; select 9";
+
+        var spans = StatementSplitter.Split(Ss, sql);
+
+        Assert.Equal(2, spans.Count);
+        Assert.Equal("select 9", spans[1].Text);
+    }
+
+    /// <summary>
+    /// A body still being typed leaves the block open, and the whole buffer is then one statement — which
+    /// is what Run should send. Mid-edit text has to produce an answer rather than a failure (§1.2), and
+    /// this is the honest one.
+    /// </summary>
+    [Fact]
+    public void An_unclosed_block_keeps_the_rest_of_the_buffer_with_it()
+    {
+        const string sql = "create procedure p as begin select 1; select 2;";
+
+        var span = Assert.Single(StatementSplitter.Split(Ss, sql));
+        Assert.Equal("create procedure p as begin select 1; select 2;", span.Text);
+    }
+
+    /// <summary>
+    /// A <c>GO</c> splits regardless: it is a client directive that ends the whole batch and cannot appear
+    /// inside a block, so an unbalanced <c>BEGIN</c> before one is text mid-edit rather than a body that
+    /// continues past it. Forgetting the block there is what leaves the following statements runnable.
+    /// </summary>
+    [Fact]
+    public void Go_ends_a_batch_even_with_a_block_left_open()
+    {
+        const string sql = "create procedure p as begin select 1\nGO\nselect 2; select 3";
+
+        var spans = StatementSplitter.Split(Ss, sql);
+
+        Assert.Equal(3, spans.Count);
+        Assert.Equal("create procedure p as begin select 1", spans[0].Text);
+        Assert.Equal("select 2", spans[1].Text);
+        Assert.Equal("select 3", spans[2].Text);
+    }
+
+    /// <summary>
+    /// And Postgres is untouched: <c>begin</c> there is a transaction statement, and a function body is
+    /// dollar-quoted — which the PG lexer reads as one token, so it never needed a block count.
+    /// </summary>
+    [Fact]
+    public void The_postgres_lexer_still_splits_its_own_begin_blocks()
+    {
+        var spans = StatementSplitter.Split(Pg, "begin; update t set x = 1; commit;");
+
+        Assert.Equal(3, spans.Count);
+        Assert.StartsWith("begin", spans[0].Text);
+    }
+
     [Fact]
     public void Folding_leaves_the_first_line_of_a_batch_visible()
     {

@@ -30,6 +30,62 @@ public class TSqlCompletionTests
     private static CompletionResult Complete(CompletionEngine engine, string sql)
         => engine.Complete(sql, sql.Length, Schema);
 
+    // ---- The replacement span over T-SQL's identifier forms ------------------------------------
+
+    /// <summary>
+    /// Where completion says it will write. The caret inside a bracketed name reported a <b>zero-length</b>
+    /// span, because the caret's "is this a partially-typed name?" test was the last thing in the engine
+    /// still reading Postgres' identifier spellings off the token text. Accepting a suggestion there
+    /// inserted instead of replacing: picking <c>Customers</c> in <c>[Order Det|ails]</c> produced
+    /// <c>[Order DetCustomersails]</c>, which is not a name and not valid T-SQL.
+    /// </summary>
+    [Theory]
+    // A delimited name, caret in the middle of it: the whole token is the span, brackets included.
+    [InlineData("select * from [Order Details]", 24, 14, 15)]
+    // A #temp name — T-SQL's fourth identifier form, and one Postgres has no token for at all.
+    [InlineData("select * from #tmp", 17, 14, 4)]
+    // The bare form, which already worked: kept as the contrast, so a regression here cannot read as a fix.
+    [InlineData("select * from Cust", 18, 14, 4)]
+    public void The_replacement_span_covers_whichever_identifier_form_the_caret_sits_in(
+        string sql, int caret, int expectedStart, int expectedLength)
+    {
+        var result = SqlServer.Complete(sql, caret, Schema);
+
+        Assert.Equal(expectedStart, result.ReplacementStart);
+        Assert.Equal(expectedLength, result.ReplacementLength);
+    }
+
+    /// <summary>
+    /// And what that means at the buffer: applying the span leaves a statement that names one relation.
+    /// The span alone is the mechanism; this is the symptom it was measured by.
+    /// </summary>
+    [Fact]
+    public void Accepting_a_suggestion_replaces_a_bracketed_name_rather_than_growing_it()
+    {
+        const string sql = "select * from [Order Details]";
+        var result = SqlServer.Complete(sql, caretOffset: 24, Schema);
+        var pick = result.Suggestions.First(s => s.DisplayText == "Customers");
+
+        var applied = sql[..result.ReplacementStart]
+                      + pick.ReplacementText
+                      + sql[(result.ReplacementStart + result.ReplacementLength)..];
+
+        Assert.Equal("select * from Customers c", applied);
+    }
+
+    /// <summary>
+    /// A variable is still not a name to overwrite — no dialect counts one as an identifier, and a table
+    /// name written over <c>@id</c> would be a different statement. The zero-length span is correct here.
+    /// </summary>
+    [Fact]
+    public void A_variable_under_the_caret_is_not_a_replacement_span()
+    {
+        const string sql = "select * from Orders where OrderId = @id";
+        var result = SqlServer.Complete(sql, caretOffset: 39, Schema);
+
+        Assert.Equal(0, result.ReplacementLength);
+    }
+
     // ---- The quoting fix ----------------------------------------------------------------------
 
     [Fact]

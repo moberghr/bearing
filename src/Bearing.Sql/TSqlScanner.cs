@@ -226,6 +226,15 @@ public static class TSqlScanner
     /// <para>
     /// Empty statements are dropped, so a trailing semicolon or a stray <c>GO</c> does not manufacture one.
     /// </para>
+    /// <para>
+    /// <b>Top-level means outside a <c>BEGIN … END</c> block as well as outside parentheses.</b> Postgres
+    /// needs no equivalent — a function body is dollar-quoted and the PG lexer sees that — but T-SQL writes
+    /// its bodies as bare statements, so a paren-only notion of "top level" cut
+    /// <c>create procedure p as begin select 1; select 2; end</c> at the first semicolon and Run sent
+    /// <c>create procedure p as begin select 1</c> for the server to reject. The same split drives the
+    /// statement-highlight margin, folding and completion's statement scope, so it was wrong in four places
+    /// at once. <c>IF</c> / <c>WHILE</c> bodies and <c>BEGIN TRY</c> have the same shape.
+    /// </para>
     /// </summary>
     public static IReadOnlyList<TSqlStatement> Split(string sql)
     {
@@ -235,6 +244,11 @@ public static class TSqlScanner
         var tokens = Tokenize(sql);
         var current = new List<TSqlToken>();
         var from = 0;
+
+        // BEGIN … END nesting, counted the way Depth counts parentheses. CASE is an opener because END
+        // closes it too and there is one END token for both — leave CASE out and `select case … end;`
+        // would decrement a block that was never opened, which is why this is not simply a BEGIN counter.
+        var block = 0;
 
         void Flush(int end)
         {
@@ -249,9 +263,11 @@ public static class TSqlScanner
             current.Clear();
         }
 
-        foreach (var t in tokens)
+        for (var index = 0; index < tokens.Count; index++)
         {
-            if (t.Kind == TSqlTokenKind.Punctuation && t.Text == ";" && t.Depth == 0)
+            var t = tokens[index];
+
+            if (t.Kind == TSqlTokenKind.Punctuation && t.Text == ";" && t.Depth == 0 && block == 0)
             {
                 Flush(t.Start);
                 from = t.Start + 1;
@@ -262,9 +278,20 @@ public static class TSqlScanner
                 && t.Text.Equals("GO", StringComparison.OrdinalIgnoreCase)
                 && StandsAlone(sql, t))
             {
+                // GO cannot appear inside a block — it is a client directive that ends the whole batch — so
+                // an unbalanced BEGIN before one is text mid-edit, not a block that continues past it.
+                // Splitting (and forgetting the block) is the answer that leaves the following statements
+                // runnable.
                 Flush(t.Start);
                 from = t.Start + t.Length;
+                block = 0;
                 continue;
+            }
+
+            if (t.IsWord && t.Depth == 0)
+            {
+                if (OpensBlock(tokens, index)) block++;
+                else if (t.Text.Equals("END", StringComparison.OrdinalIgnoreCase) && block > 0) block--;
             }
 
             current.Add(t);
@@ -272,6 +299,34 @@ public static class TSqlScanner
         Flush(sql.Length);
         return statements;
     }
+
+    /// <summary>
+    /// Whether the word at <paramref name="index"/> opens a <c>BEGIN … END</c> block.
+    /// <para>
+    /// <c>CASE</c> always does, for <see cref="Split"/>'s reason. <c>BEGIN</c> does <em>unless</em> it is
+    /// starting a transaction or a Service Broker dialog: those are ordinary statements that no <c>END</c>
+    /// closes, so counting them would swallow the whole rest of the script into one statement —
+    /// <c>begin transaction; update t; commit;</c> would stop splitting at the first semicolon, which is
+    /// the same bug pointing the other way. <c>BEGIN TRY</c> / <c>BEGIN CATCH</c> / <c>BEGIN ATOMIC</c> are
+    /// blocks and are not excluded; their <c>END TRY</c> / <c>END CATCH</c> is one <c>END</c> token with a
+    /// word after it, so the closer needs no special case.
+    /// </para>
+    /// </summary>
+    private static bool OpensBlock(IReadOnlyList<TSqlToken> tokens, int index)
+    {
+        var word = tokens[index].Text;
+        if (word.Equals("CASE", StringComparison.OrdinalIgnoreCase)) return true;
+        if (!word.Equals("BEGIN", StringComparison.OrdinalIgnoreCase)) return false;
+
+        var next = index + 1 < tokens.Count && tokens[index + 1].IsWord ? tokens[index + 1].Text : "";
+        return !NonBlockBegins.Contains(next);
+    }
+
+    /// <summary>The words after <c>BEGIN</c> that make it a statement rather than a block.</summary>
+    private static readonly HashSet<string> NonBlockBegins = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "TRANSACTION", "TRAN", "DISTRIBUTED", "DIALOG", "CONVERSATION",
+    };
 
     /// <summary>True when <paramref name="token"/> is the only thing on its line — what makes a <c>GO</c>
     /// the batch separator rather than a column called <c>go</c>. A trailing repeat count (<c>GO 5</c>) is

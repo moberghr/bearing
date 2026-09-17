@@ -52,6 +52,23 @@ public sealed partial class PgParseRules : ISqlParseRules
     /// not a different token — <c>LATERAL_P</c> is <c>lateral</c>.</summary>
     public int Lateral => PostgreSQLParser.LATERAL_P;
 
+    /// <summary>Parentheses, subscripts and <c>CASE</c> — the three things that cost the generated parser
+    /// a slice of stack per level. <c>[</c> is a subscript here, not an identifier delimiter.</summary>
+    public IReadOnlySet<int> NestOpeners { get; } = new HashSet<int>
+    {
+        PostgreSQLParser.OPEN_PAREN,
+        PostgreSQLParser.OPEN_BRACKET,
+        PostgreSQLParser.CASE,
+    };
+
+    /// <inheritdoc />
+    public IReadOnlySet<int> NestClosers { get; } = new HashSet<int>
+    {
+        PostgreSQLParser.CLOSE_PAREN,
+        PostgreSQLParser.CLOSE_BRACKET,
+        PostgreSQLParser.END_P,
+    };
+
     public int Using => PostgreSQLParser.USING;
     public int Update => PostgreSQLParser.UPDATE;
     public int Into => PostgreSQLParser.INTO;

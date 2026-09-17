@@ -331,11 +331,12 @@ public sealed class SqlServerMetadataReader : IMetadataReader
 
         var columns = await ColumnNamesAsync(conn, tableId, ct).ConfigureAwait(false);
         var indexes = await ReadIndexesAsync(conn, tableId, columns, ct).ConfigureAwait(false);
-        var constraints = await ReadConstraintsAsync(conn, tableId, indexes, ct).ConfigureAwait(false);
+        var constraints = await ReadConstraintsAsync(conn, tableId, indexes, columns, ct).ConfigureAwait(false);
         var triggers = await ReadTriggersAsync(conn, tableId, ct).ConfigureAwait(false);
 
-        // No policies: SQL Server's row-level security lives in sys.security_policies, which this reader
-        // does not read yet — empty because none were looked for, not because the table has none.
+        // No policies: SQL Server's row-level security lives in sys.security_policies, which is unread for
+        // the same reason GetDatabaseObjectsAsync is empty — the query has not been run against a live
+        // server (§4.2). TableDetails' Columns / Rules / Comment extras are unpopulated here too.
         return new TableDetails(constraints, indexes, triggers, []);
     }
 
@@ -436,16 +437,23 @@ public sealed class SqlServerMetadataReader : IMetadataReader
         Dictionary<int, string> columns)
     {
         if (name.Length == 0) return "";
-        var names = ordinals
-            .Select(o => columns.TryGetValue(o, out var n) ? SqlServerIdentifierQuote(n) : $"?{o}")
-            .ToList();
+        var names = ColumnList(ordinals, columns);
         var clustered = typeDesc.Contains("CLUSTERED", StringComparison.OrdinalIgnoreCase)
                         && !typeDesc.Contains("NONCLUSTERED", StringComparison.OrdinalIgnoreCase)
             ? "clustered "
             : "";
         return $"create {(unique ? "unique " : "")}{clustered}index {SqlServerIdentifierQuote(name)} "
-             + $"({string.Join(", ", names)})";
+             + $"({names})";
     }
+
+    /// <summary>
+    /// Key columns as a parenthesised, quoted list — <c>([a], [b])</c>. An unknown ordinal renders as
+    /// <c>?n</c> rather than being dropped, so a column the reader could not name is visible instead of
+    /// silently shortening the key.
+    /// </summary>
+    private static string ColumnList(IReadOnlyList<int> ordinals, Dictionary<int, string> columns)
+        => "(" + string.Join(", ", ordinals
+            .Select(o => columns.TryGetValue(o, out var n) ? SqlServerIdentifierQuote(n) : $"?{o}")) + ")";
 
     /// <summary>
     /// Key, check and foreign-key constraints. The key-constraint definition is composed from its index's
@@ -453,7 +461,8 @@ public sealed class SqlServerMetadataReader : IMetadataReader
     /// server's own text and so is used as-is.
     /// </summary>
     private static async Task<List<ConstraintInfo>> ReadConstraintsAsync(
-        SqlConnection conn, long tableId, IReadOnlyList<IndexInfo> indexes, CancellationToken ct)
+        SqlConnection conn, long tableId, IReadOnlyList<IndexInfo> indexes,
+        Dictionary<int, string> columns, CancellationToken ct)
     {
         var list = new List<ConstraintInfo>();
 
@@ -461,7 +470,7 @@ public sealed class SqlServerMetadataReader : IMetadataReader
             select kc.object_id, kc.name, rtrim(kc.type), kc.unique_index_id
             from sys.key_constraints kc
             where kc.parent_object_id = @id
-            order by kc.type desc, kc.name
+            order by case rtrim(kc.type) when 'PK' then 0 else 1 end, kc.name
             """;
         await using (var cmd = new SqlCommand(keySql, conn))
         {
@@ -478,7 +487,7 @@ public sealed class SqlServerMetadataReader : IMetadataReader
                     Name: r.GetString(1),
                     Kind: kind,
                     Ordinals: ordinals,
-                    Definition: ComposeKeyConstraint(kind, backing)));
+                    Definition: ComposeKeyConstraint(kind, ordinals, columns)));
             }
         }
 
@@ -530,13 +539,22 @@ public sealed class SqlServerMetadataReader : IMetadataReader
         return list;
     }
 
-    private static string ComposeKeyConstraint(ConstraintKind kind, IndexInfo? backing)
+    /// <summary>
+    /// A key constraint's definition, composed from the backing index's <em>ordinals</em> — never by
+    /// re-parsing the index's own rendered text.
+    /// <para>
+    /// It used to recover the column list with <c>LastIndexOf('(')</c> over that text, which a bracket-quoted
+    /// name containing a parenthesis breaks: for columns <c>[x]</c> and <c>[a(b]</c> the index renders as
+    /// <c>create index [i] ([x], [a(b])</c>, the search lands inside the second name, and the constraint
+    /// came out as <c>primary key (b])</c>. The ordinals were in hand the whole time.
+    /// </para>
+    /// </summary>
+    private static string ComposeKeyConstraint(
+        ConstraintKind kind, IReadOnlyList<int> ordinals, Dictionary<int, string> columns)
     {
-        if (backing is null) return "";
-        var inner = backing.Definition;
-        var open = inner.LastIndexOf('(');
-        var cols = open >= 0 ? inner[open..] : "";
-        return kind == ConstraintKind.PrimaryKey ? $"primary key {cols}".TrimEnd() : $"unique {cols}".TrimEnd();
+        if (ordinals.Count == 0) return "";
+        var cols = ColumnList(ordinals, columns);
+        return kind == ConstraintKind.PrimaryKey ? $"primary key {cols}" : $"unique {cols}";
     }
 
     /// <summary>Triggers on the relation. <c>object_definition</c> gives the real CREATE TRIGGER text — a
@@ -647,6 +665,46 @@ public sealed class SqlServerMetadataReader : IMetadataReader
         return list;
     }
 
+    /// <summary>
+    /// Not read for SQL Server yet — the interface's documented "no answer for a kind" arm (§9.9), so the
+    /// tree simply shows no Sequences / Types / Extensions / Policies groups on a SQL Server database.
+    /// <para>
+    /// SQL Server does have counterparts for some of these (<c>sys.sequences</c>, <c>sys.types</c> where
+    /// <c>is_user_defined = 1</c>, and row-level security through <c>sys.security_policies</c>), so this is
+    /// a gap rather than an absence. It is left empty deliberately instead of guessed at: §4.2 is explicit
+    /// that a provider read is reported only after its container has run it, and these queries have not
+    /// been measured against a live server.
+    /// </para>
+    /// </summary>
+    public Task<DatabaseObjectKinds> GetDatabaseObjectsAsync(CancellationToken ct)
+        => Task.FromResult(DatabaseObjectKinds.Empty);
+
+    /// <summary>
+    /// Not read for SQL Server yet, for <see cref="GetDatabaseObjectsAsync"/>'s reason. The server's
+    /// principals live in <c>sys.server_principals</c> (logins) and <c>sys.database_principals</c> (users
+    /// and database roles) — two catalogs at two scopes onto one <see cref="RoleInfo"/>, which is a mapping
+    /// decision to make with a live server in front of it, not from the documentation.
+    /// </summary>
+    public Task<IReadOnlyList<RoleInfo>> GetRolesAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<RoleInfo>>([]);
+
+    /// <summary>
+    /// Unreachable while <see cref="GetRolesAsync"/> is empty — the tree only asks for the grants of a role
+    /// it listed. <see cref="RoleGrants.NotVisible"/> rather than an empty grant list so that if it ever is
+    /// reached it cannot state that a role has no privileges here, which nothing has checked.
+    /// </summary>
+    public Task<RoleGrants> GetRoleGrantsAsync(string roleName, CancellationToken ct)
+        => Task.FromResult(RoleGrants.NotVisible);
+
+    /// <summary>
+    /// Not read for SQL Server yet. The nearest counterpart is a filegroup (<c>sys.filegroups</c> +
+    /// <c>sys.database_files</c>), which is per database rather than cluster-wide — so it is not the same
+    /// object at the same scope, and mapping it onto the server node would put a database's storage where a
+    /// Postgres user expects the cluster's.
+    /// </summary>
+    public Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<SchemaObjectInfo>>([]);
+
     /// <summary>Bracket-quote for a composed definition. The dialect owns this rule, but
     /// <c>Bearing.Data</c> does not reference <c>Bearing.Sql</c> (§2.2) — and the rule is two characters
     /// and an escape, so restating it here beats a lateral project edge.</summary>
@@ -679,33 +737,4 @@ public sealed class SqlServerMetadataReader : IMetadataReader
         "AF" => RoutineKind.Aggregate,
         _ => RoutineKind.Function,
     };
-
-    // ---- Catalog kinds this engine does not answer yet -----------------------------------------------
-    //
-    // The empty answers the interface sanctions ("a provider that has no answer for a kind returns an empty
-    // list for it"), not claims that the server has none of these. SQL Server has a counterpart for every
-    // one — sys.sequences, sys.types, sys.database_principals, sys.database_permissions, sys.filegroups —
-    // so these are unimplemented, not inapplicable, and the tree simply shows fewer kinds than it does on
-    // PostgreSQL. Writing them is a catalog query each plus a live check against a real server (§4.2); the
-    // wrong move would be to reason one out and ship it, which is how this provider's first live run lost
-    // six tests.
-
-    /// <inheritdoc/>
-    public Task<DatabaseObjectKinds> GetDatabaseObjectsAsync(CancellationToken ct)
-        => Task.FromResult(DatabaseObjectKinds.Empty);
-
-    /// <inheritdoc/>
-    public Task<IReadOnlyList<RoleInfo>> GetRolesAsync(CancellationToken ct)
-        => Task.FromResult<IReadOnlyList<RoleInfo>>([]);
-
-    /// <summary>
-    /// <see cref="RoleGrants.NotVisible"/> rather than an empty grant list, which would read as "this role
-    /// may do nothing" — a statement about permissions that nobody checked.
-    /// </summary>
-    public Task<RoleGrants> GetRoleGrantsAsync(string roleName, CancellationToken ct)
-        => Task.FromResult(RoleGrants.NotVisible);
-
-    /// <inheritdoc/>
-    public Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(CancellationToken ct)
-        => Task.FromResult<IReadOnlyList<SchemaObjectInfo>>([]);
 }

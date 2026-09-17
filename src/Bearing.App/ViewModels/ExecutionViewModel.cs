@@ -300,7 +300,14 @@ public sealed partial class ExecutionViewModel : ObservableObject
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(budget);
             deadline.CancelAfter(CountTimeout);
-            var rows = await session.Executor.CountAsync(target.RowsSql, deadline.Token);
+            // The wrapper is the connection's, shaped here for the paging count's reason: CountAsync runs
+            // the text it is handed and does not wrap it, so passing RowsSql bare made ExecuteScalar read
+            // the first column of the first row — "this will delete 8 rows" for a statement that deletes 3.
+            // A dialect that refuses the shape leaves the confirmation with no number, which is #1.5's
+            // "never guesses" arm rather than a failure.
+            if (ProviderTraits.For(session.Info).Dialect.CountWrap(target.RowsSql) is not { } countSql)
+                return RowImpact.Uncounted(target);
+            var rows = await session.Executor.CountAsync(countSql, deadline.Token);
             return rows is { } n ? RowImpact.Counted(target, n) : RowImpact.Uncounted(target);
         }
         catch (Exception)
@@ -537,7 +544,11 @@ public sealed partial class ExecutionViewModel : ObservableObject
         // than by the server. A plain EXPLAIN executes nothing and a measured SELECT is a read: both still run
         // on a read-only connection, which is what #99 asks for.
         var risks = analyze && (info.ReadOnly || info.RequireWriteConfirmation)
-            // This engine's guard, as in ExecuteAsync — ExplainAsync has no `traits` local of its own.
+            // The connection's dialect, as ExecuteAsync does (ExplainAsync has no `traits` local of its
+            // own). This call site was the one left on the Postgres lexer, which has no notion of a
+            // [bracketed] identifier — so a T-SQL batch whose write sat behind one could be read as words
+            // and under-reported, and §1.2 does not allow the guard to be narrower for one dialect than
+            // another.
             ? WriteGuard.Describe(ProviderTraits.For(info).Dialect, sql)
             : [];
 

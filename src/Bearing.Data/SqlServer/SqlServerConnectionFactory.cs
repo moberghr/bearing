@@ -57,6 +57,21 @@ public sealed class SqlServerConnectionFactory : IDbConnectionFactory
     /// not own (<c>user</c>, <c>username</c>, <c>db</c>) costs nothing, since such a key would be ignored
     /// by the next case anyway.
     /// </para>
+    /// <para>
+    /// The spellings below were enumerated against <c>SqlConnectionStringBuilder.ContainsKey</c> rather
+    /// than from memory, which is how the second group arrived: <c>Failover Partner</c> names another
+    /// server outright, and <c>AttachDbFilename</c> — with its two synonyms — attaches a local <c>.mdf</c>
+    /// as the database, so both are "where we connect" however little they look like it. <c>Server SPN</c>
+    /// and <c>Failover Partner SPN</c> name the Kerberos principal we authenticate <em>to</em>, and
+    /// <c>Host Name In Certificate</c> / <c>Server Certificate</c> decide which certificate is accepted,
+    /// which is the identity half of §1.4's encryption-versus-identity distinction. <c>User Instance</c>
+    /// starts a different server process.
+    /// </para>
+    /// <para>
+    /// <b>What is deliberately left settable</b>: routing and behaviour that does not change who or what we
+    /// connect to — <c>Application Intent</c>, <c>MultiSubnetFailover</c>, pool sizes, timeouts. The bag
+    /// exists to configure the connection; blocking those would only make it useless.
+    /// </para>
     /// </summary>
     private static readonly HashSet<string> Reserved = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -71,12 +86,23 @@ public sealed class SqlServerConnectionFactory : IDbConnectionFactory
         // Where we connect: every spelling of Data Source, and both of the database.
         "server", "data source", "datasource", "addr", "address", "network address",
         "database", "initial catalog", "db",
+        // Also where we connect, less obviously: a failover partner is another server, and
+        // AttachDbFilename (plus its two synonyms) attaches a local .mdf as the database.
+        "failover partner", "attachdbfilename", "extended properties", "initial file name",
+        // A different server process again — SQL Express spawns one per user.
+        "user instance",
+        // Who we authenticate *to*: the Kerberos service principal.
+        "server spn", "failover partner spn",
         // Whether we authenticate as the OS identity — CredentialKind.Integrated decides that.
         "integrated security", "trusted_connection", "trusted connection",
         // Transport security is ConnectionInfo.Tls now, not an Options entry. Blocked here for the
         // same reason the credentials are: a bag that travels in a shared project.json is the wrong
         // place for a security setting, and two sources of truth is how one of them gets ignored.
         "encrypt", "trustservercertificate", "trust server certificate",
+        // ...and which certificate is accepted, which is the identity half of the same setting. §1.4 keeps
+        // encryption and identity distinct, so a bag that cannot weaken the first must not weaken the
+        // second either.
+        "host name in certificate", "server certificate",
     };
 
     public SqlServerConnectionFactory(ConnectionInfo info, string? password)

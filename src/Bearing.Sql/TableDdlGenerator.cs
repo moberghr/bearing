@@ -97,7 +97,6 @@ public static class TableDdlGenerator
         return names;
     }
 
-    /// <summary>Generated DDL always quotes — nobody types over this output, so the safe form wins.</summary>
     /// <summary>Generated DDL always quotes — nobody types over this output, so the safe form
     /// wins — and the dialect decides what quoting means.</summary>
     private static string Ident(ISqlDialect dialect, string id) => dialect.Quote(id);

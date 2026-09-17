@@ -78,19 +78,18 @@ internal static class ResultSetBuilder
         return results.Select(r => spans[r.StatementIndex!.Value].Text.Trim()).ToList();
     }
 
-    /// <summary>Result-column indices that are the primary key of their base table (for the PK badge).</summary>
+    /// <summary>Result-column indices that are the primary key of their base table (for the PK badge).
+    /// Through <see cref="ColumnOriginResolver"/> because SQL Server reports origin by name only — read off
+    /// <c>BaseTableId</c>, this asked the snapshot about table 0 and no SQL Server result ever had a
+    /// badge.</summary>
     public static IReadOnlyCollection<int> DetectPrimaryKeyColumns(
         ISchemaSnapshot? snapshot, IReadOnlyList<ColumnDescriptor> columns)
     {
         if (snapshot is null || columns.Count == 0) return Array.Empty<int>();
+        var origins = ColumnOriginResolver.ResolveAll(snapshot, columns);
         var pks = new List<int>();
-        for (var i = 0; i < columns.Count; i++)
-        {
-            var c = columns[i];
-            if (!c.HasBaseColumn) continue;
-            if (snapshot.ColumnsOf(c.BaseTableId).Any(pc => pc.Ordinal == c.BaseColumnOrdinal && pc.IsPrimaryKey))
-                pks.Add(i);
-        }
+        for (var i = 0; i < origins.Length; i++)
+            if (origins[i] is { Column.IsPrimaryKey: true }) pks.Add(i);
         return pks;
     }
 
@@ -99,9 +98,12 @@ internal static class ResultSetBuilder
         ISchemaSnapshot? snapshot, IReadOnlyList<ColumnDescriptor> columns)
     {
         if (snapshot is null || columns.Count == 0) return Array.Empty<int>();
+        // Origins once for the whole set, not once per column: this asks the resolver a question per
+        // column, and each answer used to re-resolve every column of the result.
+        var origins = ColumnOriginResolver.ResolveAll(snapshot, columns);
         var fks = new List<int>();
         for (var i = 0; i < columns.Count; i++)
-            if (ForeignKeyResolver.Resolve(snapshot, columns, i) is not null) fks.Add(i);
+            if (ForeignKeyResolver.Resolve(snapshot, columns, origins, i) is not null) fks.Add(i);
         return fks;
     }
 

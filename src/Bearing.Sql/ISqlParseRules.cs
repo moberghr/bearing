@@ -112,6 +112,27 @@ public interface ISqlParseRules
     int Lateral { get; }
 
     /// <summary>
+    /// Token types that open a level of nesting, and the ones that close it — the pair
+    /// <see cref="ParseDepth"/> counts to decide whether a buffer may be handed to the parser at all.
+    /// <para>
+    /// A role rather than a constant for the usual reason, and this one was a live bug: the depth was
+    /// measured with PostgreSQL's token numbers on whatever stream it was given, so on a T-SQL buffer it
+    /// counted <c>ABSENT</c> and <c>ABSOLUTE</c> (types 2–5 there) and reported ~0 for any nesting at all.
+    /// The guard exists to stop an uncatchable <see cref="StackOverflowException"/>
+    /// (<see cref="PgParsing.MaxNestingDepth"/>), so a guard that never fires is the crash it prevents.
+    /// </para>
+    /// <para>
+    /// What counts as nesting is the grammar's business too: Postgres nests with <c>(</c>, <c>[</c> and
+    /// <c>CASE</c>, while T-SQL's square brackets delimit an identifier inside a single token and its
+    /// <c>BEGIN … END</c> block is a nesting level the parser recurses through.
+    /// </para>
+    /// </summary>
+    IReadOnlySet<int> NestOpeners { get; }
+
+    /// <inheritdoc cref="NestOpeners"/>
+    IReadOnlySet<int> NestClosers { get; }
+
+    /// <summary>
     /// True for the token types that name a relation, a column or an alias — the bare and the delimited
     /// form both. It is a predicate rather than a pair of constants because the count is grammar's
     /// business: PostgreSQL has two (<c>Identifier</c>, <c>QuotedIdentifier</c>) and T-SQL has four
