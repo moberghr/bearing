@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -228,10 +229,53 @@ public sealed partial class ResultView
         }
     }
 
+    /// <summary>The grid commands that are allowed to run while a cell editor has the keyboard, each of them
+    /// after the editor has been committed (#148). Everything else — Ctrl+C, Ctrl+V, Ctrl+A, the arrows —
+    /// belongs to the text being edited, and the way to keep that true is to list what is taken rather than
+    /// to take whatever the grid happens to know.
+    /// <para>
+    /// These three are the ones you reach for <i>while</i> editing: "type the value, Ctrl+S" is the whole
+    /// quick-edit gesture. Without this, Ctrl+S left the grid unhandled and the window answered it with
+    /// <c>file.save</c> — writing the script to disk instead of the row, which is not a no-op but the wrong
+    /// save.
+    /// </para></summary>
+    private static readonly HashSet<string> CommitFirstCommands =
+        [CommandIds.GridSave, CommandIds.GridDiscard, CommandIds.GridShowSql];
+
+    /// <summary>
+    /// Commit whatever a grid has open in a cell editor, so that anything reading the pending set sees the
+    /// value that is on screen (#147).
+    /// <para>
+    /// The DataGrid raises <c>CellEditEnding</c> — the only route into <see cref="ResultSetViewModel.SetCell"/>
+    /// — on Enter, Tab and a change of current cell, and on nothing else. Focus leaving the grid commits
+    /// nothing and closes nothing, so an edit abandoned by clicking ✓ Save stayed in a TextBox the save path
+    /// does not read, and the save wrote the previous value. A no-op when nothing is being edited.
+    /// </para>
+    /// </summary>
+    private static void CommitOpenEdit(DataGrid grid)
+        => grid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+
+    /// <summary>The same, for the routes that name a result rather than a grid (the toolbar's buttons, a
+    /// palette-invoked command).</summary>
+    private void CommitOpenEdit(ResultSetViewModel result)
+    {
+        if (_gridsByResult.TryGetValue(result, out var grid)) CommitOpenEdit(grid);
+    }
+
     /// <summary>Capture a committed cell edit back onto the result set and tint the row immediately.</summary>
     private void WireEditing(DataGrid grid, ResultSetViewModel result)
     {
         _editableGrids.Add((grid, result));
+
+        // Focus leaving the grid commits the open editor, the way a spreadsheet does (#147). An edit
+        // abandoned by clicking elsewhere is then written or — via Escape, which cancels before focus goes
+        // anywhere — visibly dropped, instead of hanging in an editor that nothing on the save path reads.
+        grid.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == InputElement.IsKeyboardFocusWithinProperty && e.NewValue is false)
+                CommitOpenEdit(grid);
+        };
+
         grid.CellEditEnding += (_, e) =>
         {
             if (e.EditAction != DataGridEditAction.Commit) return;
@@ -256,17 +300,29 @@ public sealed partial class ResultView
     /// bubbles to the window.</summary>
     private void OnGridKey(DataGrid grid, ResultSetViewModel result, KeyEventArgs e)
     {
-        if (e.Source is TextBox) return;                 // a cell editor is focused — let it have the keys
+        // A cell editor owns the keyboard, with the three exceptions in CommitFirstCommands — and those get
+        // the editor committed first, so the command acts on what is on screen and its own pending-changes
+        // guard is true by the time it is asked (#147/#148).
+        var inCellEditor = e.Source is TextBox;
+        if (inCellEditor && !ResolvesToCommitFirst(e)) return;
         if (!result.HasGrid || result.Rows.Count == 0) return;
+        if (inCellEditor) CommitOpenEdit(grid);
 
         _keyStrokeTarget = (grid, result);
         bool handled;
-        try { handled = _dispatcher?.TryHandle(e, KeyScope.Grid) == true; }
+        try { handled = _dispatcher?.TryHandle(e, KeyScope.Grid, inCellEditor ? CommitFirstCommands : null) == true; }
         finally { _keyStrokeTarget = null; }
         if (handled) return;
+        if (inCellEditor) return;                        // the rest of the keyboard is the editor's
 
         // Everything below is spatial cell-cursor motion — intrinsic grid navigation, not a rebindable
         // command (mirrors how the editor's caret motion isn't in the keymap).
         if (_selection.HandleNavigation(grid, result, e)) e.Handled = true;
     }
+
+    /// <summary>Whether a keystroke resolves, in grid scope, to one of the commands a cell editor may not
+    /// keep to itself. Resolved rather than dispatched, because the editor has to be committed in between.</summary>
+    private bool ResolvesToCommitFirst(KeyEventArgs e)
+        => _dispatcher?.Keymap.Resolve(KeyScope.Grid, e.KeyModifiers, e.Key, e.PhysicalKey) is { } id
+           && CommitFirstCommands.Contains(id);
 }
