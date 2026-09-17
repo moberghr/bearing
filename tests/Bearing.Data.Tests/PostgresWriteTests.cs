@@ -62,6 +62,64 @@ public class PostgresWriteTests
         }
     }
 
+    /// <summary>
+    /// The expression path against a live server (#149). A fixture can only assert the SQL we generate; what
+    /// it cannot say is whether Postgres takes it, whether the written value is the server's clock rather
+    /// than the client's, and whether RETURNING hands back the evaluated value. All three are the feature.
+    /// </summary>
+    [SkippableFact]
+    public async Task An_expression_assignment_is_evaluated_by_the_server_and_read_back()
+    {
+        var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
+        await using var factory = provider.CreateConnectionFactory(Info(), Password);
+        await PgTestServer.RequireWritableAsync(factory);
+
+        var exec = provider.CreateQueryExecutor(factory);
+        const string tbl = "bearing_expression_test";
+        await exec.ExecuteAsync(
+            $"drop table if exists {tbl}; create table {tbl} (id serial primary key, created_at timestamptz, tag uuid);",
+            new QueryOptions(), CancellationToken.None);
+        try
+        {
+            var ins = await exec.ExecuteWriteAsync(
+                new[] { DmlGenerator.Insert(null, tbl, new[] { new ColumnValue("created_at", null) }) },
+                CancellationToken.None);
+            var newId = Convert.ToInt32(ins[0].Rows[0][ColumnIndex(ins[0], "id")]);
+
+            var before = DateTime.UtcNow.AddSeconds(-5);
+            var upd = await exec.ExecuteWriteAsync(
+                new[] { DmlGenerator.Update(null, tbl,
+                    assignments: new[]
+                    {
+                        new ColumnValue("created_at", new SqlExpression("now()")),
+                        new ColumnValue("tag", new SqlExpression("gen_random_uuid()")),
+                    },
+                    keys: new[] { new ColumnValue("id", newId) },
+                    returning: new[] { "id", "created_at", "tag" }) },
+                CancellationToken.None);
+
+            var result = Assert.Single(upd);
+            Assert.True(result.Success, result.Error?.Message);
+
+            // The value comes back evaluated, which is the whole point: it exists nowhere else.
+            var returned = Assert.Single(result.Rows);
+            var written = Assert.IsType<DateTime>(returned[ColumnIndex(result, "created_at")]);
+            Assert.Equal(DateTimeKind.Utc, written.Kind);                 // timestamptz, §5.5
+            Assert.InRange(written, before, DateTime.UtcNow.AddSeconds(5));
+            var tag = Assert.IsType<Guid>(returned[ColumnIndex(result, "tag")]);
+            Assert.NotEqual(Guid.Empty, tag);
+
+            // …and it is what actually landed in the table, not just what RETURNING said.
+            var reread = await exec.ExecuteAsync(
+                $"select created_at from {tbl} where id = {newId}", new QueryOptions(), CancellationToken.None);
+            Assert.Equal(written, Assert.Single(reread[0].Rows)[0]);
+        }
+        finally
+        {
+            await exec.ExecuteAsync($"drop table if exists {tbl};", new QueryOptions(), CancellationToken.None);
+        }
+    }
+
     [SkippableFact]
     public async Task Failing_command_rolls_back_the_whole_batch()
     {

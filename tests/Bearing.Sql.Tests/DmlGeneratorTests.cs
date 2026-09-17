@@ -80,4 +80,60 @@ public class DmlGeneratorTests
         Assert.Throws<ArgumentException>(() =>
             DmlGenerator.Insert("s", "t", Array.Empty<ColumnValue>()));
     }
+
+    // ---- Expressions (#149) ---------------------------------------------------------------------
+
+    [Fact]
+    public void An_expression_assignment_is_emitted_inline_and_takes_no_parameter()
+    {
+        var cmd = DmlGenerator.Update("public", "film",
+            assignments: new[] { CV("last_update", new SqlExpression("now()")), CV("title", "Blade") },
+            keys: new[] { CV("film_id", 5) });
+
+        // now() is the expression; the parameter numbering steps over it rather than reserving a slot.
+        Assert.Equal(
+            "update \"public\".\"film\" set \"last_update\" = now(), \"title\" = @p0 where \"film_id\" = @p1",
+            cmd.Sql);
+        Assert.Equal(new object?[] { "Blade", 5 }, cmd.Parameters.Select(p => p.Value));
+    }
+
+    [Fact]
+    public void An_expression_insert_value_is_emitted_inline()
+    {
+        var cmd = DmlGenerator.Insert("public", "film",
+            new[] { CV("title", "Blade"), CV("last_update", new SqlExpression("default")) });
+
+        Assert.Equal(
+            "insert into \"public\".\"film\" (\"title\", \"last_update\") values (@p0, default) returning *",
+            cmd.Sql);
+        Assert.Equal("Blade", Assert.Single(cmd.Parameters).Value);
+    }
+
+    /// <summary>The refusal that keeps a write aimed at the row the user picked: a key predicate is built
+    /// from stored values only, and SQL in one would re-aim the statement.</summary>
+    [Fact]
+    public void A_key_predicate_refuses_an_expression()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => DmlGenerator.Update("public", "film",
+            assignments: new[] { CV("title", "Blade") },
+            keys: new[] { CV("film_id", new SqlExpression("now()")) }));
+        Assert.Contains("film_id", ex.Message);
+    }
+
+    [Fact]
+    public void Update_reads_back_the_named_columns_and_omits_the_clause_when_none_are_named()
+    {
+        var withReturning = DmlGenerator.Update("public", "film",
+            assignments: new[] { CV("last_update", new SqlExpression("now()")) },
+            keys: new[] { CV("film_id", 5) },
+            returning: new[] { "film_id", "last_update" });
+        Assert.EndsWith("returning \"film_id\", \"last_update\"", withReturning.Sql);
+
+        // Named columns rather than *, so a table the user may update but not fully read still saves.
+        Assert.DoesNotContain("returning *", withReturning.Sql);
+
+        var without = DmlGenerator.Update("public", "film",
+            assignments: new[] { CV("title", "Blade") }, keys: new[] { CV("film_id", 5) });
+        Assert.DoesNotContain("returning", without.Sql);
+    }
 }

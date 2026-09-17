@@ -25,6 +25,36 @@ Raw ADO.NET — **no ORM**. Two data surfaces: Postgres (query targets) and SQLi
 - Inline edits generate parameterized DML (`ResultEditModel`) and run as one transactional batch via
   `ExecuteWriteAsync`. Keep values parameterized; the SQL-preview inlining path is display-only.
 
+### §5.4a — The one value that is not a parameter, and the two conditions that bound it (#149)
+A cell may stand for a server-side expression — `now()`, `default`, `gen_random_uuid()` — carried as a
+`Core.Data.SqlExpression` and emitted by `DmlGenerator` where its parameter would have gone. It is the only
+break in the rule above, and what keeps it bounded is **where the decision is made**, not the emitting:
+
+- `ResultEditModel.ExpressionFor` says yes only when the column is one the driver does **not** map to
+  `string` **and** `Coerce` already failed on the text. That set is exactly what used to be drawn amber — a
+  value that cannot be written at all today — so this can never change the meaning of an edit that works. A
+  `text` cell holding `now()` is a value, because `Coerce` accepts it, and is never reinterpreted.
+- The emitted SQL is `Bearing.Sql.EditExpression`'s own canonical spelling, never the user's string, so
+  nothing typed is interpolated into a statement. Nothing in that table takes an argument — which is what
+  stops one carrying a subquery or a second statement, and is asserted rather than assumed.
+- A **key predicate refuses one outright** (`DmlGenerator.BuildWhere` throws). Keys come from the row's
+  stored originals, so it is an invariant check — but SQL in a `WHERE` re-aims the write at rows nobody
+  picked, which is the one failure worth stating rather than trusting.
+- WHEN extending the list, add argument-less expressions only. Anything taking an argument — `nextval('s')`
+  — or referencing a column — `amount * 1.1` — is a different feature and wants an explicit mark from the
+  user, not a wider allowlist.
+
+### §5.4b — An UPDATE reads back the columns the grid shows
+`DmlGenerator.Update` takes a `returning` list, and `ResultEditModel` passes the edit target's base columns.
+An expression's value exists only on the server, so without it the grid keeps displaying the text that was
+typed — and the same was already quietly true of a trigger's rewrite and an `on update` default.
+- **Named columns, not `returning *`.** Postgres grants privileges per column: a `*` would make a save fail
+  on a table the user may update but not read in full. These columns are the ones already on screen, so
+  `SELECT` on them is proven.
+- `ApplyReturnedRow` matches on the **base** column name and falls back to the displayed one, then keeps the
+  locally committed value for anything the statement did not return. Matching displayed names alone breaks
+  `select note as n` — and the version of this that built a fresh row wrote nulls over what had just saved.
+
 ## §5.5 — Temporal mappings are the driver's choice, and load-bearing
 Confirmed against **Npgsql 10** (`tests/Bearing.Data.Tests/TemporalMappingTests.cs` pins it live):
 

@@ -174,7 +174,8 @@ public sealed class ResultCellFactory
         // inspectable threshold is measured against, so a comma can never push a value over it.
         var raw = GridSelectionOps.CellText(row, index);
         var text = ResultChrome.ValueText(
-            Shown(raw, numeric), isNull, numeric, invalid: WillFailOnSave(result, index, row));
+            Shown(raw, numeric), isNull, numeric,
+            invalid: WillFailOnSave(result, index, row), expression: PendingExpression(result, index, row));
         if (isNull) return text;
 
         if (!isJsonCol && raw.Length <= MaxInlineChars && !raw.Contains('\n')) return text;
@@ -218,7 +219,8 @@ public sealed class ResultCellFactory
         // on screen like any other — so it follows the column's CLR type, not the colour decision.
         var value = ResultChrome.ValueText(
             Shown(GridSelectionOps.CellText(row, index), CellStats.IsNumeric(result.Columns[index].ClrType)),
-            isNull: !hasValue, numeric: false, invalid: WillFailOnSave(result, index, row));
+            isNull: !hasValue, numeric: false,
+            invalid: WillFailOnSave(result, index, row), expression: PendingExpression(result, index, row));
 
         var jump = ResultChrome.JumpAffordance();
         jump.IsVisible = hasValue;
@@ -402,6 +404,13 @@ public sealed class ResultCellFactory
     /// </para>
     /// </summary>
     private static string Shown(string raw, bool numeric) => numeric ? NumberGrouping.Apply(raw) : raw;
+
+    /// <summary>The SQL a pending edit in this cell will be saved as, or null when it is an ordinary value
+    /// (#149). Only asked of an editable result — nothing else can hold a pending edit.</summary>
+    private static string? PendingExpression(ResultSetViewModel result, int index, object?[]? row)
+        => result.IsEditable && row is not null && index < row.Length
+            ? ResultEditModel.ExpressionFor(row[index], result.Columns[index].ClrType)
+            : null;
 
     /// <summary>Whether this cell holds a pending edit that the column's type cannot take, so the save will
     /// be rejected by the server. Only asked of an editable result — nothing else can hold one.</summary>
