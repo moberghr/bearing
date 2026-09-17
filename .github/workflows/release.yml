@@ -198,6 +198,82 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release view "${{ github.event.release.tag_name }}" --json assets --jq '.assets[].name'
 
+  tap:
+    # Re-point the Homebrew cask at the release that was just published. Until this existed the cask was
+    # updated by hand in a second repository, and the two drifted the moment anyone forgot: the tap sat on
+    # the 0.7.1 placeholder for four releases while every `brew install` failed on a 404 for a tag that
+    # does not exist. The asset is published here, so the fact that selects it belongs here too.
+    #
+    # Deliberately NOT in `withdraw`'s needs. A failure here means the packages uploaded correctly and only
+    # the cask is stale — un-publishing a working release over that trades a small, fixable problem for the
+    # large one withdraw exists to prevent. It goes red, and the tap is re-pointed by re-running this job.
+    #
+    # Skipped for a pre-release. The cask is the stable install path, and §9.6a already keeps a pre-release
+    # away from the updater and What's New for the same reason: pointing it at a beta hands one to every
+    # `brew install` user, who did not opt in to it.
+    needs: publish-macos
+    if: github.event_name == 'release' && !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Re-point the cask
+        env:
+          # A PAT with write access to moberghr/homebrew-bearing: GITHUB_TOKEN is scoped to this repo and
+          # cannot push to the tap. Same secret name and shape as cli-work-tree-manager's tap update.
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${TAP_TOKEN:-}" ]]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is not set — cannot push to the tap. The release is fine;" \
+                 "the cask is stale and must be re-pointed by hand (packaging/homebrew/README.md)."
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+
+          # The sha256 is taken from the asset as *published*, not from a local build artifact: those are
+          # the bytes `brew fetch` will checksum, and re-downloading is what proves the upload landed
+          # intact rather than that we packed it correctly.
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'BearingSql-osx-Portable.zip' --dir dl
+          SHA256="$(shasum -a 256 dl/BearingSql-osx-Portable.zip | cut -d' ' -f1)"
+          echo "==> $VERSION  sha256=$SHA256"
+
+          git clone --quiet "https://x-access-token:${TAP_TOKEN}@github.com/moberghr/homebrew-bearing.git" tap
+
+          # The in-repo cask is the canonical source of everything EXCEPT these two fields, which the
+          # release owns (packaging/homebrew/README.md). Copying it wholesale and then substituting them
+          # is what keeps an edit to the caveats or the zap list from needing a second, manual copy.
+          cp packaging/homebrew/bearing.rb tap/Casks/bearing.rb
+          CASK=tap/Casks/bearing.rb
+          sed -i -E "s#^( *version )\".*\"#\1\"${VERSION}\"#" "$CASK"
+          sed -i -E "s#^( *sha256 )\".*\"#\1\"${SHA256}\"#" "$CASK"
+
+          # Both fields, verified together. A fresh sha256 against a stale version — or either sed silently
+          # matching nothing — fetches the wrong zip and fails the checksum on the user's machine, which is
+          # the one failure mode the two-line edit has. Assert rather than hope.
+          grep -qx "  version \"${VERSION}\"" "$CASK" \
+            || { echo "::error::version was not rewritten in the cask"; exit 1; }
+          grep -qx "  sha256 \"${SHA256}\"" "$CASK" \
+            || { echo "::error::sha256 was not rewritten in the cask"; exit 1; }
+
+          cd tap
+          if git diff --quiet; then
+            echo "Cask already points at ${VERSION} — nothing to push."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/bearing.rb
+          git commit -qm "bearing ${VERSION}"
+          git push --quiet
+          echo "Cask re-pointed at ${VERSION}."
+
   withdraw:
     # Publishing happens before the assets exist — that is the shape of the `release: published` trigger —
     # so a failure in either publish leg leaves a live release page with nothing on it. That is precisely

@@ -61,7 +61,30 @@ mkdir -p homebrew-bearing/Casks
 cp packaging/homebrew/bearing.rb homebrew-bearing/Casks/bearing.rb
 ```
 
-## Each release: publish, then re-point the cask
+## Each release: the cask re-points itself
+
+The `tap` job in `.github/workflows/release.yml` does this now. After `publish-macos` uploads the assets it
+downloads `BearingSql-osx-Portable.zip` **as published**, computes its sha256, copies this file over the
+tap's `Casks/bearing.rb` with `version` and `sha256` substituted, and pushes. Nothing below needs doing by
+hand unless that job fails.
+
+Which makes the ownership rule worth stating plainly: **this file is canonical for everything except
+`version` and `sha256`, which the release owns.** Edit the caveats, the zap list or the dependencies here
+and the next release carries them to the tap; do not edit the two release-owned fields here expecting them
+to mean anything — CI overwrites both.
+
+The job needs `HOMEBREW_TAP_TOKEN` on `moberghr/bearing`: a PAT with write access to the tap, because
+`GITHUB_TOKEN` is scoped to one repository and cannot push to another. Same secret name and shape as
+`cli-work-tree-manager`'s formula update.
+
+It is **skipped for a pre-release** — the cask is the stable install path, and pointing it at a beta hands
+one to every `brew install` user (§9.6a draws the same line for the updater). Re-point it by hand from the
+steps below if a pre-release ever should ship through Homebrew.
+
+A failure in the `tap` job does **not** withdraw the release: the assets are fine and only the cask is
+stale, so it goes red and is fixed by re-running the job, or by the manual steps below.
+
+## By hand, if the tap job fails
 
 The macOS package is built by the `publish-macos` job in `.github/workflows/release.yml` — publishing a
 GitHub Release is the whole trigger (§9.6a), and the job attaches `BearingSql-osx-Portable.zip`,
