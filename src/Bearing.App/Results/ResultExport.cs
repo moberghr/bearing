@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using Bearing.App.ViewModels;
+using Bearing.Core.Data;
 
 namespace Bearing.App.Results;
 
@@ -83,6 +84,70 @@ public static class ResultExport
         {
             try { if (File.Exists(temp)) File.Delete(temp); } catch { /* best effort (§5.2) */ }
         }
+    }
+
+    /// <summary>
+    /// Write a table plus the notes that have to travel with it (#113's audit report), through the same
+    /// temp-file-and-move as everything else here.
+    /// <para>
+    /// The notes are not decoration — they say what period the rows cover, whose activity it is, and whether
+    /// the SQL was stored redacted — so they go with the file rather than in a dialog the reader of the file
+    /// will never see. A workbook gets a second sheet. A CSV gets a <b>sibling</b> <c>.about.txt</c>, and stays a
+    /// pure table with its header on row 1: RFC 4180 has no comment syntax, and the <c>#</c>-prefixed lines
+    /// this used to write were not skipped by Excel, LibreOffice or pandas — the header landed on row 7, a
+    /// note containing commas split into cells, and <c>read_csv</c> raised. The one place a CSV's notes can
+    /// live without breaking the readers an auditor actually uses is beside it.
+    /// </para>
+    /// </summary>
+    /// <returns>The paths written: the report, and for a CSV its notes file.</returns>
+    public static IReadOnlyList<string> WriteReport(
+        string path, TableBlock block, ExportFormat format, string sheetName, IReadOnlyList<string> notes)
+    {
+        if (format == ExportFormat.Xlsx)
+        {
+            Atomic(path, file => XlsxWriter.Write(file, [new XlsxWriter.Sheet(block, sheetName), NotesSheet(notes)]));
+            return [path];
+        }
+
+        Atomic(path, file =>
+        {
+            using var writer = new StreamWriter(file, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+            writer.Write(TableFormats.Csv(block));
+        });
+        var about = NotesPathFor(path);
+        Atomic(about, file =>
+        {
+            using var writer = new StreamWriter(file, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+            foreach (var note in notes) writer.WriteLine(note);
+        });
+        return [path, about];
+    }
+
+    /// <summary>Where a CSV report's notes go: <c>report.csv</c> → <c>report.about.txt</c>, beside it.</summary>
+    public static string NotesPathFor(string csvPath)
+        => Path.ChangeExtension(csvPath, null) + ".about.txt";
+
+    /// <summary>Write through a temp file in the same directory and an atomic move, like every write here.</summary>
+    private static void Atomic(string path, Action<Stream> write)
+    {
+        var temp = path + ".tmp";
+        try
+        {
+            using (var file = File.Create(temp)) write(file);
+            File.Move(temp, path, overwrite: true);
+        }
+        finally
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); } catch { /* best effort (§5.2) */ }
+        }
+    }
+
+    /// <summary>The notes as their own one-column sheet, in order.</summary>
+    private static XlsxWriter.Sheet NotesSheet(IReadOnlyList<string> notes)
+    {
+        var columns = new[] { new ColumnDescriptor("about", "text", typeof(string)) };
+        var rows = notes.Select(n => new object?[] { n }).ToList();
+        return new XlsxWriter.Sheet(new TableBlock(columns, rows), "About");
     }
 
     /// <summary>A default file name for a whole run's workbook: the tab it came from, else "run".</summary>

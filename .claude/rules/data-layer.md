@@ -45,3 +45,17 @@ Confirmed against **Npgsql 10** (`tests/Bearing.Data.Tests/TemporalMappingTests.
   time in the display zone rather than a UTC instant — the lenient reading would silently move the row.
 - A driver major version that changed any row above would stop timestamps showing their zone with nothing
   else in the suite noticing, which is why the mapping has a test of its own rather than being assumed.
+
+## §5.6 — A size read tolerates a relation that vanished under it
+`pg_class` is read under the query's MVCC snapshot; `pg_total_relation_size` **stats files**, which is not.
+So a relation someone else drops while `GetRelationSizesAsync` runs is still listed and has no size, and the
+reader used to call `GetInt64` on that null and throw — losing every other relation's size to one concurrent
+`DROP`. Such a row is skipped, not reported as 0: zero bytes says "this table is empty", and the tree row it
+belongs to is about to disappear anyway. Sizes are already best-effort and arrive after the tree renders
+(#76), so a missing entry costs a label rather than a feature.
+
+WHEN adding a catalog read that calls a size or location function (`pg_total_relation_size`,
+`pg_table_size`, `pg_tablespace_location`), assume the object can be gone by the time the function runs, and
+decide what the absence means before `GetInt64` decides for you. Found by CI: this suite's own
+schema-creating tests race the enumerating ones, and a shared runner lost a race one fast machine kept
+winning for a whole session.

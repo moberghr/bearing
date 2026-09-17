@@ -19,6 +19,14 @@
        next to the clock and the cylinder, both of which are symmetric about (12,12). -->
   <StreamGeometry x:Key="Icon.Scripts">M6,3 h8 l4,4 v14 h-12 z M14,3 v4 h4 M8,12 h6 M8,15 h6 M8,18 h4</StreamGeometry>
 
+  <!-- The schema tree's two shapes (§9.14), drawn as the indent each one produces. They are the two
+       faces of one toggle in the connections header, so what has to be legible is the difference between
+       them and not either on its own: flat rows at one indent versus rows that step in. Deliberately not a
+       pair of nouns (a table, a folder) — the choice is about arrangement, and the same objects are in
+       both. -->
+  <StreamGeometry x:Key="Icon.TreeFlat">M5,7 h14 M5,12 h14 M5,17 h14</StreamGeometry>
+  <StreamGeometry x:Key="Icon.TreeNested">M5,7 h14 M10,12 h9 M15,17 h4</StreamGeometry>
+
   <!-- Folder -->
   <StreamGeometry x:Key="Icon.Folder">M4,7 h6 l2,2 h8 v9 h-16 z</StreamGeometry>
 
@@ -27,6 +35,9 @@
 
   <!-- History: a clock -->
   <StreamGeometry x:Key="Icon.History">M4,12 a8,8 0 1 1 16,0 a8,8 0 1 1 -16,0 M12,7 v5.3 l3.5,2</StreamGeometry>
+  <!-- Activity (#101): a pulse trace. A heartbeat rather than a list, because what the panel is for is
+       noticing that something is still running — the same reading a monitor gets glanced at for. -->
+  <StreamGeometry x:Key="Icon.Activity">M3,12 h4 l2.5,-6 l4,12 l2.5,-6 h5</StreamGeometry>
 
   <!-- Settings: a cog — closed 6-tooth outline (tips r=9.8, roots r=7.0, arc between teeth) + centre hole.
        Detached radial spokes were tried first and read as a brightness/light-dark toggle, not a cog. -->
@@ -94,6 +105,30 @@
   <StreamGeometry x:Key="Icon.Trigger">M13,3 L7,13 h4.5 L10.5,21 L17,11 h-4.5 z</StreamGeometry>
   <StreamGeometry x:Key="Icon.ForeignKey">M4,12 h12 M12,8 l4,4 l-4,4</StreamGeometry>
   <StreamGeometry x:Key="Icon.Reference">M20,12 h-12 M12,8 l-4,4 l4,4</StreamGeometry>
+
+  <!-- The per-database object kinds (#119). Each one is a silhouette rather than a letter, so it reads at
+       13px in a tree row: a sequence counts up, a type is a labelled tag, an extension is a plug-in block,
+       and a policy is a shield — the only one of the four that is about being kept out of something. -->
+  <StreamGeometry x:Key="Icon.Sequence">M5,17 h3 v-3 M10,14 h3 v-4 M15,10 h4 v-3</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Type">M4,7 h10 a2,2 0 0 1 2,2 v6 a2,2 0 0 1 -2,2 h-10 z M18,10 l2,2 l-2,2</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Extension">M6,7 h5 v-2 h2 v2 h5 v10 h-12 z M11,17 v2 h2 v-2</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Policy">M12,4 l7,3 v5 a8,9 0 0 1 -7,8 a8,9 0 0 1 -7,-8 v-5 z</StreamGeometry>
+
+  <!-- A role (#120): a head-and-shoulders silhouette, which reads as "who" at 13px where a key would
+       read as a constraint. -->
+  <StreamGeometry x:Key="Icon.Role">M12,7 a3,3 0 1 0 0,6 a3,3 0 1 0 0,-6 M5,20 a7,7 0 0 1 14,0</StreamGeometry>
+
+  <!-- The long-tail kinds. Each is a silhouette rather than a letterform, so it still reads at 13px:
+       a rule rewrites (a loop), a partition is a divided block, replication flows one way, a foreign server
+       is two-way, a collation orders, a cast converts, an operator combines, text search magnifies. -->
+  <StreamGeometry x:Key="Icon.Rule">M7,9 a5,5 0 1 1 0,6 M7,9 h-2 M7,9 v-2 M17,15 h2 M17,15 v2</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Partition">M4,6 h16 v12 h-16 z M4,12 h16 M12,12 v6</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Publication">M12,4 v12 M8,12 l4,4 l4,-4 M5,20 h14</StreamGeometry>
+  <StreamGeometry x:Key="Icon.ForeignServer">M4,10 h12 M13,7 l3,3 l-3,3 M20,15 h-12 M11,12 l-3,3 l3,3</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Collation">M5,17 l4,-10 l4,10 M6.5,13.5 h5 M16,8 v9 M16,17 l3,-3 M16,17 l-3,-3</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Cast">M4,12 h12 M13,9 l3,3 l-3,3 M19,7 v10</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Operator">M5,10 h6 M5,14 h6 M13,12 h6 M16,9 v6</StreamGeometry>
+  <StreamGeometry x:Key="Icon.TextSearch">M5,8 h9 M5,12 h6 M5,16 h4 M16,14 a3,3 0 1 0 0.01,0 M18.5,16.5 l2.5,2.5</StreamGeometry>
 
   <StreamGeometry x:Key="Icon.Snippet">M10,5 h-2 a2,2 0 0 0 -2,2 v3 a2,2 0 0 1 -2,2 a2,2 0 0 1 2,2 v3 a2,2 0 0 0 2,2 h2 M14,5 h2 a2,2 0 0 1 2,2 v3 a2,2 0 0 0 2,2 a2,2 0 0 0 -2,2 v3 a2,2 0 0 1 -2,2 h-2</StreamGeometry>
 

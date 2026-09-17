@@ -61,6 +61,9 @@ public static class KeymapDefaults
         yield return G(CommandIds.SelectProject, "Ctrl+Shift+J");
         yield return G(CommandIds.SelectConnection, "Ctrl+Shift+C");
         yield return G(CommandIds.SelectDatabase, "Ctrl+Shift+D");
+        // Joins the Ctrl+Shift+{J,C,D} family of "pick one of these and go there" (#117). Not Ctrl+T, which
+        // is already tab.new's alias, and not Ctrl+P, which belongs to the palette in every editor.
+        yield return G(CommandIds.SchemaGotoTable, "Ctrl+Shift+T");
         // panel.*, connection.new, query.runAll ship unbound — reachable via the command palette
         // (and the rail for panels); users can bind them in keybindings.json.
 
@@ -86,6 +89,8 @@ public static class KeymapDefaults
         yield return E(CommandIds.EditorDeleteWordBack, "Ctrl+W");
         // Per-tab font zoom. Editor scope, so Ctrl+0 resets the zoom while typing and still means
         // "focus the editor" from the grid or the side panel (that binding is Global).
+        // F12, which is go-to-definition in every IDE — the whole point of #117 is that the reflex works.
+        yield return E(CommandIds.EditorGotoDefinition, "F12");
         yield return E(CommandIds.EditorZoomIn, "Ctrl+=");
         yield return E(CommandIds.EditorZoomOut, "Ctrl+-");
         yield return E(CommandIds.EditorZoomReset, "Ctrl+0");
@@ -111,6 +116,9 @@ public static class KeymapDefaults
         // which is not what a one-step undo means.
         yield return R(CommandIds.GridSave, "Ctrl+S");
         yield return R(CommandIds.GridDiscard, "Ctrl+Alt+Z");
+        // Show the DML for what is pending (#114). Guarded on pending changes like Save and Discard, so on a
+        // clean grid the gesture is simply unclaimed rather than opening an empty window.
+        yield return R(CommandIds.GridShowSql, "Ctrl+Alt+P");
         yield return R(CommandIds.GridClearSelection, "Escape");
         yield return R(CommandIds.GridInspect, "F7");          // peek at the active cell's full value
         yield return R(CommandIds.GridFollowFk, "Alt+Right"); // drill into the FK the active cell points to

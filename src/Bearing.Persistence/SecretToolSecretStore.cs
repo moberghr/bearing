@@ -11,7 +11,17 @@ public sealed class SecretToolSecretStore : ISecretStore
 {
     // Matches the app dir name so a dev profile (BEARING_PROFILE) keeps its keychain entries
     // separate from the installed app's — same isolation as config/data dirs.
-    private static string App => BearingPaths.AppDirName;
+    /// <summary>
+    /// The profile whose namespace this store reads and writes — <see cref="BearingPaths.AppDirName"/>
+    /// (the <c>BEARING_PROFILE</c> isolation) unless a caller names another. The one caller that names
+    /// another is the installed-profile import, which copies a saved password from the installed app's
+    /// namespace into this one; every ordinary construction leaves it alone and so stays isolated.
+    /// </summary>
+    private readonly string _profile;
+
+    public SecretToolSecretStore(string? profile = null) => _profile = profile ?? BearingPaths.AppDirName;
+
+    private string App => _profile;
     public bool IsSecure => true;
 
     /// <summary>Always: the keychain is where a password belongs, so there's nothing to opt into.</summary>

@@ -177,14 +177,27 @@ public static class ResultChrome
     /// <param name="numeric">Numbers get <c>Text.Code</c>. Foreign keys pass false even though they are
     /// usually integers: they are identifiers, and the grid already sets them apart with the FK badge and the
     /// jump glyph.</param>
-    public static TextBlock ValueText(string text, bool isNull, bool numeric)
+    /// <param name="invalid">
+    /// A pending edit that will reach the server as raw text and be rejected there
+    /// (<c>ResultEditModel.WillReachServerAsText</c>). Drawn amber, the colour this grid already uses for
+    /// "true but not what you think" — the <c>no tz</c> badge's.
+    /// <para>
+    /// It earns a state of its own because digit grouping removed the accidental one such a cell had: in a
+    /// column drawing <c>1,234</c> for 1234, a typed-back <c>1,234</c> is refused by the parser and looks
+    /// exactly like a value that was not. Amber is the only thing separating them, and it covers the cases
+    /// that never had a signal either (a word typed into an integer column).
+    /// </para>
+    /// </param>
+    public static TextBlock ValueText(string text, bool isNull, bool numeric, bool invalid = false)
         => new()
         {
             Text = text,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(ResultGridChrome.CellTextMargin, 0),
             TextTrimming = TextTrimming.CharacterEllipsis,
-            Foreground = isNull ? NullBrush : (numeric ? Res("Text.Code") : Res("Text.Primary")),
+            Foreground = isNull ? NullBrush
+                : invalid ? Res("Warn.Amber")
+                : numeric ? Res("Text.Code") : Res("Text.Primary"),
             FontStyle = isNull ? FontStyle.Italic : FontStyle.Normal,
         };
 

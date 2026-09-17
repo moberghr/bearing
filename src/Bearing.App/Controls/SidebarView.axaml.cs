@@ -69,6 +69,10 @@ public partial class SidebarView : UserControl
             if (Vm?.SidePaneOpen != true) return null;
             if (SchemaTree.IsVisible) return SchemaTree;
             if (ScriptsTree.IsVisible) return ScriptsTree;
+            // The activity panel is a control of its own, so its list is reached through it rather than by
+            // an x:Name here. Without this F6 would skip the panel entirely (#101).
+            if (this.FindControl<ActivityPanelView>("ActivityPanel") is { IsVisible: true } activity)
+                return activity.FindControl<ListBox>("BackendList");
             return null;
         }
     }
@@ -279,6 +283,20 @@ public partial class SidebarView : UserControl
         if (NodeOf(sender) is { } node) TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(node.Title);
     }
 
+    /// <summary>Sequence rows' copy items (#119). The statements themselves are the view model's
+    /// (<see cref="SequenceNodeViewModel.NextvalSql"/>), so the wording is testable without a window.</summary>
+    private void OnCopySequenceNextval(object? sender, RoutedEventArgs e)
+    {
+        if (NodeOf(sender) is SequenceNodeViewModel node)
+            TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(node.NextvalSql);
+    }
+
+    private void OnCopySequenceSetval(object? sender, RoutedEventArgs e)
+    {
+        if (NodeOf(sender) is SequenceNodeViewModel node)
+            TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(node.SetvalSql);
+    }
+
     // ---- scripts ----
 
     // Scripts panel ＋ button: a fresh scratch tab. The editor re-syncs reactively off the SelectedTab change.
@@ -430,6 +448,12 @@ public partial class SidebarView : UserControl
 
     /// <summary>Raised by the panel's context menu and its empty state; the shell owns the import flow.</summary>
     public System.Action? ImportConnectionsRequested { get; set; }
+
+    private void OnImportFromInstalledClick(object? sender, RoutedEventArgs e)
+        => ImportFromInstalledRequested?.Invoke();
+
+    /// <summary>Raised by the dev-only "from the installed Bearing" item; the shell owns the flow.</summary>
+    public System.Action? ImportFromInstalledRequested { get; set; }
 
     private async void OnPasteConnectionAtRootClick(object? sender, RoutedEventArgs e)
         => await PasteConnectionsAsync(null, overrideFolder: true);
@@ -812,6 +836,13 @@ public partial class SidebarView : UserControl
     private async void OnHistorySearchKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter && Vm is not null) { e.Handled = true; await Vm.History.ReloadAsync(CancellationToken.None); }
+    }
+
+    /// <summary>The panel's Export… button (#113). The shell owns the two prompts and the write; this only
+    /// asks, as §2.2 requires of a code-behind.</summary>
+    private async void OnHistoryExportClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is not null) await Vm.ExportHistoryAsync();
     }
 
     // Double-click a history row → open its SQL in a new tab (non-destructive; inherits the connection).

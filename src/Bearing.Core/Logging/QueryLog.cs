@@ -7,6 +7,21 @@ public sealed record QueryLogEntry
     public required DateTimeOffset ExecutedAt { get; init; }
     public required string ProviderId { get; init; }
     public required string ConnectionName { get; init; }
+
+    /// <summary>
+    /// Which connection this ran against, by id (#113). Null for a row written before the log carried one —
+    /// the log stored the display <em>name</em> only until then, so a historical row can be matched to a
+    /// connection by name or not at all, and an audit report must say which of the two it did.
+    /// </summary>
+    public Guid? ConnectionId { get; init; }
+
+    /// <summary>
+    /// The connection's environment label as it was at execution time (#113), or null when unknown — either
+    /// a row written before the column existed, or a connection with no environment set. Stored rather than
+    /// only resolved later because it is the answer to "what ran against production this week", and a
+    /// connection that has since been re-pointed at staging must not rewrite last week's history.
+    /// </summary>
+    public string? Environment { get; init; }
     public required string Database { get; init; }
     public required string SqlText { get; init; }
     public TimeSpan Duration { get; init; }
@@ -25,7 +40,20 @@ public sealed record QueryLogQuery
     public string? Text { get; init; }
     public string? ConnectionName { get; init; }
     public bool? SuccessOnly { get; init; }
-    public int Limit { get; init; } = 200;
+
+    /// <summary>Earliest execution time to include, inclusive (null = no lower bound). Added for the audit
+    /// export (#113), whose whole question is "what ran between these two dates".</summary>
+    public DateTimeOffset? From { get; init; }
+
+    /// <summary>Latest execution time to include, inclusive (null = no upper bound).</summary>
+    public DateTimeOffset? To { get; init; }
+
+    /// <summary>
+    /// Most rows to return. The history panel wants a screenful; an audit report wants the period, however
+    /// many rows that is, so <c>null</c> means unbounded. Defaulted rather than nullable-by-default so no
+    /// existing caller silently becomes an unbounded read.
+    /// </summary>
+    public int? Limit { get; init; } = 200;
 }
 
 /// <summary>Append-only, searchable log of every executed query.</summary>

@@ -52,6 +52,24 @@ public interface IDbProvider
     IDbConnectionFactory CreateConnectionFactory(ConnectionInfo info, string? password);
     IMetadataReader CreateMetadataReader(IDbConnectionFactory factory);
     IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory);
+
+    /// <summary>
+    /// Whether this engine can answer <see cref="CreateServerActivity"/> at all.
+    /// <para>
+    /// A flag rather than an empty result, which is the pattern the four catalog kinds on
+    /// <see cref="IMetadataReader"/> use, because activity has no honest empty: an empty
+    /// <see cref="ServerActivity"/> makes the panel say "No sessions on this server", and the
+    /// <c>SeesAllSessions: false</c> form makes it blame the reading role for not seeing them. Both are
+    /// statements about a server nobody asked. A provider that returns false here is saying the feature is
+    /// unimplemented for the engine, which is a different sentence and the true one.
+    /// </para>
+    /// </summary>
+    bool SupportsServerActivity { get; }
+
+    /// <summary>The server's own sessions, and the two actions on one (#101). Separate from
+    /// <see cref="IMetadataReader"/> because that one is read-only by construction — see
+    /// <see cref="IServerActivity"/>. Only meaningful when <see cref="SupportsServerActivity"/>.</summary>
+    IServerActivity CreateServerActivity(IDbConnectionFactory factory);
 }
 
 /// <summary>Opens/pools underlying connections; hides the concrete ADO.NET driver.</summary>
@@ -105,6 +123,49 @@ public interface IMetadataReader
 
     /// <summary>Rendered <c>CREATE … FUNCTION/PROCEDURE</c> source, by routine id (<see cref="RoutineInfo.Id"/>).</summary>
     Task<string> GetRoutineDefinitionAsync(long routineId, CancellationToken ct);
+
+    /// <summary>
+    /// The per-database object kinds the schema explorer shows beside relations and routines (#119) —
+    /// sequences, user-defined types, installed extensions and row-level security policies.
+    /// <para>
+    /// One call rather than four, and deliberately: they are all wanted at the same moment (the tree has
+    /// just been handed a database's relations) and four catalog reads on four round trips would be strictly
+    /// worse than four on one connection. It is also what keeps a new engine's cost to one method — a
+    /// provider that has no answer for a kind returns an empty list for it, rather than the interface
+    /// growing a method it will have to stub.
+    /// </para>
+    /// <para>
+    /// Not part of <see cref="ISchemaSnapshot"/>, for <see cref="TableDetails"/>'s reason: the snapshot is on
+    /// the completion hot path and none of this answers a question a keystroke asks.
+    /// </para>
+    /// </summary>
+    Task<DatabaseObjectKinds> GetDatabaseObjectsAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Every role on the <b>server</b> (#120) — cluster-wide, so any reachable database can answer it.
+    /// <para>
+    /// Read from the view that masks the password (<c>pg_roles</c> on Postgres), never the table that holds
+    /// it. A provider with no notion of roles returns an empty list.
+    /// </para>
+    /// </summary>
+    Task<IReadOnlyList<RoleInfo>> GetRolesAsync(CancellationToken ct);
+
+    /// <summary>
+    /// What <paramref name="roleName"/> may do on the reader's own database (#120): the database-level
+    /// privileges and the per-relation grants, rendered readably.
+    /// <para>
+    /// Per database because that is the only scope the answer has — the roles are the server's, but a grant
+    /// is on an object, and objects live in one database. Reports whether the reading role could see the
+    /// answer at all rather than returning a bare empty list.
+    /// </para>
+    /// </summary>
+    Task<RoleGrants> GetRoleGrantsAsync(string roleName, CancellationToken ct);
+
+    /// <summary>
+    /// Tablespaces — the other cluster-wide kind besides roles, so it belongs beside them on the server
+    /// rather than under a database. Location and size where the reading role may see them.
+    /// </summary>
+    Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(CancellationToken ct);
 }
 
 public interface IQueryExecutor

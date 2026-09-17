@@ -199,7 +199,7 @@ Overlays (absolute): server dropdown, database dropdown, Alt menu bar + File men
 ## Screens / states
 
 ### 1. Left rail (persistent nav)
-Icons: Connections `🖧`, Schema `🗄`, Scripts `📄`, History `🕘`, spacer, Settings `⚙`. Idle: transparent tile, `#79838F` glyph. Hover: `#222831`. Active: tile `#2A323C`, glyph **teal `#35D0BE`** — full rounded tile, **no left-edge indicator**. Clicking Schema/Scripts/History swaps the 262px panel.
+Icons: Connections `🖧`, Schema `🗄`, Scripts `📄`, History `🕘`, Activity (#101), spacer, Settings `⚙`. Idle: transparent tile, `#79838F` glyph. Hover: `#222831`. Active: tile `#2A323C`, glyph **teal `#35D0BE`** — full rounded tile, **no left-edge indicator**. Clicking Schema/Scripts/History/Activity swaps the 262px panel.
 
 ### 2. Schema panel (default)
 Header `SCHEMA` + `⌕`. Monospace tree, line-height 1.95:
@@ -239,7 +239,7 @@ Alt toggles a 30px menu bar under the title bar (`File Edit View Query Help`, mn
 - Hover: rail tiles and menu/dropdown rows `#222831`; grid row hover reveals the delete affordance.
 
 ## State (MVVM)
-`ActiveConnection` (→ `ConnectionBrush`, host, db, env label) · `ConnectionState` (`Connected|Connecting|Disconnected`) · `ActivePanel` (`Schema|Scripts|History`) · `OpenDropdown` (`None|Server|Database`) · `IsMenuVisible` · `IsFocusMode` · collections `Schema`, `ScriptFolders`, `History`, `OpenTabs`, `Rows` · results state per `RESULTS_GRID.md` · cursor position and result meta for the status bar.
+`ActiveConnection` (→ `ConnectionBrush`, host, db, env label) · `ConnectionState` (`Connected|Connecting|Disconnected`) · `ActivePanel` (`Schema|Scripts|History|Activity`) · `OpenDropdown` (`None|Server|Database`) · `IsMenuVisible` · `IsFocusMode` · collections `Schema`, `ScriptFolders`, `History`, `OpenTabs`, `Rows` · results state per `RESULTS_GRID.md` · cursor position and result meta for the status bar.
 
 ## Assets
 No raster assets. The **bearing mark is generated geometry** — see `BRAND.md` §Mark for exact construction (reproduce as a `PathIcon`/`DrawingImage` or ship an SVG; do not re-draw by eye). Toolbar/tree icons (server, database, table, chain) are simple inline SVGs — replace with the project's icon set (Fluent/Lucide) at matching stroke weight (2px on a 24 viewBox). Rail and folder glyphs are emoji in the prototype — swap for real icons.

@@ -35,6 +35,10 @@ public sealed record AppSettings
     /// <summary>When editor buffers are written to disk without an explicit Save. See <see cref="Workspace.AutosaveMode"/>.</summary>
     public AutosaveMode AutosaveMode { get; init; } = AutosaveMode.OnEdit;
 
+    /// <summary>How a database node arranges its children in the schema tree (#132). See
+    /// <see cref="Workspace.SchemaTreeMode"/>.</summary>
+    public SchemaTreeMode SchemaTreeMode { get; init; } = SchemaTreeMode.Simple;
+
     /// <summary>Base point size of the SQL editor text.</summary>
     public int EditorFontSize { get; init; } = 14;
 
@@ -92,6 +96,17 @@ public sealed record AppSettings
     public int UiFontSize { get; init; } = 12;
 
     /// <summary>
+    /// Whether the results grid separates a number's digits into groups of three (<c>1,234,567.89</c>).
+    /// <para>
+    /// <b>Display only.</b> Copies, exports, the generated DML and the in-cell editor all carry the
+    /// ungrouped value — see <c>Bearing.App.Formatting.NumberGrouping</c> for why that separation is not
+    /// optional. On by default: the comma is what makes an order of magnitude readable at a glance, which is
+    /// the whole reason to look at a numeric column.
+    /// </para>
+    /// </summary>
+    public bool GroupNumbersInResults { get; init; } = true;
+
+    /// <summary>
     /// The zone <c>timestamptz</c> values are displayed in (#77). <c>UTC</c> by default, which keeps every
     /// existing display identical — the same instant, now with its offset shown — and <c>system</c> for the
     /// machine's own zone. An id the machine cannot resolve falls back to UTC rather than to a guess.
@@ -141,6 +156,30 @@ public sealed record AppSettings
     /// </para>
     /// </summary>
     public string? LastSeenVersion { get; init; }
+}
+
+/// <summary>
+/// How a database node arranges its children in the schema tree (#132).
+/// <para>
+/// The two shapes answer different questions and neither wins outright, which is why this is a setting and
+/// not a ruling. <see cref="Simple"/> is one click from a database to a table, which is what nearly every
+/// expand is for; <see cref="Full"/> is a legible hierarchy on a server whose schemas mean something.
+/// </para>
+/// </summary>
+public enum SchemaTreeMode
+{
+    /// <summary>
+    /// Relations inline, with the long tail of object kinds behind a single bucket. The default, and
+    /// deliberately: it is the shape the tree already had, so upgrading changes nobody's muscle memory, and
+    /// §9.9a's "one click to a table" survives as the out-of-box behaviour rather than as an option.
+    /// </summary>
+    Simple,
+
+    /// <summary>
+    /// Schema-first: schemas, then a group per kind inside each. Relations are three levels down, which is
+    /// the cost of a tree you can read on a server with a dozen schemas.
+    /// </summary>
+    Full,
 }
 
 /// <summary>

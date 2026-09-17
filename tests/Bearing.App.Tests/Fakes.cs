@@ -28,6 +28,8 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
     public bool SupportsIntegratedAuth => false;
     public bool SupportsEntraToken => true;
 
+    public bool SupportsServerActivity => true;
+
     /// <summary>The Postgres SQLSTATE rules, spelled out rather than referenced: this project has no
     /// Npgsql reference, and a fake that classified nothing would make every classification test pass
     /// vacuously. <c>Id</c> is "postgres", so these are the verdicts a caller should expect here.</summary>
@@ -79,6 +81,52 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
     /// concurrent runs across tabs). Otherwise each session gets a fresh no-op <see cref="FakeExecutor"/>.</summary>
     public IQueryExecutor? Executor;
     public IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory) => Executor ?? new FakeExecutor();
+
+    /// <summary>When set, every session built by this provider shares this one (so an activity-panel test can
+    /// script what the server reports). Otherwise each session gets a fresh, quiet <see cref="FakeActivity"/>.</summary>
+    public IServerActivity? Activity;
+    public IServerActivity CreateServerActivity(IDbConnectionFactory factory) => Activity ?? new FakeActivity();
+}
+
+/// <summary>
+/// A scriptable <c>pg_stat_activity</c> (#101): hand it the backends to report, make a read fail or hang, and
+/// read back which pids were asked about. Counts reads so a test can assert a poll happened — or, more often,
+/// that one did not.
+/// </summary>
+internal sealed class FakeActivity : IServerActivity
+{
+    public IReadOnlyList<BackendActivity> Backends = [];
+    public bool SeesAllSessions = true;
+    public Exception? Throws;
+    public TaskCompletionSource? Gate;
+    public int Reads;
+
+    public readonly List<int> Cancelled = [];
+    public readonly List<int> Terminated = [];
+
+    /// <summary>What each read asked for, in order — so a test can assert the narrowing, not just the rows.</summary>
+    public readonly List<ActivityFilter> Filters = [];
+
+    public async Task<ServerActivity> GetActivityAsync(ActivityFilter filter, CancellationToken ct)
+    {
+        Filters.Add(filter);
+        Interlocked.Increment(ref Reads);
+        if (Gate is { } gate) await gate.Task.WaitAsync(ct);
+        if (Throws is { } ex) throw ex;
+        return new ServerActivity(Backends, SeesAllSessions);
+    }
+
+    public Task<bool> CancelBackendAsync(int pid, CancellationToken ct)
+    {
+        Cancelled.Add(pid);
+        return Task.FromResult(true);
+    }
+
+    public Task<bool> TerminateBackendAsync(int pid, CancellationToken ct)
+    {
+        Terminated.Add(pid);
+        return Task.FromResult(true);
+    }
 }
 
 internal sealed class FakeFactory : IDbConnectionFactory
@@ -123,6 +171,21 @@ internal sealed class FakeMetadata : IMetadataReader
 
     public Task<IReadOnlyList<RoutineInfo>> GetRoutinesAsync(CancellationToken ct)
         => Task.FromResult<IReadOnlyList<RoutineInfo>>(System.Array.Empty<RoutineInfo>());
+
+    /// <summary>#119's per-database kinds. Empty: nothing in these tests asks about them, and an empty set
+    /// is a state the tree has to handle anyway (no groups at all).</summary>
+    public Task<DatabaseObjectKinds> GetDatabaseObjectsAsync(CancellationToken ct)
+        => Task.FromResult(DatabaseObjectKinds.Empty);
+
+    /// <summary>#120's roles. Empty: nothing in these tests asks about them.</summary>
+    public Task<IReadOnlyList<RoleInfo>> GetRolesAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<RoleInfo>>(System.Array.Empty<RoleInfo>());
+
+    public Task<RoleGrants> GetRoleGrantsAsync(string roleName, CancellationToken ct)
+        => Task.FromResult(RoleGrants.Of(System.Array.Empty<RoleGrant>()));
+
+    public Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<SchemaObjectInfo>>(System.Array.Empty<SchemaObjectInfo>());
 
     public Task<string> GetViewDefinitionAsync(long tableId, CancellationToken ct)
         => Task.FromResult("");
@@ -524,6 +587,25 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
         return Task.FromResult(_saveAsPath);
     }
 
+    /// <summary>What the next backend confirmation answers (#101). Defaults to <b>false</b>, matching the real
+    /// headless default: a test that means to kill a backend has to say so.</summary>
+    public bool BackendActionAnswer { get; set; }
+
+    /// <summary>Every backend action that was put to the user, in order — so a test can assert what the
+    /// confirmation was asked about, not just that one happened.</summary>
+    public List<Bearing.App.Services.BackendAction> BackendActions { get; } = new();
+
+    /// <summary>Runs while the confirmation is "open". A modal dialog can sit there for minutes, so this is
+    /// how a test makes the world change under it — the idle sweep, a Disconnect, a connection edit.</summary>
+    public Action? WhileConfirmingBackendAction { get; set; }
+
+    public Task<bool> ConfirmBackendActionAsync(Bearing.App.Services.BackendAction request)
+    {
+        BackendActions.Add(request);
+        WhileConfirmingBackendAction?.Invoke();
+        return Task.FromResult(BackendActionAnswer);
+    }
+
     /// <summary>Where the next export picker "lands". Null = the user cancelled the picker.</summary>
     public string? ExportPath { get; set; }
 
@@ -534,6 +616,20 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
     {
         ExportPickers.Add((suggestedName, format));
         return Task.FromResult(ExportPath);
+    }
+
+    /// <summary>What the audit-export dialog (#113) answers. Null = the user cancelled it.</summary>
+    public Bearing.App.Results.AuditExportRequest? AuditExport { get; set; }
+
+    /// <summary>The (connections, environments) the audit-export dialog was offered, in order — so a test
+    /// can assert the shell derived the choices from the project rather than from the log.</summary>
+    public List<(IReadOnlyList<string> Connections, IReadOnlyList<string> Environments)> AuditExportPrompts { get; } = new();
+
+    public Task<Bearing.App.Results.AuditExportRequest?> ShowAuditExportAsync(
+        IReadOnlyList<string> connectionNames, IReadOnlyList<string> environments)
+    {
+        AuditExportPrompts.Add((connectionNames, environments));
+        return Task.FromResult(AuditExport);
     }
 
     /// <summary>What the write/save confirmation answers. False cancels the write.</summary>

@@ -334,7 +334,9 @@ public sealed class SqlServerMetadataReader : IMetadataReader
         var constraints = await ReadConstraintsAsync(conn, tableId, indexes, ct).ConfigureAwait(false);
         var triggers = await ReadTriggersAsync(conn, tableId, ct).ConfigureAwait(false);
 
-        return new TableDetails(constraints, indexes, triggers);
+        // No policies: SQL Server's row-level security lives in sys.security_policies, which this reader
+        // does not read yet — empty because none were looked for, not because the table has none.
+        return new TableDetails(constraints, indexes, triggers, []);
     }
 
     /// <summary>Column id → name for one relation, so a composed definition can name its columns.</summary>
@@ -677,4 +679,33 @@ public sealed class SqlServerMetadataReader : IMetadataReader
         "AF" => RoutineKind.Aggregate,
         _ => RoutineKind.Function,
     };
+
+    // ---- Catalog kinds this engine does not answer yet -----------------------------------------------
+    //
+    // The empty answers the interface sanctions ("a provider that has no answer for a kind returns an empty
+    // list for it"), not claims that the server has none of these. SQL Server has a counterpart for every
+    // one — sys.sequences, sys.types, sys.database_principals, sys.database_permissions, sys.filegroups —
+    // so these are unimplemented, not inapplicable, and the tree simply shows fewer kinds than it does on
+    // PostgreSQL. Writing them is a catalog query each plus a live check against a real server (§4.2); the
+    // wrong move would be to reason one out and ship it, which is how this provider's first live run lost
+    // six tests.
+
+    /// <inheritdoc/>
+    public Task<DatabaseObjectKinds> GetDatabaseObjectsAsync(CancellationToken ct)
+        => Task.FromResult(DatabaseObjectKinds.Empty);
+
+    /// <inheritdoc/>
+    public Task<IReadOnlyList<RoleInfo>> GetRolesAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<RoleInfo>>([]);
+
+    /// <summary>
+    /// <see cref="RoleGrants.NotVisible"/> rather than an empty grant list, which would read as "this role
+    /// may do nothing" — a statement about permissions that nobody checked.
+    /// </summary>
+    public Task<RoleGrants> GetRoleGrantsAsync(string roleName, CancellationToken ct)
+        => Task.FromResult(RoleGrants.NotVisible);
+
+    /// <inheritdoc/>
+    public Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<SchemaObjectInfo>>([]);
 }

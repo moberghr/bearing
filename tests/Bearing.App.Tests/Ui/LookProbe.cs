@@ -3,14 +3,20 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Threading;
+using Bearing.App.Services;
 using Bearing.App.ViewModels;
+using Bearing.App.Views;
+using Bearing.App.Workspace;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.VisualTree;
 using Bearing.App.Theming;
 using Bearing.Core.Data;
+using Bearing.Core.Workspace;
 using Bearing.Demo;
+using Bearing.Sql;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -113,6 +119,133 @@ public class LookProbe
             await shell.Vm.StartDemoAsync(shell.ProjectDirectory, DemoMode.WelcomeScript);
             shell.Pump();
             Write(shell.Window, dir, "demo-session.png");
+        });
+    }
+
+    /// <summary>
+    /// The server activity panel (#101), off the demo's fixed backends: the two-line rows, the accent on the
+    /// ones Bearing opened, and — in the second frame — the detail pane the 262px row could not carry.
+    /// </summary>
+    [SkippableFact]
+    public Task ActivityPanel()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(async () =>
+        {
+            // The demo registry, exactly as App.axaml.cs builds it for a --demo launch: without it the demo
+            // connection cannot resolve a provider, and the panel correctly reports a connection it never got.
+            var providers = new DemoProvider(DemoExecutor.Default(
+                sql => StatementSplitter.Split(sql).Select(span => span.Text).ToList()));
+            using var shell = await ShellHarness.ShowAsync(nameof(ActivityPanel), providers);
+            await shell.Vm.StartDemoAsync(shell.ProjectDirectory, DemoMode.WelcomeScript);
+            shell.Pump();
+
+            // The panel reads through an already-live session (§1.5) and never opens one itself, so the
+            // capture has to connect the way a user does: by running something. The demo provider answers
+            // without a socket.
+            await shell.Vm.Execution.ExecuteAsync("select id, store_id, amount, note from shop.payment;");
+            shell.Pump();
+
+            shell.Vm.ShowPanel(SidePanel.Activity);
+            await shell.Vm.Activity.RefreshAsync();
+            shell.Pump();
+            Write(shell.Window, dir, "activity-panel.png");
+
+            // A row selected: the splitter and the detail pane appear, which is where everything the row
+            // could not fit ends up.
+            shell.Vm.Activity.Selected = shell.Vm.Activity.Backends.First(b => b.Backend.State == "idle in transaction");
+            shell.Pump();
+            Write(shell.Window, dir, "activity-panel-selected.png");
+        });
+    }
+
+    /// <summary>The confirmation for the two destructive actions (#101), which every one of them raises.</summary>
+    [SkippableFact]
+    public Task BackendConfirmations()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(() =>
+        {
+            var connection = DemoMode.Connection;
+            var backend = DemoCatalog.Activity().First(b => b.State == "idle in transaction");
+
+            foreach (var (kind, name) in new[]
+                     {
+                         (BackendActionKind.Cancel, "confirm-cancel-backend.png"),
+                         (BackendActionKind.Terminate, "confirm-terminate-backend.png"),
+                     })
+            {
+                var dialog = new ConfirmBackendActionDialog(new BackendAction(kind, connection, backend));
+                dialog.Show();
+                ResultsHarness.Pump(dialog);
+                Write(dialog, dir, name);
+                dialog.Close();
+            }
+        });
+    }
+
+    /// <summary>The connection dialog's safety group (#99 / #105): the write guard, read-only and the
+    /// statement timeout read as one block under Encryption, with the note each combination produces.</summary>
+    [SkippableFact]
+    public Task ConnectionSafety()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(() =>
+        {
+            var dialog = new ConnectionDialog(existing: null, existingPassword: null,
+                test: (_, _, _) => Task.FromResult(false));
+            dialog.Show();
+            ResultsHarness.Pump(dialog);
+            Write(dialog, dir, "connection-safety-off.png");
+
+            // What the Production preset turns on, which is the state most connections that matter will be in.
+            var production = dialog.GetVisualDescendants().OfType<Button>()
+                .First(b => b.Content as string == "Production");
+            production.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            ResultsHarness.Pump(dialog);
+            Write(dialog, dir, "connection-safety-production.png");
+
+            dialog.Close();
+        });
+    }
+
+    /// <summary>
+    /// The two schema-tree shapes (#132), off the demo's fixed catalog: simple mode with the long tail behind
+    /// one bucket, and full mode with the schema level opened.
+    /// </summary>
+    [SkippableFact]
+    public Task SchemaTreeShapes()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(async () =>
+        {
+            var providers = new DemoProvider(DemoExecutor.Default(
+                sql => StatementSplitter.Split(sql).Select(span => span.Text).ToList()));
+            using var shell = await ShellHarness.ShowAsync(nameof(SchemaTreeShapes), providers);
+            await shell.Vm.StartDemoAsync(shell.ProjectDirectory, DemoMode.WelcomeScript);
+            shell.Pump();
+
+            var server = shell.Vm.Connections.ServerNodes.OfType<ServerNodeViewModel>().First();
+            server.IsExpanded = true;
+            await server.EnsureChildrenAsync();
+
+            var database = server.Children.OfType<DatabaseNodeViewModel>().First();
+            database.IsExpanded = true;
+            await database.EnsureChildrenAsync();
+            shell.Pump();
+            Write(shell.Window, dir, "schema-tree-simple.png");
+
+            shell.Vm.Connections.SchemaTreeMode = SchemaTreeMode.Full;
+            shell.Pump();
+
+            // Opened one level, which is the shape worth looking at: a schema and its groups.
+            foreach (var node in database.Children.SelectMany(c => new[] { c }.Concat(c.Children)))
+            {
+                node.IsExpanded = true;
+                await node.EnsureChildrenAsync();
+            }
+            shell.Pump();
+            Write(shell.Window, dir, "schema-tree-full.png");
         });
     }
 
@@ -359,6 +492,162 @@ public class LookProbe
 
             Write(shell.Window, dir, "tab-name-ellipsis.png");
         });
+    }
+
+    /// <summary>
+    /// A grid with two columns frozen and one hidden (#118) — the state the header menu produces.
+    /// <para>
+    /// The menu itself is not in the frame: a <c>MenuFlyout</c> opens in its own popup top-level, which is
+    /// not part of the window's visual tree and so not part of its captured frame. What is worth looking at
+    /// anyway is the *outcome* — where the frozen seam falls, and whether the hidden column's absence is
+    /// visible on the meta row rather than silent.
+    /// </para>
+    /// </summary>
+    [SkippableFact]
+    public Task FrozenAndHiddenColumns()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(() =>
+        {
+            var (window, view) = ResultsHarness.Show(WideResult());
+            Write(window, dir, "columns-plain.png");
+
+            var layout = view.Results![0].ColumnLayout;
+            layout.Freeze(2);          // id + customer stay put
+            layout.Hide(4);            // note goes away
+            Pump(window);
+            Write(window, dir, "columns-frozen-hidden.png");
+
+            // Scrolled to the far right, which is the only state where freezing shows anything at all: the
+            // unscrolled grid above cannot say whether the first two columns are pinned or merely first.
+            // ScrollIntoView, not a ScrollViewer offset: the DataGrid owns its horizontal offset and
+            // recomputes it during layout, so assigning the offset directly is undone before the frame is
+            // captured (it was, and the capture showed an unscrolled grid).
+            var grid = view.GetVisualDescendants().OfType<DataGrid>().First();
+            var firstRow = grid.ItemsSource!.Cast<object>().First();
+            grid.ScrollIntoView(firstRow, grid.Columns[^1]);
+            Pump(window);
+            Write(window, dir, "columns-frozen-scrolled.png");
+            window.Close();
+        });
+    }
+
+    /// <summary>
+    /// The write confirmation with row counts on it (#112, #100) — the three states side by side, which is
+    /// the whole point of the feature and the one screen a number that reads wrong would be worst on.
+    /// </summary>
+    [SkippableFact]
+    public Task WriteConfirmationCounts()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(() =>
+        {
+            var dialog = new Bearing.App.Views.ConfirmWriteDialog(BatchConfirmation());
+            dialog.Show();
+            Pump(dialog);
+            Write(dialog, dir, "write-confirm-counts.png");
+            dialog.Close();
+        });
+    }
+
+    /// <summary>The pending-edits SQL window (#114) and the audit export dialog (#113), both new windows.</summary>
+    [SkippableFact]
+    public Task NewWindows()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(() =>
+        {
+            var pending = new Bearing.App.Views.PendingEditsSqlWindow(EditsConfirmation());
+            pending.Show();
+            Pump(pending);
+            Write(pending, dir, "pending-edits-sql.png");
+            pending.Close();
+
+            var export = new Bearing.App.Views.AuditExportDialog(
+                ["production", "staging", "local"], ["Production", "Staging", "Local"]);
+            export.Show();
+            Pump(export);
+            Write(export, dir, "audit-export.png");
+            export.Close();
+        });
+    }
+
+    /// <summary>A submitted batch carrying all three impact states, plus a read that shares the batch.</summary>
+    private static Bearing.App.Services.WriteConfirmation BatchConfirmation()
+    {
+        const string sql = """
+            select count(*) from shop.rental where returned_at is null;
+            delete from shop.rental where returned_at < '2019-01-01';
+            update shop.store set active = false;
+            delete from shop.payment p using shop.rental r where r.id = p.rental_id and r.id > 10;
+            """;
+        var statements = WriteGuard.Describe(sql);
+        var impacts = new Dictionary<int, Bearing.App.Services.RowImpact>
+        {
+            // A count that came back, #100's whole-table warning, and a count nobody could take — the
+            // multi-table DELETE is declined by the reducer, so it carries no impact at all.
+            [1] = new("DELETE", "shop.rental", 3412, EveryRow: false),
+            [2] = new("UPDATE", "shop.store", null, EveryRow: true),
+            [3] = new("DELETE", "shop.payment", null, EveryRow: false),
+        };
+        return Bearing.App.Services.WriteConfirmation.ForBatch(Production(), statements, impacts);
+    }
+
+    /// <summary>The generated DML for a couple of inline edits, as a grid save would build it.</summary>
+    private static Bearing.App.Services.WriteConfirmation EditsConfirmation()
+        => Bearing.App.Services.WriteConfirmation.ForEdits(Production(), [
+            new("UPDATE", "update shop.store set name = 'Riverside', active = true where id = 4;", true),
+            new("UPDATE", "update shop.store set name = 'Hilltop' where id = 7;", true),
+            new("INSERT", "insert into shop.store (name, active) values ('Docklands', true);", true),
+            new("DELETE", "delete from shop.store where id = 12;", true),
+        ]);
+
+    /// <summary>A guarded connection, so the extra warning line is in the frame too.</summary>
+    private static ConnectionInfo Production() => new()
+    {
+        Id = Guid.NewGuid(),
+        Name = "production",
+        ProviderId = "postgres",
+        Database = "app",
+        Environment = "Production",
+        EnvironmentColor = "#C4746E",
+        RequireWriteConfirmation = true,
+    };
+
+    /// <summary>
+    /// A result too wide for the window, which is what freezing is for — a grid whose columns all fit shows
+    /// nothing whether they are frozen or not.
+    /// </summary>
+    private static ResultSetViewModel WideResult()
+    {
+        var columns = new[]
+        {
+            new ColumnDescriptor("id", "int4", typeof(int)),
+            new ColumnDescriptor("customer", "text", typeof(string)),
+            new ColumnDescriptor("store", "text", typeof(string)),
+            new ColumnDescriptor("amount", "numeric", typeof(decimal)),
+            new ColumnDescriptor("note", "text", typeof(string)),
+            new ColumnDescriptor("clerk", "text", typeof(string)),
+            new ColumnDescriptor("channel", "text", typeof(string)),
+            new ColumnDescriptor("settled", "bool", typeof(bool)),
+            new ColumnDescriptor("payment_reference", "text", typeof(string)),
+            new ColumnDescriptor("billing_address", "text", typeof(string)),
+            new ColumnDescriptor("shipping_address", "text", typeof(string)),
+            new ColumnDescriptor("processor_response", "text", typeof(string)),
+            new ColumnDescriptor("settlement_batch", "text", typeof(string)),
+            new ColumnDescriptor("reconciled_by", "text", typeof(string)),
+        };
+        var rows = Enumerable.Range(1, 24).Select(i => new object?[]
+        {
+            i, $"customer-{i:00}", i % 2 == 0 ? "Riverside" : "Hilltop", 10.99m * i,
+            i % 3 == 0 ? null : $"note for row {i}", $"clerk-{i % 4}", i % 2 == 0 ? "web" : "counter",
+            i % 5 != 0,
+            $"PAY-2026-{i:0000}-RIV", $"{100 + i} Riverside Terrace, Docklands",
+            $"{200 + i} Hilltop Crescent, Northgate", i % 4 == 0 ? "declined: do not honour" : "approved",
+            $"BATCH-{i / 5:00}", $"reconciler-{i % 3}",
+        }).ToList();
+        var result = new QueryResult(columns, rows, rows.Count, TimeSpan.FromMilliseconds(31), null, null, false);
+        return new ResultSetViewModel(result, "select * from shop.payment_wide", pageable: false);
     }
 
     private static async Task Expand(Bearing.App.ViewModels.SchemaNodeViewModel node)

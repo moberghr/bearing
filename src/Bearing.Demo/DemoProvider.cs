@@ -80,6 +80,47 @@ public sealed class DemoProvider : IDbProvider, IProviderRegistry
     public IMetadataReader CreateMetadataReader(IDbConnectionFactory factory) => new DemoMetadata();
 
     public IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory) => _executor;
+
+    public bool SupportsServerActivity => true;
+
+    public IServerActivity CreateServerActivity(IDbConnectionFactory factory) => _activity;
+
+    /// <summary>One per session, like the executor: terminating a backend has to be visible in the next read,
+    /// and a fresh instance per call would forget it.</summary>
+    private readonly DemoActivity _activity = new();
+}
+
+/// <summary>
+/// The demo's server sessions (#101). Fixed rows, so the panel can be driven with no database at all —
+/// including the two states its status line has to tell apart: a role that sees everything, and one that
+/// sees only itself.
+/// <para>
+/// The one piece of state is the set of pids that have been terminated, so the action visibly does something
+/// and the row does not come straight back. Still deterministic: the answer is a function of the calls made,
+/// with no clock and no ids that vary between runs (§4.6).
+/// </para>
+/// </summary>
+public sealed class DemoActivity : IServerActivity
+{
+    private readonly HashSet<int> _gone = [];
+
+    public Task<ServerActivity> GetActivityAsync(ActivityFilter filter, CancellationToken ct)
+        => Task.FromResult(new ServerActivity(
+            DemoCatalog.Activity()
+                .Where(b => !_gone.Contains(b.Pid))
+                .Where(b => filter.Database is null || b.Database == filter.Database)
+                // "idle in transaction" is not idle: it is the state the panel exists to surface.
+                .Where(b => filter.IncludeIdle || b.State != "idle")
+                .ToList(),
+            SeesAllSessions: true));
+
+    /// <summary>Cancelling leaves the session, so the row stays — which is the difference from terminate that
+    /// the demo exists to show.</summary>
+    public Task<bool> CancelBackendAsync(int pid, CancellationToken ct)
+        => Task.FromResult(DemoCatalog.Activity().Any(b => b.Pid == pid) && !_gone.Contains(pid));
+
+    public Task<bool> TerminateBackendAsync(int pid, CancellationToken ct)
+        => Task.FromResult(DemoCatalog.Activity().Any(b => b.Pid == pid) && _gone.Add(pid));
 }
 
 /// <summary>A factory whose connections always open. There is nothing to fail against.</summary>
@@ -109,6 +150,18 @@ public sealed class DemoMetadata : IMetadataReader
 
     public Task<IReadOnlyList<RoutineInfo>> GetRoutinesAsync(CancellationToken ct)
         => Task.FromResult(DemoCatalog.Routines());
+
+    public Task<DatabaseObjectKinds> GetDatabaseObjectsAsync(CancellationToken ct)
+        => Task.FromResult(DemoCatalog.ObjectKinds());
+
+    public Task<IReadOnlyList<RoleInfo>> GetRolesAsync(CancellationToken ct)
+        => Task.FromResult(DemoCatalog.Roles());
+
+    public Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(CancellationToken ct)
+        => Task.FromResult(DemoCatalog.Tablespaces());
+
+    public Task<RoleGrants> GetRoleGrantsAsync(string roleName, CancellationToken ct)
+        => Task.FromResult(DemoCatalog.GrantsOf(roleName));
 
     public Task<string> GetViewDefinitionAsync(long tableId, CancellationToken ct)
         => Task.FromResult("select p.id as payment_id, s.name as store_name\n"

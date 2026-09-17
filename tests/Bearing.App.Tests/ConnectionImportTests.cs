@@ -114,6 +114,57 @@ public class ConnectionImportTests : IDisposable
     }
 
     [Fact]
+    public async Task Landed_pairs_each_import_with_the_id_it_ended_up_under()
+    {
+        var existing = Conn("prod");
+        var (_, vm, _) = NewVm(existing);
+
+        var sameServer = Conn("Prod Aur");                // matches `existing` — updated in place
+        var newServer = Conn("staging", port: 5433);      // no match — added, and its own id travels with it
+
+        var outcome = await vm.ImportConnectionsAsync(new[] { sameServer, newServer });
+
+        // The local id is the secret-store key, so this is the half a password copy writes under. For a
+        // match the two differ, because the update kept the id that was already here — writing the source's
+        // id instead would put the password where nothing reads it, and the connection would still prompt.
+        Assert.Equal(2, outcome.Landed.Count);
+        Assert.Equal(existing.Id, outcome.Landed.Single(l => l.SourceId == sameServer.Id).LocalId);
+        Assert.Equal(newServer.Id, outcome.Landed.Single(l => l.SourceId == newServer.Id).LocalId);
+    }
+
+    [Fact]
+    public async Task A_skipped_match_is_not_offered_for_a_password_copy()
+    {
+        var (_, vm, _) = NewVm(Conn("prod"));
+
+        var outcome = await vm.ImportConnectionsAsync(new[] { Conn("Prod Aur") }, updateExisting: false);
+
+        // Declining the update means leaving the connection exactly as it was, secret included: a copy over
+        // its password would be the update the user just refused.
+        Assert.Equal(1, outcome.Skipped);
+        Assert.Empty(outcome.Landed);
+    }
+
+    [Fact]
+    public async Task Only_a_connection_that_reads_the_store_is_offered_a_copied_password()
+    {
+        // A connection set to prompt every time: the resolver never reads the secret store for it.
+        var prompts = Conn("prod") with { CredentialKind = CredentialKind.Prompt };
+        var (_, vm, secrets) = NewVm(prompts);
+
+        var outcome = await vm.ImportConnectionsAsync(new[] { Conn("Prod Aur") });
+        var said = await vm.CarryPasswordsAsync("bearing", outcome.Landed);
+
+        // Null because the connection was never offered for a copy at all — which is the assertion that
+        // fails if the filter goes: an unfiltered carry reaches the credential store, finds nothing there
+        // for it, and reports "1 had none saved" about a connection that was never going to read one.
+        // Writing one anyway would put a real password in the keychain that nothing ever reads, report it as
+        // copied, and leave the user still being asked on every connect.
+        Assert.Null(said);
+        Assert.Null(await secrets.GetPasswordAsync(prompts.Id, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task An_updated_match_keeps_its_credential_kind()
     {
         var existing = Conn("prod") with { CredentialKind = CredentialKind.EntraToken };

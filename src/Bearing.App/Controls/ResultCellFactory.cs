@@ -9,6 +9,7 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Bearing.App.Formatting;
 using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using static Bearing.App.Controls.Tokens;
@@ -131,7 +132,12 @@ public sealed class ResultCellFactory
     private static double InitialWidth(ResultSetViewModel result, int index)
     {
         var column = result.Columns[index];
-        var sample = ColumnWidths.Sample(result.Rows, index, MaxInlineChars);
+        // Sampled through the same display step the cell applies, or a grouped value is measured three
+        // characters short per comma and ellipsizes itself — #73's failure reached from the other direction.
+        // The affordance half of the sample still reads the raw text, exactly as the cell does.
+        var sample = ColumnWidths.Sample(
+            result.Rows, index, MaxInlineChars,
+            display: CellStats.IsNumeric(column.ClrType) ? NumberGrouping.Apply : null);
         // Every path that draws a glyph has to be reserved for, not just the always-on ones: a value past
         // MaxInlineChars, or any multiline value, grows the inspect affordance too. The multiline case is the
         // one that broke — the widest value stops at the first line, so a document with a short first line
@@ -169,10 +175,14 @@ public sealed class ResultCellFactory
     private Control ValueContent(ResultSetViewModel result, int index, object?[]? row, bool isJsonCol, bool numeric)
     {
         var isNull = row is null || index >= row.Length || row[index] is null;
-        var text = ResultChrome.ValueText(GridSelectionOps.CellText(row, index), isNull, numeric);
+        // The raw form is the cell's value everywhere except the glyphs on screen: it is what the clipboard,
+        // the exports and the in-cell editor read (GridSelectionOps.CellText), and it is what the inline /
+        // inspectable threshold is measured against, so a comma can never push a value over it.
+        var raw = GridSelectionOps.CellText(row, index);
+        var text = ResultChrome.ValueText(
+            Shown(raw, numeric), isNull, numeric, invalid: WillFailOnSave(result, index, row));
         if (isNull) return text;
 
-        var raw = GridSelectionOps.CellText(row, index);
         if (!isJsonCol && raw.Length <= MaxInlineChars && !raw.Contains('\n')) return text;
 
         var expand = ResultChrome.InspectAffordance();
@@ -207,7 +217,14 @@ public sealed class ResultCellFactory
 
         // Same text treatment as every other cell (#61) — a NULL here used to render bright and upright, the
         // one column where "(null)" looked like a real value. numeric: false is deliberate; see ValueText.
-        var value = ResultChrome.ValueText(GridSelectionOps.CellText(row, index), isNull: !hasValue, numeric: false);
+        //
+        // Grouping is asked separately, and the two questions really are different: ValueText's `numeric` is
+        // about *colour*, and a foreign key deliberately declines the code colour because the badge and the
+        // jump glyph already set it apart. Digit grouping is about reading a magnitude, and an FK is a number
+        // on screen like any other — so it follows the column's CLR type, not the colour decision.
+        var value = ResultChrome.ValueText(
+            Shown(GridSelectionOps.CellText(row, index), CellStats.IsNumeric(result.Columns[index].ClrType)),
+            isNull: !hasValue, numeric: false, invalid: WillFailOnSave(result, index, row));
 
         var jump = ResultChrome.JumpAffordance();
         jump.IsVisible = hasValue;
@@ -324,11 +341,21 @@ public sealed class ResultCellFactory
         border.DetachedFromVisualTree += (_, _) => _selection.RemoveRestyleListener(Restyle);
 
         // Our press handler marks the event handled, so the DataGrid never gets to set its own current cell
-        // from the click. Focusing a grid that has *no* current cell makes Avalonia adopt the first column
-        // and scroll it into view — which is why clicking a cell while scrolled right sometimes threw the
-        // view back to the leftmost column. Handing it the clicked cell first makes that a no-op.
+        // from the click. Hand it the clicked one, or its current cell stays wherever it last was and
+        // BeginEdit / its own key handling act on a cell the user is not pointing at.
         // `CurrentItem` is internal in Avalonia 12, so the current *row* has to come from the selection; the
         // row highlight that would otherwise paint is already suppressed (ResultGridChrome).
+        //
+        // Focusing the grid used to throw a horizontally scrolled result back to column zero, and Avalonia
+        // was not the one doing it: our own GotFocus seed was (GridSelectionController.SeedActive). Fixed
+        // there — the seed now names the first cell already on screen and does not scroll.
+        //
+        // There is deliberately NO ScrollIntoView on this path any more. It used to be here as a corrective
+        // for the seed's jump, and once the seed stopped jumping the only thing it still did was scroll a
+        // cell clipped by the viewport edge fully into view — so clicking the sliver of a half-visible column
+        // slid the whole result sideways. A press is not a navigation: nothing the user clicks needs
+        // revealing, because they could already see it well enough to click it. Cursor motion still scrolls
+        // (GridSelectionController.MoveActive); a click never does.
         void FocusClickedCell()
         {
             if (index < grid.Columns.Count)
@@ -337,18 +364,6 @@ public sealed class ResultCellFactory
                 grid.CurrentColumn = grid.Columns[index];
             }
             grid.Focus();
-        }
-
-        // Corrective, on top of the above: whatever moved the viewport during the click — the DataGrid
-        // adopting a current cell, or the quick-stats bar appearing and re-measuring the grid — the cell you
-        // clicked ends up visible again. A no-op when nothing moved. Done twice because the two candidate
-        // causes land in different frames: the re-measure happens in the layout pass after this returns.
-        void KeepClickedCellInView()
-        {
-            if (index >= grid.Columns.Count) return;
-            var column = grid.Columns[index];
-            grid.ScrollIntoView(row, column);
-            Dispatcher.UIThread.Post(() => grid.ScrollIntoView(row, column), DispatcherPriority.Loaded);
         }
 
         border.AddHandler(InputElement.PointerPressedEvent, (_, e) =>
@@ -363,7 +378,6 @@ public sealed class ResultCellFactory
                 // marked handled — the flyout still has to open.
                 FocusClickedCell();
                 if (!_selection.IsSelected(result, row, index)) _selection.SelectSingle(result, row, index);
-                KeepClickedCellInView();
                 return;
             }
             if (!point.IsLeftButtonPressed) return;
@@ -374,7 +388,6 @@ public sealed class ResultCellFactory
             if (shift && _selection.CanExtendFrom(result)) _selection.ExtendTo(result, row, index);
             else if (ctrl) _selection.ToggleCell(result, row, index);
             else _selection.SelectSingleAndBeginDrag(result, row, index, e.Pointer, grid);
-            KeepClickedCellInView();
             e.Handled = true;
         }, RoutingStrategies.Bubble, handledEventsToo: true);
         return border;
@@ -382,6 +395,25 @@ public sealed class ResultCellFactory
 
     private static object? ValueAt(object?[]? row, int index)
         => row is not null && index < row.Length ? row[index] : null;
+
+    /// <summary>
+    /// What a cell <i>draws</i>, as opposed to what it holds: <paramref name="raw"/> with digit groups when
+    /// the column is numeric and the setting is on.
+    /// <para>
+    /// The only place the grouped form is produced, and it goes straight into a <c>TextBlock</c> — nothing
+    /// reads it back. Every other consumer of a cell (the clipboard, the CSV and xlsx exports, the generated
+    /// DML, the cell inspector, the in-cell editor's seed) calls <c>GridSelectionOps.CellText</c> and gets the
+    /// raw invariant text, which is what keeps a copied number re-parseable — see
+    /// <see cref="NumberGrouping"/> and <c>CellFormat.TryParseNumber</c>.
+    /// </para>
+    /// </summary>
+    private static string Shown(string raw, bool numeric) => numeric ? NumberGrouping.Apply(raw) : raw;
+
+    /// <summary>Whether this cell holds a pending edit that the column's type cannot take, so the save will
+    /// be rejected by the server. Only asked of an editable result — nothing else can hold one.</summary>
+    private static bool WillFailOnSave(ResultSetViewModel result, int index, object?[]? row)
+        => result.IsEditable && row is not null && index < row.Length
+        && ResultEditModel.WillReachServerAsText(row[index], result.Columns[index].ClrType);
 
     /// <summary>Draw (or clear) a cell's selection ring.
     /// <para>

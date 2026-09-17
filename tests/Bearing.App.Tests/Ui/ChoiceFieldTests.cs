@@ -139,6 +139,12 @@ public class ChoiceFieldTests
         public string DisplayName => "Choice UI";
         public bool SupportsIntegratedAuth => false;
         public bool SupportsEntraToken => false;
+
+        // Not the subject: these fakes exist for the dialog's field rendering.
+        public bool SupportsServerActivity => false;
+
+        public IServerActivity CreateServerActivity(IDbConnectionFactory factory)
+            => throw new NotSupportedException();
         public DbErrorKind Classify(QueryError error) => DbErrorKind.Unknown;
         public DbErrorKind ClassifyException(Exception exception) => DbErrorKind.Unknown;
 

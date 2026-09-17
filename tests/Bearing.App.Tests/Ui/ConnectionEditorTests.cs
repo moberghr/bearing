@@ -304,14 +304,18 @@ internal static class ConnectionEditorProbe
     /// among them by design — it belongs to the secret store, so the model excludes it and the dialog's own
     /// box owns it (§1.1).</summary>
     public static IReadOnlyList<string> FieldKeys(ConnectionDialog dialog)
+        // Scoped to FieldsHost, the panel RenderFields builds, rather than filtered by name over the whole
+        // dialog. The filter was a list of the dialog's own hand-written boxes, so every control added to
+        // the form elsewhere — main's read-only and statement-timeout rows, for two — joined the provider's
+        // fields and broke this. The container is what "provider-declared" actually means.
         => dialog.GetLogicalDescendants()
+            .OfType<Control>()
+            .First(c => c.Name == "FieldsHost")
+            .GetLogicalDescendants()
             .OfType<Control>()
             .Where(c => c.Name is { } n && n.EndsWith("Box", StringComparison.Ordinal)
                         && c is TextBox or CheckBox or ComboBox)
             .Select(c => c.Name![..^3])
-            // The dialog's own hand-written boxes are not provider fields.
-            .Where(key => key is not ("Name" or "Password" or "Env" or "EnvColor" or "ConfirmWrites"
-                or "Provider" or "CredentialKind" or "Tls"))
             .ToList();
 
     public static ComboBox Combo(ConnectionDialog dialog, string name)

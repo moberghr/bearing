@@ -30,6 +30,8 @@ public class WorkspacePersistenceTests : IDisposable
             Port = 5432,
             Database = "analytics",
             User = "reader",
+            ReadOnly = true,
+            StatementTimeoutSeconds = 30,
             Options = new Dictionary<string, string> { ["sslmode"] = "require", ["search_path"] = "public,reporting" },
         });
         await store.SaveAsync(created, CancellationToken.None);
@@ -47,6 +49,38 @@ public class WorkspacePersistenceTests : IDisposable
         Assert.Equal("prod", conn.Name);
         Assert.Equal("analytics", conn.Database);
         Assert.Equal("require", conn.Options["sslmode"]);
+        // The safety settings travel in the project file, which is the point of them being fields on the
+        // record rather than app-local settings: a shared project carries them to whoever opens it
+        // (#99 / #105).
+        Assert.True(conn.ReadOnly);
+        Assert.Equal(30, conn.StatementTimeoutSeconds);
+    }
+
+    [Fact]
+    public async Task A_project_written_before_the_safety_settings_existed_still_opens()
+    {
+        // The back-compat mechanism this relies on: a missing property deserializes to the member default,
+        // which is how CredentialKind and Tls were added too. A project file from an older build must not
+        // come back read-only, and must not come back with a timeout nobody set.
+        var dir = Path.Combine(_root, "old");
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(Path.Combine(dir, "project.json"), """
+            {
+              "schemaVersion": 1,
+              "name": "Legacy",
+              "connections": [
+                { "id": "6f9619ff-8b86-d011-b42d-00c04fc964ff", "name": "prod",
+                  "providerId": "postgres", "host": "db.internal", "port": 5432,
+                  "database": "analytics", "user": "reader" }
+              ]
+            }
+            """);
+
+        var reopened = await new JsonProjectStore().OpenAsync(dir, CancellationToken.None);
+        var conn = Assert.Single(reopened.Manifest.Connections);
+
+        Assert.False(conn.ReadOnly);
+        Assert.Equal(0, conn.StatementTimeoutSeconds);
     }
 
     [Fact]

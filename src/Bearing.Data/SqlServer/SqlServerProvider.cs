@@ -98,6 +98,22 @@ public sealed class SqlServerProvider : IDbProvider
         _ => DbErrorKind.Unknown,
     };
 
+    /// <summary>
+    /// Not yet. SQL Server exposes the same facts (<c>sys.dm_exec_sessions</c> joined to
+    /// <c>sys.dm_exec_requests</c>, and <c>KILL</c> for terminate — it has no cancel-without-kill), so this
+    /// is unimplemented rather than inapplicable. False until the read exists and has been checked against a
+    /// real server, because the alternative is a panel stating there are no sessions on a server nobody
+    /// asked about.
+    /// </summary>
+    public bool SupportsServerActivity => false;
+
+    /// <summary>
+    /// Never consulted while <see cref="SupportsServerActivity"/> is false — the panel asks the flag first.
+    /// It exists because the interface requires it, and it refuses rather than answers: a null object that
+    /// returned an empty list would be the claim the flag exists to avoid making.
+    /// </summary>
+    public IServerActivity CreateServerActivity(IDbConnectionFactory factory) => UnsupportedServerActivity.Instance;
+
     public IDbConnectionFactory CreateConnectionFactory(ConnectionInfo info, string? password)
         => new SqlServerConnectionFactory(info, password);
 

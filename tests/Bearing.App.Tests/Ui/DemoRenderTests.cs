@@ -78,8 +78,10 @@ public class DemoRenderTests
         var wideValues = grid.Columns[2];
         Assert.True(wideName.ActualWidth > wideValues.ActualWidth * 0.5,
             $"the long column name got {wideName.ActualWidth}px against {wideValues.ActualWidth}px of values");
-        // 110122 is the value that used to clip to 11012 (#73).
-        Assert.Equal("110122", ResultsHarness.CellText(ResultsHarness.RequireCell(window, metrics.Rows[1], 1)).Text);
+        // 110122 is the value that used to clip to 11012 (#73). It draws grouped because the column is
+        // numeric, and the whole of it still has to be there — the commas make the column wider, so this is
+        // also the assertion that the width arithmetic measured what the cell draws rather than what it holds.
+        Assert.Equal("110,122", ResultsHarness.CellText(ResultsHarness.RequireCell(window, metrics.Rows[1], 1)).Text);
         window.Close();
     });
 

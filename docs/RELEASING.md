@@ -7,15 +7,22 @@ Bearing ships through [Velopack](https://velopack.io): an installer plus per-fil
 builds both platforms and uploads them. Everything below the next section is what that workflow does, kept
 because it still runs by hand when you want it to.
 
-Two platforms are covered. Both are built from one machine, whichever OS it runs, because Velopack can
-cross-build Windows and Linux packages. **macOS cannot be built off a Mac** (Velopack needs `codesign`,
-`xcrun` and `productbuild`), so there is no macOS package; `build/release.sh` still explains the same for
-its bare-binary path.
+Three platforms are covered, from two machines. Windows and Linux cross-build from one runner, whichever
+OS it runs. **macOS cannot be built off a Mac** — Velopack needs `codesign`, `xcrun` and `productbuild` —
+so it has a runner of its own; `build/velopack.sh` refuses an `osx-*` RID anywhere else rather than
+producing a bundle nothing can open. `build/release.sh` still has no macOS path at all.
 
 | RID | Output | Channel | Install |
 |---|---|---|---|
 | `win-x64` | `BearingSql-win-Setup.exe`, full/delta `.nupkg`, `BearingSql-win-Portable.zip` | `win` | per-user, `%LOCALAPPDATA%\BearingSql` |
 | `linux-x64` | `BearingSql.AppImage`, full/delta `.nupkg` | `linux` | none — the AppImage runs where it sits |
+| `osx-arm64` | `BearingSql-osx-Portable.zip` (`Bearing.app`), `BearingSql-osx-Setup.pkg`, full/delta `.nupkg` | `osx` | `brew install --cask --no-quarantine moberghr/bearing/bearing`, or the `.pkg` |
+
+macOS is **Apple Silicon only, and unsigned**. Both follow from choices worth knowing before changing
+either: a Velopack channel holds one package per version and the app reads the plain `osx` channel, so an
+`osx-x64` package would replace the arm64 one in the same feed rather than sit beside it; and there is no
+Moberg Developer ID, so Gatekeeper refuses the download until its quarantine flag is cleared. See
+`packaging/homebrew/README.md`, which is also where the Homebrew tap's per-release steps live.
 
 ## One-time setup
 
@@ -32,7 +39,8 @@ Create the release in GitHub — **Releases ▸ Draft a new release**, pick or c
 description, publish. That is the whole job. The workflow then:
 
 1. runs `dotnet test` over the solution, and stops if anything fails — before any asset is public;
-2. builds `win-x64` and `linux-x64` and uploads both to that release;
+2. builds `win-x64` and `linux-x64` on one runner, then `osx-arm64` on a macOS runner, and uploads all
+   three to that release — sequentially, because they share one release and one description;
 3. checks the release really carries `releases.<channel>.json` and the full package, and fails if not.
 
 The version is the tag. Nothing to bump, and nothing that can disagree with it.
@@ -45,15 +53,23 @@ package — write one for anything worth explaining.
 the few minutes the tests and build take, the page exists, watchers have been notified, and there is nothing
 to download. It looks exactly like a broken release because, briefly, it is one.
 
-So a failure anywhere in the job **returns the release to draft** and says so. The tag and the description
+So a failure in any job — the tests included — **returns the release to draft** and says so. The tag and the description
 survive; fix the cause and re-run the workflow. Re-running is safe — `--merge` and the asset check are both
 idempotent — and a release that never reaches the end is never left published and empty, which is the state
 `v0.5.4` has been in since it was cut.
 
-There is no macOS package, here or anywhere (see above).
-
 `workflow_dispatch` runs the test job alone against any ref, which answers "would this tag build" without
 creating a release that claims it did.
+
+### Pre-releases
+
+Tick **Set as a pre-release** and the workflow carries that through to `vpk upload --pre`, then re-asserts
+the flag once the assets are up. A tag with a pre-release identifier — `v0.6.1-beta.1` — counts on its own,
+checkbox or not.
+
+The flag is load-bearing rather than a label: the updater and `Help ▸ What's New` both filter pre-releases
+out, so a beta is installable from the Releases page and offered to nobody. Losing it is the whole reason it
+is asserted twice. By hand, `PRERELEASE=1` does the same.
 
 ### By hand
 
@@ -83,9 +99,10 @@ The same script the workflow runs, for when you want the packages locally or CI 
 ```bash
 PUBLISH=1 RID=win-x64   build/velopack.sh
 PUBLISH=1 RID=linux-x64 build/velopack.sh
+PUBLISH=1 RID=osx-arm64 build/velopack.sh    # on a Mac only
 ```
 
-Both land on the same GitHub release (`--merge`); each channel carries its own `releases.<channel>.json`
+All three land on the same GitHub release (`--merge`); each channel carries its own `releases.<channel>.json`
 and clients only read their own. After uploading, the script **checks the release actually carries**
 `releases.<channel>.json` and the full package, and fails if it does not — an empty release page is not a
 release, and `v0.5.4` shipped as exactly that: tagged, described, and invisible to every installed copy,

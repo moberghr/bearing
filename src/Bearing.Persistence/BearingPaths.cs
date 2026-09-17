@@ -32,6 +32,15 @@ public static class BearingPaths
     /// <summary>Bulk/machine-local state: query log, fallback secrets, the default project.</summary>
     public static string DataDir => EnsureDir(Path.Combine(DataRoot, AppDirName));
 
+    /// <summary>
+    /// Another profile's directories, <b>without creating them</b> — for reading what a different profile
+    /// holds (a dev build importing the installed app's connections, #dev). Deliberately not EnsureDir:
+    /// the isolation exists so a build from source cannot disturb the installed one, and creating a
+    /// directory there would be the first breach of it.
+    /// </summary>
+    public static (string Config, string Data) RootsFor(string appDirName)
+        => (Path.Combine(ConfigRoot, appDirName), Path.Combine(DataRoot, appDirName));
+
     private static string ConfigRoot => ResolveRoot(
         PathKind.Config,
         Environment.GetEnvironmentVariable("XDG_CONFIG_HOME"),

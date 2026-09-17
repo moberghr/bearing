@@ -64,22 +64,32 @@ public static class EditorChrome
 
     // One registry for the process, built on first use. Constructing it is the ~100ms — parsing the grammar
     // and the theme — and it is immutable once built, so every further editor (the SQL-preview window, the
-    // history preview) reuses it instead of paying again. Only ever touched from the UI thread.
-    private static RegistryOptions? _sqlRegistry;
+    // history preview) reuses it instead of paying again.
+    //
+    // One lazy, not two: the wrapper and the registry it wraps have to be the same pair, and two independent
+    // `??=` fields can be raced into disagreeing — one thread building the wrapper while another builds a
+    // second registry, leaving SqlRegistry answering from an instance SqlOptions does not wrap. Harmless in
+    // what it resolves, but it is two ~100ms registries held for the life of the process, and the shape is
+    // the bug rather than the symptom.
+    private static SqlGrammarInjection? _sqlOptions;
+
+    /// <summary>What TextMate is actually handed: the packaged registry, plus
+    /// <see cref="SqlGrammarInjection"/>'s one rule for the boolean literals it has none for.</summary>
+    internal static SqlGrammarInjection SqlOptions =>
+        _sqlOptions ??= new SqlGrammarInjection(new RegistryOptions(ThemeName.DarkPlus));
 
     /// <summary>The shared TextMate registry. First read is the expensive one; keep it off the startup path
     /// for surfaces the user may never open.</summary>
-    internal static RegistryOptions SqlRegistry => _sqlRegistry ??= new RegistryOptions(ThemeName.DarkPlus);
+    internal static RegistryOptions SqlRegistry => SqlOptions.Registry;
 
     /// <summary>Install TextMate SQL syntax highlighting. DarkPlus supplies token colours; exact Bearing
     /// syntax hues are deferred (needs internal TextMateSharp APIs — docs/design/editor-4a/README.md
     /// §Fidelity). Going through here is what keeps every SQL surface changing together when they land.</summary>
     public static void InstallSqlHighlighting(TextEditor editor)
     {
-        var options = SqlRegistry;
-        var installation = editor.InstallTextMate(options);
-        var sql = options.GetLanguageByExtension(".sql");
+        var installation = editor.InstallTextMate(SqlOptions);
+        var sql = SqlRegistry.GetLanguageByExtension(".sql");
         if (sql is not null)
-            installation.SetGrammar(options.GetScopeByLanguageId(sql.Id));
+            installation.SetGrammar(SqlRegistry.GetScopeByLanguageId(sql.Id));
     }
 }

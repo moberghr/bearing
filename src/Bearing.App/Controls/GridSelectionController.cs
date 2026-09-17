@@ -232,15 +232,18 @@ public sealed class GridSelectionController
             if (point.IsRightButtonPressed && ReferenceEquals(Model.Result, result) && Model.Cells.Count > 0)
                 return GridPressTarget.Corner;
 
-            grid.Focus();          // as a cell click does, so the keys that follow reach this grid
             SelectAll(result);     // the same operation Ctrl+A runs, so the two can never disagree
             // SelectAll only seeds the active cell when there wasn't one, which is right for Ctrl+A (it
             // keeps the cursor where the user left it) and wrong here: this can arrive from a click in a
             // *different* result, leaving Active/Anchor pointing at a row this result doesn't contain, and
             // the next arrow key or Shift+click would navigate from outside the set.
-            Model.Active = (result.Rows[0], GridSelectionOps.FirstColumn(result));
-            Model.Anchor = Model.Active;
+            // The anchor is the result's top-left — the corner selected everything, and that is where
+            // "everything" starts — but the *cursor* goes on a cell the user can see, or the first arrow
+            // key would scroll away from what they are looking at to reach row one (found in review).
+            Model.Anchor = (result.Rows[0], GridSelectionOps.FirstColumn(result));
+            Model.Active = FirstCellInView(grid, result) ?? Model.Anchor;
             Notify();
+            grid.Focus();          // as a cell click does, so the keys that follow reach this grid
             return GridPressTarget.Corner;
         }
 
@@ -249,8 +252,11 @@ public sealed class GridSelectionController
             if (RowOf(rowHeader) is not { } row) return GridPressTarget.None;
             var from = extend ? Model.Anchor!.Value.Row : row;
             var origin = (row, extend ? Model.Anchor!.Value.Col : GridSelectionOps.FirstColumn(result));
+            // The row is the one under the pointer, so only the column can be off screen — and it is,
+            // whenever the grid is scrolled right, because the band's origin column is the result's first.
+            var cursor = extend ? origin : (row, InViewColumn(grid, result));
             return SelectBand(grid, result, GridSelectionOps.WholeRows(result, from, row), origin,
-                keepAnchor: extend, add, point.IsRightButtonPressed)
+                keepAnchor: extend, add, point.IsRightButtonPressed, cursor)
                 ? GridPressTarget.RowHeader
                 : GridPressTarget.None;
         }
@@ -260,8 +266,12 @@ public sealed class GridSelectionController
             if (ColumnIndexOf(grid, columnHeader) is not { } col || result.Rows.Count == 0) return GridPressTarget.None;
             var from = extend ? Model.Anchor!.Value.Col : col;
             var origin = (extend ? Model.Anchor!.Value.Row : result.Rows[0], col);
+            // Mirror of the row-header case: the column is the one under the pointer, so it is the *row*
+            // that can be off screen — the band's origin row is the result's first, which is nowhere near
+            // the viewport in a scrolled result.
+            var cursor = extend ? origin : (InViewRow(grid, result), col);
             return SelectBand(grid, result, GridSelectionOps.WholeColumns(result, from, col), origin,
-                keepAnchor: extend, add, point.IsRightButtonPressed)
+                keepAnchor: extend, add, point.IsRightButtonPressed, cursor)
                 ? GridPressTarget.ColumnHeader
                 : GridPressTarget.None;
         }
@@ -299,22 +309,35 @@ public sealed class GridSelectionController
     }
 
     /// <summary>Select a whole-row / whole-column band. Returns false when there was nothing to select, or
-    /// when a right-press landed inside a band that is already selected (which must not shrink it).</summary>
+    /// when a right-press landed inside a band that is already selected (which must not shrink it).
+    /// <para>
+    /// Focus is taken <b>after</b> the band is in the model, and the order is load-bearing: the grid's
+    /// <c>GotFocus</c> seeds a cursor when the result has none (<see cref="SeedActive"/>), so focusing first
+    /// meant every header click ran a seed it was about to overwrite.
+    /// </para>
+    /// <para>
+    /// <paramref name="cursor"/> is where the <em>cell cursor</em> lands, which is not always the band's
+    /// <paramref name="origin"/>. The origin is the band's corner and stays the anchor, so a later
+    /// Shift+click still extends from where the band starts; the cursor has to be somewhere on screen, or
+    /// the next arrow key scrolls away from what the user is looking at to reach it. Defaults to the origin
+    /// for callers where the two coincide.
+    /// </para></summary>
     private bool SelectBand(
         DataGrid grid, ResultSetViewModel result, IReadOnlyList<(object?[] Row, int Col)> cells,
-        (object?[] Row, int Col) origin, bool keepAnchor, bool add, bool rightButton)
+        (object?[] Row, int Col) origin, bool keepAnchor, bool add, bool rightButton,
+        (object?[] Row, int Col)? cursor = null)
     {
         if (cells.Count == 0) return false;
         var alreadySelected = ReferenceEquals(Model.Result, result) && cells.All(Model.Cells.Contains);
         if (rightButton && alreadySelected) return true; // leave the block alone, just let the menu open
 
-        grid.Focus(); // route the following keystrokes to this grid, as a cell click does
         if (!add || !ReferenceEquals(Model.Result, result)) Model.Cells.Clear();
         Model.Result = result;
         foreach (var cell in cells) Model.Cells.Add(cell);
-        Model.Active = origin;
+        Model.Active = cursor ?? origin;
         if (!keepAnchor) Model.Anchor = origin;
         Notify();
+        grid.Focus(); // route the following keystrokes to this grid, as a cell click does
         return true;
     }
 
@@ -325,6 +348,37 @@ public sealed class GridSelectionController
     /// <summary>A column header's result-column index. Headers are the Control instances the cell factory
     /// built per column, so they match by reference — and the Columns collection keeps its build order even
     /// after the user drags columns around (reordering moves DisplayIndex, not the collection).</summary>
+    /// <summary>
+    /// Drop cells in now-hidden columns from the selection (#118).
+    /// <para>
+    /// The controller is the only writer of <see cref="Model"/>, so the prune belongs here rather than in
+    /// each reader: filtering in <c>Copy</c> would leave <c>PlanSetNull</c>, the paste target and the stats
+    /// bar each to remember, and one of them would forget.
+    /// </para>
+    /// </summary>
+    public void DropHiddenColumns(ResultSetViewModel result)
+    {
+        if (!ReferenceEquals(Model.Result, result)) return;
+
+        var hidden = Model.Cells.Where(c => result.ColumnLayout.IsHidden(c.Col)).ToList();
+        if (hidden.Count == 0) return;
+        foreach (var cell in hidden) Model.Cells.Remove(cell);
+
+        // The cursor and the anchor can be sitting in the column that just went away. Moved to the nearest
+        // visible column rather than cleared: clearing would lose the row the user was on as well.
+        if (Model.Active is { } active && result.ColumnLayout.IsHidden(active.Col))
+            Model.Active = (active.Row, GridSelectionOps.NearestVisibleColumn(result, active.Col));
+        if (Model.Anchor is { } anchor && result.ColumnLayout.IsHidden(anchor.Col))
+            Model.Anchor = (anchor.Row, GridSelectionOps.NearestVisibleColumn(result, anchor.Col));
+
+        Notify();
+    }
+
+    /// <summary>Which result column a header belongs to, or null for the corner header (which owns none).
+    /// Exposed because the column menu (#118) needs the same mapping this class already does.</summary>
+    internal static int? ColumnIndexOfHeader(DataGrid grid, DataGridColumnHeader header)
+        => ColumnIndexOf(grid, header);
+
     private static int? ColumnIndexOf(DataGrid grid, DataGridColumnHeader header)
     {
         for (var i = 0; i < grid.Columns.Count; i++)
@@ -386,21 +440,92 @@ public sealed class GridSelectionController
         return true;
     }
 
-    /// <summary>Put the cursor on the top-left selectable cell (a grid taking focus with nothing active, or
-    /// the first arrow key into it). No-op for an empty result.</summary>
+    /// <summary>Put the cursor on the top-left selectable cell <i>that is currently on screen</i> (a grid
+    /// taking focus with nothing active, or the first arrow key into it). No-op for an empty result.
+    /// <para>
+    /// In view, and without scrolling, for the same reason: seeding is not navigation. This runs from the
+    /// grid's <c>GotFocus</c>, so it fires on the click that focuses the grid — and seeding the result's
+    /// absolute first cell and scrolling to it is what threw a horizontally scrolled result back to column
+    /// zero whenever the first click landed in it. The user's scroll position is theirs; what the focus owes
+    /// them is a cursor they can see, which is what the first on-screen cell is.
+    /// </para>
+    /// <para>
+    /// Falls back to the result's first cell when nothing is realized — an unrealized grid has no viewport
+    /// to preserve, and the fallback is what the seed always was.
+    /// </para></summary>
     public void SeedActive(DataGrid grid, ResultSetViewModel result)
     {
         if (result.Rows.Count == 0) return;
-        MoveActive(grid, result, result.Rows[0], GridSelectionOps.FirstColumn(result), extend: false);
+        var (row, col) = FirstCellInView(grid, result)
+                         ?? (result.Rows[0], GridSelectionOps.FirstColumn(result));
+        MoveActive(grid, result, row, col, extend: false, scroll: false);
     }
+
+    /// <summary>
+    /// The top-left cell the user can actually see: the realized cell with the smallest (y, x) inside the
+    /// grid's own bounds. Null when no cell of this result is realized.
+    /// <para>
+    /// Read off the visuals rather than computed, because only the grid knows what its viewport is showing
+    /// after a scroll, a freeze and a column reorder. Cells are matched by the <c>(row, column)</c> tag
+    /// <c>ResultCellFactory.MakeSelectable</c> already stamps for drag hit-testing, and a cell clipped at
+    /// either edge is skipped — a cursor half off the screen is not the visible cursor this is for.
+    /// </para></summary>
+    private static (object?[] Row, int Col)? FirstCellInView(DataGrid grid, ResultSetViewModel result)
+    {
+        var viewport = new Rect(grid.Bounds.Size);
+        if (viewport.Width <= 0 || viewport.Height <= 0) return null;
+
+        (object?[] Row, int Col)? best = null;
+        var bestAt = new Point(double.MaxValue, double.MaxValue);
+        foreach (var border in grid.GetVisualDescendants().OfType<Border>())
+        {
+            if (border.Tag is not ValueTuple<object?[], int> tag) continue;
+            if (result.ColumnLayout.IsHidden(tag.Item2)) continue;
+            // A recycled container can still carry a row this result has dropped (a discarded new row).
+            // Tested per candidate rather than on the winner alone: rejecting it at the end would throw
+            // away every other on-screen cell with it and fall back to the result's first — an invisible
+            // cursor, which is the outcome this method exists to prevent (found in review).
+            if (!result.Rows.Contains(tag.Item1)) continue;
+            // A column scrolled off to the left keeps its cells realized but collapses them to nothing —
+            // and parks them at a *positive* x, so a position test alone picks the leftmost column of the
+            // result rather than of the viewport. Measured, not assumed.
+            if (!border.IsEffectivelyVisible || border.Bounds.Width <= 0 || border.Bounds.Height <= 0) continue;
+            if (border.TranslatePoint(default, grid) is not { } at) continue;
+            // Clipped at either edge is skipped in *both* axes: a cursor with two pixels showing is not the
+            // visible cursor this is for, and the first version tested only for a fully-hidden row, so a
+            // barely-peeking top row won on having the smallest y (found in review).
+            if (at.X < -0.5 || at.X >= viewport.Width) continue;
+            if (at.Y < -0.5 || at.Y >= viewport.Height) continue;
+            if (at.Y > bestAt.Y || (at.Y == bestAt.Y && at.X >= bestAt.X)) continue;
+            bestAt = at;
+            best = (tag.Item1, tag.Item2);
+        }
+        return best;
+    }
+
+    /// <summary>The top-most row currently on screen, falling back to the result's first when nothing of it
+    /// is realized. What a column-header press puts the cursor on.</summary>
+    private static object?[] InViewRow(DataGrid grid, ResultSetViewModel result)
+        => FirstCellInView(grid, result)?.Row ?? result.Rows[0];
+
+    /// <summary>The left-most visible column currently on screen, falling back to the result's first
+    /// selectable one. What a row-header press puts the cursor on.</summary>
+    private static int InViewColumn(DataGrid grid, ResultSetViewModel result)
+        => FirstCellInView(grid, result)?.Col ?? GridSelectionOps.FirstColumn(result);
 
     /// <summary>Whether this grid still needs a seeded cursor (nothing active, or the cursor is elsewhere).</summary>
     public bool NeedsSeed(ResultSetViewModel result)
         => Model.Active is null || !ReferenceEquals(Model.Result, result);
 
     /// <summary>Move the active cell to (row, col); Shift extends the rectangle from the anchor, otherwise
-    /// the selection collapses to the single cell and re-seeds the anchor. Scrolls the target into view.</summary>
-    public void MoveActive(DataGrid grid, ResultSetViewModel result, object?[] row, int col, bool extend)
+    /// the selection collapses to the single cell and re-seeds the anchor.
+    /// <para>
+    /// Scrolls the target into view, because a cursor the keyboard moved has to stay followable. Callers that
+    /// are not <i>moving</i> the cursor — <see cref="SeedActive"/>, which only names where it already is —
+    /// pass <paramref name="scroll"/> false, and the viewport stays where the user put it.
+    /// </para></summary>
+    public void MoveActive(
+        DataGrid grid, ResultSetViewModel result, object?[] row, int col, bool extend, bool scroll = true)
     {
         Model.Active = (row, col);
         Model.Result = result;
@@ -416,7 +541,7 @@ public sealed class GridSelectionController
             if (col < result.Columns.Count) Model.Cells.Add((row, col));
             Notify();
         }
-        if (col < grid.Columns.Count) grid.ScrollIntoView(row, grid.Columns[col]);
+        if (scroll && col < grid.Columns.Count) grid.ScrollIntoView(row, grid.Columns[col]);
     }
 
     /// <summary>Approximate rows-per-page from the realized DataGridRow visuals (for PageUp/PageDown).</summary>
@@ -573,11 +698,20 @@ public sealed class GridSelectionController
         : $"{count} cells are in NOT NULL columns";
 
     /// <summary>grid.beginEdit (Enter/F2): start editing the active cell via the DataGrid's own machinery —
-    /// except on a checkbox column, which has no text editor and cycles its value instead.</summary>
+    /// except on a checkbox column, which has no text editor and cycles its value instead.
+    /// <para>
+    /// The one place a keystroke is still allowed to scroll the results (§9.10a). See the comment on the
+    /// <c>ScrollIntoView</c> below for what happens without it.
+    /// </para></summary>
     public void BeginEditActive(DataGrid grid, ResultSetViewModel result)
     {
         if (Model.Active is not { } a || !ReferenceEquals(Model.Result, result)) return;
         if (result.Rows.IndexOf(a.Row) < 0 || a.Col >= grid.Columns.Count) return;
+        // This scroll stays, and it is the one exception to "a keystroke does not move the viewport".
+        // `grid.BeginEdit()` needs a realized cell to put an editor in: with the cursor scrolled out of
+        // view (a wheel or scrollbar drag moves the viewport without moving the cursor) and this line
+        // removed, F2 opens nothing at all and reports nothing — measured. Revealing the cell you asked to
+        // edit is part of executing the command, not the pane moving on its own.
         grid.ScrollIntoView(a.Row, grid.Columns[a.Col]);
         if (a.Col < result.Columns.Count && ColumnKinds.IsBool(result.Columns[a.Col]))
         {

@@ -9,16 +9,25 @@
 #
 #   win-*    → Setup.exe + full/delta .nupkg + releases.win.json     (channel "win")
 #   linux-*  → self-updating .AppImage + .nupkg + releases.linux.json (channel "linux")
+#   osx-*    → Bearing.app in a .zip + .pkg + .nupkg + releases.osx.json  (channel "osx")
 #
-# macOS is not buildable from here at all: Velopack needs codesign/xcrun/productbuild, so a .app/.pkg
-# requires a Mac. build/release.sh says the same about its own bare-binary path.
+# macOS builds ONLY on a Mac — Velopack needs codesign/xcrun/productbuild, which do not cross-compile.
+# The script refuses the RID elsewhere rather than producing a bundle nothing can open.
+# build/release.sh says the same about its own bare-binary path.
+#
+# One arch, deliberately: osx-arm64. A Velopack channel carries one package per version and the app reads
+# the plain "osx" channel (Velopack's per-OS default, and VelopackUpdateService names no channel), so an
+# osx-x64 pack would overwrite the arm64 one in the same feed rather than sit beside it. Serving Intel too
+# means a second channel and an explicit channel in the app — a change to the updater, not a flag here.
 #
 # Usage:
 #   build/velopack.sh                          # win-x64, build only
 #   RID=linux-x64 build/velopack.sh            # cross-build the AppImage from Windows
+#   RID=osx-arm64 build/velopack.sh            # the macOS .app — on a Mac only
 #   PUBLISH=1 build/velopack.sh                # ...and upload to GitHub Releases (needs gh auth)
 #   SKIP_TESTS=1 build/velopack.sh             # skip the test run
 #   ALLOW_UNTAGGED=1 build/velopack.sh         # build a version HEAD isn't tagged for (local testing)
+#   PRERELEASE=1 build/velopack.sh             # publish it as a pre-release (see below)
 #
 # Requires: dotnet, vpk (dotnet tool install -g vpk), and gh for the GitHub steps.
 #
@@ -45,21 +54,29 @@ PACK_AUTHORS="Moberg"
 
 case "$RID" in
   win-*)
-    OS_FAMILY=windows; DIRECTIVE="[win]"; CHANNEL="win"
+    OS_FAMILY=windows; DIRECTIVE="[win]"; CHANNEL="win"; PKG_CHANNEL_TAG=""
     MAIN_EXE="bearing.exe"
     ICON="assets/brand/icons/bearing.ico"
     ;;
   linux-*)
-    OS_FAMILY=linux; DIRECTIVE="[linux]"; CHANNEL="linux"
+    OS_FAMILY=linux; DIRECTIVE="[linux]"; CHANNEL="linux"; PKG_CHANNEL_TAG="-linux"
     MAIN_EXE="bearing"
     ICON="assets/brand/icons/png/tile-512.png"
     ;;
   osx-*)
-    echo "ERROR: macOS packages cannot be built off a Mac." >&2
-    echo "       Velopack depends on codesign / xcrun / productbuild; run this script on macOS." >&2
-    exit 2
+    OS_FAMILY=macos; DIRECTIVE="[osx]"; CHANNEL="osx"; PKG_CHANNEL_TAG="-osx"
+    MAIN_EXE="bearing"
+    ICON="assets/brand/icons/bearing.icns"
+    # The bundle identifier is permanent in the same way $PACK_ID is: macOS keys launch services, the
+    # keychain ACL and TCC grants off it, so changing it later looks like a different app to all three.
+    BUNDLE_ID="hr.moberg.bearing"
+    if [[ "$(uname -s)" != "Darwin" ]]; then
+      echo "ERROR: macOS packages cannot be built off a Mac." >&2
+      echo "       Velopack depends on codesign / xcrun / productbuild; run this script on macOS." >&2
+      exit 2
+    fi
     ;;
-  *) echo "ERROR: unrecognised RID '$RID' (expected win-* or linux-*)." >&2; exit 2 ;;
+  *) echo "ERROR: unrecognised RID '$RID' (expected win-*, linux-* or osx-*)." >&2; exit 2 ;;
 esac
 
 # --- Tooling ------------------------------------------------------------------
@@ -97,6 +114,23 @@ fi
 if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+].*)?$ ]]; then
   echo "ERROR: '$TAG' is not a 3-part semver2 tag; Velopack rejects anything else." >&2
   exit 1
+fi
+
+# --- Pre-release or not -------------------------------------------------------
+# Two ways in, and the union of them, because either alone loses:
+#
+#   * PRERELEASE=1 — the workflow passes the release's own "Set as a pre-release" checkbox, which a human
+#     can tick on any tag they like; and
+#   * a tag with a pre-release identifier (v0.6.1-beta.1), which *is* a pre-release by semver whether or
+#     not anyone remembered the checkbox.
+#
+# The flag is load-bearing rather than decorative. Velopack's own feed reader and the app's Help ▸ What's
+# New both filter pre-releases out, so it is the only thing standing between a beta and every installed
+# copy being offered it.
+if [[ "${PRERELEASE:-0}" == "1" || "$VERSION" == *-* ]]; then
+  IS_PRERELEASE=1
+else
+  IS_PRERELEASE=0
 fi
 
 TAG_STATUS=""
@@ -141,6 +175,7 @@ RELEASE_DIR="$ROOT/dist/velopack/$CHANNEL"
 echo "==> Bearing release (Velopack)"
 echo "    version : $VERSION   (tag $TAG$TAG_STATUS)"
 echo "    runtime : $RID   channel $CHANNEL"
+[[ "$IS_PRERELEASE" == "1" ]] && echo "    release : pre-release"
 echo "    packId  : $PACK_ID"
 echo "    output  : $RELEASE_DIR"
 echo
@@ -223,22 +258,46 @@ else
     echo
     echo "- **Windows** — \`${PACK_ID}-win-Setup.exe\` (per-user, no admin). Updates itself from here on."
     echo "- **Linux** — \`${PACK_ID}.AppImage\`, \`chmod +x\` and run. Updates itself in place."
+    echo "- **macOS** (Apple Silicon) — \`brew install --cask --no-quarantine moberghr/bearing/bearing\`,"
+    echo "  or \`${PACK_ID}-osx-Setup.pkg\` by hand. Updates itself in place."
     echo
-    echo "Unsigned, so Windows SmartScreen warns on first run."
+    echo "Unsigned, so Windows SmartScreen warns on first run and macOS needs the quarantine flag cleared."
   } > "$NOTES"
 fi
 echo
 
 # --- Pack ---------------------------------------------------------------------
 echo "==> Packing"
+# Expanded below as ${ARR[@]+"${ARR[@]}"}, not "${ARR[@]}": macOS ships bash 3.2, where expanding an
+# EMPTY array the plain way is an unbound-variable error under `set -u`. Bash 5 on the Linux runner
+# accepts it, so this only ever fails on the one platform that cannot be cross-built — which is how it
+# reached a release. Same idiom for UPLOAD_ARGS below.
 EXTRA_PACK_ARGS=()
-if [[ "$OS_FAMILY" == "windows" ]]; then
-  # Start Menu only, matching what build/release.sh's install.ps1 creates today (no desktop icon).
-  EXTRA_PACK_ARGS+=(--shortcuts StartMenuRoot)
-else
-  # Mirrors the Categories line in release.sh's generated .desktop file.
-  EXTRA_PACK_ARGS+=(--categories "Development;Database")
-fi
+case "$OS_FAMILY" in
+  windows)
+    # Start Menu only, matching what build/release.sh's install.ps1 creates today (no desktop icon).
+    EXTRA_PACK_ARGS+=(--shortcuts StartMenuRoot)
+    ;;
+  linux)
+    # Mirrors the Categories line in release.sh's generated .desktop file.
+    EXTRA_PACK_ARGS+=(--categories "Development;Database")
+    ;;
+  macos)
+    EXTRA_PACK_ARGS+=(--bundleId "$BUNDLE_ID")
+    # Signing is opt-in through the environment and absent by default, which is the honest default: there
+    # is no Moberg Developer ID cert, and a build that silently skipped a signature it claimed to apply
+    # would be worse than one that never claimed it. Unsigned costs the user one Gatekeeper step — see
+    # packaging/homebrew/README.md, where the cask install line carries --no-quarantine because of it.
+    #
+    # WHEN a Developer ID exists, these three are the whole of it: no other line here changes.
+    [[ -n "${SIGN_APP_IDENTITY:-}" ]]     && EXTRA_PACK_ARGS+=(--signAppIdentity "$SIGN_APP_IDENTITY")
+    [[ -n "${SIGN_INSTALL_IDENTITY:-}" ]] && EXTRA_PACK_ARGS+=(--signInstallIdentity "$SIGN_INSTALL_IDENTITY")
+    [[ -n "${NOTARY_PROFILE:-}" ]]        && EXTRA_PACK_ARGS+=(--notaryProfile "$NOTARY_PROFILE")
+    if [[ -z "${SIGN_APP_IDENTITY:-}" ]]; then
+      echo "    note: unsigned — set SIGN_APP_IDENTITY / SIGN_INSTALL_IDENTITY / NOTARY_PROFILE to sign."
+    fi
+    ;;
+esac
 
 vpk "$DIRECTIVE" pack \
   --packId "$PACK_ID" \
@@ -252,7 +311,7 @@ vpk "$DIRECTIVE" pack \
   --channel "$CHANNEL" \
   --outputDir "$RELEASE_DIR" \
   --releaseNotes "$NOTES" \
-  "${EXTRA_PACK_ARGS[@]}"
+  ${EXTRA_PACK_ARGS[@]+"${EXTRA_PACK_ARGS[@]}"}
 echo
 
 echo "==> Done"
@@ -266,12 +325,14 @@ if [[ "${PUBLISH:-0}" == "1" ]]; then
     exit 1
   fi
   echo "==> Publishing to GitHub Releases ($TAG)"
+  UPLOAD_ARGS=()
+  [[ "$IS_PRERELEASE" == "1" ]] && UPLOAD_ARGS+=(--pre)
   # --merge so the other platform's channel can land on the same release: win and linux each carry
   # their own releases.<channel>.json, and the app only ever reads its own.
   vpk upload github \
     --repoUrl "$REPO_URL" --token "$TOKEN" \
     --channel "$CHANNEL" --outputDir "$RELEASE_DIR" \
-    --publish --merge \
+    --publish --merge ${UPLOAD_ARGS[@]+"${UPLOAD_ARGS[@]}"} \
     --releaseName "Bearing $VERSION" --tag "$TAG"
 
   # vpk carries the notes inside the package but leaves the GitHub release body to us. Set it here rather
@@ -294,6 +355,22 @@ if [[ "${PUBLISH:-0}" == "1" ]]; then
     fi
   fi
 
+  # --- The pre-release flag, again ----------------------------------------------
+  # Asserted after the upload as well as during it, because `--merge` operates on a release that already
+  # exists and what it does to that release's flags is not documented. Getting this wrong in the quiet
+  # direction hands a beta to every user, so it is checked rather than assumed. Read back first: an
+  # unnecessary `gh release edit` on a correct release is a needless write to something a human published.
+  if [[ "$IS_PRERELEASE" == "1" ]] && command -v gh >/dev/null 2>&1; then
+    echo
+    if [[ "$(gh release view "$TAG" --json isPrerelease --jq '.isPrerelease' 2>/dev/null || echo true)" == "true" ]]; then
+      echo "==> $TAG is still marked a pre-release"
+    else
+      echo "==> Re-marking $TAG as a pre-release (the upload cleared it)"
+      gh release edit "$TAG" --prerelease >/dev/null \
+        || echo "    WARNING: could not re-mark it. Tick 'Set as a pre-release' by hand before" >&2
+    fi
+  fi
+
   # --- Did it actually land? ----------------------------------------------------
   # A release page with no assets is not a release: the app reads releases.<channel>.json off the release,
   # so a tag whose upload half-failed leaves clients on the previous version while GitHub cheerfully
@@ -305,7 +382,11 @@ if [[ "${PUBLISH:-0}" == "1" ]]; then
     echo "==> Verifying the upload"
     ASSETS="$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")' 2>/dev/null || true)"
     MISSING=""
-    for want in "releases.$CHANNEL.json" "$PACK_ID-$VERSION-full.nupkg"; do
+    # $PKG_CHANNEL_TAG, not a bare name: vpk omits the channel from the .nupkg only for "win" (Squirrel
+    # back-compat) and writes "$PACK_ID-$VERSION-linux-full.nupkg" / "-osx-full.nupkg" for the others. The
+    # unsuffixed name was checked for every channel, and --merge puts all of them on one release — so the
+    # linux leg was verifying the *Windows* package and would have called a failed linux upload a success.
+    for want in "releases.$CHANNEL.json" "$PACK_ID-$VERSION$PKG_CHANNEL_TAG-full.nupkg"; do
       case " $ASSETS " in
         *" $want "*) ;;
         *) MISSING="$MISSING $want" ;;
@@ -325,11 +406,18 @@ if [[ "${PUBLISH:-0}" == "1" ]]; then
   fi
 else
   echo "Not published (set PUBLISH=1 to upload to GitHub Releases)."
-  if [[ "$OS_FAMILY" == "windows" ]]; then
-    echo "Install locally with:"
-    echo "    $RELEASE_DIR/$PACK_ID-win-Setup.exe"
-  else
-    echo "Run locally with:"
-    echo "    chmod +x $RELEASE_DIR/*.AppImage && $RELEASE_DIR/*.AppImage"
-  fi
+  case "$OS_FAMILY" in
+    windows)
+      echo "Install locally with:"
+      echo "    $RELEASE_DIR/$PACK_ID-win-Setup.exe"
+      ;;
+    linux)
+      echo "Run locally with:"
+      echo "    chmod +x $RELEASE_DIR/*.AppImage && $RELEASE_DIR/*.AppImage"
+      ;;
+    macos)
+      echo "Install locally with:"
+      echo "    sudo installer -pkg $RELEASE_DIR/$PACK_ID-osx-Setup.pkg -target /"
+      ;;
+  esac
 fi

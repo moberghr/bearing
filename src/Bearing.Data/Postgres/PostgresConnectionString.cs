@@ -48,6 +48,12 @@ public static class PostgresConnectionString
         "sslkey", "ssl key", "sslpassword", "ssl password",
         "sslnegotiation", "ssl negotiation",
         "checkcertificaterevocation", "check certificate revocation",
+        // The startup packet, which carries the read-only and statement-timeout settings (#99 / #105). Both
+        // are typed fields composed by StartupOptionsFor below, and this keyword is the whole packet rather
+        // than one entry in it — so a bag key here would not merge with what we composed, it would replace
+        // it, and a shared project.json could turn read-only off. Same threat as "Trust Server Certificate"
+        // beside "SSL Mode=VerifyFull", and closed the same way.
+        StartupOptionsKeyword,
     };
 
     public static NpgsqlConnectionStringBuilder Build(ConnectionInfo info, string? password)
@@ -62,6 +68,9 @@ public static class PostgresConnectionString
             ApplicationName = "bearing",
             MaxPoolSize = DefaultMaxPoolSize,
             SslMode = SslModeOf(TlsPolicy.Resolve(info)),
+            // Read-only and the statement timeout (#99 / #105). Null when the connection asks for neither,
+            // which leaves the keyword out of the connection string entirely.
+            Options = StartupOptionsFor(info),
             // No command timeout. Npgsql defaults to 30 seconds, which killed any query that took longer and
             // reported it as "Exception while reading from stream" — a message about the driver's plumbing,
             // for a query that was working. Running a slow analytical query is the point of the tool, and
@@ -101,6 +110,40 @@ public static class PostgresConnectionString
         }
 
         return csb;
+    }
+
+    /// <summary>The connection-string keyword carrying the startup packet — Postgres' own
+    /// <c>options</c> parameter, as Npgsql spells it.</summary>
+    private const string StartupOptionsKeyword = "options";
+
+    /// <summary>
+    /// The startup options for this connection's session settings (#99 / #105), or null when it asks for
+    /// neither. Postgres' own <c>-c guc=value</c> syntax, which is why this lives here and not beside the
+    /// neutral policy in <c>Core</c> (§2.1) — the same split <see cref="SslModeOf"/> makes for TLS.
+    /// <para>
+    /// <b>Why the startup packet and not a <c>SET</c>.</b> #99 and #105 both proposed
+    /// <c>SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY</c> / <c>SET statement_timeout</c>, and
+    /// neither can be issued here. A pool holds up to <see cref="DefaultMaxPoolSize"/> physical connections
+    /// per (connection, database) and every read path opens one straight from the data source, so a
+    /// <c>SET</c> reaches the one socket it was issued on and none of the others — and the idle sweep plus
+    /// Npgsql's own pruning means those sockets come and go under a live session. A connection would be
+    /// read-only or not depending on which socket a statement happened to land on. Postgres applies the
+    /// startup packet to <b>every</b> physical connection before it can run anything, which is the only
+    /// mechanism here that is true of. Do not "simplify" this into a SET.
+    /// </para>
+    /// <para>
+    /// The timeout goes on the wire in milliseconds — the GUC's own unit when no suffix is given — so nothing
+    /// depends on Postgres parsing a unit out of a startup value. The server normalizes it back, which is why
+    /// <c>show statement_timeout</c> answers <c>30s</c> for the 30000 we sent.
+    /// </para>
+    /// </summary>
+    public static string? StartupOptionsFor(ConnectionInfo info)
+    {
+        var parts = new List<string>(2);
+        if (SessionPolicy.IsReadOnly(info)) parts.Add("-c default_transaction_read_only=on");
+        if (SessionPolicy.TimeoutSeconds(info) is var seconds && seconds > SessionPolicy.NoTimeout)
+            parts.Add($"-c statement_timeout={seconds * 1000}");
+        return parts.Count == 0 ? null : string.Join(' ', parts);
     }
 
     /// <summary>Npgsql's spelling of a <see cref="TlsMode"/>. One-to-one: the modes exist because Postgres

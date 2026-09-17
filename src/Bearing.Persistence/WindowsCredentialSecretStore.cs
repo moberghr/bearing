@@ -29,6 +29,16 @@ public sealed class WindowsCredentialSecretStore : ISecretStore
     private const uint CRED_PERSIST_LOCAL_MACHINE = 2;
     private const int ERROR_NOT_FOUND = 1168;
 
+    /// <summary>
+    /// The profile whose namespace this store reads and writes — <see cref="BearingPaths.AppDirName"/>
+    /// (the <c>BEARING_PROFILE</c> isolation) unless a caller names another. The one caller that names
+    /// another is the installed-profile import, which copies a saved password from the installed app's
+    /// namespace into this one; every ordinary construction leaves it alone and so stays isolated.
+    /// </summary>
+    private readonly string _profile;
+
+    public WindowsCredentialSecretStore(string? profile = null) => _profile = profile ?? BearingPaths.AppDirName;
+
     /// <summary>CRED_MAX_CREDENTIAL_BLOB_SIZE — 5 × 512 bytes, i.e. 1,280 UTF-16 characters.</summary>
     private const int MaxBlobBytes = 5 * 512;
 
@@ -38,7 +48,7 @@ public sealed class WindowsCredentialSecretStore : ISecretStore
     public bool CanStore => true;
 
     /// <summary>The Credential Manager key. Guid formatting is invariant, so this is stable across locales.</summary>
-    private static string TargetFor(Guid id) => $"{BearingPaths.AppDirName}:connection:{id}";
+    private string TargetFor(Guid id) => $"{_profile}:connection:{id}";
 
     public Task SetPasswordAsync(Guid connectionId, string password, CancellationToken ct)
     {

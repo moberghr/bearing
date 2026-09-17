@@ -23,7 +23,12 @@ public static class SqlStatementList
     public const int MaxRendered = 100;
 
     /// <summary>Build the list for <paramref name="request"/>. Scrolls internally; the caller bounds its height.</summary>
-    public static Control Build(WriteConfirmation request)
+    /// <param name="copyButton">
+    /// Whether the header carries its own copy-all button. False for a host that already offers one in its
+    /// own button row: two buttons reading "Copy" in one window, doing the same thing, is worse than either
+    /// placement alone.
+    /// </param>
+    public static Control Build(WriteConfirmation request, bool copyButton = true)
     {
         var statements = request.Statements;
 
@@ -51,7 +56,7 @@ public static class SqlStatementList
         var headerGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         Grid.SetColumn(copy, 1);
         headerGrid.Children.Add(count);
-        headerGrid.Children.Add(copy);
+        if (copyButton) headerGrid.Children.Add(copy);
         var header = new Border
         {
             Padding = new Thickness(12, 6),

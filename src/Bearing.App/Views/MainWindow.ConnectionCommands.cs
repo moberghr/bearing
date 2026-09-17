@@ -19,6 +19,9 @@ public partial class MainWindow
 
     private async void OnImportDBeaverClick(object? sender, RoutedEventArgs e) => await ImportFromDBeaverAsync();
 
+    private async void OnImportFromInstalledClick(object? sender, RoutedEventArgs e)
+        => await ImportFromInstalledAsync();
+
     /// <summary>settings.open: the application settings dialog. Edits apply and persist as they're made,
     /// so there is nothing to save here; the window only reports back when the user asked to jump to the
     /// keyboard-shortcuts editor instead.</summary>
@@ -91,6 +94,61 @@ public partial class MainWindow
                 _palette.ShowQuickPick("Import from which DBeaver workspace?", items);
                 return;
         }
+    }
+
+    /// <summary>
+    /// Copy the installed app's connections into this profile (dev builds only).
+    /// <para>
+    /// A build running from source gets its own config, data and secret namespace via
+    /// <c>BEARING_PROFILE</c>, which is what stops it touching the real projects and query log — and which
+    /// leaves it with no connections at all. This brings them across so the app can be driven against the
+    /// servers it will actually meet, without typing them in again.
+    /// </para>
+    /// <para>
+    /// Reads only, as far as the source profile is concerned. Saved passwords <b>do</b> come with the
+    /// connections (approved 2026-09-12): they are read from the installed profile's credential store and
+    /// written under this profile's key, so an imported connection connects without prompting. See
+    /// <see cref="InstalledProfileImport"/> for what that trades away.
+    /// </para>
+    /// </summary>
+    private async Task ImportFromInstalledAsync()
+    {
+        if (Vm is null) return;
+
+        var found = await InstalledProfileImport.ReadAsync();
+        if (found.Connections.Count == 0)
+        {
+            Vm.StatusText = found.Projects == 0
+                ? $"No projects found for the '{found.Profile}' profile — is the installed app set up?"
+                : $"The '{found.Profile}' profile has no connections to copy.";
+            return;
+        }
+
+        var review = new DBeaverImportResult(found.Connections, found.Folders, [], []);
+        var choice = await new ImportConnectionsDialog(
+                review,
+                $"the '{found.Profile}' profile",
+                $"Copy connections from the installed Bearing")
+            .ShowDialog<ImportChoice?>(this);
+        if (choice is null || choice.Connections.Count == 0) return;
+
+        var folders = choice.Connections
+            .Select(c => c.Folder)
+            .OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var outcome = await Vm.Connections.ImportConnectionsAsync(
+            choice.Connections, folders, choice.UpdateExisting);
+        var passwords = await Vm.Connections.CarryPasswordsAsync(found.Profile, outcome.Landed);
+
+        // What the import *did*, not how many rows were ticked: with "update existing" off and every
+        // connection already here, all of them are skipped and "copied 12 connections" would be a plain
+        // falsehood — over the accurate line ImportConnectionsAsync had just written.
+        Vm.StatusText = (outcome.Added + outcome.Updated == 0
+                            ? $"Nothing to copy from '{found.Profile}' — every connection is already here."
+                            : $"From '{found.Profile}': {outcome.Counts}.")
+                      + (passwords is null ? "" : " " + passwords);
     }
 
     private async Task BrowseAndImportAsync(string? startDir)

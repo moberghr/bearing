@@ -153,6 +153,12 @@ public class QueryLogPrivacyTests : IDisposable
         await using var log = new SqliteQueryLog(DbPath);
         await RoundTripAsync(log, "select 1");
 
+        // Guarded a second time, for the analyzer rather than for the runtime. CA1416 follows an
+        // `if (OperatingSystem.IsWindows())` and cannot follow `Skip.If`, so without this the Unix-only
+        // call below raised a warning on *every* build — including the Windows one, where it is genuinely
+        // unreachable. Suppressing it would have hidden the next call that really is unguarded.
+        if (OperatingSystem.IsWindows()) return;
+
         foreach (var path in new[] { DbPath, DbPath + "-wal" }.Where(File.Exists))
         {
             var mode = File.GetUnixFileMode(path);

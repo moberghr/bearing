@@ -455,7 +455,8 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
 
             var session = new ConnectionSession(
                 info, factory, provider.CreateQueryExecutor(factory), provider.CreateMetadataReader(factory),
-                credential.ExpiresAt)
+                provider.CreateServerActivity(factory), credential.ExpiresAt,
+                provider.SupportsServerActivity)
             { LastUsedUtc = _clock() };
             bool disposedDuringConnect;
             bool newLink;
@@ -533,12 +534,22 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     /// authentication left the existing pool in place and every statement kept running as the old SQL
     /// login — while the dialog, the record and the beacon all said otherwise.
     /// </para>
+    /// <para>
+    /// The safety settings for the same reason, one setting later: read-only and the statement timeout
+    /// (#99 / #105) reach the server in the startup packet, so they are fixed when the pool is built.
+    /// Omitting them here would leave a connection the user just marked read-only serving writes from the
+    /// pool it already had — the #23 bug with a destructive statement at the end of it. Compared as the
+    /// neutral values rather than as the composed packet, which is a provider's spelling and not this
+    /// layer's business (§2.2).
+    /// </para>
     /// </summary>
     private static bool SameConnection(ConnectionInfo a, ConnectionInfo b)
         => a.ProviderId == b.ProviderId && a.Host == b.Host && a.Port == b.Port
            && a.Database == b.Database && a.User == b.User
            && a.CredentialKind == b.CredentialKind
            && TlsPolicy.Resolve(a) == TlsPolicy.Resolve(b)
+           && SessionPolicy.IsReadOnly(a) == SessionPolicy.IsReadOnly(b)
+           && SessionPolicy.TimeoutSeconds(a) == SessionPolicy.TimeoutSeconds(b)
            && SameOptions(a.Options, b.Options);
 
     private static bool SameOptions(IReadOnlyDictionary<string, string> a, IReadOnlyDictionary<string, string> b)

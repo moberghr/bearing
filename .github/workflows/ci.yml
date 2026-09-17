@@ -1,0 +1,148 @@
+# Build and test every pull request, and every push to main (#24).
+#
+# Two legs, because the two things worth checking cannot both be checked in one place:
+#
+#   * **ubuntu** provisions the real test database and is therefore the only leg where the ~150 live
+#     Postgres tests actually run. It uses `build/test-db.sh` rather than a GitHub `services:` container,
+#     and that is the whole point: the script loads pagila *and* writes the marker row that
+#     `PgTestServer.RequireWritableAsync` checks before any test creates or drops an object. A bare service
+#     container has neither, so every catalog test would still skip — quietly, which is the state #24 exists
+#     to end.
+#   * **windows** is where the app ships and where the platform-specific paths live: the Windows credential
+#     store (§1.1), `BearingPaths` under `%LOCALAPPDATA%`, and `LocalFilePermissions` reporting
+#     `PlatformDefault` rather than a Unix mode. Docker on a Windows runner cannot host a Linux container
+#     without WSL2, so this leg has no database and its Postgres tests skip — by design, not by accident.
+#
+# `fail-fast: false` because a red leg must not hide the other leg's result: "it fails on Linux" and "it
+# fails everywhere" are different diagnoses.
+#
+# **The suites run one project at a time, deliberately.** `dotnet test` on the solution runs test projects in
+# parallel, and two of them (`Bearing.App.Tests` and `Bearing.Data.Tests`) both talk to the single Postgres
+# container — so a solution-wide run flakes a *rotating* victim: a timeout test that loses its race, an
+# autosave test whose connection is starved, or a `RequireWritableAsync` stamp probe that times out and reads
+# as "not a Bearing test database" and skips. All of it looks like a regression and none of it is. Serialising
+# costs a few minutes and buys a signal that means something.
+#
+# There is deliberately **no `dotnet format` gate**. It would fail today, and not on anything this repo wants
+# changed: `tests/Bearing.Sql.Tests/SqlFormatSafetyTests.cs` groups its `[InlineData]` attributes several to a
+# line, by category and with comments, so a theory over thirty operators reads as four ideas instead of thirty
+# lines. `dotnet format` splits every one of them. Adding the gate means either a red check on main or losing
+# that formatting, so it needs a decision about `.editorconfig` first — not a CI file.
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  # One run per ref. Pushing twice to a PR should supersede the first run, not queue behind it.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu (with postgres)
+            os: ubuntu-latest
+            database: true
+          - name: windows
+            os: windows-latest
+            database: false
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # MinVer reads the tag history (Directory.Build.props); a shallow clone has none and every build
+          # is 0.0.0-alpha. Harmless for a test run, but it makes the version the build reports here the
+          # same one a release would — so a version-shaped assertion cannot pass locally and fail only when
+          # it matters.
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+
+      # Two dependencies, one apt pass.
+      #
+      # Fonts, because text measurement is load-bearing in the results grid — initial column widths,
+      # ellipsization and scroll offsets all derive from it, which is why the headless UI tests use Skia
+      # rather than the stub renderer (§4.5). The runner image has them; this makes it a stated dependency
+      # rather than a lucky one.
+      #
+      # LibreOffice, because `XlsxWriter` hand-rolls OOXML across four parts that must agree, and the
+      # in-suite tests check that agreement against the same understanding of the format that wrote it. A
+      # workbook whose parts are mutually consistent and still rejected by Excel passes every one of them
+      # and fails at the user's desk. `soffice --convert-to csv` is a second opinion from a codebase that
+      # has never seen ours, and it was skipping everywhere — including on the change in this branch that
+      # made the audit report a *two-sheet* workbook.
+      #
+      # Costs about a minute. Safe to add, because the readback test distinguishes "LibreOffice cannot
+      # start here" from "LibreOffice cannot read our file" and skips on the former: a broken soffice on the
+      # runner reports itself rather than reddening the build.
+      - name: Install font and spreadsheet libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends             libfontconfig1 fonts-dejavu-core libreoffice-calc
+          soffice --version
+
+      - name: Provision the test database
+        if: matrix.database
+        run: ./build/test-db.sh
+
+      # Built once, separately, so a compile error is reported as a build failure instead of being buried in
+      # the first test project's output.
+      - name: Build
+        run: dotnet build Bearing.slnx -c Release --nologo
+
+      - name: Test
+        shell: bash
+        run: |
+          set -uo pipefail
+          failed=()
+          for project in Sql Data Persistence Updates App; do
+            echo "::group::Bearing.$project.Tests"
+            # Two loggers, for two different readers. GitHubActions annotates each failure on the line it
+            # happened and writes a job-summary table — including skipped tests by name, because a skip is
+            # otherwise invisible and 100 of them looked alarming until someone counted. trx is the durable
+            # copy, uploaded below, for anything the summary cannot hold.
+            #
+            # --no-build: the solution is already built above. Each project on its own, for the contention
+            # reason in this file's header.
+            if ! dotnet test "tests/Bearing.$project.Tests" -c Release --no-build --nologo \
+                 --results-directory "artifacts/test-results" \
+                 --logger "GitHubActions;summary.includePassedTests=false;summary.includeSkippedTests=true" \
+                 --logger "trx;LogFileName=$project.trx"; then
+              failed+=("$project")
+            fi
+            echo "::endgroup::"
+          done
+          if [ ${#failed[@]} -ne 0 ]; then
+            echo "::error::failing suites: ${failed[*]}"
+            exit 1
+          fi
+
+      # always(): the run that failed is the one whose results are worth keeping.
+      - name: Keep the test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ matrix.os }}
+          path: artifacts/test-results/*.trx
+          if-no-files-found: error
+
+      # Said out loud in the log, because a skipped test is invisible in the summary and "0 failed" over a
+      # suite that skipped its whole database half is the reassurance #24 was written to remove.
+      - name: Note what did not run
+        if: ${{ !matrix.database && !cancelled() }}
+        run: echo "::notice::No Postgres on this leg — the live catalog tests skipped. The ubuntu leg runs them."

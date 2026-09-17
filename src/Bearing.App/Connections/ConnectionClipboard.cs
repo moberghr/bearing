@@ -49,6 +49,13 @@ public static class ConnectionClipboard
         public string? Environment { get; init; }
         public string? EnvironmentColor { get; init; }
         public bool RequireWriteConfirmation { get; init; }
+        // The security settings, which this record used to omit — so copying a Verify Full connection pasted
+        // one on the driver default, and copying a read-only one would have pasted a writable one. A payload
+        // that cannot express a setting silently downgrades it, which for these three is the whole point of
+        // having them (#23 / #99 / #105).
+        public TlsMode Tls { get; init; } = TlsPolicy.Default;
+        public bool ReadOnly { get; init; }
+        public int StatementTimeoutSeconds { get; init; } = SessionPolicy.NoTimeout;
         public CredentialKind CredentialKind { get; init; } = CredentialKind.StoredPassword;
         public Dictionary<string, string> Options { get; init; } = new();
     }
@@ -96,6 +103,11 @@ public static class ConnectionClipboard
         Environment = c.Environment,
         EnvironmentColor = c.EnvironmentColor,
         RequireWriteConfirmation = c.RequireWriteConfirmation,
+        // Resolve rather than copy the field: a connection still carrying its mode in the legacy options bag
+        // must paste as the mode it actually runs on, not as the untouched default (#23).
+        Tls = TlsPolicy.Resolve(c),
+        ReadOnly = c.ReadOnly,
+        StatementTimeoutSeconds = c.StatementTimeoutSeconds,
         CredentialKind = c.CredentialKind,
         Options = c.Options.ToDictionary(kv => kv.Key, kv => kv.Value),
     };
@@ -113,6 +125,9 @@ public static class ConnectionClipboard
         Environment = e.Environment,
         EnvironmentColor = e.EnvironmentColor,
         RequireWriteConfirmation = e.RequireWriteConfirmation,
+        Tls = e.Tls,
+        ReadOnly = e.ReadOnly,
+        StatementTimeoutSeconds = e.StatementTimeoutSeconds,
         CredentialKind = e.CredentialKind,
         Options = e.Options,
     };

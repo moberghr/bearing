@@ -122,6 +122,44 @@ public class ConnectionSessionManagerTests
         Assert.Same(beta, mgr.TryGet(new SessionKey(id, "beta")));   // untouched
     }
 
+    /// <summary>
+    /// The safety settings are part of what defines the live connection (#99 / #105): they reach the server
+    /// in the startup packet, so they are fixed for the life of the pool and a pool built without them can
+    /// never acquire them. Turning read-only on and reusing the old pool would leave the app refusing writes
+    /// in its own UI while the server it is talking to still accepts them.
+    /// </summary>
+    [Fact]
+    public async Task A_connection_marked_read_only_does_not_reuse_the_pool_that_was_not()
+    {
+        var provider = new FakeProvider();
+        await using var mgr = new ConnectionSessionManager(provider, () => null, runSweepTimer: false);
+        var id = Guid.NewGuid();
+        var info = Conn(id);
+
+        var writable = await mgr.GetOrConnectAsync(info, CancellationToken.None);
+        var guarded = await mgr.GetOrConnectAsync(info with { ReadOnly = true }, CancellationToken.None);
+
+        Assert.NotSame(writable, guarded);
+        Assert.Equal(2, provider.FactoriesCreated);
+    }
+
+    [Fact]
+    public async Task A_changed_statement_timeout_does_not_reuse_the_pool_either()
+    {
+        var provider = new FakeProvider();
+        await using var mgr = new ConnectionSessionManager(provider, () => null, runSweepTimer: false);
+        var id = Guid.NewGuid();
+        var info = Conn(id) with { StatementTimeoutSeconds = 30 };
+
+        var thirty = await mgr.GetOrConnectAsync(info, CancellationToken.None);
+        var sixty = await mgr.GetOrConnectAsync(info with { StatementTimeoutSeconds = 60 }, CancellationToken.None);
+        var again = await mgr.GetOrConnectAsync(info with { StatementTimeoutSeconds = 60 }, CancellationToken.None);
+
+        Assert.NotSame(thirty, sixty);
+        Assert.Same(sixty, again);            // and it settles: the new value is not a permanent rebuild
+        Assert.Equal(2, provider.FactoriesCreated);
+    }
+
     [Fact]
     public async Task Evict_drops_only_the_database_it_names()
     {

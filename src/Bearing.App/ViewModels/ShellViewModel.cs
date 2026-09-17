@@ -20,6 +20,8 @@ using Bearing.Core.Schema;
 using Bearing.Core.Workspace;
 using Bearing.Sql;
 
+using Bearing.Persistence.Import;
+
 namespace Bearing.App.ViewModels;
 
 /// <summary>
@@ -48,6 +50,9 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The execution concern (run/page/count/FK-nav/inline-edit), exposed as <see cref="Execution"/>.</summary>
     private readonly ExecutionViewModel _execution;
 
+    /// <summary>The dialog surface, kept because the history export has to ask two questions (#113).</summary>
+    private readonly IDialogService? _dialogs;
+
     private IProviderRegistry _providers => _ctx.Providers;
     private IProjectStore _projectStore => _ctx.ProjectStore;
     private ISessionStore _sessionStore => _ctx.SessionStore;
@@ -72,6 +77,7 @@ public sealed partial class ShellViewModel : ObservableObject
     {
         _ctx = new WorkspaceContext(providers, projectStore, sessionStore, queryLog, recentProjects, secretStore,
             credentialPrompt: credentialPrompt, entraTokens: entraTokens, settings: settings);
+        _dialogs = dialogs;
         _ctx.Status = text => StatusText = text;
         EditorFontSize = _ctx.Settings.EditorFontSize;
         InspectorFontSize = _ctx.Settings.InspectorFontSize;
@@ -94,6 +100,7 @@ public sealed partial class ShellViewModel : ObservableObject
         _workspace = new WorkspaceViewModel(_ctx, _scripts, _connections, dialogs);
         _execution = new ExecutionViewModel(_ctx, dialogs);
         History = new HistoryPanelViewModel(SearchHistoryAsync, ColorForConnection);
+        Activity = new ActivityPanelViewModel(_ctx, dialogs);
         // Refresh from the log's own "the row is in" signal rather than from the execution path: Append
         // hands the entry to a background writer and returns, so reloading when a run finishes would race
         // the insert and usually miss the very row it refreshed for (#78). Posted because the writer raises
@@ -132,7 +139,18 @@ public sealed partial class ShellViewModel : ObservableObject
     [ObservableProperty] private SidePanel _activePanel = SidePanel.Schema;
 
     /// <summary>The inline history panel (day-grouped, filterable) shown when ActivePanel = History.</summary>
+    /// <summary>
+    /// Whether this build is running under a profile of its own rather than as the installed app — which is
+    /// what makes the "copy the installed app's connections" item worth offering, and what keeps it out of a
+    /// real installation.
+    /// </summary>
+    public bool IsSeparateProfile => InstalledProfileImport.IsSeparateProfile;
+
     public HistoryPanelViewModel History { get; }
+
+    /// <summary>The server activity panel (#101). Polls only while it is the panel on screen — see
+    /// <see cref="SyncPanelActivity"/>.</summary>
+    public ActivityPanelViewModel Activity { get; }
 
     /// <summary>
     /// The update strip, or null when this build has no updater wired (tests, headless construction). Set by
@@ -178,11 +196,29 @@ public sealed partial class ShellViewModel : ObservableObject
 
     partial void OnActivePanelChanged(SidePanel value)
     {
+        SyncPanelActivity();
         // Reveal is *not* done here — see ShowPanel. This handler only reacts to the panel actually changing.
         RefreshHistoryIfShowing();
     }
 
-    partial void OnSidePaneOpenChanged(bool value) => RefreshHistoryIfShowing();
+    partial void OnSidePaneOpenChanged(bool value)
+    {
+        SyncPanelActivity();
+        RefreshHistoryIfShowing();
+    }
+
+    /// <summary>
+    /// Start the activity panel polling when it is on screen and stop it when it is not (#101) — the only
+    /// thing in the app that queries a server on a timer, so it must not run for a panel nobody is looking at.
+    /// <para>
+    /// Hung off <b>both</b> change handlers for the same reason <see cref="RefreshHistoryIfShowing"/> is:
+    /// <c>[ObservableProperty]</c>'s setter short-circuits on an unchanged value, so collapsing the pane from
+    /// the Activity tile and re-opening it never changes <see cref="ActivePanel"/> and would otherwise leave
+    /// the panel visible and stopped.
+    /// </para>
+    /// </summary>
+    private void SyncPanelActivity()
+        => Activity.SetPolling(ActivePanel == SidePanel.Activity && SidePaneOpen);
 
     /// <summary>
     /// Reload the history panel when it is the one on screen. Hung off every route that can put it there —
@@ -218,6 +254,70 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>Search the query log (feeds the History panel VM); stays on the shell — it only touches the log.</summary>
     public Task<IReadOnlyList<QueryLogEntry>> SearchHistoryAsync(string? text, CancellationToken ct)
         => _queryLog.SearchAsync(new QueryLogQuery { Text = text }, ct);
+
+    /// <summary>
+    /// Export the query history as an audit report (#113) — <i>what ran against which connection, when</i>.
+    /// <para>
+    /// Two questions, in this order: what to cover, then where to put it. The date range is pushed down to
+    /// the store (it is the one filter SQL can apply without dropping rows it cannot classify) and everything
+    /// else is applied by <see cref="QueryLogReport"/>, which also writes the notes that keep the file honest
+    /// about the period, the single user, and the redaction setting (§1.3).
+    /// </para>
+    /// </summary>
+    public async Task ExportHistoryAsync()
+    {
+        if (_dialogs is not { } dialogs) return;
+
+        var connections = _connections.Connections.ToList();
+        var names = connections.Select(c => c.Name).Distinct(StringComparer.Ordinal)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+        var environments = connections
+            .Select(c => c.Environment)
+            .Where(e => !string.IsNullOrWhiteSpace(e))
+            .Select(e => e!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(e => e, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (await dialogs.ShowAuditExportAsync(names, environments) is not { } request) return;
+
+        // Everything that can fail is inside the try — the store read included. A locked or corrupt log
+        // used to throw out of here, through the sidebar's async-void click handler, into the unhandled-
+        // exception path: a crash report for what §5.2 says must reach the status bar.
+        try
+        {
+            // Unbounded on purpose: an audit report covers its period, however many rows that is. The
+            // history panel's 200-row ceiling is a screenful, which is a different question.
+            var entries = await _queryLog.SearchAsync(
+                new QueryLogQuery { From = request.Filter.From, To = request.Filter.To, Limit = null },
+                CancellationToken.None);
+
+            var report = QueryLogReport.Build(
+                entries, request.Filter, connections, _ctx.Settings.QueryLogRedactLiterals);
+
+            if (await dialogs.PickExportFileAsync(
+                    QueryLogReport.SuggestedName(DateTime.Now, request.Format), request.Format) is not { } path)
+                return;
+
+            StatusText = $"Exporting {report.Table.Rows.Count:N0} executions…";
+            // Off the dispatcher, like the result export: a long history is seconds of pure formatting.
+            var written = await Task.Run(() => ResultExport.WriteReport(
+                path, report.Table, request.Format, "Audit report", report.Notes));
+
+            // Names every file, because a CSV's notes are a sibling file the user would otherwise not know
+            // to hand over with it.
+            var files = string.Join(" + ", written.Select(Path.GetFileName));
+            StatusText = report.Table.Rows.Count == 0
+                // An empty period is itself an answer to an audit question, so it is reported as a written
+                // file rather than as a failure.
+                ? $"Exported an empty report — nothing ran in that period ({files})."
+                : $"Exported {report.Table.Rows.Count:N0} executions to {files}.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Export failed: {ex.Message}";
+        }
+    }
 
     // Internal helpers used by the project/session partials; the real work lives in the child VMs.
     private void RefreshConnections() => _connections.RefreshConnections();

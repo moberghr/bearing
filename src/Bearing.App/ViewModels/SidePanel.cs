@@ -7,4 +7,7 @@ public enum SidePanel
     Schema,
     Scripts,
     History,
+
+    /// <summary>The server's own sessions, while this connection is live (#101).</summary>
+    Activity,
 }

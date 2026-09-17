@@ -47,6 +47,35 @@ public sealed class SchemaBrowser : ISchemaBrowser
         return new DatabaseObjects(snapshot, routines);
     }
 
+    public async Task<IReadOnlyList<RoleInfo>> GetRolesAsync(ConnectionInfo connection, CancellationToken ct)
+    {
+        // pg_roles is cluster-wide — the connection's own database can answer it, exactly as pg_database can.
+        var reader = await GetReaderAsync(connection, connection.Database, ct);
+        return await reader.Metadata.GetRolesAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(
+        ConnectionInfo connection, CancellationToken ct)
+    {
+        // Cluster-wide, so the connection's own database can answer it — as pg_database and pg_roles can.
+        var reader = await GetReaderAsync(connection, connection.Database, ct);
+        return await reader.Metadata.GetTablespacesAsync(ct);
+    }
+
+    public async Task<RoleGrants> GetRoleGrantsAsync(
+        ConnectionInfo connection, string database, string roleName, CancellationToken ct)
+    {
+        var reader = await GetReaderAsync(connection, database, ct);
+        return await reader.Metadata.GetRoleGrantsAsync(roleName, ct);
+    }
+
+    public async Task<DatabaseObjectKinds> GetDatabaseObjectKindsAsync(
+        ConnectionInfo connection, string database, CancellationToken ct)
+    {
+        var reader = await GetReaderAsync(connection, database, ct);
+        return await reader.Metadata.GetDatabaseObjectsAsync(ct);
+    }
+
     public async Task<string> GetViewDefinitionAsync(ConnectionInfo connection, string database, long tableId, CancellationToken ct)
     {
         var reader = await GetReaderAsync(connection, database, ct);

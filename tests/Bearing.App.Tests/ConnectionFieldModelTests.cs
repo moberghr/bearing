@@ -37,6 +37,12 @@ public class ConnectionFieldModelTests
         public string DisplayName => "Option Test";
         public bool SupportsIntegratedAuth => false;
         public bool SupportsEntraToken => false;
+
+        // Not the subject: these fakes exist for the dialog's field rendering.
+        public bool SupportsServerActivity => false;
+
+        public IServerActivity CreateServerActivity(IDbConnectionFactory factory)
+            => throw new NotSupportedException();
         public DbErrorKind Classify(QueryError error) => DbErrorKind.Unknown;
         public DbErrorKind ClassifyException(Exception exception) => DbErrorKind.Unknown;
 
@@ -78,6 +84,12 @@ public class ConnectionFieldModelTests
         public string DisplayName => "Choice Test";
         public bool SupportsIntegratedAuth => false;
         public bool SupportsEntraToken => false;
+
+        // Not the subject: these fakes exist for the dialog's field rendering.
+        public bool SupportsServerActivity => false;
+
+        public IServerActivity CreateServerActivity(IDbConnectionFactory factory)
+            => throw new NotSupportedException();
         public DbErrorKind Classify(QueryError error) => DbErrorKind.Unknown;
         public DbErrorKind ClassifyException(Exception exception) => DbErrorKind.Unknown;
 
