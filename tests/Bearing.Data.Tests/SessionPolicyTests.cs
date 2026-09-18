@@ -225,6 +225,33 @@ public class SessionPolicyTests
             Assert.NotEqual("", SessionPolicy.Advice(info));
     }
 
+    /// <summary>
+    /// The same setting on an engine whose server has nothing to refuse with. The note must not say "the
+    /// server refuses", because on SQL Server nobody arranged that — and it must say what does happen, since
+    /// a write the lexer cannot see (inside a procedure, or built as dynamic SQL) reaches the server there.
+    /// </summary>
+    [Fact]
+    public void Read_only_on_an_engine_with_no_session_read_only_says_who_actually_refuses()
+    {
+        var advice = SessionPolicy.Advice(Info(readOnly: true), serverEnforcesReadOnly: false);
+
+        Assert.DoesNotContain("The server refuses", advice);
+        Assert.Contains("Bearing refuses writes", advice);
+        Assert.Contains("dynamic SQL", advice);
+        Assert.Contains("privileges", advice);
+    }
+
+    /// <summary>The two providers answer it differently, which is what the wording above hangs on — a flag
+    /// both engines returned the same value for would make the sentence a constant again.</summary>
+    [Fact]
+    public void The_providers_disagree_about_who_enforces_read_only()
+    {
+        var registry = new ProviderRegistry();
+
+        Assert.True(registry.Get(PostgresProvider.ProviderId).EnforcesReadOnlyOnServer);
+        Assert.False(registry.Get(SqlServer.SqlServerProvider.ProviderId).EnforcesReadOnlyOnServer);
+    }
+
     // ---- against a real server ------------------------------------------------------------------
 
     [SkippableFact]

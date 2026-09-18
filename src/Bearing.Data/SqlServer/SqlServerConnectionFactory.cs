@@ -119,9 +119,11 @@ public sealed class SqlServerConnectionFactory : IDbConnectionFactory
         // import that still carries the mode in its options bag keeps working (#23).
         ApplyTls(csb, TlsPolicy.Resolve(info));
 
-        // No command timeout. SqlClient defaults to 30 seconds, which kills any query that takes longer —
-        // the same default #93 removed for Npgsql, and the same reason: a slow query is the user's business,
-        // and Esc is how they stop one. Overridable through Options ("Command Timeout"), like MaxPoolSize.
+        // No command timeout by default. SqlClient's own is 30 seconds, which kills any query that takes
+        // longer — the same default #93 removed for Npgsql, and the same reason: a slow query is the user's
+        // business, and Esc is how they stop one. Overridable through Options ("Command Timeout"), like
+        // MaxPoolSize — but see the re-assertion after the bag for what happens when the connection sets a
+        // statement timeout of its own.
         csb.CommandTimeout = 0;
 
         if (info.CredentialKind == CredentialKind.Integrated)
@@ -179,6 +181,24 @@ public sealed class SqlServerConnectionFactory : IDbConnectionFactory
                     break;
             }
         }
+
+        // §1.9's statement timeout, applied *after* the bag so the typed field is the single source of
+        // truth for it — the same precedence Tls gets, and for the same reason: a "Command Timeout" entry in
+        // a shared project.json must not quietly turn off a limit the connection asks for.
+        //
+        // This is the closest thing SQL Server has, and the difference is worth stating rather than
+        // glossing: Postgres' statement_timeout rides the startup packet and is enforced by the *server*,
+        // while SqlClient's Command Timeout is enforced by the *client*, which cancels the command when it
+        // expires. The server may still be finishing the statement for a moment afterwards. What the two
+        // share is the property the setting exists for — a runaway query does not outlive the person who
+        // left — and the spelling of "no limit", which is 0 in both.
+        //
+        // Without this the setting was inert here: the dialog offered it for every engine, the status bar
+        // reported the limit, and a SQL Server connection ran unbounded regardless. A setting that silently
+        // does nothing is worse than one that is not offered (#99/#105, and the same shape as the Fetch-all
+        // pool bug that rule already records).
+        if (SessionPolicy.TimeoutSeconds(info) is var timeout && timeout > SessionPolicy.NoTimeout)
+            csb.CommandTimeout = timeout;
 
         _connectionString = csb.ConnectionString;
     }

@@ -228,3 +228,29 @@ would fail. **Do not "simplify" this into a `SET`.**
   `Every_non_secret_field_survives_the_round_trip` could not catch it, because it enumerated ten fields by
   hand and the omitted one was omitted from the assertions too. It reflects over `ConnectionInfo` now, so the
   next field fails until it is carried.
+
+### §1.9a — On SQL Server only one of the two halves exists, and the wording says so
+
+The mechanism above is Postgres': a startup packet the **server** applies to every physical connection. SQL
+Server has one of the two and not the other, and pretending otherwise is the failure mode this note exists
+to prevent — the setting was offered for both engines from the moment the second one landed, while
+`StartupOptionsFor` was the only thing applying either.
+
+- **The statement timeout is `SqlConnectionStringBuilder.CommandTimeout`**, applied in
+  `SqlServerConnectionFactory` **after** the `Options` bag so the typed field outranks a `Command Timeout`
+  entry in a shared `project.json` (§1.4's precedence). It is the **client** cancelling, not the server
+  refusing — the server may still be finishing the statement for a moment after — so the dialog's note
+  no longer says which side does it. 0 is "no limit" in both engines, which is what makes the shared
+  spelling work. Before this it was inert: the status bar reported a limit over a connection that ran
+  unbounded, the same shape as the Fetch-all pool bug below.
+- **There is no session read-only to ask SQL Server for.** `ApplicationIntent=ReadOnly` chooses a readable
+  secondary; it refuses nothing. So there the client-side `WriteRefusal` is the **whole** of it, and a write
+  the lexer cannot see — inside a procedure, or built as dynamic SQL — reaches the server. That is not
+  fixable in the client, so it is **stated**: `IDbProvider.EnforcesReadOnlyOnServer` decides whether the
+  dialog says "The server refuses writes on this connection" or "Bearing refuses writes on this connection
+  before they run", and the second sentence names what still gets through. §1.1's rule, applied to a
+  guarantee rather than to a cause: never assert an arrangement nobody made.
+- WHEN a third engine arrives, answer that flag before shipping its connection dialog. The default is
+  `true` because it was Postgres' behaviour, which means a provider that forgets it claims a server-side
+  refusal it may not have.
+

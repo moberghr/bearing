@@ -15,6 +15,25 @@ public interface IDbProvider
     /// <summary>Fields the connect dialog renders for this engine.</summary>
     IReadOnlyList<ConnectionField> ConnectionFields { get; }
 
+    /// <summary>
+    /// Whether <see cref="ConnectionInfo.ReadOnly"/> reaches the <b>server</b> on this engine — that is,
+    /// whether the server itself refuses the write, or only Bearing does.
+    /// <para>
+    /// Postgres carries <c>default_transaction_read_only=on</c> in the startup packet, so it catches what a
+    /// lexer cannot: a function that writes, dynamic SQL, <c>COPY … TO</c> (#99). SQL Server has no
+    /// equivalent — <c>ApplicationIntent=ReadOnly</c> routes to a readable secondary, it does not refuse a
+    /// write — so there the client-side refusal is the whole of it, and what stops a write the lexer misses
+    /// is a role without write privileges.
+    /// </para>
+    /// <para>
+    /// A flag rather than silence because the difference is one the user is told about: the connection
+    /// dialog's note says "the server refuses writes on this connection", which is a claim about *their*
+    /// server and must not be made where nobody arranged it (§1.1). The setting still works on both engines
+    /// — it is the sentence describing it that changes.
+    /// </para>
+    /// </summary>
+    bool EnforcesReadOnlyOnServer { get; }
+
     /// <summary>Whether this engine can authenticate as the OS identity
     /// (<see cref="CredentialKind.Integrated"/>). The dialog offers that credential kind only where it
     /// works, rather than knowing per-engine which ones have it.</summary>

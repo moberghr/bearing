@@ -61,24 +61,38 @@ public static class SessionPolicy
     /// <see cref="TlsPolicy.Advice"/> established: it names what was actually arranged and does not overclaim.
     /// Empty when neither setting is on, so the hint is absent rather than reassuring.
     /// </summary>
-    public static string Advice(ConnectionInfo info)
-        => Advice(IsReadOnly(info), TimeoutSeconds(info));
+    public static string Advice(ConnectionInfo info, bool serverEnforcesReadOnly = true)
+        => Advice(IsReadOnly(info), TimeoutSeconds(info), serverEnforcesReadOnly);
 
     /// <summary>The same advice from the two values alone, so a dialog can describe what the user has typed
     /// without assembling a whole <see cref="ConnectionInfo"/> on every keystroke.</summary>
-    public static string Advice(bool readOnly, int timeoutSeconds)
+    /// <param name="serverEnforcesReadOnly">
+    /// <see cref="IDbProvider.EnforcesReadOnlyOnServer"/> for the engine this connection speaks to. It
+    /// changes who is said to refuse the write, which is the difference between describing an arrangement
+    /// and inventing one (§1.1): Postgres asks the server, SQL Server has nothing to ask, and on an engine
+    /// where only Bearing refuses, a write the lexer cannot see still reaches the server. Defaults to true,
+    /// the behaviour of the one engine that existed when this was written.
+    /// </param>
+    public static string Advice(bool readOnly, int timeoutSeconds, bool serverEnforcesReadOnly = true)
     {
         var seconds = timeoutSeconds > NoTimeout ? timeoutSeconds : NoTimeout;
         if (!readOnly && seconds == NoTimeout) return "";
+
+        var refusal = serverEnforcesReadOnly
+            ? "The server refuses writes on this connection."
+            : "Bearing refuses writes on this connection before they run. This engine has no session "
+              + "read-only to ask the server for, so a write it cannot see in the SQL — inside a procedure, "
+              + "or built as dynamic SQL — still reaches the server.";
+        var caveat = serverEnforcesReadOnly
+            ? " That stops mistakes, not a determined user: it can be lifted with a SET, so it is not a "
+              + "substitute for a role without write privileges."
+            : " That stops mistakes, not a determined user: a role without write privileges is what a "
+              + "server-side boundary looks like here.";
+
         if (readOnly && seconds > NoTimeout)
-            return $"The server refuses writes on this connection and cancels a statement after {seconds} s. "
-                   + "Read-only stops mistakes, not a determined user: it can be lifted with a SET, so it is "
-                   + "not a substitute for a role without write privileges.";
+            return $"{refusal} A statement is cancelled after {seconds} s.{caveat}";
         if (readOnly)
-            return "The server refuses writes on this connection. That stops mistakes, not a determined "
-                   + "user: it can be lifted with a SET, so it is not a substitute for a role without write "
-                   + "privileges.";
-        return $"The server cancels a statement on this connection after {seconds} s. Bearing itself still "
-               + "waits as long as a query takes — this is the server's limit, not the client's.";
+            return refusal + caveat;
+        return $"A statement on this connection is cancelled after {seconds} s.";
     }
 }

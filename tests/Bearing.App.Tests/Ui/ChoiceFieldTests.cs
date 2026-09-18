@@ -137,6 +137,7 @@ public class ChoiceFieldTests
 
         public string Id => ProviderId;
         public string DisplayName => "Choice UI";
+        public bool EnforcesReadOnlyOnServer => false;
         public bool SupportsIntegratedAuth => false;
         public bool SupportsEntraToken => false;
 
