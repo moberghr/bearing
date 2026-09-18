@@ -188,18 +188,31 @@ public static class ResultChrome
     /// that never had a signal either (a word typed into an integer column).
     /// </para>
     /// </param>
-    public static TextBlock ValueText(string text, bool isNull, bool numeric, bool invalid = false)
-        => new()
+    /// <param name="expression">
+    /// The SQL a pending edit in this cell stands for (#149), or null for an ordinary value. Drawn in the
+    /// function colour rather than amber: amber means "this will be refused", and an expression is the
+    /// opposite claim. The text on screen is the expression itself, so the cell already says what will run —
+    /// the tooltip says that it will run rather than be stored.
+    /// </param>
+    public static TextBlock ValueText(
+        string text, bool isNull, bool numeric, bool invalid = false, string? expression = null)
+    {
+        var block = new TextBlock
         {
             Text = text,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(ResultGridChrome.CellTextMargin, 0),
             TextTrimming = TextTrimming.CharacterEllipsis,
             Foreground = isNull ? NullBrush
+                : expression is not null ? Res("Syntax.Func")
                 : invalid ? Res("Warn.Amber")
                 : numeric ? Res("Text.Code") : Res("Text.Primary"),
-            FontStyle = isNull ? FontStyle.Italic : FontStyle.Normal,
+            FontStyle = isNull || expression is not null ? FontStyle.Italic : FontStyle.Normal,
         };
+        if (expression is not null)
+            ToolTip.SetTip(block, $"Evaluated by the server on save: {expression}");
+        return block;
+    }
 
     /// <summary>A small drawn "⤢" inspect icon that opens the cell inspector.</summary>
     public static Control InspectAffordance()

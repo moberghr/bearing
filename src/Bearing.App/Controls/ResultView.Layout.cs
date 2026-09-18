@@ -292,7 +292,11 @@ public sealed partial class ResultView
             result,
             onAddRow: () => AddRowTo(grid, result),
             onDelete: () => _selection.DeleteSelectedRows(grid, result),
-            onSave: async () => { if (SaveChanges is { } f) await f(result); },
-            onDiscard: async () => { if (DiscardChanges is { } f) await f(result); },
-            onShowSql: async () => { if (ShowPendingSql is { } f) await f(result); });
+            // Each of the three commits the open cell editor first (#147). The press that reaches these
+            // buttons already moved focus off the grid, which commits on its own — but the same callbacks
+            // are reached from the command palette, where nothing moved, and a save that reads a stale row
+            // is the one outcome this path may not have.
+            onSave: async () => { CommitOpenEdit(result); if (SaveChanges is { } f) await f(result); },
+            onDiscard: async () => { CommitOpenEdit(result); if (DiscardChanges is { } f) await f(result); },
+            onShowSql: async () => { CommitOpenEdit(result); if (ShowPendingSql is { } f) await f(result); });
 }

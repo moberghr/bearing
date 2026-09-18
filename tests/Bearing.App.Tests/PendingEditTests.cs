@@ -145,7 +145,10 @@ public class PendingEditTests
 
         Assert.Equal(ResultEditModel.ChangeKind.Update, change.Kind);
         Assert.Contains("qty", change.Command.Sql);
-        Assert.DoesNotContain("name", change.Command.Sql);   // untouched column stays out of the SET list
+        // The SET list only — an untouched column stays out of it, but every displayed column is named in
+        // the RETURNING clause (#149), which is a claim about what the save reads back, not what it writes.
+        var setList = change.Command.Sql[change.Command.Sql.IndexOf(" set ", StringComparison.Ordinal)..change.Command.Sql.IndexOf(" where ", StringComparison.Ordinal)];
+        Assert.DoesNotContain("name", setList);
         Assert.Contains(change.Command.Parameters, p => Equals(p.Value, 6));  // coerced to the column type
     }
 }

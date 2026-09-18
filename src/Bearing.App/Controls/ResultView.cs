@@ -210,13 +210,13 @@ public sealed partial class ResultView : UserControl
         // Save/Discard are guarded on pending changes as well as editability, which is what lets Ctrl+S fall
         // through to file.save on a grid with nothing of its own to commit.
         r.Register(new KeyCommand(CommandIds.GridSave, "Save changes", KeyScope.Grid, "Grid",
-            async () => { if (GridTarget() is { } t && SaveChanges is { } f) await f(t.Result); },
+            async () => { if (GridTarget() is { } t && SaveChanges is { } f) { CommitOpenEdit(t.Grid); await f(t.Result); } },
             canRun: () => HasPendingEdits()));
         r.Register(new KeyCommand(CommandIds.GridDiscard, "Discard changes", KeyScope.Grid, "Grid",
-            async () => { if (GridTarget() is { } t && DiscardChanges is { } f) await f(t.Result); },
+            async () => { if (GridTarget() is { } t && DiscardChanges is { } f) { CommitOpenEdit(t.Grid); await f(t.Result); } },
             canRun: () => HasPendingEdits()));
         r.Register(new KeyCommand(CommandIds.GridShowSql, "Show pending SQL", KeyScope.Grid, "Grid",
-            async () => { if (GridTarget() is { } t && ShowPendingSql is { } f) await f(t.Result); },
+            async () => { if (GridTarget() is { } t && ShowPendingSql is { } f) { CommitOpenEdit(t.Grid); await f(t.Result); } },
             canRun: () => HasPendingEdits()));
         r.Register(KeyCommand.Sync(CommandIds.GridClearSelection, "Clear selection", KeyScope.Grid, "Grid",
             () => _selection.ClearAndNotify(),
