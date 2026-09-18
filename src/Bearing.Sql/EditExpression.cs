@@ -61,4 +61,36 @@ public static class EditExpression
     /// <summary>Every expression the grid accepts, canonically spelled — for anything that has to *list* them
     /// (a tooltip, a menu, documentation) rather than test one.</summary>
     public static IReadOnlyCollection<string> All => Known.Values;
+
+    /// <summary>
+    /// The short list a menu offers, in menu order — a subset of <see cref="All"/>, which stays typeable in
+    /// full.
+    /// <para>
+    /// Offering is a stronger claim than accepting. A cell accepts anything in the table because the user
+    /// typed it and meant it; a menu item says "this works here", so the list leaves out the ones that would
+    /// make that a lie or a coin toss:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><c>uuid_generate_v4()</c> needs the <c>uuid-ossp</c> extension installed. Typing it is the
+    ///     user's own claim about their server; putting it in a menu would be ours, and wrong on a stock one
+    ///     — which is why <c>gen_random_uuid()</c> (core since 13) is the one offered.</item>
+    ///   <item>the near-duplicates — <c>current_timestamp</c>, <c>localtimestamp</c>,
+    ///     <c>clock_timestamp()</c>, <c>statement_timestamp()</c>, <c>transaction_timestamp()</c> — differ
+    ///     from <c>now()</c> in ways (transaction versus statement versus wall clock, zone or no zone) that a
+    ///     menu cannot explain and a user picking from one should not have to guess at. Anyone who wants a
+    ///     specific one knows its name and can type it.</item>
+    /// </list>
+    /// <para>
+    /// Drawn from <see cref="Known"/> rather than written out again, so a spelling cannot drift between what
+    /// the menu writes and what the recogniser reads — they are the same string.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<string> Offered { get; } =
+    [
+        Known["now()"],
+        Known["current_date"],
+        Known["current_user"],
+        Known["gen_random_uuid()"],
+        Known["default"],
+    ];
 }

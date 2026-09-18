@@ -86,6 +86,11 @@ public sealed partial class ResultView
             paste: result.IsEditable ? () => PasteInto(grid, result) : null,
             canPaste: () => _selection.CanPasteInto(result),
             setNull: result.IsEditable ? () => SetNullIn(grid, result) : null,
+            setExpression: result.IsEditable ? sql => SetExpressionIn(grid, result, sql) : null,
+            // Postgres' list, which is the only engine there is here. When a second one lands this reads
+            // the connection's dialect instead — one call site, which is why the menu takes the list rather
+            // than looking it up.
+            expressions: Bearing.Sql.EditExpression.Offered,
             fetchAll: result.IsPageable ? () => FetchAll?.Invoke(result) ?? Task.CompletedTask : null,
             export: format => Export?.Invoke(result, format) ?? Task.CompletedTask);
 

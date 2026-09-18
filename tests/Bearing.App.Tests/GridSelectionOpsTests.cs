@@ -400,6 +400,53 @@ public class GridSelectionOpsTests
         Assert.Equal(0, plan.NotNullable);
     }
 
+    // ---- Set value ▸ an expression -----------------------------------------------------------
+
+    /// <summary>The menu writes the same text typing it would, so which cells can take it is the question
+    /// <c>ResultEditModel.ExpressionFor</c> already answers for the save and for the cell's colour.</summary>
+    [Fact]
+    public void Set_value_takes_every_selected_cell_whose_column_the_server_would_evaluate_it_for()
+    {
+        var rs = Editable([1, "one", true, 10], [2, "two", false, 20]);
+
+        var plan = GridSelectionOps.PlanSetValue(rs, new[]
+        {
+            (rs.Rows[1], 3), (rs.Rows[0], 3), (rs.Rows[0], 0),
+        }, "now()");
+
+        Assert.Equal(0, plan.NotAnExpression);
+        // Row-then-column order, as every other plan here — the model holds the cells in a hash set.
+        Assert.Equal([(rs.Rows[0], 0), (rs.Rows[0], 3), (rs.Rows[1], 3)], plan.Targets);
+    }
+
+    /// <summary>A text column is the refusal that matters: there <c>now()</c> is a legitimate six-character
+    /// value, and storing it is precisely what a menu item called "now()" did not promise. Counted, so the
+    /// caller says so rather than writing part of a selection silently.</summary>
+    [Fact]
+    public void Set_value_refuses_a_text_column_and_says_how_many()
+    {
+        var rs = Editable([1, "one", true, 10]);
+        var row = rs.Rows[0];
+
+        var plan = GridSelectionOps.PlanSetValue(rs, new[] { (row, 1), (row, 3) }, "now()");
+
+        Assert.Equal(1, plan.NotAnExpression);
+        Assert.Equal([(row, 3)], plan.Targets);
+    }
+
+    /// <summary>A nullable column is reached through its underlying type, or every <c>bool?</c> and
+    /// <c>int?</c> column in a result would quietly refuse the menu it was offered.</summary>
+    [Fact]
+    public void Set_value_reaches_a_nullable_column()
+    {
+        var rs = Editable([1, "one", true, 10]);
+
+        var plan = GridSelectionOps.PlanSetValue(rs, new[] { (rs.Rows[0], 2) }, "default");
+
+        Assert.Equal(0, plan.NotAnExpression);
+        Assert.Single(plan.Targets);
+    }
+
     [Fact]
     public void Set_null_targets_come_back_in_row_then_column_order()
     {

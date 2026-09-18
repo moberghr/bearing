@@ -691,6 +691,42 @@ public sealed class GridSelectionController
         return $"{set} {plan.NotNullable} skipped — {columns}.";
     }
 
+    /// <summary>
+    /// The context menu's Set value ▸ items: write a recognised SQL expression (<c>now()</c>,
+    /// <c>default</c>, …) over every selected cell that can take one (#149).
+    /// <para>
+    /// Writes the canonical text through <see cref="ResultSetViewModel.SetCell"/>, exactly as typing it
+    /// would — so this is a shortcut for the keyboard, not a second way for a cell to mean an expression.
+    /// Everything downstream then follows on its own: the cell draws in the function colour with its
+    /// tooltip, the save emits the SQL in place of a parameter, and the UPDATE reads the evaluated value
+    /// back. A menu that had its own write path could disagree with the cell beside it about what was
+    /// staged, which is the bug #147 was.
+    /// </para>
+    /// Returns what to tell the user, or null when nothing was attempted.</summary>
+    public string? SetExpressionSelected(DataGrid grid, ResultSetViewModel result, string sql)
+    {
+        if (!result.IsEditable || !ReferenceEquals(Model.Result, result) || Model.Cells.Count == 0) return null;
+
+        var plan = GridSelectionOps.PlanSetValue(result, Model.Cells, sql);
+        if (plan.Targets.Count == 0)
+            return $"Nothing set to {sql} — {RefusedExpression(plan.NotAnExpression)}.";
+
+        foreach (var (row, col) in plan.Targets) result.SetCell(row, col, sql);
+        ResultRowPainter.RefreshRowColors(grid, result);
+        Notify();
+
+        var set = $"Set {CellCount(plan.Targets.Count)} to {sql}.";
+        return plan.NotAnExpression == 0
+            ? set
+            : $"{set} {plan.NotAnExpression} skipped — {RefusedExpression(plan.NotAnExpression)}.";
+    }
+
+    /// <summary>Why a cell could not take an expression. A text column would have stored the characters
+    /// rather than evaluating them, and saying "skipped" without saying that leaves the user to guess.</summary>
+    private static string RefusedExpression(int count) => count == 1
+        ? "1 cell is in a text column, which would store it as text"
+        : $"{count} cells are in text columns, which would store it as text";
+
     private static string CellCount(int count) => count == 1 ? "1 cell" : $"{count} cells";
 
     private static string Refused(int count) => count == 1

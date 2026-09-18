@@ -40,6 +40,18 @@ break in the rule above, and what keeps it bounded is **where the decision is ma
 - A **key predicate refuses one outright** (`DmlGenerator.BuildWhere` throws). Keys come from the row's
   stored originals, so it is an invariant check — but SQL in a `WHERE` re-aims the write at rows nobody
   picked, which is the one failure worth stating rather than trusting.
+- **The menu offers a subset of what a cell accepts** (`EditExpression.Offered` → the results grid's
+  `Set value ▸`, beside NULL). Offering is a stronger claim than accepting: a cell takes anything in the
+  table because the user typed it and meant it, while a menu item says "this works here". So
+  `uuid_generate_v4()` is typeable but not offered — it needs the `uuid-ossp` extension, and claiming it
+  works on a stock server is ours to get wrong — and the `now()` near-duplicates
+  (`clock_timestamp()`, `statement_timestamp()`, `localtimestamp`, …) are left out because they differ in
+  ways a menu cannot explain. The offered list indexes the same table rather than restating it, so a
+  spelling cannot drift between what the menu writes and what the recogniser reads.
+- **The menu has no write path of its own.** It calls `SetCell` with the canonical text, exactly as typing
+  it would, so the cell's colour, the generated SQL and the read-back all follow from the one decision in
+  `ExpressionFor`. A cell in a **text** column refuses the menu and is counted in the status line — there
+  the text would be stored as characters, which is a legitimate value and not what the item promised.
 - WHEN extending the list, add argument-less expressions only. Anything taking an argument — `nextval('s')`
   — or referencing a column — `amount * 1.1` — is a different feature and wants an explicit mark from the
   user, not a wider allowlist.
