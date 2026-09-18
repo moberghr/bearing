@@ -53,14 +53,15 @@ internal static class ResultEditModel
         foreach (var row in rs.EditedRows)
         {
             if (rs.OriginalOf(row) is not { } original) continue;
-            var assignments = ChangedAssignments(rs, t, original, row);
+            var assignments = ChangedAssignments(d, rs, t, original, row);
             var keys = KeyValues(t, original);
             if (assignments.Count > 0 && keys.Count > 0)
-                changes.Add(new PendingChange(ChangeKind.Update, row, DmlGenerator.Update(d, t.Schema, t.Table, assignments, keys)));
+                changes.Add(new PendingChange(ChangeKind.Update, row,
+                    DmlGenerator.Update(d, t.Schema, t.Table, assignments, keys, ReadBackColumns(t))));
         }
         foreach (var row in rs.NewRows)
         {
-            var values = InsertValues(rs, t, row);
+            var values = InsertValues(d, rs, t, row);
             if (values.Count > 0) changes.Add(new PendingChange(ChangeKind.Insert, row, DmlGenerator.Insert(d, t.Schema, t.Table, values)));
         }
         return changes;
@@ -80,11 +81,14 @@ internal static class ResultEditModel
                     rs.RemoveRow(ch.Row);
                     break;
                 case ChangeKind.Update:
-                    rs.ReplaceRow(ch.Row, CommittedRow(rs, target, ch.Row));
-                    break;
                 case ChangeKind.Insert:
-                    var returned = i < results.Count ? MapReturnedRow(results[i], rs.Columns) : null;
-                    rs.ReplaceRow(ch.Row, returned ?? CommittedRow(rs, target, ch.Row));
+                    // Both read back now (#149): an expression's value, a trigger's rewrite and an
+                    // `on update` default are all only knowable from the server's answer. The locally
+                    // committed row is the fallback for every column the statement did not return.
+                    var committed = CommittedRow(rs, target, ch.Row);
+                    rs.ReplaceRow(ch.Row, i < results.Count
+                        ? ApplyReturnedRow(results[i], rs, target, committed)
+                        : committed);
                     break;
             }
         }
@@ -138,18 +142,41 @@ internal static class ResultEditModel
         return committed;
     }
 
-    /// <summary>Build a result-shaped row from an INSERT … RETURNING result, matching columns by name.</summary>
-    private static object?[]? MapReturnedRow(QueryResult res, IReadOnlyList<ColumnDescriptor> resultColumns)
+    /// <summary>
+    /// Overlay a RETURNING result onto the locally committed row, matching each grid column to the returned
+    /// one by its <b>base</b> column name and falling back to its displayed name.
+    /// <para>
+    /// The base name is what makes an aliased result survive: <c>select name as n</c> shows a column called
+    /// <c>n</c> and gets back one called <c>name</c>, and matching on the displayed name alone would find
+    /// nothing — and, in the version of this that built a fresh row, write a null over the value the user had
+    /// just saved. A column the statement did not return keeps what the commit put there.
+    /// </para>
+    /// </summary>
+    private static object?[] ApplyReturnedRow(
+        QueryResult res, ResultSetViewModel rs, EditTarget t, object?[] committed)
     {
-        if (!res.Success || res.Columns.Count == 0 || res.Rows.Count == 0) return null;
-        var byName = new Dictionary<string, int>();
+        if (!res.Success || res.Columns.Count == 0 || res.Rows.Count == 0) return committed;
+
+        var byName = new Dictionary<string, int>(StringComparer.Ordinal);
         for (var j = 0; j < res.Columns.Count; j++) byName[res.Columns[j].Name] = j;
 
-        var row = new object?[resultColumns.Count];
-        for (var k = 0; k < resultColumns.Count; k++)
-            row[k] = byName.TryGetValue(resultColumns[k].Name, out var j) ? res.Rows[0][j] : null;
+        var baseNames = new Dictionary<int, string>();
+        foreach (var c in t.Columns) baseNames[c.ResultIndex] = c.BaseColumn;
+
+        var row = (object?[])committed.Clone();
+        for (var k = 0; k < rs.Columns.Count && k < row.Length; k++)
+        {
+            var name = baseNames.TryGetValue(k, out var b) ? b : rs.Columns[k].Name;
+            if (byName.TryGetValue(name, out var j) || byName.TryGetValue(rs.Columns[k].Name, out j))
+                row[k] = res.Rows[0][j];
+        }
         return row;
     }
+
+    /// <summary>The base columns an UPDATE reads back — the ones this result already displays, so they are
+    /// columns the user is known to be able to <c>SELECT</c> (see <see cref="DmlGenerator.Update"/>).</summary>
+    private static IReadOnlyList<string> ReadBackColumns(EditTarget t)
+        => t.Columns.Select(c => c.BaseColumn).Distinct(StringComparer.Ordinal).ToList();
 
     /// <summary>Primary-key predicates from the row's original (typed) values.</summary>
     private static List<ColumnValue> KeyValues(EditTarget t, object?[] source)
@@ -159,7 +186,8 @@ internal static class ResultEditModel
             .ToList();
 
     /// <summary>Assignments for columns whose value differs from the original (coerced to the column type).</summary>
-    private static List<ColumnValue> ChangedAssignments(ResultSetViewModel rs, EditTarget t, object?[] original, object?[] row)
+    private static List<ColumnValue> ChangedAssignments(
+        ISqlDialect dialect, ResultSetViewModel rs, EditTarget t, object?[] original, object?[] row)
     {
         var list = new List<ColumnValue>();
         foreach (var c in t.Columns)
@@ -168,8 +196,7 @@ internal static class ResultEditModel
             // Compare *coerced* to original: the grid writes strings, so a cell holding "5" never equalled the
             // typed 5 it came from and every touched cell produced an assignment — re-writing values that
             // hadn't changed (and re-touching audit triggers on those columns).
-            var value = Coerce(row[c.ResultIndex], rs.Columns[c.ResultIndex].ClrType,
-                ColumnKinds.IsTimestampWithZone(rs.Columns[c.ResultIndex].DataTypeName));
+            var value = CoerceOrExpression(dialect, row[c.ResultIndex], rs.Columns[c.ResultIndex]);
             if (Equals(value, original[c.ResultIndex])) continue;
             list.Add(new ColumnValue(c.BaseColumn, value));
         }
@@ -177,7 +204,8 @@ internal static class ResultEditModel
     }
 
     /// <summary>Insert values for the user-filled (non-null) columns; null cells are left to DB defaults.</summary>
-    private static List<ColumnValue> InsertValues(ResultSetViewModel rs, EditTarget t, object?[] row)
+    private static List<ColumnValue> InsertValues(
+        ISqlDialect dialect, ResultSetViewModel rs, EditTarget t, object?[] row)
     {
         var list = new List<ColumnValue>();
         foreach (var c in t.Columns)
@@ -188,8 +216,7 @@ internal static class ResultEditModel
             // The third Coerce call site, and it needs the zone flag as much as the other two: without it,
             // the same displayed wall time typed into a new row and into an existing one produced values
             // hours apart, and a Kind=Unspecified DateTime that Npgsql will not take for a timestamptz.
-            list.Add(new ColumnValue(c.BaseColumn, Coerce(value, rs.Columns[c.ResultIndex].ClrType,
-                ColumnKinds.IsTimestampWithZone(rs.Columns[c.ResultIndex].DataTypeName))));
+            list.Add(new ColumnValue(c.BaseColumn, CoerceOrExpression(dialect, value, rs.Columns[c.ResultIndex])));
         }
         return list;
     }
@@ -210,13 +237,46 @@ internal static class ResultEditModel
     /// stays refused and the cell says so instead.
     /// </para>
     /// </summary>
-    internal static bool WillReachServerAsText(object? value, Type clrType)
+    /// <param name="dialect">The connection's dialect, because what counts as an expression rather than a
+    /// refused value is engine-specific: <c>getdate()</c> is SQL on SQL Server and a typo on Postgres. The
+    /// two questions have to be asked of the same table or a cell is drawn one way and written the other.</param>
+    internal static bool WillReachServerAsText(ISqlDialect dialect, object? value, Type clrType)
     {
         if (value is not string s) return false;                          // already typed
         var t = Nullable.GetUnderlyingType(clrType) ?? clrType;
         if (t == typeof(string)) return false;                            // text column: raw text is correct
         if (s.Length == 0 || CellFormat.IsNullToken(s)) return false;     // both mean NULL, not a failure
+        if (dialect.TryEditExpression(s) is not null) return false;        // SQL, and drawn as SQL (#149)
         return Coerce(s, t) is string;
+    }
+
+    /// <summary>
+    /// The canonical SQL a pending cell value stands for, or null when it is an ordinary value (#149).
+    /// <para>
+    /// Both conditions are load-bearing. The column must be one the driver does <b>not</b> map to
+    /// <see cref="string"/>, so a <c>text</c> cell holding <c>now()</c> stays the six characters the user
+    /// typed. And <see cref="Coerce"/> must already have failed on it — a value that parses as the column's
+    /// type is that value, and only a value that cannot be written at all is free to mean something else.
+    /// Together they make this reinterpretation unable to change any edit that works today: the set it acts
+    /// on is exactly the set <see cref="WillReachServerAsText"/> used to draw amber.
+    /// </para>
+    /// </summary>
+    internal static string? ExpressionFor(ISqlDialect dialect, object? value, Type clrType)
+    {
+        if (value is not string s) return null;
+        var t = Nullable.GetUnderlyingType(clrType) ?? clrType;
+        if (t == typeof(string)) return null;                             // text column: text is the value
+        if (s.Length == 0 || CellFormat.IsNullToken(s)) return null;       // both mean NULL
+        if (dialect.TryEditExpression(s) is not { } sql) return null;
+        return Coerce(s, t) is string ? sql : null;                        // a value that parses stays a value
+    }
+
+    /// <summary>Coerce a cell to its column's type, or — for the narrow case <see cref="ExpressionFor"/>
+    /// describes — hand the generator SQL to emit in place of a parameter.</summary>
+    private static object? CoerceOrExpression(ISqlDialect dialect, object? value, ColumnDescriptor column)
+    {
+        if (ExpressionFor(dialect, value, column.ClrType) is { } sql) return new SqlExpression(sql);
+        return Coerce(value, column.ClrType, ColumnKinds.IsTimestampWithZone(column.DataTypeName));
     }
 
     /// <summary>Coerce a grid string back to the column's CLR type. The "(null)" token ⇒ NULL; an empty

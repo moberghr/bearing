@@ -271,6 +271,32 @@ public sealed class SqlServerDialect : ISqlDialect
             : $"insert into {qualifiedTable} ({columnList}) values ({valueList})";
 
     /// <summary>
+    /// <c>output</c> sits between the SET list and the WHERE, and each column is named off the
+    /// <c>inserted</c> pseudo-table — <c>inserted</c> holding the <em>new</em> row for an UPDATE, which is
+    /// what a read-back is asking for (<c>deleted</c> is the old one).
+    /// <para>
+    /// Msg 334 applies to an UPDATE exactly as it does to an INSERT, so the no-returning form is a real
+    /// retry path here rather than a symmetry, and the executor's existing fallback covers it unchanged.
+    /// </para>
+    /// </summary>
+    public string UpdateStatement(
+        string qualifiedTable, string setList, string whereClause, IReadOnlyList<string>? returningColumns)
+    {
+        var output = returningColumns is { Count: > 0 } cols
+            ? " output " + string.Join(", ", cols.Select(c => $"inserted.{c}"))
+            : "";
+        return $"update {qualifiedTable} set {setList}{output} where {whereClause}";
+    }
+
+    /// <summary>The T-SQL table. <c>now()</c> and <c>gen_random_uuid()</c> are deliberately absent: they
+    /// are not this engine's vocabulary, and a cell holding one stays refused rather than being rewritten
+    /// into something else (<see cref="TSqlEditExpression"/>).</summary>
+    public string? TryEditExpression(string? text) => TSqlEditExpression.TryRecognize(text);
+
+    /// <inheritdoc cref="ISqlDialect.EditExpressions"/>
+    public IReadOnlyCollection<string> EditExpressions => TSqlEditExpression.All;
+
+    /// <summary>
     /// True, and the security-relevant part of this class. It says the guard can read a T-SQL batch for
     /// itself: <see cref="DescribeStatements"/> splits and classifies with <see cref="TSqlWriteGuard"/>
     /// over the T-SQL scanner, so a <c>SELECT</c> is reported as a read rather than as "I could not tell".

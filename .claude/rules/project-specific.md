@@ -362,6 +362,31 @@ scroll position and any pending edits.
   because the grid would otherwise answer a header press with the cell menu. It is the shared home for
   #106's sort.
 
+## §9.15 — An open cell editor is not part of the pending set until something commits it (#147 / #148)
+
+`DataGrid.CellEditEnding` is the only route into `ResultSetViewModel.SetCell`, and the DataGrid raises it on
+Enter, Tab and a change of current cell — **not** when focus leaves the grid. So a typed-but-uncommitted edit
+lived in a `TextBox` that nothing on the save path reads: the buffer was one edit behind, the pending count
+did not move, and ✓ Save wrote the **previous** value while the screen showed the new one. Measured, not
+inferred (`tests/Bearing.App.Tests/Ui/CellEditCommitTests.cs`).
+
+- **Everything that reads the pending set commits first.** `ResultView.CommitOpenEdit` at the top of save /
+  discard / show-SQL, from the toolbar buttons and from the commands alike. The button press already moves
+  focus, but the palette route moves nothing, and a save that reads a stale row is the one outcome this path
+  may not have.
+- **Focus leaving the grid commits**, as a spreadsheet does. **Escape still cancels** — it cancels before
+  focus goes anywhere, which is what keeps "abandon this edit" possible.
+- **Three commands are taken from a focused cell editor**, and the set is explicit
+  (`CommitFirstCommands`: `grid.save`, `grid.discard`, `grid.showSql`). The keystroke is *resolved* first,
+  the editor committed, then dispatched with that set as `TryHandle`'s `only` — the order matters, because
+  the commands' `canRun` is `HasPendingEdits()` and the commit is what makes it true.
+- The old `if (e.Source is TextBox) return;` was not a no-op: the keystroke reached the window unhandled and
+  `KeyScope.Global` answered Ctrl+S with **`file.save`**, writing the script to disk instead of the row. A
+  key a control declines does not stop — it goes somewhere, and that is worth checking before declining it.
+- WHEN adding a grid command, it stays out of `CommitFirstCommands` unless it acts on the pending set as a
+  whole. Ctrl+C, Ctrl+V and the arrows belong to the text being edited, and taking one of those would be a
+  worse bug than the one this fixed.
+
 ## §9.10a — Focus arriving in a results grid is not a viewport event (#60)
 `GridSelectionController.SeedActive` seeds a cursor when the grid takes focus with none — and it used to
 seed the result's **absolute** first cell and scroll to it. That ran from the grid's `GotFocus`, which the

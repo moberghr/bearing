@@ -82,6 +82,43 @@ public interface ISqlDialect
     /// impossible because the table is audited.</param>
     string InsertStatement(string qualifiedTable, string columnList, string valueList, bool withReturning);
 
+    /// <summary>
+    /// One UPDATE that also reads back the columns it wrote, for the same reason
+    /// <see cref="InsertStatement"/> does — and a whole-statement hook for the same reason too: the
+    /// clause's <em>position</em> varies. Postgres ends with <c>returning c1, c2</c>; T-SQL puts
+    /// <c>output inserted.c1, inserted.c2</c> between the SET list and the WHERE, where a trailing one
+    /// would be a syntax error.
+    /// </summary>
+    /// <param name="qualifiedTable">Already quoted and schema-qualified by this dialect.</param>
+    /// <param name="setList">Already quoted assignments, comma-separated.</param>
+    /// <param name="whereClause">The predicate, without the <c>where</c> keyword.</param>
+    /// <param name="returningColumns">Already-quoted column identifiers to read back, or null for none.
+    /// The generator asks for both forms so an executor can retry without the clause — SQL Server rejects
+    /// <c>OUTPUT</c> without <c>INTO</c> on a table with an enabled trigger for an UPDATE exactly as it
+    /// does for an INSERT.</param>
+    string UpdateStatement(
+        string qualifiedTable, string setList, string whereClause, IReadOnlyList<string>? returningColumns);
+
+    /// <summary>
+    /// The canonical SQL this engine spells a recognised inline-edit expression with — <c>now()</c> on
+    /// Postgres, <c>getdate()</c> on SQL Server — or null when the text is not one of them (#149).
+    /// <para>
+    /// Per-dialect because the table is engine-specific vocabulary, and a wrong answer here is visible
+    /// twice over: the cell is drawn as an expression the server will evaluate, and the save emits SQL
+    /// that engine cannot run. <c>current_timestamp</c> and <c>default</c> happen to be common to both;
+    /// <c>gen_random_uuid()</c> and <c>newid()</c> are each meaningless to the other.
+    /// </para>
+    /// <para>
+    /// The string comes from the dialect's own table, never from the caller — that is what keeps §5.4's
+    /// one break bounded (<see cref="EditExpression"/>).
+    /// </para>
+    /// </summary>
+    string? TryEditExpression(string? text);
+
+    /// <summary>Every expression this dialect accepts in a cell, canonically spelled — for anything that
+    /// has to <em>list</em> them (a menu, a tooltip, documentation) rather than test one.</summary>
+    IReadOnlyCollection<string> EditExpressions { get; }
+
     // ---- Write guard ----
 
     /// <summary>
