@@ -2,12 +2,9 @@ cask "bearing" do
   # Canonical source of the cask. The tap (moberghr/homebrew-bearing) holds a copy at Casks/bearing.rb;
   # edit this one and copy it over — see packaging/homebrew/README.md for the per-release steps.
   #
-  # PLACEHOLDER until the first release carrying a macOS asset. Both lines are wrong on purpose, and the
-  # sha256 is all zeroes rather than a `<replace-me>` token because a cask validates the field's *shape*:
-  # a non-hex value is a syntax error that makes the whole tap unloadable, while an unmatchable hash fails
-  # one install, loudly, which is the right failure for a cask with nothing to point at yet.
-  version "0.7.1"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  # These two are re-pointed per release and must move together — see the url note below.
+  version "0.10.3"
+  sha256 "dae0c1e1a3cb30c107a55dd1c5620dacf66f1437481dd42fdf9444d6e76382ab"
 
   # The zip carries no version in its name, so the tag in the URL is what selects the build.
   url "https://github.com/moberghr/bearing/releases/download/v#{version}/BearingSql-osx-Portable.zip"
@@ -45,10 +42,17 @@ cask "bearing" do
   # than leaving the user with "Bearing is damaged and can't be opened", which is what it looks like.
   caveats do
     <<~EOS
-      Bearing is not signed with an Apple Developer ID yet. If you installed without
-      --no-quarantine, macOS will refuse to open it; clear the flag with:
+      IF MACOS SAYS "Bearing is damaged and can't be opened" — it is not damaged. That is
+      Gatekeeper refusing an unsigned app that carries the quarantine flag. Clear it:
 
         xattr -dr com.apple.quarantine "#{appdir}/Bearing.app"
+
+      To avoid it next time, install with --no-quarantine, which Homebrew accepts only on the
+      command line and a cask cannot set for you:
+
+        brew install --cask --no-quarantine moberghr/bearing/bearing
+
+      Bearing has no Apple Developer ID yet, which is why either step is needed at all.
 
       Bearing updates itself from its GitHub Releases feed — `brew upgrade` is not needed.
     EOS

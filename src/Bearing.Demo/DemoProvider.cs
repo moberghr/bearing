@@ -46,6 +46,9 @@ public sealed class DemoProvider : IDbProvider, IProviderRegistry
     /// credential kind is a promise about an authentication that never happens. The connect dialog offers
     /// neither, which is honest — and a demo session replaces the registry wholesale anyway, so the dialog
     /// is not normally reachable with this provider selected.</summary>
+    /// <summary>False: there is no server, so nothing on one refuses anything (§9.7).</summary>
+    public bool EnforcesReadOnlyOnServer => false;
+
     public bool SupportsIntegratedAuth => false;
 
     /// <inheritdoc cref="SupportsIntegratedAuth"/>

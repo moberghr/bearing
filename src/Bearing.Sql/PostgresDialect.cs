@@ -39,6 +39,19 @@ public sealed class PostgresDialect : ISqlDialect
         => $"insert into {qualifiedTable} ({columnList}) values ({valueList})"
            + (withReturning ? " returning *" : "");
 
+    /// <summary>RETURNING trails the statement here too, so the read-back reads last.</summary>
+    public string UpdateStatement(
+        string qualifiedTable, string setList, string whereClause, IReadOnlyList<string>? returningColumns)
+        => $"update {qualifiedTable} set {setList} where {whereClause}"
+           + (returningColumns is { Count: > 0 } cols ? " returning " + string.Join(", ", cols) : "");
+
+    /// <summary>The Postgres table, unchanged — <see cref="EditExpression"/> was written against this
+    /// engine and keeps its own entry points for the callers (and tests) that name it directly.</summary>
+    public string? TryEditExpression(string? text) => EditExpression.TryRecognize(text);
+
+    /// <inheritdoc cref="ISqlDialect.EditExpressions"/>
+    public IReadOnlyCollection<string> EditExpressions => EditExpression.All;
+
     /// <summary>True: <see cref="WriteGuard"/> is built on the vendored PostgreSQL lexer, so it reads
     /// this engine's batches for real and may report a plain SELECT as safe.</summary>
     public bool HasDialectAwareGuard => true;

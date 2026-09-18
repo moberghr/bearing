@@ -191,4 +191,62 @@ public class SqlServerConnectionOptionsTests
 
         Assert.Equal("bearing", result.Rows[0][0]);
     }
+
+    // ---- the statement timeout (§1.9) ------------------------------------------------------------
+
+    /// <summary>
+    /// The connection's statement timeout reaches the driver. SqlClient's Command Timeout is the closest
+    /// thing this engine has — it is the client cancelling rather than the server refusing, which is a real
+    /// difference and is why the dialog's note no longer says which side does it — but the setting has to do
+    /// *something*, and before this it did nothing at all: the status bar reported the limit over a
+    /// connection that ran unbounded.
+    /// </summary>
+    [Fact]
+    public void The_connections_statement_timeout_reaches_the_driver()
+    {
+        var factory = new SqlServerConnectionFactory(
+            MsSqlTestServer.Info() with { StatementTimeoutSeconds = 30 }, Password);
+
+        using var conn = factory.CreateConnection();
+        Assert.Equal(30, conn.CommandTimeout);
+    }
+
+    /// <summary>No timeout is still no timeout — 0 is how both engines spell "no limit", and #93's stance
+    /// that a slow query is the user's business is unchanged for a connection that asks for nothing.</summary>
+    [Fact]
+    public void A_connection_with_no_timeout_still_waits_as_long_as_the_query_takes()
+    {
+        var factory = new SqlServerConnectionFactory(MsSqlTestServer.Info(), Password);
+
+        using var conn = factory.CreateConnection();
+        Assert.Equal(0, conn.CommandTimeout);
+    }
+
+    /// <summary>
+    /// The typed field outranks the bag, the precedence Tls already has (§1.4): the options bag travels in a
+    /// shared project.json, and a "Command Timeout" entry there must not quietly lift a limit the connection
+    /// asks for. With no timeout set the bag still tunes it, which is what it is for.
+    /// </summary>
+    [Fact]
+    public void An_options_entry_cannot_lift_a_timeout_the_connection_asks_for()
+    {
+        var overridden = new SqlServerConnectionFactory(
+            MsSqlTestServer.Info() with
+            {
+                StatementTimeoutSeconds = 30,
+                Options = new Dictionary<string, string> { ["Command Timeout"] = "0" },
+            },
+            Password);
+        using var conn = overridden.CreateConnection();
+        Assert.Equal(30, conn.CommandTimeout);
+
+        var tuned = new SqlServerConnectionFactory(
+            MsSqlTestServer.Info() with
+            {
+                Options = new Dictionary<string, string> { ["Command Timeout"] = "45" },
+            },
+            Password);
+        using var tunedConn = tuned.CreateConnection();
+        Assert.Equal(45, tunedConn.CommandTimeout);
+    }
 }

@@ -439,6 +439,10 @@ public partial class ConnectionDialog : Window
         return parsed && seconds >= SessionPolicy.NoTimeout ? null : text;
     }
 
+    /// <summary>The engine the picker is on, or the first registered one before it has a selection.</summary>
+    private IDbProvider SelectedProvider()
+        => _providers[Math.Clamp(ProviderBox.SelectedIndex, 0, _providers.Count - 1)];
+
     private void OnSafetyToggled(object? sender, RoutedEventArgs e) => UpdateSafetyNote();
 
     private void OnTimeoutChanged(object? sender, TextChangedEventArgs e) => UpdateSafetyNote();
@@ -447,7 +451,11 @@ public partial class ConnectionDialog : Window
     /// dialog claims and what the connection does cannot drift apart.</summary>
     private void UpdateSafetyNote()
     {
-        var advice = SessionPolicy.Advice(ReadOnlyBox.IsChecked == true, TypedTimeoutSeconds());
+        // The selected engine decides who is said to refuse a write: Postgres asks the server, SQL Server
+        // has nothing to ask (§1.9). Read live from the picker rather than captured, so switching engine
+        // re-words the note — the same reason ProviderTraits is resolved per connection.
+        var advice = SessionPolicy.Advice(
+            ReadOnlyBox.IsChecked == true, TypedTimeoutSeconds(), SelectedProvider().EnforcesReadOnlyOnServer);
         if (UnreadableTimeout() is { } typed)
             advice = $"“{typed}” isn't a whole number of seconds, so this connection will be saved "
                      + "with no statement timeout. Enter seconds (30), or leave it empty for no limit."

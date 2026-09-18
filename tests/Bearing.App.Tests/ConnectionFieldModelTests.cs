@@ -35,6 +35,7 @@ public class ConnectionFieldModelTests
     {
         public string Id => "optiontest";
         public string DisplayName => "Option Test";
+        public bool EnforcesReadOnlyOnServer => false;
         public bool SupportsIntegratedAuth => false;
         public bool SupportsEntraToken => false;
 
@@ -82,6 +83,7 @@ public class ConnectionFieldModelTests
     {
         public string Id => "choicetest";
         public string DisplayName => "Choice Test";
+        public bool EnforcesReadOnlyOnServer => false;
         public bool SupportsIntegratedAuth => false;
         public bool SupportsEntraToken => false;
 
@@ -541,6 +543,7 @@ public class ConnectionFieldModelTests
     {
         public string Id => "fieldless";
         public string DisplayName => "Fieldless";
+        public bool EnforcesReadOnlyOnServer => false;
         public bool SupportsIntegratedAuth => false;
         public bool SupportsEntraToken => false;
 

@@ -25,6 +25,10 @@ public sealed class PostgresProvider : IDbProvider
 
     /// <summary>No integrated auth: Npgsql authenticates with a password (or a token used as one), and
     /// SSPI/GSS single sign-on is not a path this app offers. The dialog therefore never shows it here.</summary>
+    /// <summary>True: the sessions carry <c>default_transaction_read_only=on</c> in their startup packet,
+    /// so the server is the one that refuses (#99).</summary>
+    public bool EnforcesReadOnlyOnServer => true;
+
     public bool SupportsIntegratedAuth => false;
 
     /// <summary>True: Npgsql takes the Entra access token as the password, which is exactly how Azure

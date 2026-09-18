@@ -130,6 +130,10 @@ public class DialectWriteGuardTests
         public string? Wrap(string s, int o, int l) => Ss.Wrap(s, o, l);
         public string? CountWrap(string s) => Ss.CountWrap(s);
         public string InsertStatement(string t, string c, string v, bool r) => Ss.InsertStatement(t, c, v, r);
+        public string UpdateStatement(string t, string s, string w, IReadOnlyList<string>? r)
+            => Ss.UpdateStatement(t, s, w, r);
+        public string? TryEditExpression(string? text) => Ss.TryEditExpression(text);
+        public IReadOnlyCollection<string> EditExpressions => Ss.EditExpressions;
     }
 
     private static readonly ISqlDialect Unreadable = new UnreadableDialect();

@@ -33,6 +33,15 @@ public sealed class SqlServerProvider : IDbProvider
     /// <summary>True: Windows / integrated authentication is what most SQL Server installations are set up
     /// for, and SqlClient supports it directly (<see cref="CredentialKind.Integrated"/> →
     /// <c>Integrated Security=true</c>, no secret resolved and no prompt).</summary>
+    /// <summary>
+    /// False, and not an oversight. SQL Server has no session-level "refuse writes" to ask for:
+    /// <c>ApplicationIntent=ReadOnly</c> chooses a readable secondary rather than refusing anything, and a
+    /// read-only <em>database</em> or a role without write privileges is the server admin's arrangement, not
+    /// a connection setting. So on this engine a read-only connection is refused by Bearing before the batch
+    /// runs, and the dialog says exactly that instead of claiming the server arranged it.
+    /// </summary>
+    public bool EnforcesReadOnlyOnServer => false;
+
     public bool SupportsIntegratedAuth => true;
 
     /// <summary>True. SqlClient accepts an access token only via <c>SqlConnection.AccessToken</c>, never as
