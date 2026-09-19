@@ -54,4 +54,25 @@ public static class TSqlEditExpression
 
     /// <inheritdoc cref="EditExpression.All"/>
     public static IReadOnlyCollection<string> All => Known.Values;
+
+    /// <summary>
+    /// The short list a menu offers, in menu order — <see cref="EditExpression.Offered"/>'s counterpart,
+    /// and the same rule: offering is a stronger claim than accepting, so a near-duplicate that a menu
+    /// cannot explain stays typeable instead.
+    /// <para>
+    /// The clock family is where that bites here. <c>getdate()</c> is the one in every T-SQL codebase and
+    /// <c>sysdatetimeoffset()</c> is the only member that answers a <em>different</em> question — it carries
+    /// the offset, which is the whole point of a <c>datetimeoffset</c> column. <c>sysdatetime()</c>,
+    /// <c>sysutcdatetime()</c> and <c>getutcdate()</c> differ from those two in precision or in zone, which
+    /// is a choice worth making deliberately by typing it rather than by picking the third item down.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<string> Offered { get; } =
+    [
+        Known["getdate()"],
+        Known["sysdatetimeoffset()"],
+        Known["current_user"],
+        Known["newid()"],
+        Known["default"],
+    ];
 }

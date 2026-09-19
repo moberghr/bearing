@@ -3,7 +3,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
-using Bearing.Sql;
 using Xunit;
 
 namespace Bearing.App.Tests.Ui;
@@ -35,8 +34,10 @@ public class SetValueMenuTests
 
         Assert.Equal("NULL", Assert.IsType<MenuItem>(items[0]).Header);
         Assert.IsType<Separator>(items[1]);
+        // The result's own dialect, not a list this test picked: a Postgres result offers now(), and the
+        // same view on a SQL Server result would offer getdate() (TSqlEditExpressionTests holds that half).
         Assert.Equal(
-            EditExpression.Offered,
+            result.Traits.Dialect.OfferedEditExpressions,
             items.Skip(2).Cast<MenuItem>().Select(i => (string)i.Header!).ToList());
         window.Close();
     });

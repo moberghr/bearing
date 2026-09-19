@@ -209,8 +209,9 @@ public static class GridSelectionOps
     /// shape <see cref="PlanSetNull"/> uses for a NOT NULL column.
     /// </para>
     /// <para>
-    /// The test is <c>ResultEditModel.ExpressionFor</c> itself, not a second predicate that agrees with it
-    /// today. That one already decides whether the save emits SQL and whether the cell is drawn as an
+    /// The test is <c>ResultEditModel.ExpressionFor</c> itself — asked of the result's own dialect, so the
+    /// menu, the cell's colour and the generated SQL cannot disagree about what a cell means — and not a
+    /// second predicate that agrees with it today. That one already decides whether the save emits SQL and whether the cell is drawn as an
     /// expression, and a menu that wrote a cell those two would then read differently is the one outcome
     /// worth ruling out by construction.
     /// </para>
@@ -223,7 +224,11 @@ public static class GridSelectionOps
         foreach (var (row, col) in cells)
         {
             if (col < 0 || col >= result.Columns.Count || col >= row.Length) continue;
-            if (ResultEditModel.ExpressionFor(sql, result.Columns[col].ClrType) is null) { refused++; continue; }
+            if (ResultEditModel.ExpressionFor(result.Traits.Dialect, sql, result.Columns[col].ClrType) is null)
+            {
+                refused++;
+                continue;
+            }
             targets.Add((row, col));
         }
         return new SetValuePlan(Ordered(result, targets), refused);

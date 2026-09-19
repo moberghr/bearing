@@ -64,6 +64,37 @@ public class TSqlEditExpressionTests
         }
     }
 
+    /// <summary>The menu's list and the recogniser cannot disagree on this engine either: every offered
+    /// item has to be a string the recogniser accepts and hands back unchanged, or a click would stage a
+    /// cell the save then refuses.</summary>
+    [Fact]
+    public void Every_offered_tsql_expression_is_one_the_recogniser_accepts_unchanged()
+    {
+        Assert.NotEmpty(TSqlEditExpression.Offered);
+        foreach (var offered in TSqlEditExpression.Offered)
+        {
+            Assert.Equal(offered, TSqlEditExpression.TryRecognize(offered));
+            Assert.Contains(offered, TSqlEditExpression.All);
+        }
+    }
+
+    /// <summary>The two engines' menus are not the same menu — which is the point of asking the connection's
+    /// dialect for one rather than holding a list in the view.</summary>
+    [Fact]
+    public void Each_dialect_offers_its_own_engines_spelling()
+    {
+        Assert.Contains("getdate()", SqlServerDialect.Instance.OfferedEditExpressions);
+        Assert.DoesNotContain("now()", SqlServerDialect.Instance.OfferedEditExpressions);
+
+        Assert.Contains("now()", PostgresDialect.Instance.OfferedEditExpressions);
+        Assert.DoesNotContain("getdate()", PostgresDialect.Instance.OfferedEditExpressions);
+
+        // …and each offers a subset of what it accepts, never something it would then refuse.
+        foreach (var dialect in new ISqlDialect[] { PostgresDialect.Instance, SqlServerDialect.Instance })
+            foreach (var offered in dialect.OfferedEditExpressions)
+                Assert.Equal(offered, dialect.TryEditExpression(offered));
+    }
+
     /// <summary>The dialect is the seam the app asks through, so the table has to be reachable that way —
     /// and the two dialects must not answer each other's question.</summary>
     [Fact]

@@ -119,6 +119,14 @@ public interface ISqlDialect
     /// has to <em>list</em> them (a menu, a tooltip, documentation) rather than test one.</summary>
     IReadOnlyCollection<string> EditExpressions { get; }
 
+    /// <summary>
+    /// The subset of <see cref="EditExpressions"/> a menu offers, in menu order. Shorter on purpose:
+    /// a cell accepts anything in the table because the user typed it and meant it, while a menu item
+    /// claims "this works here" — so an expression needing an extension that may not be installed, or one
+    /// differing from its neighbour in a way a menu cannot explain, stays typeable and unadvertised.
+    /// </summary>
+    IReadOnlyList<string> OfferedEditExpressions { get; }
+
     // ---- Write guard ----
 
     /// <summary>

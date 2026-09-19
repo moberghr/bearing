@@ -296,6 +296,9 @@ public sealed class SqlServerDialect : ISqlDialect
     /// <inheritdoc cref="ISqlDialect.EditExpressions"/>
     public IReadOnlyCollection<string> EditExpressions => TSqlEditExpression.All;
 
+    /// <inheritdoc cref="ISqlDialect.OfferedEditExpressions"/>
+    public IReadOnlyList<string> OfferedEditExpressions => TSqlEditExpression.Offered;
+
     /// <summary>
     /// True, and the security-relevant part of this class. It says the guard can read a T-SQL batch for
     /// itself: <see cref="DescribeStatements"/> splits and classifies with <see cref="TSqlWriteGuard"/>
