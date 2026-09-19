@@ -107,22 +107,28 @@ public sealed class ResultCellFactory
         var badges = new List<(string, string)>(2);
         if (result.PrimaryKeyColumns.Contains(index)) badges.Add(("PK", "Accent.Brand"));
         if (result.ForeignKeyColumns.Contains(index)) badges.Add(("FK", "Syntax.Keyword"));
-        var type = result.Columns[index].DataTypeName;
-        if (ColumnKinds.IsJson(type)) badges.Add((type.ToLowerInvariant(), "Syntax.Table"));
+        var column = result.Columns[index];
+        var type = column.DataTypeName;
+        if (ColumnKinds.IsDocument(type)) badges.Add((type.ToLowerInvariant(), "Syntax.Table"));
         // A timestamp *without* zone, said as the consequence rather than as the type name (#77). "timestamp"
         // would be consistent with the json badge, but json's badge exists to separate json from jsonb, where
         // the type name *is* the distinction. Here the reader's question is "can I trust this instant", and
         // "timestamp" does not answer it for anyone who does not already know Postgres draws the line there.
         // On the header, never in the cell: anything appended inside CellFormat.Display travels into the
         // clipboard, the exports and the edit round-trip.
-        if (ColumnKinds.IsTimestampWithoutZone(type)) badges.Add(("no tz", "Warn.Amber"));
+        //
+        // The whole column, not just its type name: SQL Server's `timestamp` is rowversion, an 8-byte
+        // counter, and badging that "no tz" answers a question its values cannot raise. See ColumnKinds.
+        if (ColumnKinds.IsTimestampWithoutZone(column)) badges.Add(("no tz", "Warn.Amber"));
         return badges;
     }
 
     /// <summary>The width the column opens at: whatever its header and its widest loaded value need, capped
     /// (<see cref="ColumnWidths"/>). Nothing is left on the DataGrid's <c>Auto</c> sizing, which grew a
     /// column to its longest realized value and pushed the rest off screen (#30). A foreign-key or json
-    /// column also reserves room for its always-present ↗ / ⤢ glyph, so the value isn't sized into it.</summary>
+    /// column also reserves room for its always-present ↗ / ⤢ glyph, so the value isn't sized into it.
+    /// ("json column" is any document column now — xml gets the same affordance, see
+    /// <see cref="ColumnKinds.IsDocument"/>.)</summary>
     private static double InitialWidth(ResultSetViewModel result, int index)
     {
         var column = result.Columns[index];
@@ -137,7 +143,7 @@ public sealed class ResultCellFactory
         // one that broke — the widest value stops at the first line, so a document with a short first line
         // sized the column to Min and the glyph then took nearly all of it.
         var hasGlyph = result.ForeignKeyColumns.Contains(index)
-            || ColumnKinds.IsJson(column.DataTypeName)
+            || ColumnKinds.IsDocument(column.DataTypeName)
             || sample.AnyInspectable;
         return ColumnWidths.Initial(
             headerTextWidth: ResultGridChrome.MeasureText(
@@ -152,11 +158,11 @@ public sealed class ResultCellFactory
     }
 
     /// <summary>A value display cell: text (dimmed italic "(null)", numeric in code color), plus an
-    /// inspect (⤢) affordance for jsonb/json and any long/multiline value. Every value cell is
+    /// inspect (⤢) affordance for document columns (json/jsonb/xml) and any long/multiline value. Every value cell is
     /// selectable (single/drag/modifier-click); numeric selections drive the quick-stats bar.</summary>
     private IDataTemplate ValueCell(ResultSetViewModel result, int index, DataGrid grid)
     {
-        var isJsonCol = ColumnKinds.IsJson(result.Columns[index].DataTypeName);
+        var isJsonCol = ColumnKinds.IsDocument(result.Columns[index].DataTypeName);
         var numeric = CellStats.IsNumeric(result.Columns[index].ClrType);
         return new FuncDataTemplate<object?[]>((row, _) =>
             MakeSelectable(() => ValueContent(result, index, row, isJsonCol, numeric), result, row, index, grid));
@@ -409,14 +415,15 @@ public sealed class ResultCellFactory
     /// (#149). Only asked of an editable result — nothing else can hold a pending edit.</summary>
     private static string? PendingExpression(ResultSetViewModel result, int index, object?[]? row)
         => result.IsEditable && row is not null && index < row.Length
-            ? ResultEditModel.ExpressionFor(row[index], result.Columns[index].ClrType)
+            ? ResultEditModel.ExpressionFor(result.Traits.Dialect, row[index], result.Columns[index].ClrType)
             : null;
 
     /// <summary>Whether this cell holds a pending edit that the column's type cannot take, so the save will
     /// be rejected by the server. Only asked of an editable result — nothing else can hold one.</summary>
     private static bool WillFailOnSave(ResultSetViewModel result, int index, object?[]? row)
         => result.IsEditable && row is not null && index < row.Length
-        && ResultEditModel.WillReachServerAsText(row[index], result.Columns[index].ClrType);
+        && ResultEditModel.WillReachServerAsText(
+               result.Traits.Dialect, row[index], result.Columns[index].ClrType);
 
     /// <summary>Draw (or clear) a cell's selection ring.
     /// <para>

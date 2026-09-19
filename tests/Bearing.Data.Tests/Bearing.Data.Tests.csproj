@@ -14,6 +14,10 @@
   <ItemGroup>
     <!-- Shared with Bearing.App.Tests: one definition of the test server's defaults (see PgTestServer). -->
     <Compile Include="..\Shared\PgTestServer.cs" Link="Shared\PgTestServer.cs" />
+    <!-- Only this project's suites talk to a live SQL Server, so MsSqlTestServer is linked here alone;
+         it lives in Shared/ beside PgTestServer so the next project that needs it links the same file
+         rather than copying the defaults (see PgTestServer's comment on why copies are forbidden). -->
+    <Compile Include="..\Shared\MsSqlTestServer.cs" Link="Shared\MsSqlTestServer.cs" />
   </ItemGroup>
 
   <ItemGroup>

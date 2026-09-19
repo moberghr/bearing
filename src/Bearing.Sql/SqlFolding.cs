@@ -13,12 +13,21 @@ public sealed record FoldRegion(int Start, int End);
 /// </summary>
 public static class SqlFolding
 {
+    /// <summary>Fold regions for a Postgres buffer.</summary>
     public static IReadOnlyList<FoldRegion> ComputeFoldRegions(string sql)
+        => ComputeFoldRegions(PostgresDialect.Instance, sql);
+
+    /// <summary>
+    /// Fold regions for a buffer belonging to <paramref name="dialect"/>. Folding needs no grammar — a
+    /// region is one statement minus its first line — so the dialect is here only to draw the boundaries,
+    /// and a T-SQL buffer folds per <c>GO</c>-separated batch rather than per semicolon.
+    /// </summary>
+    public static IReadOnlyList<FoldRegion> ComputeFoldRegions(ISqlDialect dialect, string sql)
     {
         var regions = new List<FoldRegion>();
         if (string.IsNullOrEmpty(sql)) return regions;
 
-        foreach (var span in StatementSplitter.Split(sql))
+        foreach (var span in StatementSplitter.Split(dialect, sql))
         {
             if (string.IsNullOrWhiteSpace(span.Text)) continue;
 

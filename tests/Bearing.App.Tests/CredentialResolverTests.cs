@@ -161,4 +161,55 @@ public class CredentialResolverTests
         DateTimeOffset? expiresAt = secondsUntilExpiry == 0 ? null : now.AddSeconds(secondsUntilExpiry);
         Assert.Equal(expected, CredentialResolver.IsExpiring(expiresAt, now, TimeSpan.FromSeconds(90)));
     }
+
+    // ---- Integrated / Windows authentication ---------------------------------------------------------
+
+    [Fact]
+    public async Task Integrated_resolves_no_secret_and_never_touches_the_store_or_the_prompt()
+    {
+        // The OS identity authenticates the connection: the driver negotiates it and the factory sends
+        // neither user nor password. Nothing may be read from or written to the secret store, and the user
+        // must never be asked for anything (§1.1) — a keychain this kind does not use is also a keychain it
+        // must not warn about.
+        var secrets = new FakeSecretStore();
+        var info = Conn(CredentialKind.Integrated);
+        secrets.Seed(info.Id, "should-not-be-read");
+        var prompt = new FakeCredentialPrompt("should-not-be-asked");
+        var resolver = new CredentialResolver(() => secrets, prompt, new ThrowingEntraTokens());
+
+        var cred = await resolver.ResolveAsync(info, forceRefresh: false, CancellationToken.None);
+
+        Assert.Null(cred.Secret);
+        Assert.Null(cred.ExpiresAt);          // the OS refreshes its own ticket; nothing to schedule around
+        Assert.Empty(secrets.Fetched);
+        Assert.Equal(0, prompt.Calls);
+    }
+
+    [Fact]
+    public async Task Integrated_behaves_the_same_on_a_forced_refresh()
+    {
+        // There is nothing to re-prompt for and nothing to re-mint, which is why the retry path excludes
+        // this kind rather than "reauthenticating" by doing nothing, twice.
+        var secrets = new FakeSecretStore();
+        var info = Conn(CredentialKind.Integrated);
+        var prompt = new FakeCredentialPrompt("should-not-be-asked");
+        var resolver = new CredentialResolver(() => secrets, prompt, new ThrowingEntraTokens());
+
+        var cred = await resolver.ResolveAsync(info, forceRefresh: true, CancellationToken.None);
+
+        Assert.Null(cred.Secret);
+        Assert.Empty(secrets.Fetched);
+        Assert.Equal(0, prompt.Calls);
+    }
+
+    [Fact]
+    public async Task Integrated_works_with_no_secret_store_at_all()
+    {
+        // A machine with no reachable keychain is the common case for a Windows-auth SQL Server connection,
+        // and it must connect without a word about storage.
+        var info = Conn(CredentialKind.Integrated);
+        var resolver = new CredentialResolver(() => null, null, new ThrowingEntraTokens());
+
+        Assert.Null((await resolver.ResolveAsync(info, forceRefresh: false, CancellationToken.None)).Secret);
+    }
 }

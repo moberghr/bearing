@@ -28,6 +28,7 @@ internal sealed class CompletionController
     private readonly TextEditor _editor;
     private readonly ICompletionEngine _engine;
     private readonly Func<ISchemaSnapshot?> _snapshot;
+    private readonly Func<Bearing.Sql.ISqlDialect> _dialect;
     private readonly DispatcherTimer _debounce;
     private CompletionWindow? _window;
 
@@ -45,11 +46,15 @@ internal sealed class CompletionController
     /// keystroke — see <see cref="TrySwallowSoftSpace"/>.</summary>
     private int _softSpace = -1;
 
-    public CompletionController(TextEditor editor, ICompletionEngine engine, Func<ISchemaSnapshot?> snapshot)
+    /// <summary><paramref name="dialect"/> is the selected tab's engine, asked per trigger — it decides
+    /// where the statement under the caret ends, which is the window this completes inside.</summary>
+    public CompletionController(TextEditor editor, ICompletionEngine engine, Func<ISchemaSnapshot?> snapshot,
+        Func<Bearing.Sql.ISqlDialect> dialect)
     {
         _editor = editor;
         _engine = engine;
         _snapshot = snapshot;
+        _dialect = dialect;
         _debounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
         _debounce.Tick += (_, _) => { _debounce.Stop(); _ = TriggerAsync(); };
         _editor.TextArea.TextEntered += OnTextEntered;
@@ -129,7 +134,7 @@ internal sealed class CompletionController
         var caret = _editor.CaretOffset;
         // Scope completion to the statement at the caret so earlier statements in a multi-statement
         // buffer can't leak sources/aliases into the current one. Offsets are shifted back on Show.
-        var stmt = Bearing.Sql.StatementSplitter.StatementAt(_editor.Text, caret);
+        var stmt = Bearing.Sql.StatementSplitter.StatementAt(_dialect(), _editor.Text, caret);
         var text = stmt?.Text ?? _editor.Text;
         var localCaret = stmt is null ? caret : caret - stmt.Start;
         var baseOffset = stmt?.Start ?? 0;

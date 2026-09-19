@@ -15,13 +15,79 @@ public interface IDbProvider
     /// <summary>Fields the connect dialog renders for this engine.</summary>
     IReadOnlyList<ConnectionField> ConnectionFields { get; }
 
+    /// <summary>
+    /// Whether <see cref="ConnectionInfo.ReadOnly"/> reaches the <b>server</b> on this engine — that is,
+    /// whether the server itself refuses the write, or only Bearing does.
+    /// <para>
+    /// Postgres carries <c>default_transaction_read_only=on</c> in the startup packet, so it catches what a
+    /// lexer cannot: a function that writes, dynamic SQL, <c>COPY … TO</c> (#99). SQL Server has no
+    /// equivalent — <c>ApplicationIntent=ReadOnly</c> routes to a readable secondary, it does not refuse a
+    /// write — so there the client-side refusal is the whole of it, and what stops a write the lexer misses
+    /// is a role without write privileges.
+    /// </para>
+    /// <para>
+    /// A flag rather than silence because the difference is one the user is told about: the connection
+    /// dialog's note says "the server refuses writes on this connection", which is a claim about *their*
+    /// server and must not be made where nobody arranged it (§1.1). The setting still works on both engines
+    /// — it is the sentence describing it that changes.
+    /// </para>
+    /// </summary>
+    bool EnforcesReadOnlyOnServer { get; }
+
+    /// <summary>Whether this engine can authenticate as the OS identity
+    /// (<see cref="CredentialKind.Integrated"/>). The dialog offers that credential kind only where it
+    /// works, rather than knowing per-engine which ones have it.</summary>
+    bool SupportsIntegratedAuth { get; }
+
+    /// <summary>
+    /// Whether this engine's connection factory can actually authenticate with a short-lived Entra access
+    /// token (<see cref="CredentialKind.EntraToken"/>) — that is, whether the token has somewhere to go.
+    /// <para>
+    /// A separate flag from <see cref="SupportsIntegratedAuth"/> for the same reason that one exists: the
+    /// dialog must not offer a credential kind the factory cannot honour, rather than offering it and
+    /// failing at login. What the flag asks is not "does this engine's cloud support Entra" but "does this
+    /// factory put the token somewhere the driver will read it", and the two drivers differ: Npgsql takes it
+    /// as the password, so Postgres needed no code at all, while SqlClient takes it only on the connection
+    /// object and so needed a path of its own. Both are true today; a third engine's driver may want a
+    /// third arrangement, or none.
+    /// </para>
+    /// </summary>
+    bool SupportsEntraToken { get; }
+
+    /// <summary>
+    /// Place a failed statement's error (see <see cref="QueryError.SqlState"/>) on the neutral
+    /// <see cref="DbErrorKind"/> scale. The engine's codes never leave the provider: the App layer used
+    /// to sniff Postgres SQLSTATEs as strings, which quietly mislabelled every other engine's errors.
+    /// </summary>
+    DbErrorKind Classify(QueryError error);
+
+    /// <summary>
+    /// The same judgement for a thrown exception rather than a returned error — what the connect path
+    /// has, since a failed handshake never produces a <see cref="QueryError"/>. Implementations should
+    /// walk the inner-exception chain: drivers wrap the typed error more often than not.
+    /// </summary>
+    DbErrorKind ClassifyException(Exception exception);
+
     IDbConnectionFactory CreateConnectionFactory(ConnectionInfo info, string? password);
     IMetadataReader CreateMetadataReader(IDbConnectionFactory factory);
     IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory);
 
+    /// <summary>
+    /// Whether this engine can answer <see cref="CreateServerActivity"/> at all.
+    /// <para>
+    /// A flag rather than an empty result, which is the pattern the four catalog kinds on
+    /// <see cref="IMetadataReader"/> use, because activity has no honest empty: an empty
+    /// <see cref="ServerActivity"/> makes the panel say "No sessions on this server", and the
+    /// <c>SeesAllSessions: false</c> form makes it blame the reading role for not seeing them. Both are
+    /// statements about a server nobody asked. A provider that returns false here is saying the feature is
+    /// unimplemented for the engine, which is a different sentence and the true one.
+    /// </para>
+    /// </summary>
+    bool SupportsServerActivity { get; }
+
     /// <summary>The server's own sessions, and the two actions on one (#101). Separate from
     /// <see cref="IMetadataReader"/> because that one is read-only by construction — see
-    /// <see cref="IServerActivity"/>.</summary>
+    /// <see cref="IServerActivity"/>. Only meaningful when <see cref="SupportsServerActivity"/>.</summary>
     IServerActivity CreateServerActivity(IDbConnectionFactory factory);
 }
 
@@ -156,13 +222,20 @@ public interface IQueryExecutor
     IAsyncEnumerable<RowBatch> StreamRowsAsync(string sql, QueryOptions options, CancellationToken ct);
 
     /// <summary>
-    /// Total row count of a single SELECT (<c>select count(*) from (&lt;sql&gt;)</c>). Null means the query's
-    /// <em>shape</em> can't be counted (a multi-statement batch, a non-SELECT, a data-modifying CTE) and the
-    /// caller should simply show no total. A real failure — connection lost, table dropped, permission
+    /// Run one already-built count query (the caller shaped the <c>select count(*) from (…)</c> wrapper —
+    /// see <c>ISqlDialect.CountWrap</c>) and return its scalar. As with <see cref="ExecutePageAsync"/>, the
+    /// executor only runs the SQL — it doesn't shape it: the wrapper is dialect-varying text (SQL Server's
+    /// needs an <c>OFFSET 0 ROWS</c> repair before a derived table may carry an <c>ORDER BY</c>), and
+    /// generating it here would put a second copy of that text next to every driver.
+    /// <para>
+    /// Null means the query's <em>shape</em> can't be counted (a multi-statement batch, a non-SELECT, a
+    /// data-modifying CTE, or — on SQL Server — a derived table with an unnamed or duplicated column) and
+    /// the caller should simply show no total. A real failure — connection lost, table dropped, permission
     /// denied, timeout, cancellation — is <em>thrown</em>, never reported as a missing total, so the UI can
     /// say the count failed instead of silently leaving the row count blank.
+    /// </para>
     /// </summary>
-    Task<long?> CountAsync(string sql, CancellationToken ct);
+    Task<long?> CountAsync(string countSql, CancellationToken ct);
 
     /// <summary>
     /// Run one or more generated writes (UPDATE/DELETE/INSERT) in a single transaction. Returns one

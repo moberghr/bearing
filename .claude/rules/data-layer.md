@@ -34,9 +34,19 @@ break in the rule above, and what keeps it bounded is **where the decision is ma
   `string` **and** `Coerce` already failed on the text. That set is exactly what used to be drawn amber — a
   value that cannot be written at all today — so this can never change the meaning of an edit that works. A
   `text` cell holding `now()` is a value, because `Coerce` accepts it, and is never reinterpreted.
-- The emitted SQL is `Bearing.Sql.EditExpression`'s own canonical spelling, never the user's string, so
-  nothing typed is interpolated into a statement. Nothing in that table takes an argument — which is what
-  stops one carrying a subquery or a second statement, and is asserted rather than assumed.
+- The emitted SQL is the **dialect's** own canonical spelling, never the user's string, so nothing typed is
+  interpolated into a statement. Nothing in either table takes an argument — which is what stops one
+  carrying a subquery or a second statement, and is asserted rather than assumed.
+- **The table is per engine, and is not a translation.** `EditExpression` (Postgres) and
+  `TSqlEditExpression` (SQL Server) are reached through `ISqlDialect.TryEditExpression`, the shape
+  `WriteGuard`/`TSqlWriteGuard` already has: separate tables, one mechanism (`EditExpression.Lookup` owns
+  the normalization, because normalization decides which strings can reach a statement at all). `now()`
+  typed on a SQL Server connection stays **refused and amber** rather than becoming `getdate()` — the
+  statement that runs has to be the one the cell shows. Only `default`, `current_timestamp`,
+  `current_user` and `session_user` are common to both, and only because T-SQL genuinely spells them that
+  way. Asking the wrong table is visible twice: the cell claims the server will evaluate something, and
+  the save emits SQL that engine cannot run — which is why `ExpressionFor`, `WillReachServerAsText` and
+  `ResultCellFactory` all take the dialect rather than defaulting to one.
 - A **key predicate refuses one outright** (`DmlGenerator.BuildWhere` throws). Keys come from the row's
   stored originals, so it is an invariant check — but SQL in a `WHERE` re-aims the write at rows nobody
   picked, which is the one failure worth stating rather than trusting.
@@ -54,6 +64,14 @@ typed — and the same was already quietly true of a trigger's rewrite and an `o
 - `ApplyReturnedRow` matches on the **base** column name and falls back to the displayed one, then keeps the
   locally committed value for anything the statement did not return. Matching displayed names alone breaks
   `select note as n` — and the version of this that built a fresh row wrote nulls over what had just saved.
+- **Where the clause goes is the dialect's call** (`ISqlDialect.UpdateStatement`), like the INSERT's before
+  it: Postgres ends with `returning c1, c2`, T-SQL puts `output inserted.c1, inserted.c2` **between the SET
+  list and the WHERE**, where a trailing one is a syntax error. `inserted` is the new row for an UPDATE;
+  `deleted` is the old one.
+- **The read-back has a retry path on SQL Server, and needs one.** Msg 334 refuses `OUTPUT` without `INTO`
+  on a table with an enabled trigger for an UPDATE exactly as for an INSERT, so `Update` fills
+  `SqlWriteCommand.SqlWithoutReturning` whenever it added a clause — and null when it did not, which is what
+  tells the executor there is nothing to retry with. An audited table must lose the refill, never the save.
 
 ## §5.5 — Temporal mappings are the driver's choice, and load-bearing
 Confirmed against **Npgsql 10** (`tests/Bearing.Data.Tests/TemporalMappingTests.cs` pins it live):

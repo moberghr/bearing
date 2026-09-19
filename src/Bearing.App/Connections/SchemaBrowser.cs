@@ -32,7 +32,9 @@ public sealed class SchemaBrowser : ISchemaBrowser
 
     public async Task<IReadOnlyList<string>> GetDatabasesAsync(ConnectionInfo connection, CancellationToken ct)
     {
-        // pg_database is cluster-wide — the connection's own database can answer it.
+        // The database list is a server-level catalog on both engines (Postgres' pg_database is
+        // cluster-wide; SQL Server's sys.databases is instance-wide), so the connection's own database can
+        // answer it and no second connection is needed. The provider owns the actual query.
         var reader = await GetReaderAsync(connection, connection.Database, ct);
         return await reader.Metadata.GetDatabasesAsync(ct);
     }

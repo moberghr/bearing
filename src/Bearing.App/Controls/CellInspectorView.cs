@@ -148,9 +148,13 @@ public sealed class CellInspectorView : UserControl
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
+        // The declared type wins where there is one worth naming (json, jsonb, xml); "json" is for a value
+        // that only *looks* like a document, and "text" for everything else. An xml value lands on the
+        // third arm rather than the second: it is a document, so it keeps its type name, but it is not JSON
+        // and _isJson is false for it (the tree would have nothing to render).
         var badge = ResultChrome.Badge(
-            _isJson ? (ColumnKinds.IsJson(typeName) ? typeName.ToLowerInvariant() : "json") : "text",
-            _isJson ? "Syntax.Table" : "Text.Dim");
+            ColumnKinds.IsDocument(typeName) ? typeName.ToLowerInvariant() : _isJson ? "json" : "text",
+            _isJson || ColumnKinds.IsDocument(typeName) ? "Syntax.Table" : "Text.Dim");
 
         // Drawn, not typed: the ⧉ and ✕ glyphs aren't in every UI font and came out clipped.
         var copy = ResultChrome.GlyphIconButton("M4,4 H12 V12 H4 Z M1.5,9 V1.5 H9", "Copy value");

@@ -51,11 +51,23 @@ public static class EditExpression
 
     /// <summary>The canonical SQL for <paramref name="text"/>, or null when it is not one of the known
     /// expressions. Case- and whitespace-insensitive; the returned string comes from <see cref="Known"/>.</summary>
-    public static string? TryRecognize(string? text)
+    public static string? TryRecognize(string? text) => Lookup(Known, text);
+
+    /// <summary>
+    /// The shared half: normalize <paramref name="text"/> and look it up in one dialect's table.
+    /// <para>
+    /// Internal so a second engine's table (<see cref="TSqlEditExpression"/>) reuses this rather than
+    /// re-deriving what counts as the same spelling — the normalization <em>is</em> part of the safety
+    /// argument, since it decides which strings can reach a statement at all, and two copies of it would
+    /// be two chances to widen one by accident. The pattern <see cref="WriteGuard"/> and
+    /// <see cref="TSqlWriteGuard"/> already follow: separate tables, one mechanism.
+    /// </para>
+    /// </summary>
+    internal static string? Lookup(IReadOnlyDictionary<string, string> known, string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
         var normalized = EmptyCall.Replace(text.Trim().ToLowerInvariant(), "()");
-        return Known.TryGetValue(normalized, out var sql) ? sql : null;
+        return known.TryGetValue(normalized, out var sql) ? sql : null;
     }
 
     /// <summary>Every expression the grid accepts, canonically spelled — for anything that has to *list* them

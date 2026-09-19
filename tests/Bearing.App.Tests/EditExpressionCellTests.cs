@@ -4,6 +4,7 @@ using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
+using Bearing.Sql;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -16,6 +17,11 @@ namespace Bearing.App.Tests;
 /// </summary>
 public class EditExpressionCellTests
 {
+    /// <summary>The dialect these fixtures are written in. The recognised table is engine-specific
+    /// (<c>now()</c> is Postgres', <c>getdate()</c> is SQL Server's), so the question cannot be asked
+    /// without naming one.</summary>
+    private static readonly ISqlDialect Pg = PostgresDialect.Instance;
+
     private static readonly EditTarget Target = new("public", "t",
     [
         new EditableColumn(0, "id", IsPrimaryKey: true),
@@ -62,7 +68,7 @@ public class EditExpressionCellTests
         var change = Assert.Single(ResultEditModel.BuildPendingChanges(rs, Target));
         Assert.Contains("\"note\" = @p0", change.Command.Sql);
         Assert.Equal("now()", change.Command.Parameters[0].Value);
-        Assert.Null(ResultEditModel.ExpressionFor("now()", typeof(string)));
+        Assert.Null(ResultEditModel.ExpressionFor(Pg, "now()", typeof(string)));
     }
 
     /// <summary>A value that parses as the column's type is that value. Only a value that cannot be written
@@ -70,9 +76,9 @@ public class EditExpressionCellTests
     [Fact]
     public void A_value_that_parses_is_never_read_as_an_expression()
     {
-        Assert.Null(ResultEditModel.ExpressionFor("2026-01-02 03:04:05", typeof(DateTime)));
-        Assert.Null(ResultEditModel.ExpressionFor("(null)", typeof(DateTime)));
-        Assert.Null(ResultEditModel.ExpressionFor("", typeof(DateTime)));
+        Assert.Null(ResultEditModel.ExpressionFor(Pg, "2026-01-02 03:04:05", typeof(DateTime)));
+        Assert.Null(ResultEditModel.ExpressionFor(Pg, "(null)", typeof(DateTime)));
+        Assert.Null(ResultEditModel.ExpressionFor(Pg, "", typeof(DateTime)));
     }
 
     /// <summary>An unrecognised value keeps the amber mark it had: the cell says the save will be refused,
@@ -80,11 +86,11 @@ public class EditExpressionCellTests
     [Fact]
     public void An_unknown_function_is_still_refused_and_still_marked()
     {
-        Assert.Null(ResultEditModel.ExpressionFor("makedate(2026)", typeof(DateTime)));
-        Assert.True(ResultEditModel.WillReachServerAsText("makedate(2026)", typeof(DateTime)));
+        Assert.Null(ResultEditModel.ExpressionFor(Pg, "makedate(2026)", typeof(DateTime)));
+        Assert.True(ResultEditModel.WillReachServerAsText(Pg, "makedate(2026)", typeof(DateTime)));
 
         // …and a recognised one is not amber, because it is not going to be refused.
-        Assert.False(ResultEditModel.WillReachServerAsText("now()", typeof(DateTime)));
+        Assert.False(ResultEditModel.WillReachServerAsText(Pg, "now()", typeof(DateTime)));
     }
 
     [Fact]

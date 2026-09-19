@@ -136,4 +136,39 @@ public class DmlGeneratorTests
             assignments: new[] { CV("title", "Blade") }, keys: new[] { CV("film_id", 5) });
         Assert.DoesNotContain("returning", without.Sql);
     }
+
+    /// <summary>The read-back's <em>position</em> is what varies, which is why it is a whole-statement hook
+    /// on the dialect rather than a trailing string: a T-SQL <c>output</c> after the <c>where</c> is a
+    /// syntax error, and the columns are named off the <c>inserted</c> pseudo-table.</summary>
+    [Fact]
+    public void A_sql_server_update_reads_back_through_output_before_the_where()
+    {
+        var cmd = DmlGenerator.Update(SqlServerDialect.Instance, "dbo", "Film",
+            assignments: new[] { CV("Title", "Blade") },
+            keys: new[] { CV("FilmId", 5) },
+            returning: new[] { "FilmId", "Title" });
+
+        Assert.Equal(
+            "update [dbo].[Film] set [Title] = @p0 output inserted.[FilmId], inserted.[Title] "
+            + "where [FilmId] = @p1",
+            cmd.Sql);
+    }
+
+    /// <summary>Msg 334 refuses OUTPUT-without-INTO on a table with an enabled trigger, for an UPDATE as
+    /// much as for an INSERT — so the statement that has a clause to strip must offer the stripped form,
+    /// and the one with nothing to strip must not (null is what tells the executor there is no retry).</summary>
+    [Fact]
+    public void A_sql_server_update_offers_the_same_statement_without_its_output_clause()
+    {
+        var withOutput = DmlGenerator.Update(SqlServerDialect.Instance, "dbo", "Film",
+            assignments: new[] { CV("Title", "Blade") },
+            keys: new[] { CV("FilmId", 5) },
+            returning: new[] { "FilmId" });
+
+        Assert.Equal("update [dbo].[Film] set [Title] = @p0 where [FilmId] = @p1", withOutput.SqlWithoutReturning);
+
+        var plain = DmlGenerator.Update(SqlServerDialect.Instance, "dbo", "Film",
+            assignments: new[] { CV("Title", "Blade") }, keys: new[] { CV("FilmId", 5) });
+        Assert.Null(plain.SqlWithoutReturning);
+    }
 }

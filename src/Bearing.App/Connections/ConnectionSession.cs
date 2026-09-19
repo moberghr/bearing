@@ -13,7 +13,7 @@ namespace Bearing.App.Connections;
 public sealed class ConnectionSession : IAsyncDisposable
 {
     public ConnectionSession(ConnectionInfo info, IDbConnectionFactory factory, IQueryExecutor executor, IMetadataReader metadata,
-        IServerActivity activity, DateTimeOffset? credentialExpiresAt = null)
+        IServerActivity activity, DateTimeOffset? credentialExpiresAt = null, bool supportsActivity = true)
     {
         ConnectionId = info.Id;
         Info = info;
@@ -21,6 +21,7 @@ public sealed class ConnectionSession : IAsyncDisposable
         Executor = executor;
         Metadata = metadata;
         Activity = activity;
+        SupportsActivity = supportsActivity;
         CredentialExpiresAt = credentialExpiresAt;
     }
 
@@ -44,6 +45,11 @@ public sealed class ConnectionSession : IAsyncDisposable
     /// <summary>The server's sessions, and the two actions on one (#101). Reached from a leased session so a
     /// panel polling it can never be the reason a connection is opened (§1.5).</summary>
     public IServerActivity Activity { get; }
+
+    /// <summary>Whether <see cref="Activity"/> answers at all — <c>IDbProvider.SupportsServerActivity</c>,
+    /// carried here because the panel has the session and not the provider. False means the engine has no
+    /// implementation, which is a different thing from a server with no sessions.</summary>
+    public bool SupportsActivity { get; }
 
     /// <summary>Schema for completion; null until the first <see cref="IConnectionSessionManager.EnsureSchemaAsync"/>.</summary>
     public ISchemaSnapshot? Snapshot { get; internal set; }
