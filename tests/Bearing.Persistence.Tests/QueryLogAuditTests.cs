@@ -130,7 +130,7 @@ public class QueryLogAuditTests : IDisposable
         Assert.Equal("old-name", row.ConnectionName);
         Assert.Null(row.ConnectionId);      // there was no column to read it from
         Assert.Null(row.Environment);
-        Assert.Equal(2, SchemaVersion(path));
+        Assert.Equal(3, SchemaVersion(path));
     }
 
     [Fact]
@@ -160,7 +160,7 @@ public class QueryLogAuditTests : IDisposable
         await using (var first = new SqliteQueryLog(path)) { }
         await using var second = new SqliteQueryLog(path);
 
-        Assert.Equal(2, SchemaVersion(path));
+        Assert.Equal(3, SchemaVersion(path));
         Assert.Empty(await Read(second, new QueryLogQuery { Limit = null }));
     }
 
@@ -196,7 +196,7 @@ public class QueryLogAuditTests : IDisposable
 
         Assert.Single(rows);
         Assert.Equal("select 1", rows[0].SqlText);
-        Assert.Equal(2, SchemaVersion(path));
+        Assert.Equal(3, SchemaVersion(path));
     }
 
     [Fact]

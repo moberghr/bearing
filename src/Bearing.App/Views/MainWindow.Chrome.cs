@@ -379,6 +379,23 @@ public partial class MainWindow
         await RunAsync();
     }
 
+    /// <summary>Flip the selected connection between auto and manual commit for this session (#131).</summary>
+    private void OnCommitModeClick(object? sender, RoutedEventArgs e) => Vm?.Execution.ToggleCommitMode();
+
+    /// <summary>Commit the selected tab's manual-commit transaction (#131). The same call the palette's
+    /// <c>transaction.commit</c> makes, so the button is a second call site for one command (§9.2) rather
+    /// than a second implementation.</summary>
+    private async void OnCommitClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is { } vm) await vm.Execution.CommitTransactionAsync();
+    }
+
+    /// <inheritdoc cref="OnCommitClick"/>
+    private async void OnRollbackClick(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is { } vm) await vm.Execution.RollbackTransactionAsync();
+    }
+
     /// <summary>Re-render the visuals that read a type-scale token once rather than binding it (#52).</summary>
     internal void RefreshTypeScale() => ResultsView.RefreshTypeScale();
 

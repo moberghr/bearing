@@ -94,10 +94,12 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
 
         if (version < 1) MigrateTo1(conn);
         if (version < 2) MigrateTo2(conn);
+        if (version < 3) MigrateTo3(conn);
     }
 
-    /// <summary>The schema this build writes. 2 added the connection id and environment (#113).</summary>
-    private const long SchemaVersion = 2;
+    /// <summary>The schema this build writes. 2 added the connection id and environment (#113); 3 added
+    /// the transaction id (#131).</summary>
+    private const long SchemaVersion = 3;
 
     private static void MigrateTo1(SqliteConnection conn)
     {
@@ -166,6 +168,25 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         if (!HasColumn(conn, "query_log", "environment"))
             Execute(conn, "ALTER TABLE query_log ADD COLUMN environment TEXT;");
         Execute(conn, "PRAGMA user_version = 2;");
+        transaction.Commit();
+    }
+
+    /// <summary>
+    /// #131: which manual-commit transaction a statement ran inside, so the log can answer whether what ran
+    /// was kept. The <c>commit</c> and <c>rollback</c> that ended it are logged as entries of their own
+    /// carrying the same id — an append, never a rewrite of the rows already there, which is the same stance
+    /// <see cref="MigrateTo2"/> takes: the log is the user's own record of what they did.
+    /// <para>
+    /// Same two defences as v2, for the same two reasons — see there. They are not belt-and-braces: a
+    /// half-applied migration is a log that cannot be opened at all.
+    /// </para>
+    /// </summary>
+    private static void MigrateTo3(SqliteConnection conn)
+    {
+        using var transaction = conn.BeginTransaction(deferred: false);
+        if (!HasColumn(conn, "query_log", "transaction_id"))
+            Execute(conn, "ALTER TABLE query_log ADD COLUMN transaction_id TEXT;");
+        Execute(conn, "PRAGMA user_version = 3;");
         transaction.Commit();
     }
 
@@ -251,8 +272,8 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         cmd.CommandText = """
             INSERT INTO query_log
                 (executed_at, provider_id, connection, connection_id, environment, db, sql_text,
-                 duration_ms, row_count, success, error_message, script_path)
-            VALUES ($at, $provider, $conn, $connId, $env, $db, $sql, $dur, $rows, $ok, $err, $script);
+                 duration_ms, row_count, success, error_message, script_path, transaction_id)
+            VALUES ($at, $provider, $conn, $connId, $env, $db, $sql, $dur, $rows, $ok, $err, $script, $txId);
             """;
         cmd.Parameters.AddWithValue("$at", e.ExecutedAt.ToString("o", CultureInfo.InvariantCulture));
         cmd.Parameters.AddWithValue("$provider", e.ProviderId);
@@ -266,6 +287,7 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         cmd.Parameters.AddWithValue("$ok", e.Success ? 1 : 0);
         cmd.Parameters.AddWithValue("$err", (object?)e.ErrorMessage ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$script", (object?)e.ScriptPath ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$txId", (object?)e.TransactionId ?? DBNull.Value);
         cmd.ExecuteNonQuery();
     }
 
@@ -310,7 +332,8 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         }
         cmd.CommandText =
             "SELECT q.id, q.executed_at, q.provider_id, q.connection, q.db, q.sql_text, q.duration_ms, " +
-            "q.row_count, q.success, q.error_message, q.script_path, q.connection_id, q.environment " +
+            "q.row_count, q.success, q.error_message, q.script_path, q.connection_id, q.environment, " +
+            "q.transaction_id " +
             "FROM query_log q" +
             (where.Count > 0 ? " WHERE " + string.Join(" AND ", where) : "") +
             " ORDER BY q.id DESC" + limit + ";";
@@ -338,6 +361,7 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
                     ? null
                     : connectionId,
                 Environment = reader.IsDBNull(12) ? null : reader.GetString(12),
+                TransactionId = reader.IsDBNull(13) ? null : reader.GetString(13),
             });
         }
         return results;

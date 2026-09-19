@@ -142,6 +142,16 @@ public sealed partial class WorkspaceViewModel : ObservableObject
             tab.CancelRun();
         }
 
+        // Uncommitted work is the other thing a close can throw away, and unlike the text below it cannot be
+        // saved to session.json and restored — it lives on a server connection this tab is the only holder
+        // of (#131). Asked here, for the same reason the running query is: no point deciding what to save on
+        // a tab the user then keeps. **Rolled back only at the bottom**, once the close is certain — the
+        // prompts below can still abandon it, and a transaction discarded for a close that then did not
+        // happen is the one loss nothing can undo.
+        if (!await TransactionGuard.AskForTabAsync(
+                _ctx.Transactions, _dialogs, tab, $"close {tab.Header}"))
+            return false;
+
         // Land any debounced write before deciding: a tab whose text already reached its file has nothing
         // to lose and must close without a prompt. FlushAsync itself respects the autosave mode, so this
         // can't quietly save a named script the user asked never to autosave.
@@ -161,6 +171,8 @@ public sealed partial class WorkspaceViewModel : ObservableObject
             }
         }
 
+        // The close is certain now, so the transaction the user agreed to lose can go.
+        await TransactionGuard.RollbackForTabAsync(_ctx.Transactions, tab);
         Remove(tab);
         return true;
     }
@@ -410,7 +422,13 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         foreach (var tab in backing)
         {
             tab.CancelRun();
-            Remove(tab);   // no prompt: the file it would save to is gone
+            // No prompt — the file it would save to is gone — but an open transaction still has to end, and
+            // this path does not go through CloseTabAsync. Left behind, it would hold a pooled connection
+            // and a SessionLease keyed on a view-model no longer in Tabs: unreachable from the chip and from
+            // both commands, and released only by the idle sweep or by quitting (#131).
+            CrashReporter.Observe(
+                TransactionGuard.RollbackForTabAsync(_ctx.Transactions, tab), "transactions.delete-script");
+            Remove(tab);
         }
         return true;
     }

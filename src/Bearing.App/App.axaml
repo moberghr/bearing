@@ -79,6 +79,61 @@
           <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
           <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
         </Style>
+        <!-- Dimmed, and no hand: a rail button's content is a Path with its own explicit Stroke, so
+             disabling one changed nothing anybody could see. Commit is the first that is ever disabled
+             (#131 — a statement in the transaction failed, so only Rollback is left), and an icon that
+             looks live but swallows the click is the worst of the three possible states. Opacity rather
+             than a second brush, so it applies whatever colour the icon chose. -->
+        <Style Selector="^:disabled">
+          <Setter Property="Opacity" Value="0.3"/>
+          <Setter Property="Cursor" Value="Arrow"/>
+        </Style>
+      </ControlTheme>
+
+      <!-- Text pill for a two-state mode (#131's auto/manual commit): the "Alt" hint's shape, but it is a
+           button. Manual gets the accent border because it is the state with consequences — a write that is
+           waiting for you. A session override is marked twice over, by a dot in the label and by a filled
+           ground, because it is the one thing the connection dialog will not agree with. -->
+      <ControlTheme x:Key="ModePill" TargetType="Button">
+        <Setter Property="Height" Value="24"/>
+        <!-- Wide enough for the longest label, marker included, and fixed: a pill that resizes when it is
+             clicked shifts everything to its right, which is the width-reservation rule #65 landed for the
+             tab strip. (An earlier version marked the override with italics instead. Italic glyphs render
+             past the advance width the presenter measured, so the "l" of "Manual" was clipped at every
+             width — the marker belongs in the text, where it is measured.) -->
+        <Setter Property="MinWidth" Value="78"/>
+        <Setter Property="Padding" Value="10,0"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Background" Value="{DynamicResource Bg.Editor}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Border.Control}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Foreground" Value="{DynamicResource Text.Dim}"/>
+        <Setter Property="FontSize" Value="{DynamicResource Font.Small}"/>
+        <Setter Property="Template">
+          <ControlTemplate>
+            <Border Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="4" Padding="{TemplateBinding Padding}">
+              <ContentPresenter Content="{TemplateBinding Content}"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+          </ControlTemplate>
+        </Setter>
+        <Style Selector="^.manual">
+          <Setter Property="BorderBrush" Value="{DynamicResource Ok.Green}"/>
+          <Setter Property="Foreground" Value="{DynamicResource Ok.Green}"/>
+        </Style>
+        <!-- A session override, which the label already marks with a dot. The fill is the second, quieter
+             half of that mark — a property with no effect on text metrics, unlike the italic this
+             replaced. -->
+        <Style Selector="^.overridden">
+          <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
+        </Style>
+        <Style Selector="^:pointerover">
+          <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
+        </Style>
       </ControlTheme>
 
       <!-- Bordered 30×30 icon button (connection toggle): transparent fill, thin border, subtle hover. -->

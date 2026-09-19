@@ -62,6 +62,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
     // run clock so the status bar shows a live execution timer. Stopped whenever nothing is in flight.
     private readonly DispatcherTimer _elapsedTimer;
 
+    // Runs only while a transaction is open: warns, and eventually rolls one back (#131).
+    private readonly DispatcherTimer _transactionTimer;
+
     public ExecutionViewModel(WorkspaceContext ctx, IDialogService? dialogs)
     {
         _ctx = ctx;
@@ -72,8 +75,294 @@ public sealed partial class ExecutionViewModel : ObservableObject
         // state (execution itself is per-tab). Track selection changes and the selected tab's IsRunning
         // so the toolbar Run/Cancel button reflects whichever tab is focused.
         _ctx.SelectedTabChanged += OnSelectedTabChanged;
+        // The chip and the two commands are a façade over the selected tab's transaction, exactly as
+        // IsBusy is over its run — so both the selection changing and the map changing have to refresh it.
+        _ctx.Transactions.Changed += OnTransactionsChanged;
+        _ctx.CommitModes.Changed += RefreshCommitMode;
+        // The two idle clocks (#131). One timer for every open transaction, running only while there is at
+        // least one — a tick that finds nothing to do is a tick nobody asked for. Five seconds because the
+        // chip shows seconds below a minute; the thresholds themselves are minutes.
+        _transactionTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+        _transactionTimer.Tick += (_, _) => CrashReporter.Observe(SweepTransactionsAsync(), "transactions.sweep");
         OnSelectedTabChanged();
     }
+
+    // ---- manual-commit mode (#131) ------------------------------------------------------------
+
+    /// <summary>The selected tab's open transaction, or null when it has none.</summary>
+    public TabTransaction? Transaction => Selected is { } tab ? _ctx.Transactions.For(tab) : null;
+
+    /// <summary>Whether the selected tab is holding one — what the status chip's visibility binds to.</summary>
+    public bool HasOpenTransaction => Transaction is not null;
+
+    /// <summary>
+    /// Whether it may still be committed: there is one, nothing in it failed, and the tab is not mid-statement.
+    /// <para>
+    /// The last of those is not politeness. A transaction lives on <b>one</b> physical connection, and so
+    /// does the statement running in it — issuing a commit on a connection with a command in flight throws
+    /// from the driver, and the teardown that follows would dispose the connection out from under a live
+    /// reader. Esc cancels the statement; then this becomes available.
+    /// </para>
+    /// </summary>
+    public bool CanCommit => Transaction is { State: TransactionState.Active } && Selected?.IsRunning != true;
+
+    /// <summary>Whether the transaction can be rolled back right now. Unlike <see cref="CanCommit"/> an
+    /// aborted one still can — that is the way out of it — but a tab mid-statement still cannot, for the
+    /// connection reason above.</summary>
+    public bool CanRollback => Transaction is not null && Selected?.IsRunning != true;
+
+    /// <summary>
+    /// The chip: how much is uncommitted and for how long — "3 uncommitted · 4m". The count is statements
+    /// run in the transaction, not rows: rows would need a total nobody asked the server for.
+    /// <para>
+    /// An <b>aborted</b> transaction says so instead of counting. Nothing in it is waiting to be committed —
+    /// it cannot be — so "2 uncommitted" would describe work the user still has a choice about, which is
+    /// exactly what they no longer have.
+    /// </para>
+    /// </summary>
+    public string TransactionText => Transaction is { } t
+        ? t.State == TransactionState.Aborted
+            ? $"transaction aborted · {CommitPolicy.AgeLabel(t.Age)}"
+            : $"{t.StatementCount} uncommitted · {CommitPolicy.AgeLabel(t.Age)}"
+        : "";
+
+    /// <summary>Whether the chip should read as a warning: idle past the nudge threshold, or aborted.
+    /// Two different things said one way on purpose — both mean "this needs you now".</summary>
+    public bool TransactionIsStale => Transaction is { } t
+        && (t.State == TransactionState.Aborted
+            || CommitPolicy.IsStale(t.Idle, _ctx.Settings.IdleTransactionWarnMinutes));
+
+    /// <summary>The chip's tooltip: which connection and database is being held, and why it is amber.</summary>
+    public string TransactionTip => Transaction is { } t
+        ? t.State == TransactionState.Aborted
+            ? $"A statement failed in this transaction on {t.ConnectionName}/{t.Database} — "
+              + "it can only be rolled back."
+            : $"Uncommitted on {t.ConnectionName}/{t.Database}, idle {CommitPolicy.AgeLabel(t.Idle)}. "
+              + "An open transaction holds locks on the server until you commit or roll it back."
+        : "";
+
+    // True while SweepTransactionsAsync is in flight. The timer is not awaited (it cannot be), so without
+    // this a rollback slower than one tick lets the next tick see the same entry — logging a second
+    // `rollback` row and raising a second toast for one transaction.
+    private bool _sweeping;
+
+    private void OnTransactionsChanged()
+    {
+        RefreshTransaction();
+        // Start the clocks with the first transaction and stop them with the last, the way the elapsed
+        // timer follows IsBusy.
+        _transactionTimer.IsEnabled = _ctx.Transactions.Any;
+    }
+
+    /// <summary>
+    /// The idle sweep for open transactions: roll back the abandoned ones, then re-render the rest (#131).
+    /// <para>
+    /// <b>The rollback is not a warning the user missed.</b> An open transaction holds locks on the server
+    /// for as long as it lives, and a warning nobody is there to read puts no bound on that at all — so the
+    /// second clock ends it. It is reported through the same completion toast a background run uses, because
+    /// the user is by definition not watching the status bar, and a status line is gone by the time they
+    /// come back.
+    /// </para>
+    /// <para>
+    /// The rollback threshold is raised to the warning's when it is set below it: warning about something
+    /// that has already been rolled back is a sentence about nothing, and a settings file is hand-editable.
+    /// </para>
+    /// </summary>
+    /// <remarks>Public for the same reason <c>ConnectionSessionManager.SweepIdleAsync</c> is: the thing
+    /// under test is measured in minutes, and a test that waited for the timer would be a test that waited
+    /// for fifteen minutes.</remarks>
+    public async Task SweepTransactionsAsync()
+    {
+        if (_sweeping) return;
+        _sweeping = true;
+        try { await SweepOnceAsync().ConfigureAwait(true); }
+        finally { _sweeping = false; }
+    }
+
+    private async Task SweepOnceAsync()
+    {
+        var settings = _ctx.Settings;
+        var rollbackAfter = settings.IdleTransactionRollbackMinutes <= 0
+            ? 0
+            : Math.Max(settings.IdleTransactionRollbackMinutes, settings.IdleTransactionWarnMinutes);
+
+        foreach (var (tab, open) in _ctx.Transactions.Entries)
+        {
+            // A tab mid-statement is not idle, whatever the clock says, and rolling back under a live
+            // command is the failure EndTransactionAsync refuses by hand. The clock is stamped when a
+            // statement finishes as well as when it starts (see TrackedExecutor), so a long UPDATE no
+            // longer ages past the threshold while it runs — this is the backstop for the moment between.
+            if (tab.IsRunning) continue;
+            if (!CommitPolicy.IsAbandoned(open.Idle, rollbackAfter)) continue;
+            var idle = CommitPolicy.AgeLabel(open.Idle);
+            var statements = open.StatementCount;
+            await _ctx.Transactions.RollbackAsync(tab, CancellationToken.None);
+            var message = $"Rolled back {statements} uncommitted statement(s) on "
+                          + $"{open.ConnectionName}/{open.Database} after {idle} idle.";
+            _ctx.SetStatus(message);
+            // Always a toast, even when the tab is the one on screen: the whole premise of this path is
+            // that nobody was looking, and RunFinished would put it in the status bar and let the next
+            // thing overwrite it.
+            BackgroundCompleted?.Invoke(new BackgroundCompletion(
+                tab.Header, message, _ctx.AllTabs.Contains(tab), tab));
+        }
+
+        // Everything still open: the age moved, and so may the amber.
+        RefreshTransaction();
+    }
+
+    /// <summary>Re-raise everything the chip and the two commands read. Cheap and coarse: there are at most
+    /// a handful of transactions, and this fires on open, end, and each idle tick.</summary>
+    public void RefreshTransaction()
+    {
+        OnPropertyChanged(nameof(Transaction));
+        OnPropertyChanged(nameof(HasOpenTransaction));
+        OnPropertyChanged(nameof(CanCommit));
+        OnPropertyChanged(nameof(CanRollback));
+        OnPropertyChanged(nameof(TransactionText));
+        OnPropertyChanged(nameof(TransactionIsStale));
+        OnPropertyChanged(nameof(TransactionTip));
+    }
+
+    // ---- the mode itself, flippable without opening the dialog (#131) -------------------------
+
+    private ConnectionInfo? SelectedConnection => Selected is { } tab ? _ctx.EffectiveConnection(tab) : null;
+
+    /// <summary>Whether there is a connection whose mode there is any point showing.</summary>
+    public bool CommitModeVisible => SelectedConnection is not null;
+
+    /// <summary>Whether the selected tab's connection is holding writes right now.</summary>
+    public bool IsManualCommit => SelectedConnection is { } info && CommitPolicy.IsManualCommit(info);
+
+    /// <summary>
+    /// The pill: short, because it sits in a toolbar — the tooltip carries the rest. A dot marks a mode
+    /// that is not the one saved on the connection, the same mark the tab strip uses for a buffer that
+    /// differs from its file, and for the same reason: something here will not survive being reopened.
+    /// </summary>
+    public string CommitModeLabel
+        => (IsManualCommit ? "Manual" : "Auto") + (CommitModeIsOverridden ? " •" : "");
+
+    /// <summary>Whether the mode in force is not the one saved on the connection — the pill marks it, so a
+    /// setting that disagrees with the dialog is never something you have to discover.</summary>
+    public bool CommitModeIsOverridden
+        => SelectedConnection is { } info && _ctx.CommitModes.IsOverridden(info.Id);
+
+    public string CommitModeTip
+    {
+        get
+        {
+            if (SelectedConnection is not { } info) return "";
+            var mode = IsManualCommit
+                ? "Manual commit — a write opens a transaction and waits for Commit or Rollback."
+                : "Auto-commit — every statement commits itself.";
+            // The *saved* record, not the effective one this property reads from: what the tooltip has to
+            // name is what the connection dialog would show, which is exactly what the override differs from.
+            var overridden = _ctx.CommitModes.IsOverridden(info.Id) && _ctx.FindConnection(info.Id) is { } disk
+                ? $"\nThis session only; {disk.Name} is saved as "
+                  + (disk.ManualCommit ? "manual commit." : "auto-commit.")
+                : "";
+            return mode + overridden + "\nClick to switch.";
+        }
+    }
+
+    /// <summary>
+    /// Flip the selected tab's connection between auto and manual commit for the rest of the session
+    /// (<c>transaction.toggleMode</c>). The saved connection is untouched — see <see cref="CommitModes"/>.
+    /// <para>
+    /// Switching <b>to auto-commit is refused</b> while any tab on that connection holds a transaction. The
+    /// mode is per connection and the transactions are per tab, so there is no coherent "and this one keeps
+    /// waiting"; and a toolbar pill may not be a thing that discards data or commits to production, which
+    /// are the only other two answers. Refusing costs one gesture and cannot lose anything.
+    /// </para>
+    /// </summary>
+    public void ToggleCommitMode()
+    {
+        if (SelectedConnection is not { } info) { _ctx.SetStatus("This tab has no connection."); return; }
+        var manual = CommitPolicy.IsManualCommit(info);
+
+        if (manual && _ctx.Transactions.All.FirstOrDefault(t => t.Key.ConnectionId == info.Id) is { } open)
+        {
+            _ctx.SetStatus(
+                $"{open.ConnectionName}/{open.Database} has an uncommitted transaction — commit or roll it "
+                + "back before switching to auto-commit.");
+            return;
+        }
+
+        _ctx.CommitModes.Set(info.Id, !manual);
+        RefreshCommitMode();
+        _ctx.SetStatus(manual
+            ? $"{info.Name}: auto-commit — statements commit themselves."
+            : $"{info.Name}: manual commit — a write now waits for Commit or Rollback.");
+    }
+
+    /// <summary>Re-raise the pill's bindings. Called on a toggle, a selection change, and whenever the
+    /// override map moves under us (saving the connection clears it).</summary>
+    public void RefreshCommitMode()
+    {
+        OnPropertyChanged(nameof(CommitModeVisible));
+        OnPropertyChanged(nameof(IsManualCommit));
+        OnPropertyChanged(nameof(CommitModeIsOverridden));
+        OnPropertyChanged(nameof(CommitModeLabel));
+        OnPropertyChanged(nameof(CommitModeIsOverridden));
+        OnPropertyChanged(nameof(CommitModeTip));
+    }
+
+    /// <summary>Commit the selected tab's transaction (<c>transaction.commit</c>).</summary>
+    public Task CommitTransactionAsync() => EndTransactionAsync(commit: true);
+
+    /// <summary>Roll back the selected tab's transaction (<c>transaction.rollback</c>).</summary>
+    public Task RollbackTransactionAsync() => EndTransactionAsync(commit: false);
+
+    // True while a commit or rollback is in flight. Neither verb sets tab.IsRunning and the transaction
+    // stays in the map until the end completes, so without this a second click during a slow commit
+    // re-enters, calls CommitAsync on a transaction already committing, and reports "Commit failed" for
+    // one that in fact committed.
+    private bool _ending;
+
+    private async Task EndTransactionAsync(bool commit)
+    {
+        if (_ending) return;
+        if (Selected is not { } tab) return;
+        if (_ctx.Transactions.For(tab) is null) { _ctx.SetStatus("No open transaction on this tab."); return; }
+
+        // Deliberately not under RunExclusiveAsync — ending a transaction is not a query on the tab — but
+        // equally it may not run *beside* one. The transaction and the statement share a physical
+        // connection, so a commit issued mid-statement throws from the driver and the teardown behind it
+        // would dispose that connection under a live reader. Esc first, then this.
+        if (tab.IsRunning)
+        {
+            _ctx.SetStatus(
+                $"A statement is still running on {tab.Header} — cancel it with Esc, then "
+                + (commit ? "commit." : "roll back."));
+            return;
+        }
+
+        _ending = true;
+        try
+        {
+            _ctx.SetStatus(commit
+                ? await _ctx.Transactions.CommitAsync(tab, CancellationToken.None)
+                : await _ctx.Transactions.RollbackAsync(tab, CancellationToken.None));
+        }
+        finally { _ending = false; }
+        RefreshTransaction();
+    }
+
+
+    /// <summary>
+    /// Which executor <paramref name="tab"/>'s statements run on: its own held transaction's when it has
+    /// one, else the session's pooled one (#131). Every call site that runs the user's SQL goes through
+    /// here, or it would open a fresh connection and miss the transaction entirely.
+    /// <para>
+    /// The key is re-checked rather than trusted. A tab may not change connection or database while a
+    /// transaction is open — the guards refuse it — and if one ever slipped through, running on a
+    /// connection to a different database would be worse than not being in the transaction.
+    /// </para>
+    /// </summary>
+    private IQueryExecutor ExecutorFor(EditorTabViewModel tab, ConnectionSession session)
+        => _ctx.Transactions.For(tab) is { } open && open.Key == session.Key
+            ? open.Scope.Executor
+            : session.Executor;
 
     /// <summary>Live elapsed time of the selected tab's in-flight run ("247 ms" / "1.2 s"), or empty when
     /// idle. Shown in the status bar (visibility bound to <see cref="IsBusy"/>) and refreshed ~10×/second.</summary>
@@ -123,15 +412,22 @@ public sealed partial class ExecutionViewModel : ObservableObject
         if (_watchedTab is not null) _watchedTab.PropertyChanged += OnWatchedTabChanged;
         OnPropertyChanged(nameof(IsBusy));
         OnPropertyChanged(nameof(RunButtonText));
+        RefreshTransaction();
+        RefreshCommitMode();   // a different tab can be on a different connection, and so a different mode
         SyncElapsedTimer();
     }
 
     private void OnWatchedTabChanged(object? sender, PropertyChangedEventArgs e)
     {
+        // Re-pointing the tab changes which connection's mode the pill is describing.
+        if (e.PropertyName is nameof(EditorTabViewModel.ConnectionId) or nameof(EditorTabViewModel.DatabaseName))
+            RefreshCommitMode();
         if (e.PropertyName == nameof(EditorTabViewModel.IsRunning))
         {
             OnPropertyChanged(nameof(IsBusy));
             OnPropertyChanged(nameof(RunButtonText));
+            // Both verbs are unavailable mid-statement (see CanCommit), so they move with the run.
+            RefreshTransaction();
             SyncElapsedTimer();
         }
     }
@@ -181,9 +477,16 @@ public sealed partial class ExecutionViewModel : ObservableObject
         // The connection's dialect, not a Postgres default: the guard's verdict depends on whether it can
         // read this engine at all, and an engine it cannot read has every statement treated as risky with a
         // label saying why (§1.2 — never narrower for any dialect).
-        var risks = info.ReadOnly || info.RequireWriteConfirmation
+        var risks = info.ReadOnly || info.RequireWriteConfirmation || CommitPolicy.IsManualCommit(info)
             ? WriteGuard.Describe(traits.Dialect, sql)
             : [];
+
+        // Manual-commit: Bearing is holding the transaction on this connection, so a typed BEGIN / COMMIT /
+        // ROLLBACK is refused rather than run behind the driver's back (#131). Ahead of the read-only
+        // refusal because it is about who owns the transaction rather than about what the statement writes,
+        // and a COMMIT is neither a read nor a write.
+        if (WriteRefusal.ReasonForTransactionControl(info, risks) is { } notOurs)
+        { _ctx.SetStatus(notOurs); return; }
 
         // Read-only connection: refuse, don't ask (#99). Ahead of the confirmation because it is independent
         // of RequireWriteConfirmation — a read-only connection refuses whether or not it also prompts — and
@@ -210,6 +513,20 @@ public sealed partial class ExecutionViewModel : ObservableObject
         // that produced it. No-op in the other modes.
         if (_ctx.Autosave is { } autosave) await autosave.OnExecutedAsync(tab);
 
+        // Manual-commit opens on the first *write*, never on a read: a transaction left open by nothing but
+        // browsing a table is the commonest way to end up holding locks on a production server (#131). Once
+        // one is open every statement joins it, reads included — that is what makes the row-count preview
+        // and the grid agree with what the transaction has actually done.
+        // Decided here and acted on inside the run, because opening one needs a live session and the run is
+        // what connects.
+        // NamesAWrite, not IsRisky. The guard's verdict is deliberately generous — on T-SQL anything whose
+        // lead word is not a known read is treated as a write so that it gets confirmed — and that is the
+        // wrong test for this question: `declare @id int; select …` is ordinary T-SQL for a read, and
+        // opening a transaction on it would make browsing hold locks.
+        var opensTransaction = CommitPolicy.IsManualCommit(info)
+            && _ctx.Transactions.For(tab) is null
+            && risks.Any(s => s.NamesAWrite);
+
         await RunExclusiveAsync(tab, async ct =>
         {
             // Push a server-side LIMIT for a single read-only SELECT so a remote server produces only
@@ -223,13 +540,13 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // and on an auth failure refresh the credential and retry exactly once. A stored password that
             // didn't change can't be helped by a retry, so it surfaces the error on the first pass.
             var canRefresh = CanRefreshCredential(info);
-            var outcome = await RunFetchAsync(info, tab, sql, fetchSql, final: !canRefresh, ct);
+            var outcome = await RunFetchAsync(info, tab, sql, fetchSql, opensTransaction, final: !canRefresh, ct);
             if (outcome == RunOutcome.AuthFailed && canRefresh && !ct.IsCancellationRequested)
             {
                 _ctx.Credentials.Invalidate(info.Id);
                 await _ctx.Sessions.EvictAsync(SessionKey.For(info));
                 RunStatus(tab, "Reauthenticating…");
-                await RunFetchAsync(info, tab, sql, fetchSql, final: true, ct);
+                await RunFetchAsync(info, tab, sql, fetchSql, opensTransaction, final: true, ct);
             }
         }, "Query cancelled by user.", "Execution error");
     }
@@ -281,8 +598,11 @@ public sealed partial class ExecutionViewModel : ObservableObject
         // session open while the user reads it (the same rule SaveChangesAsync follows).
         using var lease = _ctx.Sessions.Lease(session);
         using var budget = new CancellationTokenSource(CountBudget);
+        // On the tab's own transaction when it has one: inside an open transaction the count that matters is
+        // the one that sees its uncommitted rows, which is the answer the user is about to act on (#131).
+        var executor = ExecutorFor(tab, session);
         foreach (var (index, target) in toCount)
-            impacts[index] = await CountOneAsync(session, target, budget.Token);
+            impacts[index] = await CountOneAsync(session, executor, target, budget.Token);
 
         return impacts;
     }
@@ -294,7 +614,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// confirmation the user asked for.
     /// </summary>
     private static async Task<RowImpact> CountOneAsync(
-        ConnectionSession session, UpdateDeleteTarget target, CancellationToken budget)
+        ConnectionSession session, IQueryExecutor executor, UpdateDeleteTarget target, CancellationToken budget)
     {
         try
         {
@@ -307,7 +627,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // "never guesses" arm rather than a failure.
             if (ProviderTraits.For(session.Info).Dialect.CountWrap(target.RowsSql) is not { } countSql)
                 return RowImpact.Uncounted(target);
-            var rows = await session.Executor.CountAsync(countSql, deadline.Token);
+            var rows = await executor.CountAsync(countSql, deadline.Token);
             return rows is { } n ? RowImpact.Counted(target, n) : RowImpact.Uncounted(target);
         }
         catch (Exception)
@@ -321,7 +641,8 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// binding/logging on a non-final attempt so the caller can refresh the credential and retry once; on the
     /// final attempt any error (auth included) is surfaced normally.</summary>
     private async Task<RunOutcome> RunFetchAsync(
-        ConnectionInfo info, EditorTabViewModel tab, string sql, string fetchSql, bool final, CancellationToken ct)
+        ConnectionInfo info, EditorTabViewModel tab, string sql, string fetchSql, bool opensTransaction,
+        bool final, CancellationToken ct)
     {
         var wall = Stopwatch.StartNew();
         // Acquire a lease so an idle sweep / evict / database switch can't dispose the pool from
@@ -344,8 +665,17 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // with no connect-on-tab-switch anymore this run is the first thing to load it.
             var schemaWarm = _ctx.Sessions.EnsureSchemaAsync(session, CancellationToken.None);
 
+            // Opened here rather than before the run: it needs a live session, and this is the call that
+            // connects. Before the statement, so the write it was opened for lands inside it.
+            if (opensTransaction && _ctx.Transactions.For(tab) is null)
+            {
+                var (_, error) = await _ctx.Transactions.OpenAsync(tab, info, session, ct);
+                if (error is not null) { RunFinished(tab, error); return RunOutcome.Failed; }
+            }
+
             RunStatus(tab, "Running…");
-            var results = await session.Executor.ExecuteAsync(fetchSql, new QueryOptions { MaxRows = PageSize }, ct);
+            var results = await ExecutorFor(tab, session)
+                .ExecuteAsync(fetchSql, new QueryOptions { MaxRows = PageSize }, ct);
             wall.Stop();
 
             // Auth rejected on open (stale token) comes back as a QueryError; retry before binding/logging.
@@ -362,7 +692,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // assign to — RunFinished is what tells the user the run ended, with TabStillOpen false.
             tab.SetFreshResults(ResultSetBuilder.BuildResultSets(
                 results, sql, session.Snapshot, ProviderTraits.For(info), SessionPolicy.IsReadOnly(info)));
-            LogExecution(info, sql, results);
+            LogExecution(info, sql, results, _ctx.Transactions.For(tab)?.Id);
             var summary = ResultSetBuilder.DescribeResults(
                 results, wall.Elapsed, info, ct.IsCancellationRequested);
             // On success, lead with the connection so the status bar reads e.g. "pagila (local) · 88 ms".
@@ -469,7 +799,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
                 RunStatus(tab, "Paging unavailable for this query on this engine — the rows already loaded are all of them shown.");
                 return;
             }
-            var page = await session.Executor.ExecutePageAsync(pageSql, ct);
+            var page = await ExecutorFor(tab, session).ExecutePageAsync(pageSql, ct);
 
             // A failed page arrives as an error result, not a throw, so it has to be checked for. Appending
             // it would append nothing and clear HasMore: the result would silently look complete — auto-load
@@ -558,6 +888,28 @@ public sealed partial class ExecutionViewModel : ObservableObject
             return null;
         }
 
+        // A measured EXPLAIN cannot be run while this tab holds a transaction, and both halves of why are
+        // about the same fact — a transaction lives on one connection (#131).
+        //
+        // It carries its own BEGIN … ROLLBACK (ExplainSql.Measured, and it needs to: a plain SELECT can call
+        // a volatile function that writes). Issued on the held connection, that ROLLBACK would end the
+        // *user's* transaction instead of the plan's. Issued on a pooled one — which is what it used to do —
+        // it executes the statement against rows this tab's own transaction has locked, and blocks: with no
+        // statement timeout by default it waits forever, and while it waits the tab counts as running, so
+        // Commit and Rollback are both out of reach. The one action that would release the lock is the one
+        // the hang takes away.
+        //
+        // A plan-only EXPLAIN has neither problem: it carries no transaction control and executes nothing,
+        // so it runs on the transaction below like any other read.
+        if (analyze && _ctx.Transactions.For(tab) is { } held)
+        {
+            _ctx.SetStatus(
+                $"This tab has an uncommitted transaction on {held.ConnectionName}/{held.Database} — "
+                + "EXPLAIN ANALYZE runs the statement and cannot join it. Commit or roll back first, "
+                + "or use Explain, which executes nothing.");
+            return null;
+        }
+
         if (analyze && info.RequireWriteConfirmation && _dialogs is { } dialogs)
         {
             if (risks.Any(s => s.IsRisky)
@@ -575,7 +927,10 @@ public sealed partial class ExecutionViewModel : ObservableObject
         ExplainPlan? plan = null;
         await RunExclusiveAsync(tab, async ct =>
         {
-            var results = await session.Executor.ExecuteAsync(request.Sql, new QueryOptions(), ct);
+            // The plan-only form joins the tab's transaction like any other read, so the plan describes
+            // the state the user is actually looking at. The measured form never gets here — it carries its
+            // own transaction control and was refused above.
+            var results = await ExecutorFor(tab, session).ExecuteAsync(request.Sql, new QueryOptions(), ct);
 
             // BEGIN and ROLLBACK produce no rows, so the one result that has any is the plan. An error
             // anywhere in the batch arrives as a failed result rather than a throw, and its message is worth
@@ -635,7 +990,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // No ConfigureAwait(false) here, deliberately: each batch is appended to Rows, which the grid is
             // bound to, so the loop body must resume on the UI thread. The reader itself drains off it — that
             // is what the Bearing.Data ConfigureAwait pass is for.
-            await foreach (var batch in session.Executor.StreamRowsAsync(sql, options, ct))
+            await foreach (var batch in ExecutorFor(tab, session).StreamRowsAsync(sql, options, ct))
             {
                 // hasMore stays true for the duration (the honest value while a read is in flight) and is
                 // settled once below. Nothing can act on it meanwhile — the tab is running.
@@ -686,7 +1041,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // Null means the query can't be counted at all (shape), so "unavailable" is the honest report.
             // A *failed* count throws instead and lands in RunExclusiveAsync's "Count failed: …" — TotalCount
             // stays null, so CanCount stays true and the [Count] action is still there to retry.
-            rs.TotalCount = await session.Executor.CountAsync(countSql, ct);
+            rs.TotalCount = await ExecutorFor(tab, session).CountAsync(countSql, ct);
             RunFinished(tab, rs.TotalCount is not null ? "Counted total." : "Count unavailable for this query.");
         }, "Count cancelled.", "Count failed");
     }
@@ -831,7 +1186,8 @@ public sealed partial class ExecutionViewModel : ObservableObject
         await RunExclusiveAsync(tab, async ct =>
         {
             RunStatus(tab, "Opening referenced row…");
-            var results = await session.Executor.ExecuteAsync(sql, new QueryOptions { MaxRows = PageSize }, ct);
+            var results = await ExecutorFor(tab, session)
+                .ExecuteAsync(sql, new QueryOptions { MaxRows = PageSize }, ct);
             var info = _ctx.EffectiveConnection(tab);
             tab.PushResults(ResultSetBuilder.BuildResultSets(
                 results, sql, session.Snapshot, ProviderTraits.For(session.Info),
@@ -888,8 +1244,18 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
         await RunExclusiveAsync(tab, async ct =>
         {
+            // An inline edit is a write, so on a manual-commit connection it opens the transaction the same
+            // way a typed INSERT does — and joins one that is already open rather than committing itself.
+            if (connection is not null && CommitPolicy.IsManualCommit(connection)
+                && _ctx.Transactions.For(tab) is null)
+            {
+                var (_, error) = await _ctx.Transactions.OpenAsync(tab, connection, session, ct);
+                if (error is not null) { RunFinished(tab, error); return; }
+            }
+
             RunStatus(tab, $"Saving {changes.Count} change(s)…");
-            var results = await session.Executor.ExecuteWriteAsync(changes.Select(c => c.Command).ToList(), ct);
+            var results = await ExecutorFor(tab, session)
+                .ExecuteWriteAsync(changes.Select(c => c.Command).ToList(), ct);
             if (results.FirstOrDefault(r => !r.Success) is { } failed)
             { RunFinished(tab, $"Save failed: {failed.Error?.Message}"); return; } // rows/pending untouched
 
@@ -967,20 +1333,24 @@ public sealed partial class ExecutionViewModel : ObservableObject
     }
 
     // History logs one entry per submitted run; a multi-statement run aggregates its sets.
-    private void LogExecution(ConnectionInfo info, string sql, IReadOnlyList<QueryResult> results) => _ctx.QueryLog.Append(new QueryLogEntry
-    {
-        ExecutedAt = DateTimeOffset.UtcNow,
-        ProviderId = info.ProviderId,
-        ConnectionName = info.Name,
-        // Id and environment as they are right now (#113): the id survives a later rename, and the
-        // environment is a fact about this execution that re-pointing the connection must not rewrite.
-        ConnectionId = info.Id,
-        Environment = string.IsNullOrWhiteSpace(info.Environment) ? null : info.Environment,
-        Database = info.Database,
-        SqlText = sql,
-        Duration = results[^1].Duration,
-        RowCount = results.Sum(r => r.RowCount),
-        Success = results.All(r => r.Success),
-        ErrorMessage = results.FirstOrDefault(r => !r.Success)?.Error?.Message,
-    });
+    private void LogExecution(
+        ConnectionInfo info, string sql, IReadOnlyList<QueryResult> results, string? transactionId)
+        => _ctx.QueryLog.Append(new QueryLogEntry
+        {
+            ExecutedAt = DateTimeOffset.UtcNow,
+            ProviderId = info.ProviderId,
+            ConnectionName = info.Name,
+            // Id and environment as they are right now (#113): the id survives a later rename, and the
+            // environment is a fact about this execution that re-pointing the connection must not rewrite.
+            ConnectionId = info.Id,
+            Environment = string.IsNullOrWhiteSpace(info.Environment) ? null : info.Environment,
+            Database = info.Database,
+            SqlText = sql,
+            Duration = results[^1].Duration,
+            RowCount = results.Sum(r => r.RowCount),
+            Success = results.All(r => r.Success),
+            ErrorMessage = results.FirstOrDefault(r => !r.Success)?.Error?.Message,
+            // Null when the statement committed itself, which is every run on an ordinary connection (#131).
+            TransactionId = transactionId,
+        });
 }

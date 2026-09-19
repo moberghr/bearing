@@ -79,6 +79,27 @@ public sealed record ConnectionInfo
     public int StatementTimeoutSeconds { get; init; } = SessionPolicy.NoTimeout;
 
     /// <summary>
+    /// When true, a write on this connection opens a transaction that stays open until the user commits or
+    /// rolls it back, rather than committing itself (#131). A read on its own still auto-commits: it is the
+    /// first <i>write</i> that opens one, because a transaction left open by nothing but browsing is the
+    /// commonest way to end up holding locks on a production server.
+    /// <para>
+    /// <b>Client-side, and unlike the other two safety settings it reaches no server.</b>
+    /// <see cref="ReadOnly"/> and <see cref="StatementTimeoutSeconds"/> ride the startup packet and are
+    /// things the server is asked to enforce (§1.9); this one is a connection Bearing holds open and a
+    /// <c>COMMIT</c> it declines to send. So it is not part of what defines a pool — see
+    /// <c>SamePool</c> — and toggling it never rebuilds one.
+    /// </para>
+    /// <para>
+    /// <b>It does not relax the write guard.</b> A connection with both this and
+    /// <see cref="RequireWriteConfirmation"/> confirms the write <i>and</i> holds it; §1.2 is not narrowed
+    /// because a write became undoable. On a connection that is also <see cref="ReadOnly"/> nothing ever
+    /// opens, because nothing ever writes.
+    /// </para>
+    /// </summary>
+    public bool ManualCommit { get; init; }
+
+    /// <summary>
     /// What this connection demands of the transport (#23). Default <see cref="TlsMode.Prefer"/> — the
     /// driver's own default, so a missing value in an older project file keeps the behaviour it already had.
     /// <para>

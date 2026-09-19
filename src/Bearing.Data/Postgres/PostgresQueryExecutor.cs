@@ -20,9 +20,13 @@ namespace Bearing.Data.Postgres;
 /// </summary>
 public sealed class PostgresQueryExecutor : IQueryExecutor
 {
-    private readonly NpgsqlConnectionFactory _factory;
+    private readonly IPgConnectionSource _source;
 
-    public PostgresQueryExecutor(NpgsqlConnectionFactory factory) => _factory = factory;
+    public PostgresQueryExecutor(NpgsqlConnectionFactory factory) : this(new PooledPgConnections(factory)) { }
+
+    /// <summary>The same executor over a connection someone else is holding — a manual-commit transaction
+    /// (#131). Nothing below knows which source it has; that is the point of the seam.</summary>
+    internal PostgresQueryExecutor(IPgConnectionSource source) => _source = source;
 
     public async Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
     {
@@ -30,8 +34,8 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         var results = new List<QueryResult>();
         try
         {
-            await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
-            await using var cmd = new NpgsqlCommand(sql, conn);
+            await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
+            await using var cmd = new NpgsqlCommand(sql, rent.Connection, rent.Transaction);
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
             // One QueryResult per statement's result set — NextResult walks a multi-statement batch.
@@ -63,8 +67,8 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         var sw = Stopwatch.StartNew();
         try
         {
-            await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
-            await using var cmd = new NpgsqlCommand(pageSql, conn);
+            await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
+            await using var cmd = new NpgsqlCommand(pageSql, rent.Connection, rent.Transaction);
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             return await ReadResultSetAsync(reader, new QueryOptions { MaxRows = null }, sw, ct).ConfigureAwait(false);
         }
@@ -90,8 +94,8 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         string sql, QueryOptions options, [EnumeratorCancellation] CancellationToken ct)
     {
         var batchSize = Math.Max(1, options.BatchRows);
-        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
-        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
+        await using var cmd = new NpgsqlCommand(sql, rent.Connection, rent.Transaction);
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         if (reader.FieldCount == 0) yield break; // not row-returning — nothing to stream
@@ -129,17 +133,75 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
     {
         // The caller (PageSql.CountWrap, through the connection's dialect) already shaped the wrapper; we
         // just run it, exactly as ExecutePageAsync runs a page the caller shaped.
+        await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
+
+        // Inside a held transaction (#131) this probe runs under a savepoint, and it is the only call in this
+        // class that does. A shape the wrapper cannot count comes back as a syntax error, and on Postgres
+        // *any* error aborts the whole transaction — so a speculative count of ours would destroy the user's
+        // uncommitted work and leave every later statement answering 25P02. The savepoint protects their
+        // transaction from us. It is deliberately not a general undo for statements they asked for: those
+        // abort the transaction, which is what the server did and what the chip then says.
+        // `guarded` is set only once the savepoint is actually in place, and the SAVEPOINT is inside the
+        // try: in an already-aborted transaction it is itself refused with 25P02, and issued outside it
+        // would escape as a raw driver error rather than the documented "no total available".
+        var guarded = false;
         try
         {
-            await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
-            await using var cmd = new NpgsqlCommand(countSql, conn);
+            if (rent.Transaction is not null)
+            {
+                await ExecNonQueryAsync(rent, "savepoint " + CountSavepoint, ct).ConfigureAwait(false);
+                guarded = true;
+            }
+            await using var cmd = new NpgsqlCommand(countSql, rent.Connection, rent.Transaction);
             var scalar = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+            if (guarded) await ExecNonQueryAsync(rent, "release savepoint " + CountSavepoint, ct).ConfigureAwait(false);
             return scalar is null or DBNull ? null : Convert.ToInt64(scalar);
         }
-        catch (PostgresException pg) when (IsUncountableShape(pg))
+        catch (Exception ex)
         {
-            return null; // this query can't be wrapped at all — caller just hides the total
+            // **Every** failure unwinds, not just a PostgresException. The count runs under a deadline
+            // (§1.5: CountTimeout 2 s, CountBudget 4 s for the batch), and a statement cancelled by its
+            // token surfaces as OperationCanceledException — while the *server* has already raised 57014
+            // and aborted the transaction block. Catching only the driver's exception left that savepoint
+            // un-rolled-back, the scope still reporting Active, and Commit still offered for a transaction
+            // Postgres would have silently turned into a rollback.
+            if (guarded) await UnwindCountAsync(rent).ConfigureAwait(false);
+            // The shape verdict is still the driver's alone; everything else propagates.
+            if (ex is PostgresException pg && IsUncountableShape(pg)) return null;
+            throw;
         }
+    }
+
+    /// <summary>
+    /// Roll back to the count probe's savepoint, best-effort.
+    /// <para>
+    /// <b>Not the caller's token.</b> The commonest reason to be here is that the token was cancelled, and
+    /// issuing the recovery on it would throw before reaching the server — leaving the transaction in
+    /// exactly the state this exists to get it out of.
+    /// </para>
+    /// <para>
+    /// A failure is swallowed: the transaction is past saving either way, and the error worth reporting is
+    /// the one that got us here, not the one raised trying to recover from it.
+    /// </para>
+    /// </summary>
+    private static async Task UnwindCountAsync(PgRent rent)
+    {
+        try
+        {
+            await ExecNonQueryAsync(rent, "rollback to savepoint " + CountSavepoint, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch { /* see above */ }
+    }
+
+    /// <summary>Named, not anonymous: it is released on the way out, so a long-lived transaction does not
+    /// accumulate one per count.</summary>
+    private const string CountSavepoint = "bearing_count_probe";
+
+    private static async Task ExecNonQueryAsync(PgRent rent, string sql, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(sql, rent.Connection, rent.Transaction);
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -159,20 +221,27 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
     {
         var sw = Stopwatch.StartNew();
         var results = new List<QueryResult>(commands.Count);
-        await using var conn = await _factory.DataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
+
         // One transaction for the whole batch: any failure disposes the tx uncommitted → rollback.
-        await using var tx = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        // In manual-commit mode one is already open and it is the user's, so the batch *joins* it and is
+        // deliberately not committed here — that is the whole of #131 as far as this method is concerned.
+        // `own` is non-null exactly when this call opened one, which is also what says whether to commit it.
+        var own = rent.Transaction is null
+            ? await rent.Connection.BeginTransactionAsync(ct).ConfigureAwait(false)
+            : null;
+        var tx = rent.Transaction ?? own!;
         try
         {
             foreach (var c in commands)
             {
-                await using var cmd = new NpgsqlCommand(c.Sql, conn, tx);
+                await using var cmd = new NpgsqlCommand(c.Sql, rent.Connection, tx);
                 foreach (var p in c.Parameters)
                     cmd.Parameters.Add(new NpgsqlParameter(p.Name, p.Value ?? DBNull.Value));
                 await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
                 results.Add(await ReadResultSetAsync(reader, new QueryOptions { MaxRows = null }, sw, ct).ConfigureAwait(false));
             }
-            await tx.CommitAsync(ct).ConfigureAwait(false);
+            if (own is not null) await own.CommitAsync(ct).ConfigureAwait(false);
             return results;
         }
         catch (PostgresException pg)
@@ -185,6 +254,12 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         {
             sw.Stop();
             return new[] { Failure(sw.Elapsed, new QueryError(PostgresErrorText.Explain(ex), null, null)) };
+        }
+        finally
+        {
+            // Disposing an uncommitted transaction rolls it back — which is the batch's own rollback on the
+            // pooled path, and must never reach a transaction this call did not open.
+            if (own is not null) await own.DisposeAsync().ConfigureAwait(false);
         }
     }
 

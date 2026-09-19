@@ -99,6 +99,19 @@ public interface IDialogService
     /// without someone saying so.</summary>
     Task<bool> ConfirmDeleteScriptAsync(string fileName);
 
+    /// <summary>
+    /// Confirm ending uncommitted transactions before an action that would destroy them — quitting,
+    /// disconnecting, closing the tab holding one (#131). <paramref name="action"/> is what the user asked
+    /// for, in their words, so the prompt says what it is in the way of. True = roll them back and proceed.
+    /// <para>
+    /// Implementations with no window (headless/tests) return <b>true</b>, the side of the line
+    /// <see cref="ConfirmCancelRunningAsync"/> is on rather than <see cref="ConfirmDeleteScriptAsync"/>: a
+    /// headless close still closes, and a transaction nobody can be asked about dies with the process
+    /// anyway. Rolling it back deliberately is strictly better than the connection being severed.
+    /// </para>
+    /// </summary>
+    Task<bool> ConfirmDiscardTransactionsAsync(int count, string action);
+
     /// <summary>Ask what to do with a project the user wants gone: forget it, or delete its folder too.
     /// <paramref name="directory"/> is shown, since that is what a delete would remove. Implementations with
     /// no window (headless/tests) return <see cref="ProjectRemoval.Cancel"/> — deliberately the opposite of

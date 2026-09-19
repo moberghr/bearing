@@ -56,6 +56,10 @@ public static class ConnectionClipboard
         public TlsMode Tls { get; init; } = TlsPolicy.Default;
         public bool ReadOnly { get; init; }
         public int StatementTimeoutSeconds { get; init; } = SessionPolicy.NoTimeout;
+        // Manual commit joins them for the same reason, though it is a safety setting of a different kind —
+        // client-side rather than asked of the server (#131). Pasting a manual-commit connection as an
+        // auto-commit one is the same silent downgrade.
+        public bool ManualCommit { get; init; }
         public CredentialKind CredentialKind { get; init; } = CredentialKind.StoredPassword;
         public Dictionary<string, string> Options { get; init; } = new();
     }
@@ -107,6 +111,7 @@ public static class ConnectionClipboard
         // must paste as the mode it actually runs on, not as the untouched default (#23).
         Tls = TlsPolicy.Resolve(c),
         ReadOnly = c.ReadOnly,
+        ManualCommit = c.ManualCommit,
         StatementTimeoutSeconds = c.StatementTimeoutSeconds,
         CredentialKind = c.CredentialKind,
         Options = c.Options.ToDictionary(kv => kv.Key, kv => kv.Value),
@@ -127,6 +132,7 @@ public static class ConnectionClipboard
         RequireWriteConfirmation = e.RequireWriteConfirmation,
         Tls = e.Tls,
         ReadOnly = e.ReadOnly,
+        ManualCommit = e.ManualCommit,
         StatementTimeoutSeconds = e.StatementTimeoutSeconds,
         CredentialKind = e.CredentialKind,
         Options = e.Options,

@@ -43,8 +43,9 @@ public static class TSqlWriteGuard
     /// <summary>Every statement in the batch, in execution order, tagged with the risky verbs it carries.
     /// Mirrors <see cref="WriteGuard.Describe(string)"/>'s contract exactly, so the two are interchangeable
     /// behind <see cref="ISqlDialect"/>.</summary>
-    public static IReadOnlyList<StatementRisk> Describe(string sql, IReadOnlySet<string> riskyVerbs)
+    public static IReadOnlyList<StatementRisk> Describe(string sql, ISqlDialect dialect)
     {
+        var riskyVerbs = dialect.RiskyVerbs;
         var described = new List<StatementRisk>();
         if (string.IsNullOrWhiteSpace(sql)) return described;
 
@@ -55,6 +56,7 @@ public static class TSqlWriteGuard
 
             var first = words[0];
             var risky = new List<string>();
+            var guessed = false;
 
             if (riskyVerbs.Contains(first))
             {
@@ -77,10 +79,17 @@ public static class TSqlWriteGuard
                 // be read without a parser, and on a guarded connection the wrong answer must be "confirm",
                 // never "run it".
                 if (risky.Count == 0 && !ReadStarts.Contains(first))
+                {
                     Add(risky, first);
+                    // Recorded, because a caller that must not act on a guess has to be able to tell this
+                    // apart from a verb the scan actually recognised (StatementRisk.NamesAWrite).
+                    guessed = true;
+                }
             }
 
-            described.Add(new StatementRisk(statement.Text, first, risky));
+            described.Add(new StatementRisk(
+                statement.Text, first, risky, TransactionControl: dialect.TransactionControl(words),
+                FromConservativeDefault: guessed));
         }
         return described;
     }

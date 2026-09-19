@@ -254,3 +254,196 @@ to prevent — the setting was offered for both engines from the moment the seco
   `true` because it was Postgres' behaviour, which means a provider that forgets it claims a server-side
   refusal it may not have.
 
+## §1.10 — Manual commit is a connection Bearing holds open, and every path that could take it must say so (#131)
+
+`ConnectionInfo.ManualCommit` makes a **write** open a transaction that stays open until the user presses
+Commit or Rollback. It is the third per-connection safety setting and the only one that reaches no server:
+§1.9's two ride the startup packet, this one is a pooled connection kept checked out and a `COMMIT` declined.
+That is why `CommitPolicy` is its own class beside `SessionPolicy`, and why it is **not** part of
+`SamePool`/`SameConnection` — it does not define a pool.
+
+- **A read opens nothing** — and the test for that is `StatementRisk.NamesAWrite`, **not** `IsRisky`. The
+  guard's verdict is generous on purpose: on T-SQL anything whose lead word is not a known read is treated
+  as a write so that it gets confirmed. That is the right answer to "must this be confirmed?" and the wrong
+  one to "does this write?" — `declare @id int; select …` is ordinary T-SQL for a read, and opening a
+  transaction on it makes browsing hold locks, which is the outcome this rule exists to prevent. A dialect
+  the guard cannot read still counts as a write: not knowing is a reason to hold a write, never a reason to
+  let one commit itself.
+  The first *write* opens one; once open, everything that tab runs joins it, reads
+  included. Opening on any statement is DBeaver's behaviour and is how a session ends up `idle in
+  transaction` from nothing but browsing — the hazard #101's panel exists to make visible. Reads joining an
+  already-open transaction is what makes the row-count preview (§1.5) and the grid agree with it.
+- **The write guard is not relaxed.** A connection with both settings confirms the write *and* holds it.
+  §1.2 is not narrowed because a write became undoable.
+
+### The seam: a second `IQueryExecutor`, not a parameter on the first
+Every executor method in both providers opened its own pooled connection and handed it back when the method
+returned, so a transaction begun in one call was over before the next began. `IDbProvider.CreateTransactionScope`
+hands out an `ITransactionScope` holding **one** connection, with an `IQueryExecutor` pinned to it — so
+nothing downstream learned a second way to run a statement. The executors take an `IPgConnectionSource` /
+`ISqlConnectionSource` (pooled: open and dispose; pinned: the held one, dispose nothing) and are written once
+against both.
+- **`ExecuteWriteAsync` commits only what it opened.** `own` is non-null exactly when the call began a
+  transaction, and that is also what says whether to commit and whether disposal may roll back. On the pinned
+  source an inline-grid save joins the user's transaction.
+- **`ExecutorFor(tab, session)` in `ExecutionViewModel` is the only chooser**, and it re-checks the
+  `SessionKey`. Every call site that runs the user's SQL goes through it, or it opens a fresh connection and
+  misses the transaction.
+- **EXPLAIN ANALYZE is refused while the tab holds one**, and both halves of why are the same fact.
+  `ExplainSql.Measured` carries its own `BEGIN … ROLLBACK` — necessarily, since a plain SELECT can call a
+  volatile function that writes — so on the held connection that rollback ends the *user's* transaction. Run
+  on a pooled connection instead (the first attempt) it executes against rows this tab's transaction has
+  locked and blocks; with no statement timeout by default it waits forever, and while it waits the tab counts
+  as running, so Commit and Rollback are both out of reach — the hang removes the only action that would end
+  it. A **plan-only** EXPLAIN has neither problem (`RolledBack: false`, executes nothing) and runs on the
+  transaction like any other read.
+- **Metadata, schema and the activity panel stay pooled.** A catalog read inside the user's transaction is
+  wrong, and a panel polling it would pin it.
+- **`CountAsync` is savepoint-protected, and it is the only call that is.** A shape the count wrapper cannot
+  take is an error, and on Postgres any error dooms the transaction — so the row-impact probe Bearing runs on
+  the user's behalf would destroy their work. The savepoint protects the transaction *from us*; it is not a
+  general undo for statements they asked for. `TrackedExecutor` therefore exempts `CountAsync` from the abort
+  rule, and does not count it as a statement either — every write confirmation runs one, and the chip counts
+  what the user wrote.
+  - **Every failure unwinds, not just the driver's own exception, and the unwind uses
+    `CancellationToken.None`.** The probe runs under a deadline (§1.5), so the commonest way to leave it is a
+    cancelled token — which arrives as `OperationCanceledException` *after* the server has raised 57014 and
+    aborted the block, and which would make the recovery throw before reaching the server if it were issued
+    on the same token. Catching only `PostgresException`/`SqlException` left the savepoint un-rolled-back,
+    the scope still reporting `Active`, and Commit still on offer for a transaction Postgres would silently
+    have turned into a rollback. Pinned live, both engines.
+
+### One abort rule, two different truths
+Any failure marks the transaction `Aborted`, and Commit is then refused. On Postgres that is simply what
+happened (`25P02` thereafter — measured). On SQL Server it is **conservative**: a duplicate key there leaves a
+transaction the server would still commit, also measured. The cost is a rollback of work that server would
+have taken, against offering a `COMMIT` that Postgres turns silently into a `ROLLBACK`. Bearing does not offer
+to commit what it cannot promise to commit. Do not "fix" the SQL Server side by probing `XACT_STATE()`
+without deciding that trade again.
+
+### Typed `BEGIN`/`COMMIT`/`ROLLBACK` are refused, on a manual-commit connection only
+`ISqlDialect.TransactionControl` classifies them and `WriteRefusal.ReasonForTransactionControl` refuses the
+whole batch. An ordinary connection keeps running a script that manages its own transactions, so nothing is
+narrowed. The classification is per dialect and **not a translation**: in T-SQL a bare `BEGIN` opens a
+`BEGIN … END` *block* and `END` closes it, while in Postgres `BEGIN` is a transaction and `END` is a commit.
+Getting that backwards refuses every T-SQL block or lets a raw `COMMIT` end the held transaction behind the
+driver's back. `PREPARE` needs its second word too.
+
+### A transaction and its statement share one connection
+`ExecutionViewModel.EndTransactionAsync` refuses while `tab.IsRunning`, and `CanCommit`/`CanRollback` follow
+it, so neither the buttons nor the palette can reach them mid-statement. A commit issued on a connection with
+a command in flight throws from the driver, and the teardown behind it would dispose that connection under a
+live reader — ending the transaction on the server while the app believed it had committed. Esc first.
+
+The idle sweep obeys the same rule twice over: `TrackedExecutor` stamps `LastActivityUtc` when a statement
+**finishes** as well as when it starts (a sixteen-minute UPDATE used to age past the rollback threshold while
+it ran), and the sweep skips a running tab outright. It is also not re-entrant — the timer is not awaited, and
+a rollback slower than one tick would log a second `rollback` row and raise a second toast for one transaction.
+
+### A retry may not re-apply what a failed attempt already did
+SQL Server's Msg 334 makes `ExecuteWriteAsync` re-run the whole batch with the returning clauses dropped,
+on the premise that the failed attempt left nothing behind. That is true when it owns the transaction —
+disposing it rolls back — and **false when it joined the user's**, where a DELETE that succeeded before a
+sibling INSERT raised 334 would be applied twice: its triggers fired again, its affected count reported as 0
+the second time. `RunBatchAsync` therefore takes its own savepoint (`bearing_write_batch`, distinct from the
+count probe's — both can be in flight in one transaction) and unwinds to it before letting the failure reach
+the retry. Pinned live against a trigger-bearing table, which is the only shape that shows it.
+
+### Per tab, and capped
+A pool is shared by every tab on a (connection, database), so a session-owned transaction would be one two
+tabs wrote into without either saying so. `TabTransactions` keys on the tab. Each open transaction holds a
+`SessionLease` — which exempts it from the idle sweep for free, and means `EvictConnectionAsync` only
+*retires* the session, so **Disconnect must roll back itself** or the transaction survives it invisibly.
+`CommitPolicy.MaxOpenPerPool` (4 of `DefaultMaxPoolSize` 10) refuses the next one with a sentence, because
+without it tabs that have each written once exhaust the pool and every other operation on that database
+blocks with nothing on screen to say why.
+
+### The guard table — the list *is* the feature
+| Path | What it does |
+|---|---|
+| Switch a tab's connection or database | **Refuse** — another pool (§9.4a); there is no version that keeps it. No-ops early when nothing would change, so re-selecting what the tab is already on is not reported as a switch |
+| Disconnect, refresh server metadata | **Ask and act** (`TransactionGuard.ConfirmAsync`) — nothing can intervene between the two |
+| Quit, close the tab | **Ask, then act later** (`AskAsync` … `RollbackAsync`) — see below |
+| Connection edited into a pool rebuild, **manual commit turned off**, connection deleted, **project removed**, script deleted | **Roll back and report** — the user already confirmed something that subsumes it |
+| Idle sweep | Skips a running tab; otherwise rolls back past the threshold |
+
+**A forced rollback cancels rather than refuses.** The two verbs refuse outright while the tab is
+mid-statement (above); a guard path cannot — the disconnect, close or quit is already happening — so
+`RollbackWhereAsync` cancels the statement first. Without that it disposed the pinned connection under a
+live reader, which is the thing the verbs refuse by hand.
+
+**Asking is not acting, and where a third thing can intervene they must be separate steps.** Quit asks about
+transactions *and* about running queries; a tab close asks about the transaction *and* about unsaved text.
+Rolling back as soon as the first question was answered lost the work for an action the second question then
+cancelled — and unlike a cancelled query, a rolled-back transaction cannot be re-run. `AskAsync` and
+`RollbackAsync` are split for exactly this; `ConfirmAsync` is the convenience for the paths where nothing
+comes between.
+
+**Turning the mode off ends the transaction.** `ManualCommit` is not part of `SamePool` (it reaches no
+server), so nothing else on the save path would have noticed — and the transaction would have gone on taking
+that tab's writes uncommitted while the refusal that stops a typed `COMMIT` reaching it disappeared with the
+setting.
+
+**Every route that removes a tab has to end its transaction**, not only `CloseTabAsync`. There are two, and
+they are not the same as a project *switch*: deleting a script removes its tabs directly, and removing a
+project drops every tab it owned (`WorkspaceContext.Close` returns them, which is what
+`TabTransactions.RollbackForTabsAsync` is handed). A **switch** is safe on its own — `Park` keeps the tab
+view-models alive on the `ProjectWorkspace` and `AllTabs` still sees them, so the transaction is off screen
+rather than lost, and switching back makes it reachable again. A transaction left on a dropped tab is
+unreachable: nothing can select it, so neither the chip nor either command can ever reach it, while it goes on
+holding a pooled connection and a lease that stops the session being disposed — and it still counts against
+the per-pool cap.
+
+WHEN adding a path that disposes, retires or re-keys a session, or that removes a tab, decide what it does to
+an open transaction before the server decides for you. A severed connection rolls back on the server's
+schedule, silently, which is the exact failure this feature exists to prevent.
+
+### The mode is flippable without the dialog, for this session only
+A toolbar pill (`ModePill`, beside Commit/Rollback and always visible when the tab has a connection) switches
+the connection between auto and manual commit; `transaction.toggleMode` is the same thing from the palette.
+- **It does not write the connection.** `project.json` is shared, and turning manual commit on for one
+  dangerous `UPDATE` is not a statement about how everyone else should work. `CommitModes` holds the
+  override in memory, per connection, for the session.
+- **`WorkspaceContext.EffectiveConnection` is the only place it is applied** — the same seam that substitutes
+  the tab's active database. Everything downstream reads `ManualCommit` off a plain `ConnectionInfo` and
+  never learns an override exists, which is why the execution path, the write refusal, the status tip and
+  every guard needed no call site.
+- **`CommitModes` takes an *id* everywhere except `IsManualCommit`, and that is a guard.** Most records the
+  app holds are *effective* ones, which already have the override applied — comparing an override against
+  one compares it with itself and reports that nothing is overridden, which is exactly what the first
+  version did.
+- **Saving the connection clears the override**, because the dialog is the authoritative statement of what
+  the connection is; without that, unticking the box would appear to do nothing. The rollback check on save
+  therefore compares the mode *in force* (override included) against the saved one — an override that had a
+  transaction open still has to end it.
+- **Switching to auto-commit is refused while any tab on that connection holds a transaction.** The mode is
+  per connection and the transactions are per tab, so there is no coherent "and that one keeps waiting"; and
+  a toolbar pill may not be a thing that discards data or commits to production, which are the only other
+  two answers.
+- The pill marks an override with a dot, the mark the tab strip already uses for a buffer that differs from
+  its file. It was italics first: italic glyphs render past the advance width the content presenter measured,
+  so the last letter clipped at every pill width. A marker that changes metrics belongs in the text.
+
+### Two clocks, and the query log
+`AppSettings.IdleTransactionWarnMinutes` (5) turns the status chip amber; `IdleTransactionRollbackMinutes`
+(15, raised to the warning if set below it) rolls it back and reports it as a **toast**, because the premise
+is that nobody was watching the status bar. 0 disables either. Idle is measured from the last statement, not
+from when it opened.
+
+The chip lives beside the beacon and **never on it** — §9.3a gives the beacon connection *state* in its
+silhouette, and a transaction is not one. Commit/Rollback are commands (§9.2) with a toolbar home and no
+default binding: every plausible gesture is taken, and `Ctrl+Shift+C` belongs to `select.connection`.
+
+`ConfirmDiscardTransactionDialog` gives its **"Keep it open"** button both `IsCancel` and `IsDefault` — the
+§9.13 treatment, so no single keystroke throws away uncommitted work. That is one keystroke more than
+`ConfirmCancelRunningDialog` asks for, deliberately: a cancelled query can be re-run.
+
+`query_log` is at `user_version = 3`: `transaction_id` is written on each statement, and the commit or
+rollback is logged as an entry of its own carrying the same id — it *is* SQL the user caused to run, which is
+the line §9.13 draws. Null means auto-commit, which is not the same as "rolled back", so a report says how
+many rows it could not place. **The logging lives in `TabTransactions`, not at the two buttons**, because
+every end has to be in the record: a history that only recorded the ones the user pressed could not tell
+"committed" from "discarded on the way out by quit, a disconnect or a deleted connection". It is written in
+the `finally`, so an end that **failed** is recorded too (`Success = false` with the message) — the scope has
+released its connection either way, and leaving it out would put the statements in the log with a transaction
+id nothing matches, which reads exactly like one still open.

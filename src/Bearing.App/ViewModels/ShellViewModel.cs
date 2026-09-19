@@ -92,7 +92,7 @@ public sealed partial class ShellViewModel : ObservableObject
             OnPropertyChanged(nameof(IsMenuTransient));
             IsMenuVisible = s.ShowMenuBar;
         };
-        _connections = new ConnectionsViewModel(_ctx);
+        _connections = new ConnectionsViewModel(_ctx, dialogs);
         _scripts = new ScriptsViewModel(_ctx, UpdateTitle);
         // The workspace owns the tabs and coordinates with the scripts concern (refresh tree / rename file)
         // and the connections concern (connection-display); it holds both directly (they're already built
@@ -113,6 +113,10 @@ public sealed partial class ShellViewModel : ObservableObject
     public ScriptsViewModel Scripts => _scripts;
     public WorkspaceViewModel Workspace => _workspace;
     public ExecutionViewModel Execution => _execution;
+
+    /// <summary>The shared aggregate the child view-models coordinate through. Exposed for the window's own
+    /// guards — the quit path has to ask about open transactions (#131) and has no other route to them.</summary>
+    internal Workspace.WorkspaceContext Context => _ctx;
 
     /// <summary>Owns the live preferences; the settings window writes through it and the shell mirrors
     /// the bits the XAML binds to (see <see cref="EditorFontSize"/>).</summary>

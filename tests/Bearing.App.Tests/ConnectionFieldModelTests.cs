@@ -64,6 +64,9 @@ public class ConnectionFieldModelTests
             => throw new NotSupportedException("declares fields only");
         public IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory)
             => throw new NotSupportedException("declares fields only");
+
+        public ITransactionScope CreateTransactionScope(IDbConnectionFactory factory)
+            => throw new NotSupportedException();
     }
 
     private static readonly OptionProvider Opt = new();
@@ -114,6 +117,9 @@ public class ConnectionFieldModelTests
             => throw new NotSupportedException("declares fields only");
         public IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory)
             => throw new NotSupportedException("declares fields only");
+
+        public ITransactionScope CreateTransactionScope(IDbConnectionFactory factory)
+            => throw new NotSupportedException();
     }
 
     private static readonly ChoiceProvider Choice = new();
@@ -563,5 +569,8 @@ public class ConnectionFieldModelTests
             => throw new NotSupportedException("declares fields only");
         public IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory)
             => throw new NotSupportedException("declares fields only");
+
+        public ITransactionScope CreateTransactionScope(IDbConnectionFactory factory)
+            => throw new NotSupportedException();
     }
 }

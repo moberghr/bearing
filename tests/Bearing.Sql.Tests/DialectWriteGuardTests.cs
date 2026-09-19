@@ -118,6 +118,7 @@ public class DialectWriteGuardTests
         public IReadOnlySet<string> RiskyVerbs => Ss.RiskyVerbs;
         public IReadOnlyList<StatementRisk> DescribeStatements(string sql) => Ss.DescribeStatements(sql);
         public IReadOnlyList<StatementSpan> SplitStatements(string sql) => Ss.SplitStatements(sql);
+        public string? TransactionControl(IReadOnlyList<string> words) => Ss.TransactionControl(words);
         public ISqlParseRules ParseRules => Ss.ParseRules;
         public bool InStringLiteral(string sql, int offset) => Ss.InStringLiteral(sql, offset);
         public string RedactLiterals(string? sql) => Ss.RedactLiterals(sql);

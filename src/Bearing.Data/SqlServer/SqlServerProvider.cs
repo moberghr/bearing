@@ -131,4 +131,7 @@ public sealed class SqlServerProvider : IDbProvider
 
     public IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory)
         => new SqlServerQueryExecutor((SqlServerConnectionFactory)factory);
+
+    public ITransactionScope CreateTransactionScope(IDbConnectionFactory factory)
+        => new SqlServerTransactionScope((SqlServerConnectionFactory)factory);
 }

@@ -73,6 +73,19 @@ public interface IDbProvider
     IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory);
 
     /// <summary>
+    /// A transaction that outlives the call that opened it, for manual-commit mode (#131). Nothing is opened
+    /// until <see cref="ITransactionScope.BeginAsync"/>.
+    /// <para>
+    /// This exists because <see cref="CreateQueryExecutor"/>'s product cannot serve it: every method on that
+    /// executor opens its own pooled connection and hands it back when the method returns, so a transaction
+    /// begun in one call is over before the next one starts. A scope holds <b>one</b> physical connection for
+    /// as long as the user leaves the transaction open, and hands out an <see cref="IQueryExecutor"/> pinned
+    /// to it — so nothing downstream has to learn a second way to run a statement.
+    /// </para>
+    /// </summary>
+    ITransactionScope CreateTransactionScope(IDbConnectionFactory factory);
+
+    /// <summary>
     /// Whether this engine can answer <see cref="CreateServerActivity"/> at all.
     /// <para>
     /// A flag rather than an empty result, which is the pattern the four catalog kinds on
@@ -244,6 +257,66 @@ public interface IQueryExecutor
     /// single error result rather than thrown.
     /// </summary>
     Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct);
+}
+
+/// <summary>Where a transaction opened by <see cref="ITransactionScope"/> stands.</summary>
+public enum TransactionState
+{
+    /// <summary>Nothing is open — before <see cref="ITransactionScope.BeginAsync"/>, and after either verb.</summary>
+    None,
+
+    /// <summary>Open, and able to be committed.</summary>
+    Active,
+
+    /// <summary>
+    /// Open, but a statement in it failed, so only <see cref="ITransactionScope.RollbackAsync"/> is left.
+    /// <para>
+    /// On Postgres this is simply what happened: any error aborts the transaction and every later statement
+    /// comes back <c>25P02</c> until it ends. On SQL Server it is <b>conservative</b> — some errors there
+    /// (a duplicate key, say) leave a transaction the server would still commit — and deliberately so: the
+    /// cost is a rollback of work the server would have taken, which the user is told about, against a
+    /// <c>COMMIT</c> that Postgres would silently turn into a <c>ROLLBACK</c>. Bearing does not offer to
+    /// commit what it cannot promise to commit.
+    /// </para>
+    /// </summary>
+    Aborted,
+}
+
+/// <summary>
+/// One transaction held open across calls, on one physical connection (#131). Created by
+/// <see cref="IDbProvider.CreateTransactionScope"/>; disposing it rolls back anything still open.
+/// </summary>
+public interface ITransactionScope : IAsyncDisposable
+{
+    TransactionState State { get; }
+
+    /// <summary>How many statements have run inside this transaction — what the status chip counts.</summary>
+    int StatementCount { get; }
+
+    /// <summary>When something last ran in it, for the idle clocks in <see cref="CommitPolicy"/>. Bumped by
+    /// the pinned executor, so it measures the transaction's own activity and not the tab's.</summary>
+    DateTime LastActivityUtc { get; }
+
+    /// <summary>
+    /// Runs on this scope's held connection and transaction. Same interface as the pooled one on purpose:
+    /// the caller picks which executor a tab gets and nothing further down knows the difference.
+    /// <para>
+    /// One difference in behaviour, and it is the point:
+    /// <see cref="IQueryExecutor.ExecuteWriteAsync"/> here does <b>not</b> commit — the batch joins the open
+    /// transaction and waits for the user like everything else.
+    /// </para>
+    /// </summary>
+    IQueryExecutor Executor { get; }
+
+    /// <summary>Open the transaction. Called once, before anything runs on <see cref="Executor"/>.</summary>
+    Task BeginAsync(CancellationToken ct);
+
+    /// <summary>Commit and release the connection. Refused when <see cref="State"/> is
+    /// <see cref="TransactionState.Aborted"/> — see that member for why.</summary>
+    Task CommitAsync(CancellationToken ct);
+
+    /// <summary>Roll back and release the connection. Always available while anything is open.</summary>
+    Task RollbackAsync(CancellationToken ct);
 }
 
 /// <summary>Registry of available providers, resolved by <see cref="IDbProvider.Id"/>.</summary>

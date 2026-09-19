@@ -83,6 +83,17 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
     public IQueryExecutor? Executor;
     public IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory) => Executor ?? new FakeExecutor();
 
+    /// <summary>A working scope over the same executor, so a test can drive manual-commit mode end to end
+    /// without a server (#131): open, run, commit or roll back, and watch the state. It commits nothing
+    /// anywhere, which is the point — what is under test here is the app's bookkeeping, never the
+    /// engine's. The real transaction is exercised live against both servers (§4.2).</summary>
+    public ITransactionScope CreateTransactionScope(IDbConnectionFactory factory)
+        => LastScope = new FakeTransactionScope(Executor ?? new FakeExecutor());
+
+    /// <summary>The most recently created scope, so a test can assert what was actually done to it — a
+    /// close or a disconnect that stops showing the chip has not necessarily rolled anything back.</summary>
+    public FakeTransactionScope? LastScope;
+
     /// <summary>When set, every session built by this provider shares this one (so an activity-panel test can
     /// script what the server reports). Otherwise each session gets a fresh, quiet <see cref="FakeActivity"/>.</summary>
     public IServerActivity? Activity;
@@ -210,8 +221,18 @@ internal sealed class FakeExecutor : IQueryExecutor
         System.Array.Empty<ColumnDescriptor>(), System.Array.Empty<object?[]>(),
         0, System.TimeSpan.Zero, null, null, false);
 
+    /// <summary>When set, every <see cref="ExecuteAsync"/> comes back as a failed result — which is how the
+    /// executors report a statement error (they do not throw one), and so the shape a transaction has to
+    /// notice to mark itself aborted (#131).</summary>
+    public string? FailWith { get; set; }
+
     public Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
-        => Task.FromResult<IReadOnlyList<QueryResult>>(new[] { Empty });
+        => Task.FromResult<IReadOnlyList<QueryResult>>(new[]
+        {
+            FailWith is { } message
+                ? Empty with { Error = new QueryError(message, "42601", null) }
+                : Empty,
+        });
 
     public Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
         => Task.FromResult(Empty);
@@ -534,6 +555,19 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
         _saveAsPath = saveAsPath;
     }
 
+    /// <summary>What the uncommitted-transaction prompt answers. False keeps the transaction (and so
+    /// cancels the close / disconnect / quit that asked).</summary>
+    public bool DiscardTransactionsAnswer { get; set; } = true;
+
+    /// <summary>The (count, action) pairs the transaction prompt was raised with, in order.</summary>
+    public List<(int Count, string Action)> TransactionPrompts { get; } = new();
+
+    public Task<bool> ConfirmDiscardTransactionsAsync(int count, string action)
+    {
+        TransactionPrompts.Add((count, action));
+        return Task.FromResult(DiscardTransactionsAnswer);
+    }
+
     /// <summary>Tab names the close prompt was raised for, in order.</summary>
     public List<string> ClosePrompts { get; } = new();
 
@@ -775,5 +809,121 @@ internal sealed class FakeReleaseNotes : IReleaseNotes
     {
         Notes.Add(new ReleaseNote(version, $"Bearing {version}", null, markdown, $"https://x/{version}"));
         return this;
+    }
+}
+
+
+/// <summary>
+/// A transaction scope with no server under it (#131): it keeps the state a real one would — open, how many
+/// statements, when the last ran, aborted once one failed — and delegates the running to whatever executor
+/// it was handed. What it cannot show is a rollback undoing anything, because nothing was done; that half
+/// belongs to the live suites (§4.2), and asserting it here would assert our own fixture back at us (§4.6).
+/// </summary>
+internal sealed class FakeTransactionScope : ITransactionScope
+{
+    private readonly IQueryExecutor _inner;
+
+    public FakeTransactionScope(IQueryExecutor inner)
+    {
+        _inner = inner;
+        Executor = new Counting(this);
+        LastActivityUtc = DateTime.UtcNow;
+    }
+
+    public TransactionState State { get; private set; } = TransactionState.None;
+    public int StatementCount { get; private set; }
+    public DateTime LastActivityUtc { get; private set; }
+    public IQueryExecutor Executor { get; }
+
+    /// <summary>How many times each verb was called — so a test can assert that a close/disconnect actually
+    /// rolled back rather than merely stopped showing the chip.</summary>
+    public int Commits { get; private set; }
+    public int Rollbacks { get; private set; }
+
+    public Task BeginAsync(CancellationToken ct)
+    {
+        State = TransactionState.Active;
+        StatementCount = 0;
+        LastActivityUtc = DateTime.UtcNow;
+        return Task.CompletedTask;
+    }
+
+    /// <summary>When set, both verbs throw it — but still release, as the real scopes do (their own
+    /// `finally` hands the connection back whether or not the verb worked).</summary>
+    public string? FailToEnd { get; set; }
+
+    public Task CommitAsync(CancellationToken ct)
+    {
+        if (State != TransactionState.Active)
+            throw new InvalidOperationException($"Cannot commit a transaction that is {State}.");
+        State = TransactionState.None;
+        if (FailToEnd is { } why) throw new InvalidOperationException(why);
+        Commits++;
+        return Task.CompletedTask;
+    }
+
+    public Task RollbackAsync(CancellationToken ct)
+    {
+        var wasOpen = State != TransactionState.None;
+        State = TransactionState.None;
+        if (FailToEnd is { } why) throw new InvalidOperationException(why);
+        if (wasOpen) Rollbacks++;
+        return Task.CompletedTask;
+    }
+
+    public ValueTask DisposeAsync() { State = TransactionState.None; return default; }
+
+    /// <summary>Backdate the last activity, so a test can reach the idle thresholds without waiting.</summary>
+    public void Idle(TimeSpan by) => LastActivityUtc = DateTime.UtcNow - by;
+
+    private sealed class Counting : IQueryExecutor
+    {
+        private readonly FakeTransactionScope _scope;
+        internal Counting(FakeTransactionScope scope) => _scope = scope;
+
+        private void Ran() { _scope.StatementCount++; Touched(); }
+
+        /// <summary>Activity without a statement — what a count probe is, mirroring
+        /// <c>TrackedExecutor</c>'s split (#131).</summary>
+        private void Touched() => _scope.LastActivityUtc = DateTime.UtcNow;
+        private void Failed()
+        {
+            if (_scope.State == TransactionState.Active) _scope.State = TransactionState.Aborted;
+        }
+
+        public async Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
+        {
+            Ran();
+            var results = await _scope._inner.ExecuteAsync(sql, options, ct);
+            if (results.Any(r => !r.Success)) Failed();
+            return results;
+        }
+
+        public Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
+        {
+            Ran();
+            return _scope._inner.ExecutePageAsync(pageSql, ct);
+        }
+
+        public IAsyncEnumerable<RowBatch> StreamRowsAsync(string sql, QueryOptions options, CancellationToken ct)
+        {
+            Ran();
+            return _scope._inner.StreamRowsAsync(sql, options, ct);
+        }
+
+        public Task<long?> CountAsync(string countSql, CancellationToken ct)
+        {
+            Touched();   // a probe, not a statement the user wrote — see the real tracker
+            return _scope._inner.CountAsync(countSql, ct);
+        }
+
+        public async Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(
+            IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct)
+        {
+            Ran();
+            var results = await _scope._inner.ExecuteWriteAsync(commands, ct);
+            if (results.Any(r => !r.Success)) Failed();
+            return results;
+        }
     }
 }

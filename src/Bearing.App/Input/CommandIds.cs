@@ -63,6 +63,20 @@ public static class CommandIds
     /// occasional action, reachable from the palette and the History panel's own button.</summary>
     public const string HistoryExport = "history.export";
     public const string ConnectionNew = "connection.new";
+
+    /// <summary>Commit / roll back the selected tab's manual-commit transaction (#131). Both ship
+    /// <b>unbound</b>: every plausible gesture here is taken — Ctrl+Shift+C is <c>select.connection</c> —
+    /// and a command that ends a transaction is a poor reason to re-home an existing one. They have a
+    /// toolbar home beside Run, which is where the eye already is, plus the palette; a user who wants a
+    /// keystroke binds one in keybindings.json (§9.2).</summary>
+    public const string TransactionCommit = "transaction.commit";
+
+    /// <inheritdoc cref="TransactionCommit"/>
+    public const string TransactionRollback = "transaction.rollback";
+
+    /// <summary>Switch the selected tab's connection between auto and manual commit for this session
+    /// (#131). Unbound by default like the pair above; the toolbar pill is its home.</summary>
+    public const string TransactionToggleMode = "transaction.toggleMode";
     public const string ConnectionImportDBeaver = "connection.import.dbeaver";
     /// <summary>Fuzzy-pick a relation from the loaded schema and reveal it in the tree (#117).</summary>
     public const string SchemaGotoTable = "schema.gotoTable";

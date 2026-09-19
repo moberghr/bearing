@@ -166,5 +166,8 @@ public class ChoiceFieldTests
             => throw new NotSupportedException("declares fields only");
         public IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory)
             => throw new NotSupportedException("declares fields only");
+
+        public ITransactionScope CreateTransactionScope(IDbConnectionFactory factory)
+            => throw new NotSupportedException();
     }
 }

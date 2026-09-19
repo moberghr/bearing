@@ -84,6 +84,9 @@ public sealed class DemoProvider : IDbProvider, IProviderRegistry
 
     public IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory) => _executor;
 
+    public ITransactionScope CreateTransactionScope(IDbConnectionFactory factory)
+        => new DemoTransactionScope(_executor);
+
     public bool SupportsServerActivity => true;
 
     public IServerActivity CreateServerActivity(IDbConnectionFactory factory) => _activity;

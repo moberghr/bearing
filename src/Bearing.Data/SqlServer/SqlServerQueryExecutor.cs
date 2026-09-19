@@ -34,9 +34,13 @@ namespace Bearing.Data.SqlServer;
 /// </summary>
 public sealed class SqlServerQueryExecutor : IQueryExecutor
 {
-    private readonly SqlServerConnectionFactory _factory;
+    private readonly ISqlConnectionSource _source;
 
-    public SqlServerQueryExecutor(SqlServerConnectionFactory factory) => _factory = factory;
+    public SqlServerQueryExecutor(SqlServerConnectionFactory factory) : this(new PooledSqlConnections(factory)) { }
+
+    /// <summary>The same executor over a connection someone else is holding — a manual-commit transaction
+    /// (#131). Nothing below knows which source it has; that is the point of the seam.</summary>
+    internal SqlServerQueryExecutor(ISqlConnectionSource source) => _source = source;
 
     public async Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
     {
@@ -88,8 +92,8 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
     {
         var results = new List<QueryResult>();
 
-        await using var conn = await _factory.OpenConnectionAsync(ct).ConfigureAwait(false);
-        await using var cmd = new SqlCommand(sql, conn);
+        await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
+        await using var cmd = new SqlCommand(sql, rent.Connection, rent.Transaction);
 
         // The per-statement row counts, in statement order. This event is the only place they exist — see
         // DescribeBatch for what the reader does and does not expose.
@@ -129,8 +133,8 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
         var sw = Stopwatch.StartNew();
         try
         {
-            await using var conn = await _factory.OpenConnectionAsync(ct).ConfigureAwait(false);
-            await using var cmd = new SqlCommand(pageSql, conn);
+            await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
+            await using var cmd = new SqlCommand(pageSql, rent.Connection, rent.Transaction);
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             return await ReadResultSetAsync(
                 reader, new QueryOptions { MaxRows = null }, sw, ct).ConfigureAwait(false);
@@ -156,8 +160,8 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
         string sql, QueryOptions options, [EnumeratorCancellation] CancellationToken ct)
     {
         var batchSize = Math.Max(1, options.BatchRows);
-        await using var conn = await _factory.OpenConnectionAsync(ct).ConfigureAwait(false);
-        await using var cmd = new SqlCommand(sql, conn);
+        await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
+        await using var cmd = new SqlCommand(sql, rent.Connection, rent.Transaction);
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         if (reader.FieldCount == 0) yield break; // not row-returning — nothing to stream
@@ -197,17 +201,59 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
         // the wrapper — including the OFFSET 0 ROWS repair a derived table needs before it may carry an
         // ORDER BY. We just run it, exactly as ExecutePageAsync runs a page the caller shaped. That is also
         // what keeps this project free of a Bearing.Sql reference (§2.2).
+        await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
+
+        // Inside a held transaction (#131) this probe runs under a savepoint, and it is the only call in
+        // this class that does — the Postgres executor draws the same line for the same reason. A shape the
+        // wrapper cannot count fails, and an error inside a transaction can doom it; a speculative count of
+        // ours must not be what destroys the user's uncommitted work. T-SQL has no "release savepoint", so
+        // the name is simply re-used: a rollback goes to the most recent one bearing it.
+        // Set only once the savepoint is in place, and taken inside the try — see the Postgres executor.
+        var guarded = false;
         try
         {
-            await using var conn = await _factory.OpenConnectionAsync(ct).ConfigureAwait(false);
-            await using var cmd = new SqlCommand(countSql, conn);
+            if (rent.Transaction is not null)
+            {
+                await ExecNonQueryAsync(rent, "save transaction " + CountSavepoint, ct).ConfigureAwait(false);
+                guarded = true;
+            }
+            await using var cmd = new SqlCommand(countSql, rent.Connection, rent.Transaction);
             var scalar = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
             return scalar is null or DBNull ? null : Convert.ToInt64(scalar);
         }
-        catch (SqlException ex) when (IsUncountableShape(ex))
+        catch (Exception ex)
         {
-            return null; // this query can't be wrapped at all — caller just hides the total
+            // **Every** failure unwinds — see the Postgres executor's UnwindCountAsync for why catching
+            // only the driver's exception is not enough: the count runs under a deadline (§1.5), and a
+            // cancelled statement arrives as OperationCanceledException after the server has already dealt
+            // with it.
+            if (guarded) await UnwindCountAsync(rent).ConfigureAwait(false);
+            // The shape verdict is still the driver's alone; everything else propagates.
+            if (ex is SqlException sql && IsUncountableShape(sql)) return null;
+            throw;
         }
+    }
+
+    /// <summary>Roll back to the count probe's savepoint, best-effort and on <see cref="CancellationToken.None"/>.
+    /// The sibling of the Postgres executor's, and for the same two reasons — see there.</summary>
+    private static async Task UnwindCountAsync(SqlRent rent)
+    {
+        try
+        {
+            await ExecNonQueryAsync(rent, "rollback transaction " + CountSavepoint, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch { /* the transaction is past saving either way */ }
+    }
+
+    /// <summary>Named so the rollback can aim at it. Re-used across counts in one transaction: T-SQL has no
+    /// release, and a fresh name per probe would grow the transaction's savepoint list without bound.</summary>
+    private const string CountSavepoint = "bearing_count_probe";
+
+    private static async Task ExecNonQueryAsync(SqlRent rent, string sql, CancellationToken ct)
+    {
+        await using var cmd = new SqlCommand(sql, rent.Connection, rent.Transaction);
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -302,24 +348,66 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
         IReadOnlyList<SqlWriteCommand> commands, Stopwatch sw, bool withReturning, CancellationToken ct)
     {
         var results = new List<QueryResult>(commands.Count);
-        await using var conn = await _factory.OpenConnectionAsync(ct).ConfigureAwait(false);
-        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
 
-        foreach (var c in commands)
+        // In manual-commit mode one transaction is already open and it is the user's, so the batch joins it
+        // and is deliberately not committed here (#131). `own` is non-null exactly when this call opened
+        // one, which is also what says whether to commit it.
+        var own = rent.Transaction is null
+            ? (SqlTransaction)await rent.Connection.BeginTransactionAsync(ct).ConfigureAwait(false)
+            : null;
+        var tx = rent.Transaction ?? own!;
+
+        // A savepoint, but only when joining someone else's transaction. The caller retries this whole batch
+        // from index 0 on Msg 334, on the premise that a failed attempt left nothing behind — true when we
+        // own the transaction, because disposing it rolls back. Joined, there is nothing to roll back, so a
+        // DELETE that already succeeded before a sibling INSERT raised 334 would be applied twice: its
+        // triggers fired again, and its affected-row count reported as 0 the second time.
+        var guarded = rent.Transaction is not null;
+        if (guarded) await ExecNonQueryAsync(rent, "save transaction " + BatchSavepoint, ct).ConfigureAwait(false);
+        try
         {
-            var sql = withReturning ? c.Sql : c.SqlWithoutReturning ?? c.Sql;
-            await using var cmd = new SqlCommand(sql, conn, tx);
-            foreach (var p in c.Parameters)
-                cmd.Parameters.Add(new DriverParameter(p.Name, p.Value ?? DBNull.Value));
-            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            // One command per write, so its RecordsAffected stands for that write alone rather than
-            // continuing a running batch total.
-            results.Add(await ReadResultSetAsync(
-                reader, new QueryOptions { MaxRows = null }, sw, ct).ConfigureAwait(false));
+            foreach (var c in commands)
+            {
+                var sql = withReturning ? c.Sql : c.SqlWithoutReturning ?? c.Sql;
+                await using var cmd = new SqlCommand(sql, rent.Connection, tx);
+                foreach (var p in c.Parameters)
+                    cmd.Parameters.Add(new DriverParameter(p.Name, p.Value ?? DBNull.Value));
+                await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                // One command per write, so its RecordsAffected stands for that write alone rather than
+                // continuing a running batch total.
+                results.Add(await ReadResultSetAsync(
+                    reader, new QueryOptions { MaxRows = null }, sw, ct).ConfigureAwait(false));
+            }
+            if (own is not null) await own.CommitAsync(ct).ConfigureAwait(false);
+            return results;
         }
-        await tx.CommitAsync(ct).ConfigureAwait(false);
-        return results;
+        catch when (guarded)
+        {
+            // Put the user's transaction back where this attempt found it, then let the failure travel: the
+            // caller decides whether to retry, and now a retry starts from a clean slate. Best-effort — if
+            // the error doomed the transaction there is nothing to unwind to, and the original failure is
+            // the one worth reporting.
+            try
+            {
+                await ExecNonQueryAsync(rent, "rollback transaction " + BatchSavepoint, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch { /* see above */ }
+            throw;
+        }
+        finally
+        {
+            // Disposing an uncommitted transaction rolls it back — which is this batch's own rollback on the
+            // pooled path, and must never reach a transaction this call did not open.
+            if (own is not null) await own.DisposeAsync().ConfigureAwait(false);
+        }
     }
+
+    /// <summary>Marks where a write batch started inside a transaction it did not open, so a retry cannot
+    /// re-apply what the first attempt already did. Distinct from the count probe's: the two can be in
+    /// flight in the same transaction, and a shared name would have one unwind the other.</summary>
+    private const string BatchSavepoint = "bearing_write_batch";
 
     private static async Task<QueryResult> ReadResultSetAsync(
         SqlDataReader reader, QueryOptions options, Stopwatch sw,

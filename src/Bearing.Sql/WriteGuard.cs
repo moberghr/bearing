@@ -18,9 +18,47 @@ namespace Bearing.Sql;
 /// (<see cref="ISqlDialect.HasDialectAwareGuard"/>). The statement is then risky whatever the scan found,
 /// because "found nothing" did not mean "there is nothing" — see <see cref="IsRisky"/>.
 /// </param>
+/// <param name="FromConservativeDefault">
+/// True when the only reason this is risky is that the dialect's guard did not recognise the leading word
+/// as a read — T-SQL's catch-all, which covers <c>DECLARE</c>, <c>SET</c>, <c>IF</c> and an <c>EXEC</c>
+/// alike. It is the right answer to "must this be confirmed?" and the wrong one to "does this write?";
+/// see <see cref="NamesAWrite"/>.
+/// </param>
+/// <param name="TransactionControl">
+/// The transaction-control statement this is, in the engine's own words (<c>COMMIT</c>,
+/// <c>BEGIN TRANSACTION</c>, <c>SAVE TRANSACTION</c>, …), or null for everything else —
+/// <see cref="ISqlDialect.TransactionControl"/>. Orthogonal to <see cref="RiskyVerbs"/> and deliberately
+/// so: it says what the statement <i>does to the transaction</i>, which is a different question from
+/// whether it writes, and answering it does not change any existing verdict (§1.2).
+/// </param>
 public sealed record StatementRisk(
-    string Text, string Verb, IReadOnlyList<string> RiskyVerbs, bool GuardIsDialectAware = true)
+    string Text, string Verb, IReadOnlyList<string> RiskyVerbs, bool GuardIsDialectAware = true,
+    string? TransactionControl = null, bool FromConservativeDefault = false)
 {
+    /// <summary>
+    /// Whether the scan actually <b>named a write</b> in this statement — as opposed to being unable to
+    /// rule one out. The narrower question, for the callers that must not act on a guess.
+    /// <para>
+    /// <see cref="IsRisky"/> is the guard's question and is deliberately generous: on an unreadable
+    /// dialect, and on any T-SQL statement whose lead word is not a known read, the safe answer is
+    /// "confirm". Manual-commit mode asks a different one (#131) — whether to <i>open a transaction</i> —
+    /// and there the generous answer is wrong in a way the user feels: <c>declare @id int; select …</c> is
+    /// ordinary T-SQL for a read, and opening a transaction on it makes browsing hold locks, which is the
+    /// exact outcome "a read opens nothing" exists to prevent.
+    /// </para>
+    /// <para>
+    /// A dialect the guard cannot read still counts as a write here. Not knowing is a reason to hold a
+    /// write, not a reason to let one commit itself — the two questions differ in what they do with a
+    /// recognised non-write, not in what they do with ignorance.
+    /// </para>
+    /// </summary>
+    public bool NamesAWrite => (RiskyVerbs.Count > 0 && !FromConservativeDefault) || !GuardIsDialectAware;
+
+    /// <summary>Whether this statement begins, ends or marks a transaction rather than doing work in
+    /// one. Manual-commit mode refuses these, because Bearing is holding the transaction and a raw
+    /// <c>COMMIT</c> would end it behind the driver's back (#131).</summary>
+    public bool IsTransactionControl => TransactionControl is not null;
+
     /// <summary>Why a read is being confirmed, appended to its <see cref="Label"/> so the prompt can say
     /// what it is unsure of instead of implying the statement writes.</summary>
     public const string UnparsedDialectNote = "dialect not parsed";
@@ -110,8 +148,9 @@ public static class WriteGuard
     /// WriteGuard test asserts exactly this.
     /// </summary>
     internal static IReadOnlyList<StatementRisk> DescribeWithPostgresLexer(
-        string sql, IReadOnlySet<string> risky)
+        string sql, ISqlDialect dialect)
     {
+        var risky = dialect.RiskyVerbs;
         var described = new List<StatementRisk>();
         if (string.IsNullOrWhiteSpace(sql)) return described;
 
@@ -142,7 +181,9 @@ public static class WriteGuard
                     Add(found, "SELECT INTO");
             }
 
-            described.Add(new StatementRisk(span.Text.Trim(), first.ToUpperInvariant(), found));
+            described.Add(new StatementRisk(
+                span.Text.Trim(), first.ToUpperInvariant(), found,
+                TransactionControl: dialect.TransactionControl(keywords)));
         }
         return described;
     }

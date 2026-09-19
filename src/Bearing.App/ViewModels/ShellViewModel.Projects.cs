@@ -270,7 +270,16 @@ public sealed partial class ShellViewModel
             await ForgetConnectionsAsync(project);
         }
 
-        _ctx.Close(directory);
+        // Close returns every tab the project owned — the ones on screen and the ones parked. They are
+        // gone from every list after this, so an uncommitted transaction on one would be unreachable rather
+        // than merely off screen (#131). Rolled back rather than asked about: removing the project is the
+        // confirmation, and it has already been given. Deleting from disk has already done the same thing
+        // by connection, so this is a no-op on that path.
+        var dropped = _ctx.Close(directory);
+        if (await _ctx.Transactions.RollbackForTabsAsync(dropped, CancellationToken.None) is > 0 and var rolled)
+            StatusText = rolled == 1
+                ? "Rolled back 1 uncommitted transaction."
+                : $"Rolled back {rolled} uncommitted transactions.";
         await _recentProjects.RemoveAsync(directory, CancellationToken.None);
         await OpenProjectAsync(successor);
 
@@ -309,6 +318,9 @@ public sealed partial class ShellViewModel
         {
             try
             {
+                // The project (and with it the connection) is already gone by the time this runs, so the
+                // transaction is rolled back rather than asked about — the removal prompt subsumed it (#131).
+                await _ctx.Transactions.RollbackConnectionAsync(connection.Id, CancellationToken.None);
                 await _sessions.EvictConnectionAsync(connection.Id);   // every database it was open on
                 _sessions.InvalidateSchema(connection.Id);
                 await _schemaBrowser.InvalidateAsync(connection.Id);   // its own per-conn+db reader cache (§9.4)

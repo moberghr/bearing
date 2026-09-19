@@ -95,6 +95,12 @@
     <CheckBox x:Name="ReadOnlyBox" IsCheckedChanged="OnSafetyToggled"
               Content="Read-only — the server refuses writes on this connection"/>
 
+    <!-- Manual commit (#131). Third in the group because it is the one that changes what pressing Run
+         *does* rather than whether it is allowed: a write opens a transaction and waits for you. Reads never
+         open one, which is what keeps a session from sitting in `idle in transaction` after mere browsing. -->
+    <CheckBox x:Name="ManualCommitBox" IsCheckedChanged="OnSafetyToggled"
+              Content="Manual commit — a write waits for Commit or Rollback"/>
+
     <StackPanel Orientation="Horizontal" Spacing="6">
       <TextBlock Text="Statement timeout" Opacity="0.8" VerticalAlignment="Center"/>
       <TextBox x:Name="StatementTimeoutBox" Width="70" PlaceholderText="0"

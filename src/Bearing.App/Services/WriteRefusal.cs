@@ -47,6 +47,37 @@ public static class WriteRefusal
                + "Turn read-only off for this connection to write to it.";
     }
 
+    /// <summary>
+    /// Why a batch containing <c>BEGIN</c> / <c>COMMIT</c> / <c>ROLLBACK</c> / <c>SAVEPOINT</c> will not be
+    /// run on a manual-commit connection, or null when it may be (#131).
+    /// <para>
+    /// Only on a manual-commit connection: an ordinary one keeps running a script that manages its own
+    /// transactions exactly as it always has, so this narrows nothing (§1.2). What it protects is the one
+    /// case where Bearing is itself holding a transaction on that connection — a raw <c>COMMIT</c> there
+    /// ends it behind the driver's back, leaving the transaction object claiming something the server no
+    /// longer has, the chip counting statements into nothing, and Commit throwing when the user presses it.
+    /// </para>
+    /// <para>
+    /// Refused for the whole batch, and whether or not a transaction is open yet. "Who owns the transaction
+    /// on this connection" has one answer on a manual-commit connection, and making it conditional on
+    /// whether one happens to be open right now is the ambiguity the refusal exists to remove.
+    /// </para>
+    /// </summary>
+    public static string? ReasonForTransactionControl(
+        ConnectionInfo connection, IReadOnlyList<StatementRisk> statements)
+    {
+        if (!CommitPolicy.IsManualCommit(connection)) return null;
+
+        var found = statements.Where(s => s.IsTransactionControl)
+            .Select(s => s.TransactionControl!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (found.Count == 0) return null;
+
+        return $"{connection.Name} is in manual-commit mode — {string.Join(", ", found)} not run. "
+               + "Bearing holds the transaction on this connection; use Commit or Rollback to end it.";
+    }
+
     /// <summary>The same refusal for an inline-grid save, whose statements are writes by construction so
     /// there is no risk verdict to read. A backstop: the grid does not offer an edit on a read-only
     /// connection at all (its lock chip says why), so reaching this means something upstream let one

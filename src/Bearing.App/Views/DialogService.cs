@@ -58,6 +58,11 @@ public sealed class DialogService : IDialogService
             ? new ConfirmBackendActionDialog(request).ShowDialog<bool>(window)
             : Task.FromResult(false); // no window → do nothing; someone else's session needs a real answer
 
+    public Task<bool> ConfirmDiscardTransactionsAsync(int count, string action)
+        => Owner is { } window
+            ? new ConfirmDiscardTransactionDialog(count, action).ShowDialog<bool>(window)
+            : Task.FromResult(true); // no window → proceed, as the running-query confirmation does
+
     public Task<ProjectRemoval> ConfirmRemoveProjectAsync(string name, string directory)
         => Owner is { } window
             ? new ConfirmRemoveProjectDialog(name, directory).ShowDialog<ProjectRemoval>(window)
