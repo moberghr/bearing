@@ -197,6 +197,43 @@ public static class GridSelectionOps
         return new SetNullPlan(Ordered(result, targets), notNullable);
     }
 
+    /// <summary>What a Set value ▸ expression over a selection would write, and how many cells refuse it.</summary>
+    public sealed record SetValuePlan(IReadOnlyList<(object?[] Row, int Col)> Targets, int NotAnExpression);
+
+    /// <summary>
+    /// Which of the selected cells can take <paramref name="sql"/> as a server-side expression (#149).
+    /// <para>
+    /// A cell refuses when its column is one the driver maps to <see cref="string"/>: there the text would be
+    /// stored as the literal characters <c>now()</c>, which is a legitimate value and emphatically not what a
+    /// menu item called "now()" promised. Counted rather than dropped, so the caller can say so — the same
+    /// shape <see cref="PlanSetNull"/> uses for a NOT NULL column.
+    /// </para>
+    /// <para>
+    /// The test is <c>ResultEditModel.ExpressionFor</c> itself — asked of the result's own dialect, so the
+    /// menu, the cell's colour and the generated SQL cannot disagree about what a cell means — and not a
+    /// second predicate that agrees with it today. That one already decides whether the save emits SQL and whether the cell is drawn as an
+    /// expression, and a menu that wrote a cell those two would then read differently is the one outcome
+    /// worth ruling out by construction.
+    /// </para>
+    /// Row-then-column order, as every other plan here.</summary>
+    public static SetValuePlan PlanSetValue(
+        ResultSetViewModel result, IReadOnlyCollection<(object?[] Row, int Col)> cells, string sql)
+    {
+        var targets = new List<(object?[] Row, int Col)>();
+        var refused = 0;
+        foreach (var (row, col) in cells)
+        {
+            if (col < 0 || col >= result.Columns.Count || col >= row.Length) continue;
+            if (ResultEditModel.ExpressionFor(result.Traits.Dialect, sql, result.Columns[col].ClrType) is null)
+            {
+                refused++;
+                continue;
+            }
+            targets.Add((row, col));
+        }
+        return new SetValuePlan(Ordered(result, targets), refused);
+    }
+
     /// <summary>Whether a cell already means NULL — a real null, or the token a previous edit/paste left in
     /// the buffer (the grid holds raw edit text until save-time coercion).</summary>
     private static bool IsNullValue(object? value)

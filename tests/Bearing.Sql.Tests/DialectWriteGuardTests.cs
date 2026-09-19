@@ -134,6 +134,7 @@ public class DialectWriteGuardTests
             => Ss.UpdateStatement(t, s, w, r);
         public string? TryEditExpression(string? text) => Ss.TryEditExpression(text);
         public IReadOnlyCollection<string> EditExpressions => Ss.EditExpressions;
+        public IReadOnlyList<string> OfferedEditExpressions => Ss.OfferedEditExpressions;
     }
 
     private static readonly ISqlDialect Unreadable = new UnreadableDialect();

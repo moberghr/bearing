@@ -52,6 +52,9 @@ public sealed class PostgresDialect : ISqlDialect
     /// <inheritdoc cref="ISqlDialect.EditExpressions"/>
     public IReadOnlyCollection<string> EditExpressions => EditExpression.All;
 
+    /// <inheritdoc cref="ISqlDialect.OfferedEditExpressions"/>
+    public IReadOnlyList<string> OfferedEditExpressions => EditExpression.Offered;
+
     /// <summary>True: <see cref="WriteGuard"/> is built on the vendored PostgreSQL lexer, so it reads
     /// this engine's batches for real and may report a plain SELECT as safe.</summary>
     public bool HasDialectAwareGuard => true;

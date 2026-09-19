@@ -86,6 +86,11 @@ public sealed partial class ResultView
             paste: result.IsEditable ? () => PasteInto(grid, result) : null,
             canPaste: () => _selection.CanPasteInto(result),
             setNull: result.IsEditable ? () => SetNullIn(grid, result) : null,
+            setExpression: result.IsEditable ? sql => SetExpressionIn(grid, result, sql) : null,
+            // The connection's own engine: now() on Postgres, getdate() on SQL Server. One call site,
+            // which is why the menu takes the list rather than looking one up — it knows nothing about
+            // engines, and the cell it writes is judged by this same dialect (§5.4a).
+            expressions: result.Traits.Dialect.OfferedEditExpressions,
             fetchAll: result.IsPageable ? () => FetchAll?.Invoke(result) ?? Task.CompletedTask : null,
             export: format => Export?.Invoke(result, format) ?? Task.CompletedTask);
 

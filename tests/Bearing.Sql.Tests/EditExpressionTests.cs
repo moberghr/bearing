@@ -50,4 +50,29 @@ public class EditExpressionTests
     public void No_known_expression_takes_an_argument()
         => Assert.All(EditExpression.All, sql =>
             Assert.True(!sql.Contains('(') || sql.EndsWith("()"), $"'{sql}' takes an argument"));
+
+    /// <summary>The menu's list and the recogniser cannot disagree: every item the menu offers has to be a
+    /// string the recogniser accepts and hands back unchanged, or a click would stage a cell the save then
+    /// refuses. They are the same strings by construction (<c>Offered</c> indexes the table), and this is
+    /// what keeps that true if someone spells one out instead.</summary>
+    [Fact]
+    public void Every_offered_expression_is_one_the_recogniser_accepts_unchanged()
+    {
+        Assert.NotEmpty(EditExpression.Offered);
+        foreach (var offered in EditExpression.Offered)
+        {
+            Assert.Equal(offered, EditExpression.TryRecognize(offered));
+            Assert.Contains(offered, EditExpression.All);
+        }
+    }
+
+    /// <summary>What the offered list leaves out, and why — an extension-dependent function is a claim about
+    /// the user's server that a menu must not make on their behalf, while typing it stays their own.</summary>
+    [Fact]
+    public void An_extension_dependent_expression_is_typeable_but_not_offered()
+    {
+        Assert.Equal("uuid_generate_v4()", EditExpression.TryRecognize("uuid_generate_v4()"));
+        Assert.DoesNotContain("uuid_generate_v4()", EditExpression.Offered);
+        Assert.Contains("gen_random_uuid()", EditExpression.Offered);
+    }
 }

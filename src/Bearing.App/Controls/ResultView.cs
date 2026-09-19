@@ -251,6 +251,13 @@ public sealed partial class ResultView : UserControl
         if (_selection.SetNullSelected(grid, result) is { } report) Status?.Invoke(report);
     }
 
+    /// <summary>The context menu's Set value ▸ expressions: write one over the selection and report what it
+    /// did (a selection spanning a text column is written in part, and has to say so).</summary>
+    private void SetExpressionIn(DataGrid grid, ResultSetViewModel result, string sql)
+    {
+        if (_selection.SetExpressionSelected(grid, result, sql) is { } report) Status?.Invoke(report);
+    }
+
     /// <summary>Paste the clipboard into a grid and report the outcome — including how many cells were
     /// dropped, so a paste clipped by the loaded row count can't pass for a complete one.</summary>
     private async Task PasteInto(DataGrid grid, ResultSetViewModel result)
