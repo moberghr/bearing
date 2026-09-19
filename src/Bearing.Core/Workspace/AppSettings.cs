@@ -1,3 +1,5 @@
+using Bearing.Core.Data;
+
 namespace Bearing.Core.Workspace;
 
 /// <summary>
@@ -73,6 +75,20 @@ public sealed record AppSettings
     /// <summary>Minutes an unused connection is kept open before the idle sweep closes it. A connection
     /// serving a running query holds a lease and is never swept, whatever this says.</summary>
     public int ConnectionIdleTimeoutMinutes { get; init; } = 30;
+
+    /// <summary>
+    /// Minutes an uncommitted transaction may sit idle before the status chip calls it out, or 0 to never
+    /// (#131). Measured from the last statement in it, not from when it opened: a transaction being worked
+    /// in is not forgotten, and one opened a minute ago and walked away from is on its way to being.
+    /// </summary>
+    public int IdleTransactionWarnMinutes { get; init; } = CommitPolicy.DefaultIdleWarnMinutes;
+
+    /// <summary>
+    /// Minutes an uncommitted transaction may sit idle before Bearing rolls it back, or 0 to never (#131).
+    /// The second clock: a warning nobody is there to read puts no bound on how long locks are held, which
+    /// is the hazard on a production server. Set below the warning it is meaningless, so it is clamped up.
+    /// </summary>
+    public int IdleTransactionRollbackMinutes { get; init; } = CommitPolicy.DefaultIdleRollbackMinutes;
 
     /// <summary>Rows fetched per page, both for a query's first page and for each Load more.</summary>
     public int ResultPageSize { get; init; } = 100;

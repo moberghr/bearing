@@ -97,6 +97,7 @@ public partial class ConnectionDialog : Window
             EnvColorBox.Text = existing.EnvironmentColor ?? "";
             ConfirmWritesBox.IsChecked = existing.RequireWriteConfirmation;
             ReadOnlyBox.IsChecked = existing.ReadOnly;
+            ManualCommitBox.IsChecked = existing.ManualCommit;
             // 0 is "no limit" and shows as an empty box, whose placeholder says 0 — a bare "0" in a field
             // reads as a limit of zero seconds, which is the one thing it does not mean (§1.7).
             StatementTimeoutBox.Text = existing.StatementTimeoutSeconds > SessionPolicy.NoTimeout
@@ -456,6 +457,12 @@ public partial class ConnectionDialog : Window
         // re-words the note — the same reason ProviderTraits is resolved per connection.
         var advice = SessionPolicy.Advice(
             ReadOnlyBox.IsChecked == true, TypedTimeoutSeconds(), SelectedProvider().EnforcesReadOnlyOnServer);
+        // Manual commit's own sentence, appended rather than folded in: it is not a thing the server is
+        // asked for (§1.9), so SessionPolicy has nothing to say about it — see CommitPolicy for why the two
+        // are separate. On a read-only connection it says the true and slightly odd thing, which is that
+        // nothing will ever open a transaction because nothing writes.
+        if (CommitPolicy.Advice(ManualCommitBox.IsChecked == true, ReadOnlyBox.IsChecked == true) is { Length: > 0 } commit)
+            advice = advice.Length > 0 ? advice + "\n" + commit : commit;
         if (UnreadableTimeout() is { } typed)
             advice = $"“{typed}” isn't a whole number of seconds, so this connection will be saved "
                      + "with no statement timeout. Enter seconds (30), or leave it empty for no limit."
@@ -501,6 +508,10 @@ public partial class ConnectionDialog : Window
         // aspirational — someone who needs to write to production unticks it deliberately. Deliberately not
         // unset when moving back to a lesser preset: dropping a safety setting is the user's call, not a
         // side effect of a click.
+        // Manual commit is deliberately NOT part of this preset. The other three narrow what a connection
+        // will do; this one changes what every write *is* — two clicks instead of one, for the rest of the
+        // connection's life — and a preset button is not where someone opts into that. It is one tick away
+        // in the same group, which is the right distance for a decision this size (#131).
         if (label == "production")
         {
             ConfirmWritesBox.IsChecked = true;
@@ -555,6 +566,7 @@ public partial class ConnectionDialog : Window
         EnvironmentColor = string.IsNullOrWhiteSpace(EnvColorBox.Text) ? null : EnvColorBox.Text!.Trim(),
         RequireWriteConfirmation = ConfirmWritesBox.IsChecked == true,
         ReadOnly = ReadOnlyBox.IsChecked == true,
+        ManualCommit = ManualCommitBox.IsChecked == true,
         StatementTimeoutSeconds = TypedTimeoutSeconds(),
         CredentialKind = SelectedCredentialKind(),
         Tls = SelectedTls(),

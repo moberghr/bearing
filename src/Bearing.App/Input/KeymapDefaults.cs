@@ -64,6 +64,9 @@ public static class KeymapDefaults
         // Joins the Ctrl+Shift+{J,C,D} family of "pick one of these and go there" (#117). Not Ctrl+T, which
         // is already tab.new's alias, and not Ctrl+P, which belongs to the palette in every editor.
         yield return G(CommandIds.SchemaGotoTable, "Ctrl+Shift+T");
+        // transaction.commit / transaction.rollback ship unbound too, and for a sharper reason than the
+        // rest: Ctrl+Shift+C is already select.connection, and taking a gesture off a command people use
+        // every day to give it to one that ends a transaction is the wrong trade. They live on the toolbar.
         // panel.*, connection.new, query.runAll ship unbound — reachable via the command palette
         // (and the rail for panels); users can bind them in keybindings.json.
 

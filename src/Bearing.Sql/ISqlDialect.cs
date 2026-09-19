@@ -153,6 +153,21 @@ public interface ISqlDialect
     /// </summary>
     IReadOnlyList<StatementRisk> DescribeStatements(string sql);
 
+    /// <summary>
+    /// Which transaction-control statement <paramref name="words"/> begins — the engine's own name for it
+    /// (<c>COMMIT</c>, <c>BEGIN TRANSACTION</c>, <c>SAVEPOINT</c>, …) — or null when it is an ordinary
+    /// statement. <paramref name="words"/> is the statement's on-channel tokens, as the guard already lexed
+    /// them; only the leading one or two are read.
+    /// <para>
+    /// Per dialect because the spelling genuinely differs, and not by translation: in T-SQL a bare
+    /// <c>BEGIN</c> opens a <c>BEGIN…END</c> <i>block</i> and is not transaction control at all, while in
+    /// Postgres it is exactly a transaction. Getting that backwards would either refuse every T-SQL block
+    /// or let a raw <c>COMMIT</c> through — and a <c>COMMIT</c> that reaches the server behind a held
+    /// transaction leaves the driver's transaction object claiming something the server no longer has.
+    /// </para>
+    /// </summary>
+    string? TransactionControl(IReadOnlyList<string> words);
+
     // ---- Statement splitting ----
 
     /// <summary>

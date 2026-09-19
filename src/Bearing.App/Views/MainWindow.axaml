@@ -308,6 +308,41 @@
           </Panel>
         </Button>
 
+        <!-- The commit mode, and the way to change it without opening the connection dialog (#131).
+             Always visible (unlike the two buttons beside it), because "which mode am I in" is a question
+             you have to be able to answer before running anything, not only once a transaction exists.
+             Marked when it differs from what the connection was saved as — the pill is a session override,
+             and a mode you cannot find in the dialog must not be a mystery. -->
+        <Button x:Name="CommitModeButton" Theme="{StaticResource ModePill}"
+                Click="OnCommitModeClick" Margin="6,0,0,0"
+                IsVisible="{Binding Execution.CommitModeVisible}"
+                Classes.manual="{Binding Execution.IsManualCommit}"
+                Classes.overridden="{Binding Execution.CommitModeIsOverridden}"
+                ToolTip.Tip="{Binding Execution.CommitModeTip}"
+                Content="{Binding Execution.CommitModeLabel}"/>
+
+        <!-- Manual-commit mode (#131): present only while this tab is holding a transaction, so an
+             ordinary connection's toolbar is unchanged. Beside Run because that is where the eye already is
+             and because this is what Run just did — #130 will move all three into the editor rail together.
+             Commit disables itself when a statement in the transaction failed; Rollback never does, since it
+             is the way out of exactly that state. -->
+        <Button x:Name="CommitButton" Classes="rail" Theme="{StaticResource RailButton}" Width="30" Height="30"
+                Click="OnCommitClick" Margin="6,0,0,0"
+                IsVisible="{Binding Execution.HasOpenTransaction}"
+                IsEnabled="{Binding Execution.CanCommit}"
+                ToolTip.Tip="{Binding Execution.TransactionTip}">
+          <Path Data="{StaticResource Icon.Commit}" Stroke="{DynamicResource Ok.Green}" StrokeThickness="1.8"
+                Fill="Transparent" Stretch="Uniform" Width="14" Height="14"/>
+        </Button>
+        <Button x:Name="RollbackButton" Classes="rail" Theme="{StaticResource RailButton}" Width="30" Height="30"
+                Click="OnRollbackClick" Margin="2,0,0,0"
+                IsVisible="{Binding Execution.HasOpenTransaction}"
+                IsEnabled="{Binding Execution.CanRollback}"
+                ToolTip.Tip="{Binding Execution.TransactionTip}">
+          <Path Data="{StaticResource Icon.Rollback}" Stroke="{DynamicResource Warn.Amber}" StrokeThickness="1.6"
+                Fill="Transparent" Stretch="Uniform" Width="14" Height="14"/>
+        </Button>
+
         <Border Width="1" Height="22" Background="{DynamicResource Border}" Margin="4,0"/>
         <Border Background="{DynamicResource Bg.Editor}" BorderBrush="{DynamicResource Border.Control}"
                 BorderThickness="1" CornerRadius="4" Padding="6,2" VerticalAlignment="Center"
@@ -339,6 +374,30 @@
           <TextBlock Text="{Binding Execution.ElapsedText}" VerticalAlignment="Center"
                      IsVisible="{Binding Execution.IsBusy}"
                      Foreground="{DynamicResource Ok.Green}"/>
+          <!-- Uncommitted-transaction chip (#131). Beside the beacon and deliberately not on it: §9.3a gives
+               the beacon connection *state*, carried in its silhouette, and a transaction is not one — a
+               connection can be holding a transaction and be about to go down. A border rather than bare
+               text so it reads as a standing condition rather than as another status message, which is also
+               why it does not share StatusText's slot: that one is overwritten by the next thing that
+               happens, and this has to stay until the user ends it. -->
+          <Border x:Name="TransactionChip" CornerRadius="4" Padding="6,1" VerticalAlignment="Center"
+                  BorderThickness="1" IsVisible="{Binding Execution.HasOpenTransaction}"
+                  Classes.stale="{Binding Execution.TransactionIsStale}"
+                  ToolTip.Tip="{Binding Execution.TransactionTip}">
+            <Border.Styles>
+              <!-- Quiet while it is being worked in; amber once it has been idle past the warning
+                   threshold, or once a statement in it has failed. Both mean "this needs you now". -->
+              <Style Selector="Border">
+                <Setter Property="BorderBrush" Value="{DynamicResource Border.Control}"/>
+              </Style>
+              <Style Selector="Border.stale">
+                <Setter Property="BorderBrush" Value="{DynamicResource Warn.Amber}"/>
+              </Style>
+            </Border.Styles>
+            <TextBlock x:Name="TransactionChipText" Text="{Binding Execution.TransactionText}"
+                       FontSize="{DynamicResource Font.Small}"
+                       Foreground="{DynamicResource Text.Dim}"/>
+          </Border>
         </StackPanel>
       </DockPanel>
     </Border>

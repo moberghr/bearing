@@ -380,7 +380,7 @@ public partial class MainWindow : Window
     protected override void OnClosing(WindowClosingEventArgs e)
     {
         var running = QuitGuard.RunningCount(Vm);
-        if (!_closeConfirmed && running > 0 && Vm is { } vm)
+        if (!_closeConfirmed && QuitGuard.NeedsConfirmation(Vm) && Vm is { } vm)
         {
             e.Cancel = true;
             _ = ConfirmQuitAsync(vm, running);

@@ -8,6 +8,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Bearing.App.Connections;
+using Bearing.App.Services;
 using Bearing.App.Workspace;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
@@ -33,9 +34,15 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     /// its picker and every field it renders come from here (<c>IDbProvider.ConnectionFields</c>).</summary>
     public IProviderRegistry Providers => _ctx.Providers;
 
-    public ConnectionsViewModel(WorkspaceContext ctx)
+    /// <param name="dialogs">
+    /// Only for the confirmations that guard an uncommitted transaction (#131) — Disconnect and Refresh
+    /// metadata. Optional, and null is not a degraded mode for anything else here: with no dialog service
+    /// those two proceed, which is what the interface says a windowless confirmation means.
+    /// </param>
+    public ConnectionsViewModel(WorkspaceContext ctx, IDialogService? dialogs = null)
     {
         _ctx = ctx;
+        _dialogs = dialogs;
         _ctx.SelectedTabChanged += OnSelectedTabChanged;
         // Reflect the real session state: any connect (explicit, or lazily from a query / schema warm) or
         // teardown (disconnect, idle sweep, expiry) re-derives the indicators, so they can't drift out of
@@ -48,6 +55,8 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         _schemaTreeMode = _ctx.Settings.SchemaTreeMode;
         _ctx.SettingsService.Changed += settings => SchemaTreeMode = settings.SchemaTreeMode;
     }
+
+    private readonly IDialogService? _dialogs;
 
     /// <summary>
     /// How a database arranges its children (#132) — flipped by the panel header's icon toggle, and mirrored
@@ -331,8 +340,11 @@ public sealed partial class ConnectionsViewModel : ObservableObject
             var info = _ctx.SelectedTab is { } tab ? _ctx.EffectiveConnection(tab) : null;
             if (info is null) return StatusLabel;
 
-            var marks = new List<string>(2);
+            var marks = new List<string>(3);
             if (SessionPolicy.IsReadOnly(info)) marks.Add("read-only");
+            // A setting of the connection, like the two beside it — not "a transaction is open right now",
+            // which the status chip says and which is a fact about this tab rather than this connection.
+            if (CommitPolicy.IsManualCommit(info)) marks.Add("manual commit");
             if (SessionPolicy.TimeoutSeconds(info) > SessionPolicy.NoTimeout)
                 marks.Add($"statement timeout {SessionPolicy.TimeoutLabel(info)}");
             return marks.Count == 0 ? StatusLabel : $"{StatusLabel} · {string.Join(" · ", marks)}";
@@ -397,6 +409,13 @@ public sealed partial class ConnectionsViewModel : ObservableObject
                 if (tab?.ConnectionId is { } id)
                 {
                     var name = _ctx.FindConnection(id)?.Name;
+                    // Ask before this one. A held transaction keeps a lease, so EvictConnectionAsync only
+                    // *retires* the session — the transaction would survive Disconnect with nothing on
+                    // screen still admitting it exists, and then die whenever the lease finally went (#131).
+                    if (!await TransactionGuard.ConfirmForConnectionAsync(
+                            _ctx.Transactions, _dialogs, id,
+                            name is null ? "disconnect" : $"disconnect from {name}"))
+                        return;
                     await _ctx.Sessions.EvictConnectionAsync(id);
                     State = ConnectionState.Disconnected;
                     _ctx.SetStatus(name is null ? "Disconnected." : $"Disconnected from {name}.");
@@ -529,6 +548,19 @@ public sealed partial class ConnectionsViewModel : ObservableObject
 
     public void SetTabConnection(EditorTabViewModel tab, Guid? id)
     {
+        // Nothing to refuse when nothing would change — double-clicking the tree's server row for the
+        // connection the tab is already on must not report a switch it was not making. SetTabDatabase draws
+        // the same line for the same reason.
+        if (tab.ConnectionId == id) return;
+        // An open transaction lives on a connection out of *this* connection's pool, so re-pointing the tab
+        // would orphan it (§9.4a, #131). Refused rather than resolved: there is no version of this that
+        // keeps it, and silently rolling back on a picker click is not a thing a picker may do.
+        if (TransactionGuard.ReasonToRefuse(_ctx.Transactions, tab, "switch connection") is { } blocked)
+        {
+            _ctx.SetStatus(blocked);
+            OnPropertyChanged(nameof(SelectedTabConnection));   // snap the picker back to what is still true
+            return;
+        }
         tab.ConnectionId = id;
         tab.DatabaseName = null;            // reset to the new connection's default DB
         ApplyConnectionDisplay(tab);
@@ -549,6 +581,14 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     public void SetTabDatabase(EditorTabViewModel tab, string database)
     {
         if (string.Equals(tab.DatabaseName, database, StringComparison.Ordinal)) return;
+        // A pool is per (connection, database), so another database is another pool — and the transaction is
+        // held on a connection out of this one (§9.4a, #131). Same refusal as switching connection.
+        if (TransactionGuard.ReasonToRefuse(_ctx.Transactions, tab, "switch database") is { } blocked)
+        {
+            _ctx.SetStatus(blocked);
+            OnPropertyChanged(nameof(SelectedTabDatabase));     // snap the picker back to what is still true
+            return;
+        }
         tab.DatabaseName = database;
         // No glyph refresh here: the chain is server-level now, and moving between databases of the same
         // server cannot change it. That is the whole behaviour change.
@@ -646,13 +686,27 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         var idx = list.FindIndex(c => c.Id == conn.Id);
         var networkChanged = true;
         var poolChanged = true;
+        // Manual commit deliberately does not define a pool (it reaches no server), so turning it *off*
+        // changes nothing about the session — and would have left the open transaction in place, still
+        // taking this tab's statements, while the refusal that stops a typed COMMIT reaching it went away
+        // with the setting. The transaction has to end with the mode (#131).
+        var commitModeDropped = false;
         if (idx >= 0)
         {
             networkChanged = !SameNetwork(list[idx], conn);
             poolChanged = !SamePool(list[idx], conn);
+            // The mode in force, which may be a session override (#131) — not the one on disk. Unticking
+            // the box while an override held it on still drops it, and that still has to end the
+            // transaction.
+            commitModeDropped = _ctx.CommitModes.IsManualCommit(list[idx]) && !CommitPolicy.IsManualCommit(conn);
             list[idx] = conn;
         }
         else list.Add(conn);
+
+        // The dialog is the authoritative statement of what this connection is, so it wins over anything
+        // the toolbar pill did earlier in the session. Without this, unticking the box would appear to do
+        // nothing (#131).
+        _ctx.CommitModes.Clear(conn.Id);
 
         var refusedSecret = false;
         try
@@ -681,6 +735,12 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         // catalog: turning read-only on must rebuild the pool without discarding the schema the tree and
         // completion are using.
         if (networkChanged) _ctx.Sessions.InvalidateSchema(conn.Id);
+        // A pool rebuild throws away the connection the transaction is held on, so it goes with it (#131).
+        // Rolled back and reported rather than asked about: the user has just pressed Save on a dialog whose
+        // whole subject is this connection, and a second prompt there reads as the app arguing back.
+        if ((poolChanged || commitModeDropped)
+            && await TransactionGuard.RollbackForConnectionAsync(_ctx.Transactions, conn.Id) is { } rolled)
+            _ctx.SetStatus(rolled);
         if (poolChanged) await _ctx.Sessions.EvictConnectionAsync(conn.Id);
         _ctx.DefaultConnectionId ??= conn.Id;
         RefreshConnections();
@@ -1129,6 +1189,9 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         catch (Exception ex) { _ctx.SetStatus($"Deleted connection but store failed: {ex.Message}"); }
 
         _ctx.Sessions.InvalidateSchema(id);   // the connection is gone; don't keep its catalog around
+        // Deleting the connection subsumes the question, so this rolls back rather than asking — but it
+        // still says so, because uncommitted work being discarded is never a detail (#131).
+        await TransactionGuard.RollbackForConnectionAsync(_ctx.Transactions, id);
         await _ctx.Sessions.EvictConnectionAsync(id);   // every database on it, not just one
         foreach (var t in Tabs) if (t.ConnectionId == id) { t.ConnectionId = null; ApplyConnectionDisplay(t); }
         if (_ctx.DefaultConnectionId == id) _ctx.DefaultConnectionId = null;
@@ -1144,6 +1207,12 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     /// </summary>
     public async Task RefreshServerMetadataAsync(Guid connectionId)
     {
+        // This evicts every pool on the server, which takes the transaction's connection with it. Asked
+        // rather than assumed: re-reading a catalog is a convenience, and it is not worth someone's
+        // uncommitted work without them saying so (#131).
+        if (!await TransactionGuard.ConfirmForConnectionAsync(
+                _ctx.Transactions, _dialogs, connectionId, "refresh this server's metadata"))
+            return;
         await _ctx.Schema.InvalidateAsync(connectionId);
         _ctx.Sessions.InvalidateSchema(connectionId);   // this command's entire point is to re-read the catalog
         await _ctx.Sessions.EvictConnectionAsync(connectionId);   // every database's pool re-reads on next use

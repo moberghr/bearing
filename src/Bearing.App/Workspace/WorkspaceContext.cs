@@ -49,6 +49,10 @@ public sealed class WorkspaceContext
         // reveal (#117) is otherwise only testable against a live server, since a real browser opens its own
         // connections. The app still passes nothing and gets the real one.
         Schema = schema ?? new SchemaBrowser(providers, () => Credentials);
+        Transactions = new TabTransactions(Sessions, providers, QueryLog);
+        // Handed the *saved* lookup, never EffectiveConnection — see CommitModes for why that distinction
+        // is the whole correctness of the override.
+        CommitModes = new CommitModes(FindConnection);
 
         // The idle sweep is the one service that caches a setting rather than reading it per use, so it
         // has to be told when the setting changes.
@@ -71,6 +75,16 @@ public sealed class WorkspaceContext
     public CredentialResolver Credentials { get; }
     public IConnectionSessionManager Sessions { get; }
     public ISchemaBrowser Schema { get; }
+
+    /// <summary>Which tabs are holding a manual-commit transaction open (#131). Here rather than on the
+    /// execution view-model because four other concerns have to ask: the tab strip's close, the connection
+    /// toggle and database picker, the quit guard and the status chip.</summary>
+    public TabTransactions Transactions { get; }
+
+    /// <summary>Commit mode flipped for this session, per connection (#131). Read through
+    /// <see cref="EffectiveConnection"/> rather than directly — the toolbar pill is the only thing that
+    /// should be asking this.</summary>
+    public CommitModes CommitModes { get; }
 
     /// <summary>Owns the live user preferences: edits, persistence, and the change broadcast. Defaults
     /// backed by nothing when none were supplied, so headless/test construction behaves like a fresh
@@ -250,14 +264,25 @@ public sealed class WorkspaceContext
         return null;
     }
 
-    /// <summary>The connection a tab actually runs against: its saved connection with the tab's active
-    /// database substituted in (the toolbar Database pill can target another DB on the same server).
-    /// Keeps the connection <c>Id</c> so the password (secret keyed by Id) is reused on connect.</summary>
+    /// <summary>
+    /// The connection a tab actually runs against: its saved connection with the tab's active database
+    /// substituted in (the toolbar Database pill can target another DB on the same server) and this
+    /// session's commit-mode override applied (#131). Keeps the connection <c>Id</c> so the password
+    /// (secret keyed by Id) is reused on connect.
+    /// <para>
+    /// <b>The one place either substitution happens.</b> Everything downstream reads a plain
+    /// <see cref="ConnectionInfo"/> and never learns that a tab can point somewhere else or that a mode can
+    /// be flipped for the session — which is what keeps <see cref="CommitModes"/> from needing a call site
+    /// in the execution path, the write refusal, the status tip or the guards.
+    /// </para>
+    /// </summary>
     public ConnectionInfo? EffectiveConnection(EditorTabViewModel tab)
     {
         if (tab.ConnectionId is not { } id || FindConnection(id) is not { } info) return null;
-        return tab.DatabaseName is { } db && !string.Equals(db, info.Database, StringComparison.Ordinal)
-            ? info with { Database = db }
-            : info;
+        if (tab.DatabaseName is { } db && !string.Equals(db, info.Database, StringComparison.Ordinal))
+            info = info with { Database = db };
+        return CommitModes.IsManualCommit(info) == info.ManualCommit
+            ? info
+            : info with { ManualCommit = !info.ManualCommit };
     }
 }

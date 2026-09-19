@@ -69,7 +69,32 @@ public sealed class PostgresDialect : ISqlDialect
     /// <summary>The vendored PostgreSQL lexer, which reads this engine for real — unchanged from
     /// before a second dialect existed.</summary>
     public IReadOnlyList<StatementRisk> DescribeStatements(string sql)
-        => WriteGuard.DescribeWithPostgresLexer(sql, RiskyVerbs);
+        => WriteGuard.DescribeWithPostgresLexer(sql, this);
+
+    /// <summary>
+    /// Postgres' transaction vocabulary. <c>BEGIN</c> and <c>START TRANSACTION</c> open one; <c>COMMIT</c>
+    /// and <c>END</c> close it (<c>END</c> is a synonym here, unlike T-SQL where it closes a block);
+    /// <c>ROLLBACK</c>, <c>ABORT</c>, <c>SAVEPOINT</c> and <c>RELEASE</c> are the rest of it.
+    /// <para>
+    /// <c>PREPARE</c> needs its second word: <c>PREPARE TRANSACTION</c> is two-phase commit, while a bare
+    /// <c>PREPARE</c> is a prepared statement and has nothing to do with transactions.
+    /// </para>
+    /// </summary>
+    public string? TransactionControl(IReadOnlyList<string> words)
+    {
+        if (words.Count == 0) return null;
+        var first = words[0].ToUpperInvariant();
+        if (first == "PREPARE")
+            return words.Count > 1 && words[1].Equals("TRANSACTION", StringComparison.OrdinalIgnoreCase)
+                ? "PREPARE TRANSACTION"
+                : null;
+        return TransactionVerbs.Contains(first) ? first : null;
+    }
+
+    private static readonly HashSet<string> TransactionVerbs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "BEGIN", "START", "COMMIT", "END", "ROLLBACK", "ABORT", "SAVEPOINT", "RELEASE",
+    };
 
     /// <summary>The same lexer again, and the same split the editor has always had: semicolons and blank
     /// lines, with dollar-quoted bodies and comments read for what they are.</summary>

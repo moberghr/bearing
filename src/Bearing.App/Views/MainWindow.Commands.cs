@@ -98,6 +98,18 @@ public partial class MainWindow
         r.Register(new KeyCommand(CommandIds.ConnectionNew, "New connection…", KeyScope.Global, "Connection", async () => await AddConnectionAsync()));
         r.Register(new KeyCommand(CommandIds.ConnectionImportDBeaver, "Import connections: from DBeaver…",
             KeyScope.Global, "Connection", async () => await ImportFromDBeaverAsync()));
+        // canRun is what keeps these out of the palette until they mean something — CommandPaletteHost
+        // ranks only commands that can run — and what greys the toolbar buttons. Commit also asks whether
+        // the transaction is still committable: a statement in it may have failed (#131).
+        r.Register(new KeyCommand(CommandIds.TransactionCommit, "Commit transaction", KeyScope.Global, "Connection",
+            async () => { if (Vm is not null) await Vm.Execution.CommitTransactionAsync(); },
+            canRun: () => Vm?.Execution.CanCommit == true));
+        r.Register(new KeyCommand(CommandIds.TransactionRollback, "Roll back transaction", KeyScope.Global, "Connection",
+            async () => { if (Vm is not null) await Vm.Execution.RollbackTransactionAsync(); },
+            canRun: () => Vm?.Execution.CanRollback == true));
+        r.Register(KeyCommand.Sync(CommandIds.TransactionToggleMode, "Switch auto / manual commit",
+            KeyScope.Global, "Connection", () => Vm?.Execution.ToggleCommitMode(),
+            canRun: () => Vm?.Execution.CommitModeVisible == true));
         r.Register(new KeyCommand(CommandIds.QueryRunAll, "Run entire script", KeyScope.Global, "Query", async () => await RunAllAsync()));
         r.Register(KeyCommand.Sync(CommandIds.QueryCancel, "Cancel running query", KeyScope.Global, "Query",
             () => Vm?.Execution.CancelExecution()));

@@ -147,7 +147,34 @@ public sealed class SqlServerDialect : ISqlDialect
     /// rules, so a delimited name, a keyword inside a string literal and an @-prefixed variable
     /// cannot trip the guard, while a GO-separated batch splits correctly.</summary>
     public IReadOnlyList<StatementRisk> DescribeStatements(string sql)
-        => TSqlWriteGuard.Describe(sql, RiskyVerbs);
+        => TSqlWriteGuard.Describe(sql, this);
+
+    /// <summary>
+    /// T-SQL's transaction vocabulary, which is not Postgres' with different spelling.
+    /// <para>
+    /// <b>A bare <c>BEGIN</c> is a block</b> — <c>BEGIN … END</c> — and is emphatically not transaction
+    /// control; only <c>BEGIN TRAN</c> / <c>BEGIN TRANSACTION</c> / <c>BEGIN DISTRIBUTED TRANSACTION</c>
+    /// opens one. <c>END</c> closes that block, so unlike Postgres it is never a commit. A savepoint is
+    /// <c>SAVE TRANSACTION</c>, and there is no release: savepoints simply live until the transaction ends.
+    /// </para>
+    /// <para>
+    /// The optional <c>TRAN</c>/<c>TRANSACTION</c>/<c>WORK</c> after <c>COMMIT</c> and <c>ROLLBACK</c> is
+    /// not read, because it changes nothing about what the statement does.
+    /// </para>
+    /// </summary>
+    public string? TransactionControl(IReadOnlyList<string> words)
+    {
+        if (words.Count == 0) return null;
+        var first = words[0].ToUpperInvariant();
+        var second = words.Count > 1 ? words[1].ToUpperInvariant() : "";
+        return first switch
+        {
+            "BEGIN" when second is "TRAN" or "TRANSACTION" or "DISTRIBUTED" => "BEGIN TRANSACTION",
+            "SAVE" when second is "TRAN" or "TRANSACTION" => "SAVE TRANSACTION",
+            "COMMIT" or "ROLLBACK" => first,
+            _ => null,
+        };
+    }
 
     /// <summary>Split with <see cref="TSqlScanner"/> as well, so the editor sees the same statements the
     /// guard does: <c>GO</c> ends a batch, and a <c>;</c> inside <c>[a;b]</c> or a string does not. Run

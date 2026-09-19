@@ -31,6 +31,19 @@ public sealed record QueryLogEntry
 
     /// <summary>Relative script path if the SQL came from a saved script, else null (scratch).</summary>
     public string? ScriptPath { get; init; }
+
+    /// <summary>
+    /// The manual-commit transaction this ran inside, or null when it committed itself (#131). An opaque
+    /// per-transaction id, not anything the server knows: what it is for is tying a statement to the
+    /// <c>commit</c> or <c>rollback</c> that later ended it, both of which are logged as entries of their
+    /// own carrying the same value.
+    /// <para>
+    /// Null on every row written before v3, and on every auto-commit row since — which is not the same
+    /// thing, and is why a report says how many rows it could not place rather than calling them
+    /// uncommitted.
+    /// </para>
+    /// </summary>
+    public string? TransactionId { get; init; }
 }
 
 /// <summary>Free-text + structured search over the history.</summary>

@@ -310,6 +310,35 @@ public static class SettingsCatalog
             Get = s => s.ConnectionIdleTimeoutMinutes,
             Set = (s, v) => s with { ConnectionIdleTimeoutMinutes = v },
         },
+        new IntSetting
+        {
+            Key = "connections.idleTransactionWarnMinutes",
+            CategoryId = Connections,
+            Title = "Warn about an uncommitted transaction after",
+            Description = "On a manual-commit connection, how long a transaction may sit with nothing "
+                        + "running in it before the status bar marks it. Zero never warns.",
+            Keywords = "transaction commit rollback manual idle locks",
+            Min = 0,
+            Max = 1440,
+            Unit = "minutes",
+            Get = s => s.IdleTransactionWarnMinutes,
+            Set = (s, v) => s with { IdleTransactionWarnMinutes = v },
+        },
+        new IntSetting
+        {
+            Key = "connections.idleTransactionRollbackMinutes",
+            CategoryId = Connections,
+            Title = "Roll back an uncommitted transaction after",
+            Description = "An idle transaction holds locks on the server until it ends, so Bearing ends it "
+                        + "for you eventually. Zero never rolls one back — the locks are then yours to "
+                        + "watch. Raised to the warning above if set below it.",
+            Keywords = "transaction commit rollback manual idle locks abandon",
+            Min = 0,
+            Max = 1440,
+            Unit = "minutes",
+            Get = s => s.IdleTransactionRollbackMinutes,
+            Set = (s, v) => s with { IdleTransactionRollbackMinutes = v },
+        },
 
         // ---- History ---------------------------------------------------------------------------
         new IntSetting

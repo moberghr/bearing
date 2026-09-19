@@ -132,4 +132,10 @@
 
   <StreamGeometry x:Key="Icon.Snippet">M10,5 h-2 a2,2 0 0 0 -2,2 v3 a2,2 0 0 1 -2,2 a2,2 0 0 1 2,2 v3 a2,2 0 0 0 2,2 h2 M14,5 h2 a2,2 0 0 1 2,2 v3 a2,2 0 0 0 2,2 a2,2 0 0 0 -2,2 v3 a2,2 0 0 1 -2,2 h-2</StreamGeometry>
 
+  <!-- Commit / Roll back (#131): the pair on the toolbar beside Run. A tick and a counter-clockwise undo,
+       stroked like everything around them — the two verbs are actions on the transaction, not objects, and
+       the shapes are deliberately unalike at 14px so a glance cannot confuse "keep" with "throw away". -->
+  <StreamGeometry x:Key="Icon.Commit">M5,12.5 L9.5,17 L19,7</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Rollback">M6,10 h8 a4.5,4.5 0 1 1 0,9 h-4.5 M6,10 l3.5,-3.5 M6,10 l3.5,3.5</StreamGeometry>
+
 </ResourceDictionary>
