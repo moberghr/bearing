@@ -1,0 +1,17 @@
+{
+  "first_session": "2026-08-31",
+  "last_session": "2026-09-03",
+  "sessions": 24,
+  "total_operations": 5309,
+  "total_modifications": 580,
+  "specs_created": 0,
+  "lessons_captured": 0,
+  "scope_guard_warnings": 0,
+  "benchmarks_run": 0,
+  "benchmark_last_score": "",
+  "queue_writes": 0,
+  "queue_drains": 0,
+  "queue_expired": 0,
+  "bytes_read": 1553249,
+  "estimated_context_tokens": 388312
+}

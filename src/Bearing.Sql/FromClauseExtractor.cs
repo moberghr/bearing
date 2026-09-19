@@ -10,9 +10,19 @@ namespace Bearing.Sql;
 /// keyword and reads the table name + optional alias that follows, at any nesting depth. That means
 /// sources inside subqueries and <c>join lateral ( … )</c> blocks are found even while the enclosing
 /// paren is still open — the case where a parse-tree walk drops the inner tables.
+/// <para>
+/// The scan is a keyword walk, so <b>which grammar lexed the buffer decides what it can see</b> — the
+/// same argument <see cref="StatementSplitter"/> makes. Hence the <see cref="ISqlParseRules"/> overload:
+/// the dialect-less one stays Postgres-bound for callers that have no engine to hand, matching the
+/// pattern <see cref="WriteGuard"/> and <see cref="PageSql"/> already use.
+/// </para>
 /// </summary>
 public static class FromClauseExtractor
 {
+    /// <summary>FROM/JOIN sources of <paramref name="sql"/>, read with the PostgreSQL grammar.</summary>
+    public static IReadOnlyList<TableRef> Extract(string sql, ISchemaSnapshot schema, int? caretOffset = null)
+        => Extract(PgParseRules.Instance, sql, schema, caretOffset);
+
     /// <param name="caretOffset">
     /// When set, the bare name the caret is editing is not reported as a source. That word is the
     /// relation being *chosen*, not one already in scope, and counting it made its own text a taken
@@ -20,9 +30,10 @@ public static class FromClauseExtractor
     /// so the auto-alias depended on how much of the name had been typed when the popup opened.
     /// Only an unaliased name is dropped — an alias the query actually wrote stays in scope.
     /// </param>
-    public static IReadOnlyList<TableRef> Extract(string sql, ISchemaSnapshot schema, int? caretOffset = null)
+    public static IReadOnlyList<TableRef> Extract(
+        ISqlParseRules rules, string sql, ISchemaSnapshot schema, int? caretOffset = null)
     {
-        var toks = PgParsing.LexAll(sql)
+        var toks = rules.LexAll(sql)
             .Where(t => t.Channel == TokenConstants.DefaultChannel && t.Type != TokenConstants.EOF)
             .ToList();
 
@@ -30,26 +41,26 @@ public static class FromClauseExtractor
 
         for (var i = 0; i < toks.Count; i++)
         {
-            if (Introducer(toks, i) is not { } introducer) continue;
+            if (Introducer(rules, toks, i) is not { } introducer) continue;
 
             var j = i + 1;
-            if (j < toks.Count && toks[j].Type == PostgreSQLParser.LATERAL_P) j++; // JOIN LATERAL (...)
+            if (j < toks.Count && toks[j].Type == rules.Lateral) j++; // JOIN LATERAL (...)
             // `UPDATE ONLY t` / `DELETE FROM ONLY t` — inheritance scoping, not part of the name. Left
             // unskipped the loop broke on the keyword and the statement ended up with no sources at all,
             // which is the whole-catalog fallback rather than a narrower answer.
-            if (j < toks.Count && toks[j].Type == PostgreSQLParser.ONLY) j++;
+            if (j < toks.Count && toks[j].Type == rules.Only) j++;
 
             // A comma-separated list of table refs (FROM a x, b y); each may be a name or a subquery.
             while (j < toks.Count)
             {
-                if (toks[j].Type == PostgreSQLParser.OPEN_PAREN) break; // derived table — its own FROM is scanned separately
-                if (!IsName(toks[j])) break;
+                if (toks[j].Type == rules.OpenParen) break; // derived table — its own FROM is scanned separately
+                if (!rules.IsIdentifier(toks[j].Type)) break;
 
                 var nameParts = new List<string> { toks[j].Text };
                 var nameStart = toks[j].StartIndex;
                 var nameStop = toks[j].StopIndex;
                 var k = j + 1;
-                while (k + 1 < toks.Count && toks[k].Type == PostgreSQLParser.DOT && IsName(toks[k + 1]))
+                while (k + 1 < toks.Count && toks[k].Type == rules.Dot && rules.IsIdentifier(toks[k + 1].Type))
                 {
                     nameParts.Add(toks[k + 1].Text);
                     nameStop = toks[k + 1].StopIndex;
@@ -57,17 +68,17 @@ public static class FromClauseExtractor
                 }
 
                 string? alias = null;
-                if (k < toks.Count && toks[k].Type == PostgreSQLParser.AS
-                    && k + 1 < toks.Count && IsName(toks[k + 1]))
+                if (k < toks.Count && toks[k].Type == rules.As
+                    && k + 1 < toks.Count && rules.IsIdentifier(toks[k + 1].Type))
                 {
                     alias = toks[k + 1].Text; k += 2;
                 }
-                else if (k < toks.Count && toks[k].Type is PostgreSQLParser.Identifier or PostgreSQLParser.QuotedIdentifier)
+                else if (k < toks.Count && rules.IsIdentifier(toks[k].Type))
                 {
                     alias = toks[k].Text; k += 1; // a bare identifier after the name is the alias
                 }
 
-                var (schemaName, name) = SplitQualified(nameParts);
+                var (schemaName, name) = SplitQualified(rules, nameParts);
 
                 // Same span ResolveCaret treats as the word to overwrite: inside the name, or just
                 // after its last character — but not immediately before it, which is an insertion
@@ -80,7 +91,7 @@ public static class FromClauseExtractor
                     {
                         Schema = schemaName,
                         RawName = name,
-                        Alias = Unquote(alias),
+                        Alias = Unquote(rules, alias),
                         // Quoting is kept here (and only here) so generated predicates can spell the
                         // qualifier the way the query does — `"__MigrationHistory".id`, not `.id` folded.
                         ReferenceText = alias ?? nameParts[^1],
@@ -88,7 +99,7 @@ public static class FromClauseExtractor
                         IsWriteTarget = introducer,
                     });
 
-                if (k < toks.Count && toks[k].Type == PostgreSQLParser.COMMA) { j = k + 1; continue; }
+                if (k < toks.Count && toks[k].Type == rules.Comma) { j = k + 1; continue; }
                 break;
             }
         }
@@ -110,35 +121,33 @@ public static class FromClauseExtractor
     /// than reading one.
     /// </para>
     /// </summary>
-    private static bool? Introducer(IReadOnlyList<IToken> toks, int i) => toks[i].Type switch
+    private static bool? Introducer(ISqlParseRules rules, IReadOnlyList<IToken> toks, int i)
     {
+        var t = toks[i].Type;
         // Read: FROM and JOIN, plus USING — which introduces a real source in `DELETE … USING u` and
         // `MERGE … USING src`. Harmless on `JOIN a USING (id)`, where the next token is a paren and the
         // name loop stops immediately.
-        PostgreSQLParser.FROM or PostgreSQLParser.JOIN or PostgreSQLParser.USING => false,
+        if (t == rules.From || t == rules.Join || t == rules.Using) return false;
 
         // Written: guarded, because both keywords also appear where no relation follows —
         // `SELECT … FOR UPDATE`, `ON CONFLICT DO UPDATE SET`, and `SELECT … INTO newtable`, which
         // creates a relation rather than reading one.
-        PostgreSQLParser.UPDATE => i == 0 || toks[i - 1].Type is not (PostgreSQLParser.FOR or PostgreSQLParser.DO)
-            ? true
-            : null,
-        PostgreSQLParser.INTO => i > 0
-            && toks[i - 1].Type is PostgreSQLParser.INSERT or PostgreSQLParser.MERGE
-            ? true
-            : null,
+        if (t == rules.Update)
+            return i == 0 || (toks[i - 1].Type != rules.For && toks[i - 1].Type != rules.Do) ? true : null;
 
-        _ => null,
-    };
+        if (t == rules.Into)
+            return i > 0 && (toks[i - 1].Type == rules.Insert || toks[i - 1].Type == rules.Merge)
+                ? true
+                : null;
 
-    /// <summary>Only true identifiers (bare or quoted) name a table or alias here.</summary>
-    private static bool IsName(IToken t)
-        => t.Type is PostgreSQLParser.Identifier or PostgreSQLParser.QuotedIdentifier;
+        return null;
+    }
 
-    private static (string? schema, string name) SplitQualified(IReadOnlyList<string> parts)
+    private static (string? schema, string name) SplitQualified(
+        ISqlParseRules rules, IReadOnlyList<string> parts)
     {
-        var name = Unquote(parts[^1]) ?? "";
-        var schema = parts.Count >= 2 ? Unquote(parts[^2]) : null;
+        var name = Unquote(rules, parts[^1]) ?? "";
+        var schema = parts.Count >= 2 ? Unquote(rules, parts[^2]) : null;
         return (schema, name);
     }
 
@@ -152,5 +161,11 @@ public static class FromClauseExtractor
         return result;
     }
 
-    private static string? Unquote(string? s) => s is null ? null : PgIdentifier.Unquote(s);
+    /// <summary>
+    /// Whichever grammar lexed the buffer strips its own delimiters. This is where
+    /// <c>from dbo.[Order Details] as od</c> used to go wrong: read with Postgres unquoting, the relation
+    /// came back literally named <c>[Order Details]</c>, resolved to nothing, and <c>od.</c> therefore
+    /// offered no columns — while <c>dbo</c>, the schema, was the only part that looked like a name.
+    /// </summary>
+    private static string? Unquote(ISqlParseRules rules, string? s) => s is null ? null : rules.Unquote(s);
 }

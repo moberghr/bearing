@@ -25,6 +25,17 @@ public interface ISchemaSnapshot
     IReadOnlyList<ColumnInfo> ColumnsOf(long tableId);
 
     /// <summary>
+    /// One relation by its provider-assigned id, or null when the snapshot does not hold it.
+    /// <para>
+    /// Indexed, like <see cref="ColumnsOf"/> and <see cref="ResolveTable"/>, because the resolvers ask it
+    /// per result column per foreign key: scanning <see cref="Tables"/> for each made the affordance pass
+    /// over a wide <c>select *</c> quadratic in columns and linear in the whole catalog, on the thread that
+    /// renders the grid.
+    /// </para>
+    /// </summary>
+    TableInfo? TableById(long id);
+
+    /// <summary>
     /// Resolve a table by optional schema + name. When schema is null, search_path order and
     /// identifier-casing/quoting rules decide the match. Returns null when nothing matches.
     /// </summary>

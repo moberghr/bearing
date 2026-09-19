@@ -1,21 +1,40 @@
 namespace Bearing.Core.Data;
 
 /// <summary>
-/// One result column. When the column maps straight to a table column (not an expression/alias),
-/// <see cref="BaseTableId"/> + <see cref="BaseColumnOrdinal"/> identify its catalog origin (resolved
-/// against the schema snapshot) — the hook for FK navigation and inline edit. Both are 0 for
-/// expression/aliased columns, and are populated only for a raw query, not the wrapped paging query.
-/// Identity is provider-assigned (the Postgres provider maps table OID + attribute number onto it).
+/// One result column. When the column maps straight to a table column (not an expression/alias), its
+/// catalog origin is carried alongside it — the hook for FK navigation and inline edit. Origin comes in
+/// two forms because the two engines hand it over differently, and neither can produce the other's:
+/// <list type="bullet">
+/// <item><b>By id</b> — <see cref="BaseTableId"/> + <see cref="BaseColumnOrdinal"/>. Postgres gets this
+/// for free off the RowDescription (table OID + attribute number), and it is exact: it survives a table
+/// being renamed mid-session and never needs a name lookup.</item>
+/// <item><b>By name</b> — <see cref="BaseSchemaName"/> + <see cref="BaseTableName"/> +
+/// <see cref="BaseColumnName"/>, qualified by <see cref="BaseCatalogName"/>. <c>SqlDataReader</c> only
+/// ever exposes names, and only when the command was run under <c>CommandBehavior.KeyInfo</c>; there is
+/// no id to be had. The resolver looks these up in the schema snapshot (case-insensitively) to reach the
+/// same <c>TableInfo</c>/<c>ColumnInfo</c> — and refuses when the catalog is not the one the snapshot
+/// describes, because a name is only unique <em>within</em> a database.</item>
+/// </list>
+/// Both are absent for expression/aliased columns, and origin is populated only for a raw query, not the
+/// wrapped paging query.
 /// </summary>
 public sealed record ColumnDescriptor(
     string Name,
     string DataTypeName,
     Type ClrType,
     long BaseTableId = 0,
-    int BaseColumnOrdinal = 0)
+    int BaseColumnOrdinal = 0,
+    string? BaseSchemaName = null,
+    string? BaseTableName = null,
+    string? BaseColumnName = null,
+    string? BaseCatalogName = null)
 {
-    /// <summary>True when this column maps straight to a catalog table column.</summary>
-    public bool HasBaseColumn => BaseTableId != 0 && BaseColumnOrdinal > 0;
+    /// <summary>True when this column maps straight to a catalog table column, in either origin form.
+    /// A name origin without <see cref="BaseColumnName"/> does not count: the table alone can't be
+    /// edited through, so it has to read as an expression rather than as a half-mapped column.</summary>
+    public bool HasBaseColumn
+        => (BaseTableId != 0 && BaseColumnOrdinal > 0)
+        || (BaseTableName is not null && BaseColumnName is not null);
 }
 
 public sealed record QueryError(string Message, string? SqlState, int? Position);

@@ -38,7 +38,9 @@ public class FormatSqlTests
     private static (TextEditor Editor, EditorTextCommands Commands) Editor(string text)
     {
         var editor = new TextEditor { Text = text };
-        return (editor, new EditorTextCommands(editor));
+        // The commands take the connection's dialect (formatting quotes and splits per engine); these
+        // assertions are PostgreSQL's, which is the dialect they were written against.
+        return (editor, new EditorTextCommands(editor, () => PostgresDialect.Instance));
     }
 
     private static SqlFormatOptions Options(

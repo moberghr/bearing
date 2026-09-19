@@ -46,10 +46,15 @@ public sealed record ConnectionInfo
     public bool RequireWriteConfirmation { get; init; }
 
     /// <summary>
-    /// When true, this connection's sessions start with <c>default_transaction_read_only=on</c>, so the
-    /// <b>server</b> refuses a write rather than Bearing asking about one (#99). Auto-enabled for the
-    /// "production" preset. Where <see cref="RequireWriteConfirmation"/> asks, this refuses — and it catches
-    /// what a lexer cannot: a function that writes, dynamic SQL in a <c>DO</c> block, <c>COPY … TO</c>.
+    /// When true, writes on this connection are refused rather than confirmed (#99). Auto-enabled for the
+    /// "production" preset. Where <see cref="RequireWriteConfirmation"/> asks, this refuses.
+    /// <para>
+    /// <b>Who refuses depends on the engine</b> — <see cref="IDbProvider.EnforcesReadOnlyOnServer"/>. On
+    /// Postgres the sessions start with <c>default_transaction_read_only=on</c>, so the <b>server</b> refuses
+    /// and catches what a lexer cannot: a function that writes, dynamic SQL in a <c>DO</c> block,
+    /// <c>COPY … TO</c>. SQL Server has no session read-only to ask for, so there the refusal is Bearing's
+    /// alone and a write hidden from the lexer still reaches the server. The dialog's note says which, and
+    /// must keep saying it.</para>
     /// <para>
     /// <b>Not a privilege boundary.</b> <c>default_transaction_read_only</c> is a <c>USERSET</c> GUC, so a
     /// user who types <c>SET default_transaction_read_only = off</c> or <c>BEGIN READ WRITE</c> turns it off.
@@ -91,12 +96,31 @@ public sealed record ConnectionInfo
 }
 
 /// <summary>Describes one field in a provider's connection dialog (drives the UI generically).</summary>
+/// <param name="Choices">
+/// The values a <see cref="ConnectionFieldKind.Choice"/> field offers, in display order; null or empty for
+/// every other kind — and for a Choice field with nothing to offer, which the dialog then renders as a text
+/// box rather than as an empty dropdown.
+/// <para>
+/// Added last and optional so every existing positional <c>new ConnectionField(…)</c> still compiles: this
+/// record is constructed by each provider, and a required parameter in the middle would be a breaking change
+/// to a <c>Core</c> contract for the sake of a field kind nothing declares yet.
+/// </para>
+/// <para>
+/// <b>No shipped provider declares one.</b> Both engines' would-be dropdowns became typed fields —
+/// <c>sslmode</c> and SQL Server's <c>Encrypt</c>/<c>TrustServerCertificate</c> are all
+/// <see cref="ConnectionInfo.Tls"/> now (#23) — so this is a capability with no production user. It exists
+/// because the kind already existed and rendered as a text box, which is a worse answer than either a
+/// dropdown or no kind at all: a Choice field whose candidates the dialog could not show let the user type
+/// a value the provider never offered.
+/// </para>
+/// </param>
 public sealed record ConnectionField(
     string Key,
     string Label,
     ConnectionFieldKind Kind,
     bool Required,
-    string? Default = null);
+    string? Default = null,
+    IReadOnlyList<string>? Choices = null);
 
 public enum ConnectionFieldKind
 {
@@ -104,5 +128,9 @@ public enum ConnectionFieldKind
     Number,
     Password,
     Boolean,
+
+    /// <summary>One of a fixed set of values — see <see cref="ConnectionField.Choices"/>, which supplies
+    /// them. Without candidates the dialog falls back to a text box, so a provider adding this kind must
+    /// add the list with it.</summary>
     Choice,
 }

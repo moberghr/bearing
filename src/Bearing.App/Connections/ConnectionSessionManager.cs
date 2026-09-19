@@ -455,7 +455,8 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
 
             var session = new ConnectionSession(
                 info, factory, provider.CreateQueryExecutor(factory), provider.CreateMetadataReader(factory),
-                provider.CreateServerActivity(factory), credential.ExpiresAt)
+                provider.CreateServerActivity(factory), credential.ExpiresAt,
+                provider.SupportsServerActivity)
             { LastUsedUtc = _clock() };
             bool disposedDuringConnect;
             bool newLink;
@@ -508,20 +509,30 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         }
     }
 
+    /// <summary>The failure message. The endpoint goes through <see cref="ConnectionEndpoint"/> because a
+    /// SQL Server named instance has no meaningful port, and printing one next to <c>HOST\INSTANCE</c> sends
+    /// the user to check a port that had nothing to do with the failure.</summary>
     private static string Describe(ConnectionInfo info, string detail)
         => $"Could not connect to '{info.Name}' ({ConnectionEndpoint.Address(info)}): {detail}";
 
-    /// <summary>Compares only the fields that define the live connection; name/environment/color are cosmetic.
-    /// Database is part of <see cref="SessionKey"/> and so always already equal at every call site — kept in
-    /// the comparison so the predicate is true to its name if it is ever reused off the keyed path.</summary>
     /// <summary>
-    /// Whether a live session's settings still match the record — i.e. whether its pool can be reused rather
-    /// than rebuilt.
+    /// Whether a live session's settings still match the record — i.e. whether its pool can be reused
+    /// rather than rebuilt. Name, environment and colour are cosmetic and excluded. Database is part of
+    /// <see cref="SessionKey"/> and so already equal at every call site, but is kept here so the predicate
+    /// is true to its name if it is ever reused off the keyed path.
     /// <para>
     /// <c>TlsPolicy.Resolve</c> rather than the raw field, because that is the mode the pool was actually
     /// built with: while sslmode lived in the options bag it was covered by <see cref="SameOptions"/>, and
     /// moving it to a field would otherwise have left an existing session running on the old mode after the
     /// dialog raised it — the record and the dialog saying Verify Full while the socket is unverified (#23).
+    /// </para>
+    /// <para>
+    /// <see cref="ConnectionInfo.CredentialKind"/> is here for the same shape of reason: it decides
+    /// <em>who</em> the pooled connection is authenticated as, not merely how the secret was fetched. The
+    /// SQL Server factory branches on it to set <c>Integrated Security</c> and to omit the user name and
+    /// password entirely, so without it, switching a live connection from a stored password to Windows
+    /// authentication left the existing pool in place and every statement kept running as the old SQL
+    /// login — while the dialog, the record and the beacon all said otherwise.
     /// </para>
     /// <para>
     /// The safety settings for the same reason, one setting later: read-only and the statement timeout
@@ -535,6 +546,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     private static bool SameConnection(ConnectionInfo a, ConnectionInfo b)
         => a.ProviderId == b.ProviderId && a.Host == b.Host && a.Port == b.Port
            && a.Database == b.Database && a.User == b.User
+           && a.CredentialKind == b.CredentialKind
            && TlsPolicy.Resolve(a) == TlsPolicy.Resolve(b)
            && SessionPolicy.IsReadOnly(a) == SessionPolicy.IsReadOnly(b)
            && SessionPolicy.TimeoutSeconds(a) == SessionPolicy.TimeoutSeconds(b)

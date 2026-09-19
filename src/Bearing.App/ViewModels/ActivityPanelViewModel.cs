@@ -143,6 +143,17 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
         }
 
         var (info, session) = target;
+
+        // Said, not shown as an empty list: "No sessions on this server" would be a claim about the user's
+        // server, and this one is about Bearing.
+        if (!session.SupportsActivity)
+        {
+            Backends.Clear();
+            Selected = null;
+            Status = UnsupportedText();
+            return;
+        }
+
         _reading = true;
         var cts = new CancellationTokenSource(PollTimeout);
         _inFlight = cts;
@@ -239,6 +250,11 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
         return _ctx.Sessions.TryGet(SessionKey.For(info)) is { } session ? (info, session) : null;
     }
 
+    /// <summary>Why there is nothing to show when the engine itself has no answer, named so the sentence
+    /// is about the missing feature rather than about the server.</summary>
+    private static string UnsupportedText()
+        => "Bearing can't read server sessions on this engine yet.";
+
     /// <summary>
     /// Why there is nothing to show. Reads the <em>server link</em> rather than the pool, because §9.4 is
     /// explicit that no user-facing connected/disconnected indicator reads <c>TryGet</c> — a swept pool is not
@@ -289,6 +305,7 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
     private async Task ActAsync(BackendRowViewModel row, BackendActionKind kind)
     {
         if (Target() is not { } target) { _ctx.SetStatus(NotConnectedText()); return; }
+        if (!target.Session.SupportsActivity) { _ctx.SetStatus(UnsupportedText()); return; }
         var info = target.Info;
 
         // Refused before it is confirmed: a prompt for something that will not be done is a question with no

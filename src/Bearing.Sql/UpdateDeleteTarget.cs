@@ -27,8 +27,10 @@ public sealed record UpdateDeleteTarget(string Verb, string Relation, string Tar
 
     /// <summary>
     /// The row-returning query whose count is the answer. Deliberately <c>select *</c> rather than
-    /// <c>select count(*)</c>: <c>IQueryExecutor.CountAsync</c> wraps whatever it is handed in
-    /// <c>select count(*) from (…)</c>, so counting here would count the count.
+    /// <c>select count(*)</c>: the caller wraps this in <c>select count(*) from (…)</c> through the
+    /// connection's <see cref="ISqlDialect.CountWrap"/> — where the engine is known — so counting here
+    /// would count the count. It is not counted by being handed to <c>IQueryExecutor.CountAsync</c> bare;
+    /// that runs the text it is given and would return this query's first column instead of a count.
     /// </summary>
     public string RowsSql => Where is null ? $"select * from {Target}" : $"select * from {Target} where {Where}";
 
@@ -101,6 +103,13 @@ public sealed record UpdateDeleteTarget(string Verb, string Relation, string Tar
         // read out of a join is a count of the wrong rows.
         if (isUpdate && terminator != "SET") return null;
         if (!isUpdate && terminator is not ("WHERE" or "RETURNING" or ";" or "")) return null;
+
+        // T-SQL's row-limited write, `update top (10) Orders set …`. The DELETE spelling already declines
+        // (`delete top (5) from t` fails the FROM check above), but the UPDATE spelling reduced with `top`
+        // as the relation: a no-WHERE variant then announced "this will update every row in top" — a claim
+        // about a table that does not exist, in amber, about a statement that touches ten rows. There is no
+        // honest count for a TOP either way, because the predicate does not decide the row set on its own.
+        if (Is(tokens, targetStart, "TOP") && Is(tokens, targetStart + 1, "(")) return null;
 
         var target = Slice(statement, tokens[targetStart], tokens[targetEnd]);
         if (RelationName(tokens, targetStart, targetEnd) is not { } relation) return null;

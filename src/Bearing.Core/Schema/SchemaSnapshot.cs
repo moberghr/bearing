@@ -6,6 +6,7 @@ namespace Bearing.Core.Schema;
 /// </summary>
 public sealed class SchemaSnapshot : ISchemaSnapshot
 {
+    private readonly Dictionary<long, TableInfo> _tablesById;
     private readonly Dictionary<long, List<ColumnInfo>> _columnsByTable;
     private readonly Dictionary<long, List<ForeignKeyInfo>> _fksByTable;
     // Case-folded (schema, name) and (name) lookups. Both map to a *list*: Postgres lets one schema
@@ -35,6 +36,12 @@ public sealed class SchemaSnapshot : ISchemaSnapshot
         SearchPath = searchPath ?? schemas;
         Tables = tables;
 
+        // First spelling of an id wins, for _bySchemaName's reason: a duplicate is catalog data we cannot
+        // reconcile, and throwing here would take completion and the schema browser down for the whole
+        // database rather than losing one relation.
+        _tablesById = new Dictionary<long, TableInfo>();
+        foreach (var t in tables) _tablesById.TryAdd(t.Id, t);
+
         _columnsByTable = columns
             .GroupBy(c => c.TableId)
             .ToDictionary(g => g.Key, g => g.OrderBy(c => c.Ordinal).ToList());
@@ -63,6 +70,8 @@ public sealed class SchemaSnapshot : ISchemaSnapshot
 
     public IReadOnlyList<ColumnInfo> ColumnsOf(long tableId)
         => _columnsByTable.TryGetValue(tableId, out var c) ? c : Array.Empty<ColumnInfo>();
+
+    public TableInfo? TableById(long id) => _tablesById.GetValueOrDefault(id);
 
     public TableInfo? ResolveTable(string? schema, string name)
     {

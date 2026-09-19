@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using Bearing.App.Connections;
+using Bearing.Core.Data;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -53,4 +55,45 @@ public class EntraTokenProviderTests
     [Fact]
     public void Malformed_json_throws()
         => Assert.ThrowsAny<JsonException>(() => EntraTokenProvider.ParseTokenResponse("not json"));
+
+    // ---- Which audience the token is minted for -------------------------------------------------------
+
+    private static ConnectionInfo Target(string providerId, params string[] options)
+    {
+        var map = new Dictionary<string, string>();
+        for (var i = 0; i + 1 < options.Length; i += 2) map[options[i]] = options[i + 1];
+        return new ConnectionInfo
+        {
+            Id = Guid.NewGuid(),
+            Name = "c",
+            ProviderId = providerId,
+            Options = map,
+        };
+    }
+
+    [Fact]
+    public void The_resource_is_the_engines_own_audience()
+    {
+        // A token minted for Azure Database for PostgreSQL is rejected by Azure SQL, so this is not a
+        // cosmetic string. The Postgres value is unchanged: an existing Entra connection must keep minting
+        // exactly the token it minted before a second engine arrived.
+        Assert.Equal("https://ossrdbms-aad.database.windows.net",
+            EntraTokenProvider.ResourceFor(Target("postgres")));
+        Assert.Equal("https://database.windows.net/",
+            EntraTokenProvider.ResourceFor(Target("sqlserver")));
+    }
+
+    [Fact]
+    public void An_explicit_option_still_overrides_the_engines_audience()
+    {
+        // Sovereign clouds and preview audiences need no code change.
+        Assert.Equal("https://ossrdbms-aad.database.chinacloudapi.cn",
+            EntraTokenProvider.ResourceFor(Target("postgres",
+                EntraTokenProvider.ResourceOptionKey, " https://ossrdbms-aad.database.chinacloudapi.cn ")));
+    }
+
+    [Fact]
+    public void A_blank_override_falls_back_rather_than_minting_for_nothing()
+        => Assert.Equal("https://database.windows.net/",
+            EntraTokenProvider.ResourceFor(Target("sqlserver", EntraTokenProvider.ResourceOptionKey, "   ")));
 }

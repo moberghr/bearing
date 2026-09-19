@@ -11,6 +11,12 @@ namespace Bearing.Sql;
 /// isn't even reflected in the reported query time). Safe only for a single read-only, row-returning
 /// statement that has no row cap of its own; every other shape falls back to the caller's unbounded
 /// execution (which is capped client-side). Pure and lexer-based (reuses <see cref="PgParsing"/>).
+/// <para>
+/// This is the <em>Postgres</em> rule — <see cref="PostgresDialect"/> is the one that serves it through
+/// <see cref="ISqlDialect.TryAppendPage"/>. T-SQL's suffix is a different clause with a different
+/// precondition (<see cref="SqlServerDialect"/>), so a caller holding a connection must ask its dialect,
+/// never these statics.
+/// </para>
 /// </summary>
 public static class FirstPageLimiter
 {
@@ -33,6 +39,14 @@ public static class FirstPageLimiter
     /// its own line so a trailing line-comment (<c>-- …</c>) can't swallow it.
     /// </summary>
     public static string? TryAppendLimit(string sql, int limit) => TryAppendPage(sql, 0, limit);
+
+    /// <summary>
+    /// The same first-page question asked of an arbitrary engine: <paramref name="sql"/> with
+    /// <paramref name="dialect"/>'s row-limit clause appended, or <c>null</c> when that dialect will not
+    /// take one and the caller should run the query unbounded.
+    /// </summary>
+    public static string? TryAppendLimit(ISqlDialect dialect, string sql, int limit)
+        => dialect.TryAppendPage(sql, 0, limit);
 
     /// <summary>
     /// Returns <paramref name="sql"/> with a top-level <c>limit &lt;limit&gt; offset &lt;offset&gt;</c>
