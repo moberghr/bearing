@@ -53,6 +53,10 @@ public partial class MainWindow : Window
         EditorChrome.InstallSqlHighlighting(Editor);
         App.LogStartup("TextMate installed");
 
+        // Which engine the buffer is written in, asked live because one editor serves every tab. It reads
+        // `Vm`, i.e. `DataContext` — an AvaloniaObject — so every holder of this must ask it on the UI
+        // thread. The folding, statement and completion controllers all do; CompletionEngine asked it on
+        // its parse thread instead, which threw VerifyAccess and killed completion outright (#94, 1.0).
         Func<ISqlDialect> dialect = () => Vm?.Execution.DialectForSelectedTab() ?? PostgresDialect.Instance;
         _completion = new CompletionController(Editor, new CompletionEngine(dialect),
             () => Vm?.Execution.SnapshotForSelectedTab(), dialect);

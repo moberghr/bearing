@@ -18,33 +18,57 @@ public sealed class CompletionEngine : ICompletionEngine
     /// serves the whole window, and which engine the buffer is written in changes with the selected tab.
     /// Defaults to Postgres so every caller that has no tab to ask — the pinning tests, and the
     /// Postgres-bound statics' own idiom — keeps working unchanged.
+    /// <para>
+    /// It is asked on the <b>caller's</b> thread, never on the deep-stack parse thread — see
+    /// <see cref="CompleteAsync"/>. The callback answers from the selected tab, which the App layer reads
+    /// off the window's <c>DataContext</c>: an <c>AvaloniaObject</c>, so asking it anywhere but the UI
+    /// thread throws <c>VerifyAccess</c>.
+    /// </para>
     /// </summary>
     public CompletionEngine(Func<ISqlDialect>? dialect = null)
         => _dialect = dialect ?? (() => PostgresDialect.Instance);
 
     public CompletionResult Complete(string sql, int caretOffset, ISchemaSnapshot schema)
+    {
         // The parse and antlr4-c3's walk both recurse per nesting level; PgParsing.OnDeepStack gives them
         // the stack for it. Kept for callers that are already off any thread that matters (tests).
-        => PgParsing.OnDeepStack(() => CompleteCore(sql, caretOffset, schema));
+        var dialect = _dialect();   // before the hop — see CompleteAsync
+        return PgParsing.OnDeepStack(() => CompleteCore(sql, caretOffset, schema, dialect));
+    }
 
     /// <inheritdoc />
     public Task<CompletionResult> CompleteAsync(string sql, int caretOffset, ISchemaSnapshot schema)
-        // What the editor uses. The synchronous path would have the caller's thread blocked on Join for the
-        // whole parse — and since the controller already calls this from the thread pool, that was a pool
-        // thread parked per keystroke on top of the deep-stack thread doing the work.
-        => PgParsing.OnDeepStackAsync(() => CompleteCore(sql, caretOffset, schema));
+    {
+        // The dialect is resolved HERE, on the caller's thread, and carried into the parse thread as a
+        // value. Asking inside CompleteCore instead put the question on the deep-stack thread, and the
+        // App layer's answer is "whichever engine the selected tab is on" — read off the window's
+        // DataContext, an AvaloniaObject, which throws VerifyAccess off the UI thread. Every keystroke's
+        // completion then failed before it parsed anything, and because the controller's catch writes to
+        // the crash log rather than the status bar, the only symptom was a popup that never appeared
+        // (#94 shipped this in 1.0; `CompletionEngineTests.The_dialect_is_asked_on_the_calling_thread`
+        // is what notices).
+        var dialect = _dialect();
 
-    private CompletionResult CompleteCore(string sql, int caretOffset, ISchemaSnapshot schema)
+        // What the editor uses, and it has to be this rather than Complete: the synchronous path parks the
+        // calling thread on Join for the whole parse, and the caller here is the UI thread — a freeze per
+        // keystroke. (The comment this replaces said the controller called from the thread pool. It does
+        // not, deliberately — see CompletionController.TriggerAsync — and believing it is what would make
+        // resolving the dialect above unsound.)
+        return PgParsing.OnDeepStackAsync(() => CompleteCore(sql, caretOffset, schema, dialect));
+    }
+
+    /// <param name="dialect">Which grammar this request is reading, resolved once by the caller and passed
+    /// in: the selected tab's engine changes under a single long-lived <see cref="CompletionEngine"/>, so it
+    /// cannot be captured at construction — but asking twice within one request could also answer twice
+    /// differently, and asking it from here would ask it on the wrong thread. Everything below works in
+    /// terms of roles and intents, which is what lets one engine answer for both dialects. The dialect
+    /// itself is passed, not just its rules: how a name is <em>quoted</em> on the way out is its business
+    /// too.</param>
+    private CompletionResult CompleteCore(
+        string sql, int caretOffset, ISchemaSnapshot schema, ISqlDialect dialect)
     {
         caretOffset = Math.Clamp(caretOffset, 0, sql.Length);
 
-        // The one place the engine learns which grammar it is reading, asked once per request and reused:
-        // the selected tab's engine changes under a single long-lived CompletionEngine, so this cannot be
-        // captured at construction — but asking twice within one request could also answer twice
-        // differently. Everything below works in terms of roles and intents, which is what lets one engine
-        // answer for both dialects. The dialect itself is kept, not just its rules: how a name is *quoted*
-        // on the way out is its business too.
-        var dialect = _dialect();
         var rules = dialect.ParseRules;
 
         // Nothing in the catalog or the grammar belongs inside 'text' — it is data, and a popup over it is
@@ -198,12 +222,14 @@ public sealed class CompletionEngine : ICompletionEngine
 
     /// <summary>The candidate intents at the caret (exposed for pinning tests).</summary>
     public IReadOnlySet<CompletionIntent> IntentsAt(string sql, int caretOffset)
-        => PgParsing.OnDeepStack(() => IntentsAtCore(sql, caretOffset));
+    {
+        var rules = _dialect().ParseRules;   // before the hop, as in CompleteAsync
+        return PgParsing.OnDeepStack(() => IntentsAtCore(sql, caretOffset, rules));
+    }
 
-    private IReadOnlySet<CompletionIntent> IntentsAtCore(string sql, int caretOffset)
+    private IReadOnlySet<CompletionIntent> IntentsAtCore(string sql, int caretOffset, ISqlParseRules rules)
     {
         caretOffset = Math.Clamp(caretOffset, 0, sql.Length);
-        var rules = _dialect().ParseRules;
         var parsed = rules.Parse(sql);
         parsed.Tokens.Fill();
         if (ParseDepth.TooDeep(rules, parsed.Tokens.GetTokens())) return new HashSet<CompletionIntent>();

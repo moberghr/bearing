@@ -141,4 +141,43 @@ public class CompletionEngineTests
 
         Assert.NotEmpty(result.Suggestions);
     }
+
+    // ---- Which thread the dialect is asked on -------------------------------------------------
+
+    /// <summary>
+    /// The engine resolves its dialect callback on the <b>caller's</b> thread, not on the deep-stack thread
+    /// it runs the parse on.
+    /// <para>
+    /// This is not a tidiness rule. The App layer's callback answers "whichever engine the selected tab is
+    /// on", which it reads off the window's <c>DataContext</c> — an <c>AvaloniaObject</c>, and therefore
+    /// thread-affine. Asked from inside <c>CompleteCore</c> it threw <c>VerifyAccess</c> before the parse
+    /// began, so <em>every</em> completion failed: no popup on typing, nothing on Ctrl+Space, and the only
+    /// trace was a crash-log line per keystroke, because the controller's catch deliberately never reaches
+    /// the UI. Shipped in 1.0 by #94, which introduced the callback.
+    /// </para>
+    /// <para>
+    /// Asserted on the thread rather than on the popup because that is the whole of the defect: the App
+    /// layer's own dialect lambda cannot be called here at all (it needs a window), so a Postgres-only
+    /// suggestion assertion passes either way — which is exactly why the suite stayed green.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task The_dialect_is_asked_on_the_calling_thread()
+    {
+        var caller = Environment.CurrentManagedThreadId;
+        var askedOn = new System.Collections.Concurrent.ConcurrentBag<int>();
+        var engine = new CompletionEngine(() =>
+        {
+            askedOn.Add(Environment.CurrentManagedThreadId);
+            return PostgresDialect.Instance;
+        });
+
+        // All three entry points hop to the deep-stack thread, so all three could ask on the wrong one.
+        engine.Complete("select * from u", caretOffset: 15, Schema);
+        engine.IntentsAt("select * from u", caretOffset: 15);
+        await engine.CompleteAsync("select * from u", caretOffset: 15, Schema);
+
+        Assert.Equal(3, askedOn.Count);
+        Assert.All(askedOn, id => Assert.Equal(caller, id));
+    }
 }
