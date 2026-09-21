@@ -40,6 +40,10 @@ internal sealed class CompletionController
     /// the already-narrowed list, so deleting a character brings the dropped rows back.</summary>
     private IReadOnlyList<Suggestion> _suggestions = Array.Empty<Suggestion>();
     private int _generation;
+
+    /// <summary>Whether the last request faulted and said so in the crash log. Suppresses the identical
+    /// entry on every keystroke after it — see the catch in <see cref="TriggerAsync"/>.</summary>
+    private bool _faultLogged;
     private bool _narrowQueued;   // coalesces the posted re-rank (see QueueNarrow)
 
     /// <summary>Offset of the space the last accepted completion appended, or -1. Good for exactly one
@@ -143,17 +147,31 @@ internal sealed class CompletionController
         CompletionResult result;
         try
         {
-            // Not Task.Run: CompleteAsync already runs the parse on its own (deep) thread, so wrapping it
-            // would park a pool thread on top of that for the length of every keystroke's parse.
+            // Not Task.Run, and not merely as an optimisation: CompleteAsync resolves the dialect on *this*
+            // thread before handing the parse to its own (deep) one, and that answer comes from the window's
+            // DataContext. Wrapping this would ask it on a pool thread, which throws — and would also park
+            // that thread on top of the parse for the length of every keystroke.
             result = await _engine.CompleteAsync(text, localCaret, snapshot);
         }
         catch (Exception ex)
         {
             // Completion must never disrupt editing — but a silent swallow hid real engine faults
             // (e.g. the antlr4-c3 gotcha). Record it so it's at least visible in the crash log.
-            Bearing.Persistence.CrashLog.Write("completion", ex);
+            //
+            // Once per run of failures, not once per keystroke. A fault in the *request* rather than in the
+            // text fails identically every time, so this fired on the debounce of every character typed:
+            // 1.0's dialect-on-the-parse-thread put the same stack trace in the log 38 times in four
+            // minutes, and put a file append in the typing path to do it. The flag clears on the next
+            // success below, so an intermittent fault is still recorded each time it comes back.
+            if (!_faultLogged)
+            {
+                _faultLogged = true;
+                Bearing.Persistence.CrashLog.Write("completion", ex);
+            }
             return;
         }
+
+        _faultLogged = false;
 
         if (generation != _generation) return; // a newer keystroke superseded this
         Show(result, baseOffset);
