@@ -355,4 +355,21 @@ public class TSqlCompletionTests
 
         Assert.Equal(new[] { "[Order Details]", "o" }, names);
     }
+
+    // ---- An alias slot with no catalog ---------------------------------------------------------
+
+    /// <summary>
+    /// The alias-slot rule is dialect-agnostic and so is the defect: with no catalog loaded nothing
+    /// resolves, so the slot stopped being recognised and the popup covered the alias being typed. Pinned
+    /// here as well as on Postgres because "measured on both engines" is the claim, and this grammar
+    /// reaches the rule through its own token set.
+    /// </summary>
+    [Fact]
+    public void An_alias_slot_is_silent_with_no_catalog_as_it_is_with_one()
+    {
+        const string sql = "select * from Customers c";
+
+        Assert.Empty(SqlServer.Complete(sql, sql.Length, SchemaSnapshot.Empty).Suggestions);
+        Assert.Empty(SqlServer.Complete(sql, sql.Length, Schema).Suggestions);
+    }
 }
