@@ -142,6 +142,75 @@ public class CompletionEngineTests
         Assert.NotEmpty(result.Suggestions);
     }
 
+    // ---- With no catalog behind the caret -----------------------------------------------------
+
+    /// <summary>
+    /// The grammar's answers do not need a server. A tab that has never connected has no snapshot, and
+    /// <c>CompletionController</c> used to return on that — so a fresh tab completed nothing whatever, not
+    /// even <c>sel</c>. The snapshot was only ever read for relations and columns; the keywords come out of
+    /// antlr4-c3's token candidates.
+    /// </summary>
+    [Theory]
+    [InlineData("sel", 3, "SELECT")]
+    [InlineData("select * fr", 11, "FROM")]
+    [InlineData("insert in", 9, "INTO")]
+    public void Without_a_catalog_the_grammar_still_answers(string sql, int caret, string keyword)
+    {
+        var result = Engine.Complete(sql, caret, Bearing.Core.Schema.SchemaSnapshot.Empty);
+
+        Assert.Contains(keyword, result.Suggestions.Where(s => s.Kind is SuggestionKind.Keyword)
+            .Select(s => s.DisplayText));
+    }
+
+    /// <summary>
+    /// And the other half, which is what makes the empty snapshot safe to pass rather than merely useful:
+    /// with nothing to resolve against it can name no relation, so it cannot invent one. Same caret that
+    /// offers <c>users</c> and <c>orders</c> against a real catalog.
+    /// <para>
+    /// Here the answer is empty <em>altogether</em> — measured, against a first version of this test that
+    /// asserted the opposite on the assumption that keywords come back everywhere. They do not: after
+    /// <c>from</c> the grammar wants a relation and nothing else, so with no catalog there is genuinely
+    /// nothing to say and no popup opens. That is the correct behaviour and worth pinning, because the
+    /// tempting "fix" for it is to offer keywords that are not valid at the caret.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Without_a_catalog_no_relation_is_named()
+    {
+        var result = Engine.Complete("select * from u", caretOffset: 15, Bearing.Core.Schema.SchemaSnapshot.Empty);
+
+        Assert.Empty(result.Suggestions);
+
+        // The contrast, so "nothing came back" cannot pass as this test on a day the engine breaks.
+        Assert.Contains("users", Engine.Complete("select * from u", caretOffset: 15, Schema)
+            .Suggestions.Select(s => s.DisplayText));
+    }
+
+    /// <summary>
+    /// The catalog's <em>absence</em> must not answer a question about the catalog.
+    /// <para>
+    /// <c>CaretIsInAliasSlot</c> ends by asking whether the preceding name resolves to a relation. Against
+    /// an empty snapshot nothing resolves, so when completion started running without a catalog every alias
+    /// slot stopped being one: <c>select * from users u|</c> returned twelve keywords over a span covering
+    /// the <c>u</c>, and accepting one wrote <c>select * from users UNION</c>. That is worse than the
+    /// silence it replaced — it destroys what the user typed — and it is the exact failure the alias rule
+    /// exists to prevent.
+    /// </para>
+    /// <para>
+    /// Both columns are asserted, because the claim is parity: with no catalog these carets answer exactly
+    /// as they do with one.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("select * from users u")]
+    [InlineData("update users u")]
+    [InlineData("select * from users as u")]
+    public void Without_a_catalog_an_alias_slot_is_still_silent(string sql)
+    {
+        Assert.Empty(Engine.Complete(sql, sql.Length, Bearing.Core.Schema.SchemaSnapshot.Empty).Suggestions);
+        Assert.Empty(Engine.Complete(sql, sql.Length, Schema).Suggestions);
+    }
+
     // ---- Which thread the dialect is asked on -------------------------------------------------
 
     /// <summary>

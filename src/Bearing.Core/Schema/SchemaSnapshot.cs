@@ -21,6 +21,20 @@ public sealed class SchemaSnapshot : ISchemaSnapshot
     public IReadOnlyList<string> SearchPath { get; }
     public IReadOnlyList<TableInfo> Tables { get; }
 
+    /// <summary>
+    /// A snapshot of nothing: no database, no schemas, no relations.
+    /// <para>
+    /// For a caret with no catalog behind it — a tab that has never connected, or one whose schema read
+    /// has not landed yet. Completion is still worth running there, because the grammar's own answers need
+    /// no catalog: <c>sel</c> offers SELECT with or without a server. What this cannot do is name a
+    /// relation, and it names none rather than guessing, so nothing it produces can be wrong about the
+    /// database — only incomplete about it.
+    /// </para>
+    /// </summary>
+    public static readonly SchemaSnapshot Empty = new(
+        "", Array.Empty<string>(), Array.Empty<TableInfo>(), Array.Empty<ColumnInfo>(),
+        Array.Empty<ForeignKeyInfo>());
+
     public SchemaSnapshot(
         string database,
         IReadOnlyList<string> schemas,

@@ -84,15 +84,40 @@ public class CompletionWiringTests
         Assert.Contains("document", Rows(list!));
     });
 
+    /// <summary>
+    /// And with no connection at all. The shell here has no catalog and never had one, so
+    /// <c>SnapshotForSelectedTab</c> is null — which <c>TriggerAsync</c> answered by returning, making a
+    /// freshly opened Bearing complete nothing whatever until you connected something. The keywords never
+    /// needed the server.
+    /// </summary>
+    [Fact]
+    public Task A_tab_with_no_connection_still_completes_keywords() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(A_tab_with_no_connection_still_completes_keywords));
+        Assert.Null(shell.Vm.Execution.SnapshotForSelectedTab());   // the state under test, not an accident
+
+        var editor = Focused(shell);
+        shell.Window.KeyTextInput("sel");
+        shell.Pump();
+        Assert.Equal("sel", editor.Text);
+
+        var list = await WaitForPopup(shell);
+
+        Assert.NotNull(list);
+        Assert.Contains("SELECT", Rows(list!));
+    });
+
     // ---- Harness ---------------------------------------------------------------------------------
 
     /// <summary>
     /// The shell on the demo catalog, connected.
     /// <para>
     /// The connect is not ceremony: <c>SnapshotForSelectedTab</c> is null until a schema has been read, and
-    /// <c>TriggerAsync</c> returns silently on a null snapshot — so without it these tests would pass over
-    /// the defect by never reaching the engine at all. Asserted rather than assumed for that reason. The
-    /// demo provider serves the catalog with no server (§4.6).
+    /// only a catalog puts a relation in the popup — so these two tests need one to have <c>document</c> to
+    /// assert on. Asserted rather than assumed for that reason. A null snapshot no longer stops completion
+    /// (that is <see cref="A_tab_with_no_connection_still_completes_keywords"/>), so without the connect
+    /// these would still open a popup and would be asserting the keyword case twice over. The demo provider
+    /// serves the catalog with no server (§4.6).
     /// </para>
     /// </summary>
     private static async Task<ShellHarness> ConnectedShell(string name)

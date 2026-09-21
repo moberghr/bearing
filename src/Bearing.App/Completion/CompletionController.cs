@@ -13,7 +13,15 @@ namespace Bearing.App.Completion;
 
 /// <summary>
 /// Bridges the pure <see cref="ICompletionEngine"/> to AvaloniaEdit's completion popup: debounces
-/// typing, runs the engine off the UI thread, discards stale results, and shows a completion window.
+/// typing, calls the engine, discards stale results, and shows a completion window.
+///
+/// <para>
+/// <b>It calls the engine <em>on</em> the UI thread, and must.</b> This summary used to say it ran the
+/// engine off it, which is the belief that killed completion for the whole of 1.0 — <c>CompleteAsync</c>
+/// resolves the selected tab's dialect from the window before handing the text to a parse thread of its
+/// own, so entering it from anywhere else throws. The engine is not blocked by this: it returns before the
+/// parse starts. See the note on <c>ICompletionEngine</c>, and the one in <see cref="TriggerAsync"/>.
+/// </para>
 ///
 /// <para>
 /// It also owns the as-you-type narrowing. AvaloniaEdit's own filtering (<c>IsFiltering = true</c>)
@@ -41,9 +49,12 @@ internal sealed class CompletionController
     private IReadOnlyList<Suggestion> _suggestions = Array.Empty<Suggestion>();
     private int _generation;
 
-    /// <summary>Whether the last request faulted and said so in the crash log. Suppresses the identical
-    /// entry on every keystroke after it — see the catch in <see cref="TriggerAsync"/>.</summary>
-    private bool _faultLogged;
+    /// <summary>The fault last written to the crash log — type and message — or null. Suppresses the
+    /// identical entry on every keystroke after it, and only the identical one: a *different* fault
+    /// beginning while a persistent one is in force is the case the log most needs to catch, and a plain
+    /// "already logged" flag would have swallowed it for the rest of the run. See the catch in
+    /// <see cref="TriggerAsync"/>.</summary>
+    private string? _loggedFault;
     private bool _narrowQueued;   // coalesces the posted re-rank (see QueueNarrow)
 
     /// <summary>Offset of the space the last accepted completion appended, or -1. Good for exactly one
@@ -132,8 +143,13 @@ internal sealed class CompletionController
 
     private async Task TriggerAsync()
     {
-        var snapshot = _snapshot();
-        if (snapshot is null) return;
+        // No catalog: a tab that has never connected, or one whose schema read has not landed. This used to
+        // return, which made a fresh tab complete *nothing at all* — not even `sel` → SELECT. Keywords come
+        // from the grammar and never touched the snapshot, so the guard was wider than the thing it
+        // guarded. An empty snapshot keeps every catalog-derived suggestion out (there is nothing in it to
+        // resolve against, so no table, column or alias can be named) while leaving the grammar's own
+        // answers intact.
+        var snapshot = _snapshot() ?? Bearing.Core.Schema.SchemaSnapshot.Empty;
 
         var caret = _editor.CaretOffset;
         // Scope completion to the statement at the caret so earlier statements in a multi-statement
@@ -158,20 +174,25 @@ internal sealed class CompletionController
             // Completion must never disrupt editing — but a silent swallow hid real engine faults
             // (e.g. the antlr4-c3 gotcha). Record it so it's at least visible in the crash log.
             //
-            // Once per run of failures, not once per keystroke. A fault in the *request* rather than in the
-            // text fails identically every time, so this fired on the debounce of every character typed:
-            // 1.0's dialect-on-the-parse-thread put the same stack trace in the log 38 times in four
-            // minutes, and put a file append in the typing path to do it. The flag clears on the next
-            // success below, so an intermittent fault is still recorded each time it comes back.
-            if (!_faultLogged)
+            // Once per run of *this* failure, not once per keystroke. A fault in the request rather than in
+            // the text fails identically every time, so this fired on the debounce of every character
+            // typed: 1.0's dialect-on-the-parse-thread put the same stack trace in the log 38 times in four
+            // minutes, and put a file append in the typing path to do it.
+            //
+            // Keyed on the fault rather than a bare "already logged", because the second fault arriving
+            // while a persistent first one is in force is the one the log most needs to catch — a flag
+            // would have hidden it for the rest of the run. Cleared on the next success below, so an
+            // intermittent fault is recorded again each time it comes back.
+            var fault = ex.GetType().FullName + ": " + ex.Message;
+            if (_loggedFault != fault)
             {
-                _faultLogged = true;
+                _loggedFault = fault;
                 Bearing.Persistence.CrashLog.Write("completion", ex);
             }
             return;
         }
 
-        _faultLogged = false;
+        _loggedFault = null;
 
         if (generation != _generation) return; // a newer keystroke superseded this
         Show(result, baseOffset);

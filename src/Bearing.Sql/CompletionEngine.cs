@@ -418,6 +418,16 @@ public sealed class CompletionEngine : ICompletionEngine
 
         var relation = rules.Unquote(parts[^1]);
         var schemaName = parts.Count >= 2 ? rules.Unquote(parts[^2]) : null;
+
+        // Whether that name really is a relation is a question only a catalog can answer, and an
+        // unanswerable question is not a no. With no catalog loaded — a tab whose schema has not been read,
+        // which reaches here as SchemaSnapshot.Empty — nothing resolves, so letting the lookup decide turned
+        // *every* alias slot into an ordinary caret: `select * from users u|` offered twelve keywords over a
+        // span covering the `u`, and Enter wrote `select * from users UNION`. Measured, both engines. The
+        // grammar already said a relation name belongs in this slot; destroying the alias the user is typing
+        // is a worse answer than the silence they get with a catalog present.
+        if (schema.Tables.Count == 0) return true;
+
         return schema.ResolveTable(schemaName, relation) is not null;
     }
 
