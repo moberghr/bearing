@@ -1,18 +1,17 @@
 using System;
-using Bearing.App.Results;
 using Bearing.Core.Data;
 using Bearing.Data.Postgres;
 using Bearing.Data.SqlServer;
 using Bearing.Sql;
 
-namespace Bearing.App.Connections;
+namespace Bearing.Sessions;
 
 /// <summary>
-/// The App-side facts about one engine that no <c>Core</c> abstraction carries: which
+/// The facts about one engine that no <c>Core</c> abstraction carries: which
 /// <see cref="ISqlDialect"/> shapes its SQL text, how a value is written as a literal, which AAD resource
 /// its Entra tokens are minted for, and what the connection editor should say about its endpoint.
 /// <para>
-/// They live here, together, for two reasons. They are <b>text and UI concerns</b>, so putting them on
+/// They live here, together, for two reasons. They are <b>text and presentation concerns</b>, so putting them on
 /// <c>IDbProvider</c> would drag paging syntax and dialog copy into the driver contract
 /// (<c>Bearing.Sql</c> and <c>Bearing.Data</c> deliberately do not reference each other — §2.2, which is
 /// why a provider and its dialect are paired by a shared id rather than by a property). And keeping the

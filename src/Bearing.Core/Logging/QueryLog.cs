@@ -33,6 +33,19 @@ public sealed record QueryLogEntry
     public string? ScriptPath { get; init; }
 
     /// <summary>
+    /// What ran this — <c>null</c> for Bearing itself, or the name of the host that did
+    /// (<see cref="QueryOrigin.Cli"/>). §1.11's external path writes its own rows here, so "what ran
+    /// against production last week" includes what an agent ran and says which.
+    /// <para>
+    /// <b>A null is not ambiguous here, unlike <see cref="ConnectionId"/>'s.</b> Every row written before
+    /// this column existed came from the editor, because nothing else could write to the log until the
+    /// column and the second host arrived together. So null means the app, full stop, and a report does not
+    /// have to hedge about historical rows the way #113's does.
+    /// </para>
+    /// </summary>
+    public string? Origin { get; init; }
+
+    /// <summary>
     /// The manual-commit transaction this ran inside, or null when it committed itself (#131). An opaque
     /// per-transaction id, not anything the server knows: what it is for is tying a statement to the
     /// <c>commit</c> or <c>rollback</c> that later ended it, both of which are logged as entries of their
@@ -87,4 +100,13 @@ public interface IQueryLog
     event Action<QueryLogEntry>? Appended;
 
     Task<IReadOnlyList<QueryLogEntry>> SearchAsync(QueryLogQuery query, CancellationToken ct);
+}
+
+/// <summary>The hosts that write to the query log, for <see cref="QueryLogEntry.Origin"/>. Bearing itself
+/// writes null rather than a name of its own: it is the overwhelming majority of rows, and a column that is
+/// null for "us" and set for "not us" reads correctly at a glance in a history list.</summary>
+public static class QueryOrigin
+{
+    /// <summary>The `bearing` command (§1.11).</summary>
+    public const string Cli = "cli";
 }

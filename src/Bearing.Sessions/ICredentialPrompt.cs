@@ -2,7 +2,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Bearing.Core.Data;
 
-namespace Bearing.App.Connections;
+namespace Bearing.Sessions;
 
 /// <summary>Asks the user for a connection password at connect time (for
 /// <see cref="CredentialKind.Prompt"/> connections). Implemented in the UI layer; returns null when the

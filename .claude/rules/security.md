@@ -447,3 +447,221 @@ every end has to be in the record: a history that only recorded the ones the use
 the `finally`, so an end that **failed** is recorded too (`Success = false` with the message) — the scope has
 released its connection either way, and leaving it out would put the statements in the log with a transaction
 id nothing matches, which reads exactly like one still open.
+
+## §1.11 — A connection is reachable from outside Bearing only if it says so, and only for reads
+
+`ConnectionInfo.ExternalAccess` (`None` by default) is what lets a host that is not the app see a connection
+at all. Today that host is **`bearing`** (`src/Bearing.Cli`), a console exe run by a person, a script or
+an agent with a shell. `ExternalAccessPolicy` is what the setting *means*, and the
+split is the point: **the flag grants nothing by itself.** `ForExternalHost` is the only route to an exposed
+connection, and it is what forces the settings the exposure is safe under. A host that read the saved record
+directly would be running with the user's own settings, which is the bug this shape exists to prevent.
+
+**The boundary is "anything running as you", and it must never be described as more.** An external host runs
+as the user and can therefore read the same keychain the app reads; what stops it querying a server is that
+nobody marked the connection. That is a real gate and it is the only one this layer has — it is not a
+sandbox, and §1.1's rule against asserting an arrangement nobody made applies to the docs, the dialog and the
+tool descriptions alike.
+
+### Three settings are decided for the host, not read from the record
+- **`ReadOnly` is forced on**, whatever the connection is for the user. The two are deliberately independent:
+  the usual reason to expose a connection is that you still write to it yourself. On an engine with
+  `IDbProvider.EnforcesReadOnlyOnServer` this rides the startup packet and the **server** refuses (§1.9);
+  where it does not, the client-side refusal is the whole of it and a write hidden from the lexer still
+  reaches the server, so the host has to say which it is (§1.9a). Exposing a SQL Server connection is a
+  weaker arrangement than exposing a Postgres one, and the wording is where that difference lives.
+- **`ManualCommit` is forced off.** Inert while nothing writes, since it is the first *write* that opens a
+  transaction (§1.10) — but an external host has no Commit button, no chip and no quit guard, so a
+  transaction opened on one would be precisely the unreachable transaction that rule is about. A setting
+  that cannot be honoured is cleared rather than left inert for a reason that could stop being true.
+- **A missing statement timeout is filled in** with `SessionPolicy.PresetTimeoutSeconds`. A timeout the user
+  *set* is kept, however long: the fill stops a runaway outliving the caller, it does not second-guess a
+  connection pointed at slow analytical work. `RequireWriteConfirmation` is carried across untouched — there
+  is nobody to confirm to and the write is already refused, and clearing a safety flag to tidy up a record is
+  how one stops being set when it starts mattering again.
+
+`ExternalAccessTests.Nothing_but_the_three_forced_settings_differs_from_the_saved_connection` pins that list
+by reflection, so a fourth forced setting has to be an argued addition rather than a quiet one.
+
+### It travels with the project and not with the clipboard
+The field is in `project.json`, which is right: "this connection may be queried by tooling" is a fact about
+the connection, and a team sharing a project already shares its connections' settings. `ConnectionClipboard`
+**drops it**, and is the one deliberate omission in that payload besides the id.
+
+Every other setting there preserves a *restriction* when carried, so losing one downgrades the pasted
+connection — which is the whole reason they were added (#23 / #99 / #105). Exposure runs the other way: it
+would carry a *permission* onto a machine whose owner never granted it. The asymmetry in being wrong settles
+it — a lost restriction announces itself the first time a write is refused, while an arrived-with permission
+is invisible until something uses it. Opening a shared project is taking that project's configuration whole,
+exposure visible in the connection list with it; a paste mints a fresh id and a fresh connection in the
+recipient's own project, which is authoring one rather than accepting one.
+
+### `ReadWrite` is absent, and that is the decision
+Not because writes from outside are unthinkable, but because what makes a write safe here does not exist. In
+the app a guarded write is confirmed by a human reading the row count (§1.5); an external host has nobody to
+ask, so the level would have to raise a dialog on a screen the caller cannot see — blocking an unattended
+agent on a prompt nobody answers — or drop the confirmation, which is §1.2 narrowed for the caller least able
+to notice it went wrong. Adding the enum member is the easy half.
+
+### `bearing` is the command and `bearing-app` is the window
+The console exe takes the plain name; the GUI apphost is renamed. A command **has** to be the console one —
+a WinExe cannot write to a pipe or return a useful exit code — and the name a person already knows is the
+one they will type, so `bearing` with no arguments launches `bearing-app` (`AppLauncher`). Both are
+published into one directory by `build/velopack.sh`, so "beside me" is how the CLI finds the app; on macOS
+it opens the enclosing `.app` rather than the binary, because Launch Services is what gives it a Dock entry.
+
+DO NOT "tidy" the GUI apphost back to `bearing`: the two would collide in one directory, and the one that
+lost would be the one people type. The update identity is `$PACK_ID`, not an exe name (§9.6), so the rename
+does not orphan an installed client — but it does change the Start Menu shortcut's target, so the first
+update across it is worth watching.
+
+### The front end is a CLI, and an MCP server was built and dropped
+Both were written over the same `IBearingHost`; the protocol skin was deleted rather than shipped beside it.
+A CLI is reachable from a shell, a script, CI and any agent that can run a command, costs nothing in context
+until it is invoked, and shows up in shell history where a refusal can be read afterwards. The MCP server
+reached Claude Desktop and Cursor, which have no shell, and kept one pooled connection and one catalog read
+for a whole session — which the CLI cannot, since **every invocation is a fresh process and therefore a
+fresh connection**, and `tables`/`describe` re-read the catalog each time. That cost is the known trade, and
+it is the right one at a few calls a minute; it would be the wrong one inside a loop.
+
+WHEN an MCP server is wanted again, it is another skin over `IBearingHost` and not a second implementation.
+
+### An external host owns its own session manager
+`SessionKey` is (connection id, database), and the exposed `ConnectionInfo` differs from the saved one only
+in settings the key does not cover. `ConnectionSessionManager` reuses a live session only when
+`SameConnection` matches, and that compares `ReadOnly` and the timeout (§1.9) — so a manager serving both the
+UI and an external host would tear down and rebuild the same pool on every alternate use, silently, each
+rebuild costing a handshake. Today they are separate processes and the question does not arise. WHEN an
+external host is ever hosted **inside** the app, give it its own manager rather than sharing the UI's, or
+give `SessionKey` a principal.
+
+### A refusal has to give advice the caller can act on
+`WriteRefusal` decides whether a batch runs, and `BearingHost` never re-implements that verdict (§2.6) — but
+it writes its **own sentence**. `WriteRefusal.Reason` ends "Turn read-only off for this connection to write
+to it", which is right for the person at the keyboard and wrong twice through here: read-only is not this
+connection's setting, and turning it off changes nothing because exposure forces it back on. Found by running
+the built binary rather than by reading it. Telling a caller to do something that cannot work is §1.1's
+failure in its plainest form, so the exposed path says "exposed for reads only … its owner can widen that".
+
+### §1.11a — The exposed path is an allow-list, because the deny-list was measured and failed
+
+`ExternalSqlPolicy.Refuse` runs a statement only when its leading keyword is on **this engine's**
+`ISqlDialect.ExternalReadVerbs`. Everything else is refused, including shapes nobody has thought about.
+`WriteGuard` is unchanged and still runs first — it names the verb of an outright write in the sentence a
+caller most needs — but it is a **deny-list**, and a deny-list is the wrong default for a caller who is not
+the person at the keyboard.
+
+**This is not theoretical.** Against the live test server, on a connection exposed read-only:
+
+```
+begin read write; select nextval('film_film_id_seq')          -> 1002, ran
+set transaction read write; select nextval('film_film_id_seq') -> 1001, ran
+```
+
+Neither `BEGIN` nor `SET` is a risky verb, so the guard passed them, and Postgres honoured them — the
+sequence really advanced. §1.9 says this in words ("a user who types `SET default_transaction_read_only =
+off` or `BEGIN READ WRITE` turns it off"); what it means for an untrusted caller is that the server-side
+read-only session is **not** a barrier on its own. `LiveExposureTests.The_read_only_barrier_cannot_be_lifted_from_outside`
+pins all four spellings and asserts the sequence did not move, because "the command failed" is a weaker
+claim than "nothing happened".
+
+Two things that did *not* work, recorded so nobody re-derives them: `set default_transaction_read_only =
+off` alone changes the GUC but not the transaction already in progress, so it achieves nothing by itself;
+and `SELECT … INTO` *is* caught by the dialect scanner, which the risky-verb list alone does not suggest.
+
+- **The tables are per engine and not translations** (§5.4a's rule): Postgres reads `SHOW`, `TABLE` and
+  `VALUES`, T-SQL does not, and T-SQL deliberately omits `DECLARE` although it opens many ordinary read
+  scripts — it is also how dynamic SQL is staged, and an ambiguous shape defaults to refusal.
+- **A dialect whose scanner cannot be trusted gets an empty allow-list.** `HasDialectAwareGuard == false`
+  already means "assume every statement writes"; the mirror of it is "vouch for none". Borrowing another
+  engine's verbs would be vouching on its behalf.
+
+### §1.11a-bis — T-SQL needs no separator, so the leading word is not the statement
+
+`TSqlScanner.Split` breaks on `;` and standalone `GO`, but **T-SQL does not require either between
+statements**. So one span can be a whole batch, and its leading word says nothing about what the text runs:
+
+```
+select 1 drop table t            -> statements=1  verb=SELECT  risky=false
+select 1 begin drop table t end  -> statements=1  verb=SELECT  risky=false
+```
+
+Found by code review and measured: sent to a live SQL Server, the first returned its row **and dropped the
+table**. Postgres is unaffected — it requires the semicolon, so its splitter sees two statements.
+
+**This was a `WriteGuard` hole first and an exposed-path hole second**, which is why the fix is in
+`TSqlWriteGuard.Describe` rather than in `ExternalSqlPolicy`: on a guarded T-SQL connection the *editor*
+did not prompt for it either (§1.2). A risky verb anywhere in the statement's **top-level** words now counts.
+
+- `TSqlToken.Depth` is *parenthesis* depth, so a verb inside a `begin … end` block still counts — it is a
+  statement there too — while a word inside a string literal or square brackets is not a word at all and
+  cannot false-positive.
+- What can false-positive is a column genuinely named after a verb (`select copy from t`), which now asks
+  for a confirmation it does not need. §1.2's stance is that this is the right side to be wrong on, and
+  `[copy]` is the escape. Widening the guard is always allowed; narrowing it is what needs an argument.
+- `ExternalSqlPolicy` asks `NamesAWrite`, not `IsRisky`, before saying a statement writes: the T-SQL
+  verdict is generous by design, and "'DECLARE' writes" would assert a cause nobody checked (§1.1). Such a
+  statement is still refused — by the allow-list, in its own words.
+- `VALUES` was removed from T-SQL's `ExternalReadVerbs`. A standalone `VALUES (1)` is not a T-SQL statement
+  (it is a table constructor inside INSERT or FROM); the entry was Postgres' vocabulary carried across,
+  which is precisely what §5.4a says not to do, and it was dead anyway.
+
+### §1.11d — What an external host runs is in the record, refusals included
+
+`query_log` is at `user_version = 4`: `origin` names the host that ran the statement — null for Bearing,
+`QueryOrigin.Cli` for the `bearing` command. Stepwise and additive like every migration before it (§1.6),
+with the write lock taken up front and the per-column guard, which matter **more** here than ever because
+two processes now open this file and the CLI may well be the one that migrates it first.
+
+- **A null origin is not ambiguous**, unlike #113's null `connection_id`. Nothing but the app could write to
+  this log until the column and the second host arrived together, so no historical row could have been
+  external. A report does not have to hedge about old rows the way the connection id's does.
+- **Bearing writes no name of its own.** It is the overwhelming majority of rows, and null for "us" against
+  a name for "not us" is what reads correctly in a history list at a glance.
+- **A refusal is recorded**, with `Success = false` and the reason as the error — the shape a failed
+  execution already has. Strictly nothing ran, and §1.3 calls the log the record of SQL the user *ran*; the
+  exception is deliberate, because the caller here is not the person at the keyboard and "an agent tried to
+  lift read-only and was stopped" is the single most useful line this log can hold. The statement is stored
+  verbatim, since an audit that recorded only "refused" could not say what of.
+- **The CLI honours the user's own settings** for retention and redaction rather than defaulting them:
+  §1.3 makes redaction a property of *when a row was written*, and someone who asked for literals to be
+  stripped did not ask for that to stop applying to what an agent ran.
+- **`tables` and `describe` are not logged.** They read the catalog, and §9.13's precedent is that a panel's
+  own reads are not the record of what someone ran.
+- The log is held and disposed by the command, not merely handed to the host: `Append` returns before the
+  row is written, so exiting without disposing loses the entry the command just produced.
+
+### §1.11b — Read-only bounds writes; it does not bound reads or signals
+
+Measured on a superuser connection with read-only fully in force, every one of these a plain `SELECT`:
+
+```
+select pg_read_file('/etc/passwd')   -> the file
+select pg_ls_dir('/etc')             -> the directory
+```
+
+`pg_terminate_backend` needs no write at all (§9.13 says so for the activity panel). So
+`ISqlDialect.ExternalDeniedFunctions` refuses the obvious ones — other sessions, the server's filesystem,
+large-object file I/O, and `set_config`, which is `SET` in a `SELECT`'s clothing and therefore invisible to
+the verb allow-list.
+
+**That list stops accidents, not a determined caller, and must never be described as more.** A name reaches
+through a wrapper function, a search_path that resolves elsewhere, or SQL built at runtime. The boundary
+that holds is a role without the privilege. WHEN someone asks for exposure to be "safe", the answer is a
+role, not a longer list.
+
+### §1.11c — One invocation is one connection; concurrency is the server's to bound
+
+Measured: `select count(*) from pg_stat_activity where usename = current_user and datname =
+current_database()` returns **1** during a CLI run. A command runs its batch sequentially, so the pool's
+ceiling of 10 is never approached and capping it client-side would buy nothing — which is why there is no
+such cap. What is *not* bounded is how many invocations run at once, and no client-side setting can bound
+it. `ALTER ROLE agent_ro CONNECTION LIMIT n` can, which is the same answer as everything else here.
+
+### What a pure check may and may not answer
+`ExternalAccessPolicy.UnavailableReason` reports only what the `CredentialKind` settles — a kind whose whole
+mechanism is asking the user cannot work where there is no user. It deliberately does **not** report whether
+the credential can be obtained *right now*: an unreachable keyring, an expired `az` session, a password never
+stored are runtime facts, and a pure function claiming them would be asserting a cause nobody checked (§1.1).
+A host reports those when the connect fails, with what the attempt actually said.
+

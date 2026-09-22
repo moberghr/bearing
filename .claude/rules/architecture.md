@@ -12,12 +12,16 @@ Layered clean architecture. Reference: `.claude/references/architecture-principl
 
 ## §2.2 — Dependency direction (never invert)
 ```
-Core  ←  Sql, Data, Persistence, Updates  ←  App  ←  Desktop
+Core  ←  Sql, Data, Persistence, Updates  ←  Sessions  ←  App  ←  Desktop
+                                                       ↖  Cli   (bearing)
 ```
-- `Sql` (SQL parsing/completion), `Data` (Postgres/Npgsql), `Persistence` (SQLite), `Updates` (Velopack
-  release feed / self-update) each depend on `Core` only.
+- `Sql` (SQL parsing/completion), `Data` (Postgres/Npgsql, SQL Server), `Persistence` (SQLite), `Updates`
+  (Velopack release feed / self-update) each depend on `Core` only.
+- `Sessions` depends on `Core`, `Sql` and `Data` — see §2.6.
 - `App` (Avalonia MVVM) composes them; `Desktop` is the thin entry point.
-- DO NOT reference `App`/Avalonia types from `Core`/`Sql`/`Data`/`Persistence`.
+- `Cli` is a **second host** over the same `Sessions`, not a layer under `App`: a windowless console exe
+  with its own composition root (§1.11). It must never reference `App`.
+- DO NOT reference `App`/Avalonia types from `Core`/`Sql`/`Data`/`Persistence`/`Sessions`.
 
 ## §2.3 — MVVM boundaries
 - Business logic (DB access, connection lifecycle, SQL execution, editing) lives in ViewModels or the
@@ -35,3 +39,26 @@ Core  ←  Sql, Data, Persistence, Updates  ←  App  ←  Desktop
   into stateless helpers under `Results/`, `Input/`, or the `Sql` project so it can be unit-tested without
   a UI or a live connection. This is the established pattern (`ResultSetBuilder`, `ResultEditModel`,
   `WriteGuard`, `PaletteFilter`, `GestureParser`).
+
+## §2.6 — `Bearing.Sessions` is everything that must happen before a statement runs
+Credential resolution (`CredentialResolver`, `EntraTokenProvider`), the one connect recipe
+(`ConnectionFactoryBuilder`), pooled sessions and their leases (`ConnectionSessionManager`,
+`ConnectionSession`, `SessionKey`, `SessionLease`), the schema browser, the per-engine text facts
+(`ProviderTraits`) and the read-only refusal (`WriteRefusal`). Extracted from `Bearing.App` for the outside
+invoke work: a second host — the headless MCP process — runs SQL through the same machinery, and **a second
+copy of the connect recipe or of `WriteRefusal` is exactly the drift §1.9 exists to prevent**. A refusal that
+holds in the editor and not in the other host is worse than no refusal, because it reads as enforced.
+
+- It has **no Avalonia and no `Persistence` reference**, and both are load-bearing: a host with no window has
+  to be able to reference it, and its stores arrive through `Core`'s interfaces (`ISecretStore`,
+  `IQueryLog`, …) rather than as concrete SQLite/keychain types.
+- WHEN a change decides **whether or how a statement may run** — a refusal, a credential, a pool, which
+  dialect shapes the text — it belongs here, not in `App`. `App` decides what to *ask the user*
+  (`WriteConfirmation`, the dialogs) and what to *show*.
+- What deliberately stayed in `App`: `TabTransactions` and `CommitModes` (both keyed on a tab, which is a
+  UI concept — an agent has no tabs and never opens a manual-commit transaction, §1.10), and the connection
+  panel's own helpers (`ConnectionTree`, `ConnectionClipboard`, `ConnectionFieldModel`, `ConnectionState`,
+  `CredentialKindOptions`, `FolderPath`, `SecretStorageAdvice`).
+- `SqlLiteralStyle` moved to `Bearing.Sql` in the same pass — it is a fact about an engine's SQL *text*, and
+  `ProviderTraits` (which pairs it with the dialect) is no longer in the App layer. The renderer that reads
+  it, `Results.SqlValue`, stayed where it was.

@@ -9,6 +9,7 @@ using Bearing.Core.Data;
 using Bearing.Core.Schema;
 using Bearing.Core.Updates;
 using Bearing.Core.Workspace;
+using Bearing.Sessions;
 
 namespace Bearing.App.Tests;
 

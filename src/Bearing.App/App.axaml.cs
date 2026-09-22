@@ -19,6 +19,7 @@ using Bearing.App.Demo;
 using Bearing.Core.Data;
 using Bearing.Demo;
 using Bearing.Persistence;
+using Bearing.Sessions;
 using Bearing.Updates;
 
 namespace Bearing.App;
@@ -106,7 +107,7 @@ public partial class App : Application
                 // string (§2.2). Read once at startup, so a mid-session flip cannot leave half the log
                 // redacted and half not.
                 redactSql: settings.Current.QueryLogRedactLiterals
-                    ? (providerId, sql) => Connections.ProviderTraits.For(providerId).Dialect.RedactLiterals(sql)
+                    ? (providerId, sql) => ProviderTraits.For(providerId).Dialect.RedactLiterals(sql)
                     : null);
             IRecentProjects recentProjects = _demo?.RecentProjects ?? new FileRecentProjects();
 

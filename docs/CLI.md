@@ -1,0 +1,209 @@
+# `bearing` — querying Bearing's connections from outside
+
+`bearing` is one command for both halves of Bearing. On its own it opens the window:
+
+```console
+$ bearing          # opens the Bearing app
+```
+
+Given a command, it runs read-only queries against the connections the user has **exposed**. That half is
+meant for AI agents and scripts: an agent can explore and query a database without ever being told the host,
+the user, the database name or the password, and without being able to write.
+
+It does not talk to a running Bearing and does not need one. It reads the same `project.json` and the same OS
+keychain the app does, and runs statements through the same code the editor runs them through.
+
+## The two gates
+
+Nothing is reachable unless **both** are true:
+
+1. The connection's owner ticked **"Let the `bearing` command query this connection, read-only"** in the
+   connection dialog's Safety group. The default is off, for every connection that exists and every one
+   that ever existed.
+2. The credential can be obtained without a window — a password in the OS keychain, an OS identity, or an
+   `az` session. A connection that asks for its password each session can only be opened in Bearing itself,
+   and is listed as unavailable with that reason.
+
+**The boundary is "anything running as you."** `bearing` runs as the user and can read the same keychain
+the app reads; what stops it querying a server is that nobody marked the connection. That is a real gate, and
+it is the only one. It is not a sandbox, and nothing here should be described as one.
+
+## Commands
+
+```
+bearing                                Open the Bearing window.
+bearing [--project <dir>] [--table] <command> [arguments]
+
+  connections                        The exposed connections: name, engine, environment.
+  tables <connection>                Tables and views. --schema <name> narrows it.
+  describe <connection> <table>      Columns, types, nullability, primary key, foreign keys.
+  query <connection> <sql>           Run a read-only query. --max-rows <n>, up to 1000.
+```
+
+Output is JSON by default — that is what a script or an agent should parse, and it is stable. `--table` is
+for a person reading a terminal and is explicitly *not* stable; it also renders a null and an empty string
+identically, which only the JSON tells apart.
+
+Exit codes: `0` fine, `1` the command could not be completed (the reason is on stderr), `2` the arguments
+were wrong. A refusal never writes to stdout, so a caller reading stdout gets data or nothing.
+
+```console
+$ bearing connections --table
+name         engine      access     available
+-----------  ----------  ---------  ---------
+agent-reads  PostgreSQL  read-only  true
+
+$ bearing query agent-reads "select title, rental_rate from film order by title limit 3" --table
+title             rental_rate
+----------------  -----------
+ACADEMY DINOSAUR  0.99
+ACE GOLDFINGER    4.99
+ADAPTATION HOLES  2.99
+(3 rows in 758 ms)
+
+$ bearing query agent-reads "update film set title = 'x'"
+'agent-reads' is exposed to external tools for reads only, so UPDATE will not run. Its owner can widen
+that in Bearing, or run the statement there themselves.
+$ echo $?
+1
+```
+
+## What stops a query doing damage
+
+Three things, in the order they apply. The first is the one that actually holds.
+
+**1. Only reads are sent at all.** An exposed connection accepts a statement only if its leading keyword is
+one this engine calls a read — on PostgreSQL `SELECT`, `WITH`, `EXPLAIN`, `SHOW`, `TABLE`, `VALUES`.
+Everything else is refused before it reaches the server, including `SET`, `BEGIN`, `COMMIT` and any shape
+nobody listed. That last part is the point: a new SQL construct defaults to refused.
+
+```console
+$ bearing query agent-reads "begin read write; select nextval('film_film_id_seq')"
+agent-reads: 'BEGIN' is not allowed on a connection exposed to external tools — it is what would let a
+read-only session become writable. Send one read.
+```
+
+That example is not hypothetical. Before the allow-list existed, `begin read write; select nextval(…)` and
+`set transaction read write; select nextval(…)` both **ran**, on a connection exposed read-only — because
+neither `BEGIN` nor `SET` is a write, and the read-only session setting governs the *next* transaction
+rather than the one already in progress.
+
+**2. The session is opened read-only anyway.** On PostgreSQL that rides the startup packet, so the server
+refuses writes the client could not see — a volatile function, dynamic SQL:
+
+```console
+$ bearing query agent-reads "select nextval('film_film_id_seq')"
+agent-reads: cannot execute nextval() in a read-only transaction
+```
+
+That message is Postgres', not Bearing's. On **SQL Server** there is no session read-only to ask for, so
+layer 1 is the whole of it there.
+
+**3. A handful of functions are refused inside otherwise-ordinary reads** — `pg_terminate_backend`,
+`pg_cancel_backend`, `pg_read_file`, `pg_ls_dir`, `set_config`, `lo_import`/`lo_export`. These are reads, or
+signals, so read-only never bounded them; measured on a superuser connection with read-only fully in force,
+`select pg_read_file('/etc/passwd')` returned the file.
+
+**This third layer stops accidents, not a determined caller**, and it would be dishonest to present it
+otherwise: a name can be reached through a wrapper function, a `search_path` that resolves elsewhere, or SQL
+built at runtime.
+
+### The boundary is the database role
+
+Layers 1–3 are a very good fence. The thing that is a *wall* is the role the connection authenticates as.
+If you expose a connection, point it at a role that cannot do the damage in the first place:
+
+```sql
+create role agent_ro nosuperuser nologin;
+grant connect on database app to agent_ro;
+grant usage on schema public to agent_ro;
+grant select on all tables in schema public to agent_ro;
+alter role agent_ro connection limit 5;
+```
+
+That last line matters for a different reason: one `bearing` invocation opens exactly one connection
+(measured), but nothing bounds how many invocations run at once, and no client-side setting can. A
+`CONNECTION LIMIT` can.
+
+If the connection is a **superuser**, none of layers 1–3 is worth much on its own — a superuser `SELECT`
+reads the server's filesystem and `pg_authid`. That is not a reason to refuse superuser connections; it is
+the reason the role is the control that matters.
+
+### Two more limits on every exposed session
+
+A statement timeout is filled in (30 s) when the connection has none, so a runaway query cannot outlive the
+caller — it is per statement, so a long script can still take a long time. And the connection's
+manual-commit setting is cleared, because nothing here can press Commit.
+
+## Which project
+
+`--project <dir>`, or the most recently opened project when it is omitted. Put the explicit form in anything
+you save: the fallback follows whoever last opened a project in Bearing.
+
+The project file is re-read on every invocation, so revoking a connection's exposure takes effect on the next
+command — there is no cached grant to wait out.
+
+## What it records
+
+Every `query` writes a row to the same SQLite query log the app keeps, marked with its origin — so
+`bearing`'s statements sit in your history beside your own and are told apart at a glance:
+
+```
+12:04  [cli] select count(*) from payment      88 ms
+12:04        select * from film limit 100      12 ms
+```
+
+**A refused statement is recorded too**, with the refusal as its error. Strictly nothing ran, and §1.3 calls
+the log the record of SQL the user ran — but the reason this path exists is that the caller is not the
+person at the keyboard, and "an agent tried to lift read-only and was stopped" is the most useful line the
+log can hold.
+
+The log is the user's own settings: retention and literal redaction are honoured exactly as the app applies
+them, because §1.3 makes redaction a property of *when a row was written*. The audit export (#113) carries
+the origin, so "what ran against production last week" includes what an agent ran and says so.
+
+`tables` and `describe` are not logged — they read the catalog, and §9.13's precedent is that a panel's own
+reads are not the record of what someone ran.
+
+## A cost worth knowing
+
+Every invocation is a fresh process and therefore a fresh connection: there is no pool to reuse, and `tables`
+and `describe` re-read the catalog each time. That is the right trade for a command called a few times a
+minute and the wrong one inside a loop — prefer one well-aimed `query` with an aggregate over many small ones.
+
+## Installing it
+
+`bearing` ships inside Bearing's own package, so it installs, updates and uninstalls with the app and can
+never drift from the project format it reads.
+
+- **macOS** — the Homebrew cask puts it on `PATH`; `brew install --no-quarantine moberghr/bearing/bearing`.
+- **Windows** — it lands in `%LocalAppData%\BearingSql\current\bearing.exe`. That directory is not on
+  `PATH`; add it, or call the full path. *(Putting it on `PATH` from the installer is not done yet.)*
+- **Linux** — beside the app in the install directory, same as Windows.
+
+Inside the install directory there are two executables: `bearing` (this command) and `bearing-app` (the
+window). It is round that way because a command has to be a console program — a Windows GUI executable
+cannot write to a pipe or return a useful exit code — and the name people already know should be the one
+they can type. The Start Menu entry and the macOS bundle point at `bearing-app`, and `bearing` with no
+arguments starts exactly that, so nothing about opening Bearing changes.
+
+## Registering it with an agent
+
+Claude Code needs no configuration — it has a shell. Allowing it without a prompt each time is one permission
+rule:
+
+```
+Bash(bearing query:*)
+Bash(bearing connections:*)
+Bash(bearing tables:*)
+Bash(bearing describe:*)
+```
+
+Telling the agent what it has is worth a line in `CLAUDE.md`:
+
+> Databases are reachable read-only through `bearing`. Run `bearing connections` to see which, then
+> `bearing tables <name>` and `bearing query <name> "<sql>"`. Writes are refused.
+
+An MCP server was built for this and dropped in favour of the CLI: it reached clients with no shell, but cost
+tool definitions in every session's context and could not be scripted. If it is wanted again it is another
+front end over the same internals, not a second implementation.

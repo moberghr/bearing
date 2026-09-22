@@ -10,6 +10,7 @@ using Bearing.App.Input;
 using Bearing.App.Services;
 using Bearing.App.Workspace;
 using Bearing.Core.Workspace;
+using Bearing.Sessions;
 
 namespace Bearing.App.ViewModels;
 

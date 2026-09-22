@@ -1,7 +1,7 @@
 using System;
 using System.Threading;
 
-namespace Bearing.App.Connections;
+namespace Bearing.Sessions;
 
 /// <summary>
 /// A hold on a <see cref="ConnectionSession"/> that keeps it alive for the duration of a running query:

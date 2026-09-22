@@ -2,7 +2,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Bearing.Core.Data;
 
-namespace Bearing.App.Connections;
+namespace Bearing.Sessions;
 
 /// <summary>
 /// The one connect recipe shared by <see cref="ConnectionSessionManager"/> (query sessions) and

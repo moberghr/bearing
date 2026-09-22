@@ -28,6 +28,12 @@ cask "bearing" do
 
   app "Bearing.app"
 
+  # The `bearing` command ships inside the bundle (build/velopack.sh publishes it beside the GUI apphost)
+  # and is put on PATH here, which is the only step that makes it a command rather than a file. `bearing`
+  # with no arguments opens the app, so this is the whole entry point — the GUI apphost beside it is called
+  # `bearing-app` precisely so this one can have the name.
+  binary "#{appdir}/Bearing.app/Contents/MacOS/bearing"
+
   # Not zapped: the login keychain items holding connection passwords (§1.1). They are the user's
   # credentials, they are shared with any other install, and `brew zap` is not where someone expects to
   # lose them — remove them from Keychain Access if you want them gone.

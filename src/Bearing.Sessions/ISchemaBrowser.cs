@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
 
-namespace Bearing.App.Connections;
+namespace Bearing.Sessions;
 
 /// <summary>The relations + routines of one database, for the schema browser tree.</summary>
 public sealed record DatabaseObjects(ISchemaSnapshot Snapshot, IReadOnlyList<RoutineInfo> Routines);

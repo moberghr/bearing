@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Bearing.App.Formatting;
+using Bearing.Sessions;
 
 namespace Bearing.App.Results;
 
@@ -234,7 +235,7 @@ public static class TableFormats
     /// parameterized (§5.4).
     /// </summary>
     public static string SqlInsert(TableBlock block, string? schema, string table)
-        => SqlInsert(block, Connections.ProviderTraits.Postgres, schema, table);
+        => SqlInsert(block, ProviderTraits.Postgres, schema, table);
 
     /// <inheritdoc cref="SqlInsert(TableBlock, string?, string)"/>
     /// <remarks>The clipboard text has to be valid on the engine the rows came from: a SQL Server grid
@@ -242,7 +243,7 @@ public static class TableFormats
     /// visible) and <c>'02'</c> for varbinary, which SSMS implicitly converts — so the INSERT
     /// succeeded and stored the bytes of the six characters instead of the two intended ones.</remarks>
     public static string SqlInsert(
-        TableBlock block, Connections.ProviderTraits traits, string? schema, string table)
+        TableBlock block, ProviderTraits traits, string? schema, string table)
     {
         var q = traits.Dialect;
         var target = schema is { Length: > 0 } ? $"{q.Quote(schema)}.{q.Quote(table)}" : q.Quote(table);
@@ -271,10 +272,10 @@ public static class TableFormats
     /// </para>
     /// </summary>
     public static string InList(TableBlock block)
-        => InList(block, Connections.ProviderTraits.Postgres);
+        => InList(block, ProviderTraits.Postgres);
 
     /// <inheritdoc cref="InList(TableBlock)"/>
-    public static string InList(TableBlock block, Connections.ProviderTraits traits)
+    public static string InList(TableBlock block, ProviderTraits traits)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var values = new List<string>();

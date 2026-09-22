@@ -1,22 +1,8 @@
 using System;
 using System.Globalization;
+using Bearing.Sql;
 
 namespace Bearing.App.Results;
-
-/// <summary>
-/// How an engine spells the literal forms the two do not share. Everything else — single-quoting, ISO
-/// dates, invariant numbers — is identical, which is why this is a two-member enum rather than a second
-/// renderer. Resolved per connection through <c>ProviderTraits</c>.
-/// </summary>
-public enum SqlLiteralStyle
-{
-    /// <summary>PostgreSQL: the <c>true</c>/<c>false</c> keywords, and bytea as a quoted <c>'\x…'</c>.</summary>
-    Postgres,
-
-    /// <summary>T-SQL: no boolean literal at all (<c>bit</c> takes <c>1</c>/<c>0</c>), and binary as the
-    /// bare <c>0x…</c> constant — quoting that would make it a string.</summary>
-    TSql,
-}
 
 /// <summary>
 /// Renders a typed value as a SQL literal. Used wherever SQL is produced as *text* rather than

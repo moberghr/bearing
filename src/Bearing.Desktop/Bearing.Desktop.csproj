@@ -5,7 +5,12 @@
     <OutputType>WinExe</OutputType>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <AssemblyName>bearing</AssemblyName>
+    <!-- The GUI apphost is `bearing-app`, not `bearing`, because `bearing` is the command a person and an
+         agent type and it has to be the console one: a WinExe cannot write to a pipe or return an exit code
+         usefully. `bearing` with no arguments launches this (see Bearing.Cli's AppLauncher), so the name a
+         user knows still opens the window. The Start Menu shortcut points here and is labelled "Bearing"
+         whatever the file is called, and the update identity is $PACK_ID rather than an exe name (§9.6). -->
+    <AssemblyName>bearing-app</AssemblyName>
     <!-- Win32 icon baked into the .exe (Explorer, taskbar, Alt+Tab). Only has an effect when the
          target produces a Windows apphost; ignored for linux-*/osx-* RIDs. The in-app window icon
          is separate — see Bearing.App/Views/MainWindow.axaml. Forward slashes so the path resolves

@@ -10,6 +10,7 @@
     <ProjectReference Include="..\..\src\Bearing.Core\Bearing.Core.csproj" />
     <ProjectReference Include="..\..\src\Bearing.Data\Bearing.Data.csproj" />
     <ProjectReference Include="..\..\src\Bearing.Persistence\Bearing.Persistence.csproj" />
+    <ProjectReference Include="..\..\src\Bearing.Sessions\Bearing.Sessions.csproj" />
   </ItemGroup>
 
   <ItemGroup>

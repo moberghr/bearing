@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <OutputType>Library</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Bearing.Cli\Bearing.Cli.csproj" />
+    <ProjectReference Include="..\..\src\Bearing.Core\Bearing.Core.csproj" />
+    <ProjectReference Include="..\..\src\Bearing.Data\Bearing.Data.csproj" />
+    <ProjectReference Include="..\..\src\Bearing.Persistence\Bearing.Persistence.csproj" />
+    <ProjectReference Include="..\..\src\Bearing.Sessions\Bearing.Sessions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Shared with Bearing.Data.Tests and Bearing.App.Tests: one definition of the test server's
+         defaults (see PgTestServer). -->
+    <Compile Include="..\Shared\PgTestServer.cs" Link="Shared\PgTestServer.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="GitHubActionsTestLogger" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Xunit.SkippableFact" />
+  </ItemGroup>
+
+</Project>

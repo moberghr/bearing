@@ -366,4 +366,28 @@ public sealed class SqlServerDialect : ISqlDialect
         var s = sql.TrimEnd();
         return s.EndsWith(';') ? s[..^1] : s;
     }
+
+    /// <summary>The reads a host outside Bearing may send. Smaller than Postgres': T-SQL has no
+    /// <c>SHOW</c> and no <c>TABLE</c> shorthand, and <c>DECLARE</c> is deliberately absent even though it
+    /// opens many ordinary read scripts — it is also how dynamic SQL is staged, and the whole point of an
+    /// allow-list is that an ambiguous shape defaults to refusal.</summary>
+    public IReadOnlySet<string> ExternalReadVerbs { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        // No VALUES: a standalone `VALUES (1)` is not a T-SQL statement (it is a table constructor inside
+        // INSERT or FROM), and listing it here was Postgres' vocabulary carried across — the exact mistake
+        // §5.4a warns about. It was also dead: TSqlWriteGuard's ReadStarts has no VALUES, so such a
+        // statement hit the conservative default and was refused as a write before reaching this list.
+        "SELECT", "WITH",
+    };
+
+    /// <summary>
+    /// SQL Server procedures and functions an exposed connection refuses. Shells, file and registry
+    /// access, and the dynamic-SQL entry point — the T-SQL equivalents of the Postgres list, arrived at
+    /// per engine rather than translated (§5.4a).
+    /// </summary>
+    public IReadOnlySet<string> ExternalDeniedFunctions { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "xp_cmdshell", "sp_executesql", "xp_dirtree", "xp_fileexist", "xp_subdirs",
+        "xp_regread", "xp_regwrite", "openrowset", "opendatasource", "sp_oacreate",
+    };
 }

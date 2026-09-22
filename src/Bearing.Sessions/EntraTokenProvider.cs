@@ -7,7 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Bearing.Core.Data;
 
-namespace Bearing.App.Connections;
+namespace Bearing.Sessions;
 
 /// <summary>
 /// Obtains an Entra access token by shelling out to the Azure CLI

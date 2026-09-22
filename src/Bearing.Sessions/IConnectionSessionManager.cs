@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
 
-namespace Bearing.App.Connections;
+namespace Bearing.Sessions;
 
 /// <summary>
 /// Caches one live <see cref="ConnectionSession"/> per <see cref="SessionKey"/> — connection <i>and</i>

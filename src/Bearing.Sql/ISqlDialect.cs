@@ -141,6 +141,28 @@ public interface ISqlDialect
     IReadOnlySet<string> RiskyVerbs { get; }
 
     /// <summary>
+    /// Leading keywords this engine considers a read, for a host outside Bearing — the <b>allow</b>-list
+    /// that <see cref="ExternalSqlPolicy"/> applies, the mirror image of <see cref="RiskyVerbs"/>.
+    /// <para>
+    /// Per engine and not a translation, the shape <see cref="EditExpressions"/> already has: Postgres
+    /// answers <c>SHOW</c> and <c>TABLE</c>, T-SQL does not, and a keyword that means a read in one may
+    /// mean something else in the other. Keep it small — a verb added here is a shape an agent may send at
+    /// a production server, and the default for anything absent is refusal, which is the point.
+    /// </para>
+    /// </summary>
+    IReadOnlySet<string> ExternalReadVerbs { get; }
+
+    /// <summary>
+    /// Functions refused on an exposed connection even inside an otherwise-ordinary read — the ones that
+    /// reach the server's filesystem, its other sessions, or this session's own settings.
+    /// <para>
+    /// Accident prevention, not a boundary: see <see cref="ExternalSqlPolicy.DeniedFunction"/> for why a
+    /// name scan cannot be one. Bare names, no schema and no argument list; the policy matches a call.
+    /// </para>
+    /// </summary>
+    IReadOnlySet<string> ExternalDeniedFunctions { get; }
+
+    /// <summary>
     /// Split a batch into statements and classify each, in <b>this engine's</b> lexical rules. The
     /// guard is a keyword scan, so the lexing is the whole ballgame: a lexer that cannot see a
     /// delimited identifier reads the words inside one as clause keywords, and a lexer that does not

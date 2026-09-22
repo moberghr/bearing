@@ -1,6 +1,6 @@
 using Bearing.Core.Data;
 
-namespace Bearing.App.Connections;
+namespace Bearing.Sessions;
 
 /// <summary>
 /// One spelling for "which server is this", shared by the schema tree's server row, the toolbar pill's

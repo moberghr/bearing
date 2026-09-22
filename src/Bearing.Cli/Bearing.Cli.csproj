@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The `bearing` command: read-only access to the connections their owner exposed (§1.11), for a
+       person, a script, or an agent with a shell.
+
+       This is the exe named `bearing`; the GUI apphost beside it is `bearing-app`, because a command has
+       to be a console program and the name people know should be the one they can type. Run with no
+       arguments it launches that (AppLauncher).
+
+       No Avalonia, no Velopack, no window. Everything it runs an agent's SQL through is Bearing.Sessions,
+       so the refusal and the connect recipe are the ones the app uses rather than copies of them (§2.6).
+       An MCP server was built over the same IBearingHost and dropped in favour of this - see docs/CLI.md. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>bearing</AssemblyName>
+    <!-- Nothing here is culture-sensitive and the wire format is JSON; keep the satellite assemblies out. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Bearing.Core\Bearing.Core.csproj" />
+    <ProjectReference Include="..\Bearing.Sql\Bearing.Sql.csproj" />
+    <ProjectReference Include="..\Bearing.Data\Bearing.Data.csproj" />
+    <ProjectReference Include="..\Bearing.Persistence\Bearing.Persistence.csproj" />
+    <ProjectReference Include="..\Bearing.Sessions\Bearing.Sessions.csproj" />
+  </ItemGroup>
+
+</Project>

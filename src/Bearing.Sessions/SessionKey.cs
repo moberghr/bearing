@@ -1,7 +1,7 @@
 using System;
 using Bearing.Core.Data;
 
-namespace Bearing.App.Connections;
+namespace Bearing.Sessions;
 
 /// <summary>
 /// Identity of a live session: a connection <b>and</b> the database it is open on. A pool is bound to one
@@ -13,8 +13,8 @@ namespace Bearing.App.Connections;
 /// </summary>
 public readonly record struct SessionKey(Guid ConnectionId, string Database)
 {
-    /// <summary>The key for a resolved connection — normally a <see cref="Workspace.WorkspaceContext.EffectiveConnection"/>
-    /// effective connection, which has the tab's active database substituted in.</summary>
+    /// <summary>The key for a resolved connection — normally one from <c>WorkspaceContext.EffectiveConnection</c>,
+    /// which has the tab's active database substituted in.</summary>
     public static SessionKey For(ConnectionInfo info) => new(info.Id, info.Database);
 
     public override string ToString() => $"{ConnectionId:D}/{Database}";

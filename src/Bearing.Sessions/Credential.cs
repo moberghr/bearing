@@ -1,6 +1,6 @@
 using System;
 
-namespace Bearing.App.Connections;
+namespace Bearing.Sessions;
 
 /// <summary>A resolved secret ready to hand to the provider as the connection password, plus an optional
 /// expiry. <see cref="ExpiresAt"/> is set for short-lived credentials (Entra tokens) and null for a fixed

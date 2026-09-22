@@ -42,6 +42,8 @@ cd "$ROOT"
 RID="${RID:-win-x64}"
 CONFIG="${CONFIG:-Release}"
 PROJECT="src/Bearing.Desktop/Bearing.Desktop.csproj"
+# Shipped in the same package as the app — see the publish step below for why.
+CLI_PROJECT="src/Bearing.Cli/Bearing.Cli.csproj"
 REPO_URL="https://github.com/moberghr/bearing"
 
 # The Velopack app identity. NOT "bearing": the Windows installer owns %LocalAppData%\<packId> and
@@ -55,17 +57,20 @@ PACK_AUTHORS="Moberg"
 case "$RID" in
   win-*)
     OS_FAMILY=windows; DIRECTIVE="[win]"; CHANNEL="win"; PKG_CHANNEL_TAG=""
-    MAIN_EXE="bearing.exe"
+    MAIN_EXE="bearing-app.exe"
+    CLI_EXE="bearing.exe"
     ICON="assets/brand/icons/bearing.ico"
     ;;
   linux-*)
     OS_FAMILY=linux; DIRECTIVE="[linux]"; CHANNEL="linux"; PKG_CHANNEL_TAG="-linux"
-    MAIN_EXE="bearing"
+    MAIN_EXE="bearing-app"
+    CLI_EXE="bearing"
     ICON="assets/brand/icons/png/tile-512.png"
     ;;
   osx-*)
     OS_FAMILY=macos; DIRECTIVE="[osx]"; CHANNEL="osx"; PKG_CHANNEL_TAG="-osx"
-    MAIN_EXE="bearing"
+    MAIN_EXE="bearing-app"
+    CLI_EXE="bearing"
     ICON="assets/brand/icons/bearing.icns"
     # The bundle identifier is permanent in the same way $PACK_ID is: macOS keys launch services, the
     # keychain ACL and TCC grants off it, so changing it later looks like a different app to all three.
@@ -207,6 +212,30 @@ echo
 
 if [[ ! -f "$PUBDIR/$MAIN_EXE" ]]; then
   echo "ERROR: expected published entry point at $PUBDIR/$MAIN_EXE" >&2
+  exit 1
+fi
+
+# --- the `bearing` command, into the same directory --------------------------
+# The CLI ships *inside* the app's package rather than as a second artifact: it reads the same project.json
+# and the same keychain, so a version of it that could drift from the app it belongs to is a bug waiting to
+# be filed. It is also the exe named `bearing` — the GUI apphost beside it is `bearing-app` — and running it
+# with no arguments launches that, so one name serves both. `vpk pack` takes the whole --packDir, so publishing here is all it takes to be installed
+# alongside, updated by the same delta, and removed by the same uninstall.
+#
+# Self-contained, like the app. The first version published this --no-self-contained on the theory that
+# "the runtime is already in this directory" — it is, but a *framework-dependent* apphost does not look
+# there. Its runtimeconfig.json names a framework, so it resolves through DOTNET_ROOT or a machine-wide
+# install and fails with "You must install .NET to run this application" on exactly the machines
+# self-contained packaging exists to serve, while bearing-app beside it works. Found by review.
+#
+# It costs almost nothing: both publishes write the same runtime files into the same directory, so the
+# second one overwrites an identical set rather than adding a copy.
+echo "==> Publishing $CLI_PROJECT ($CLI_EXE) into the same directory"
+dotnet publish "$CLI_PROJECT"   -c "$CONFIG"   -r "$RID"   --no-self-contained   -p:DebugType=none   -p:DebugSymbols=false   -p:Version="$VERSION"   -p:InformationalVersion="$VERSION"   -o "$PUBDIR"   --nologo
+echo
+
+if [[ ! -f "$PUBDIR/$CLI_EXE" ]]; then
+  echo "ERROR: expected the CLI at $PUBDIR/$CLI_EXE" >&2
   exit 1
 fi
 

@@ -13,6 +13,7 @@ using Bearing.App.Connections;
 using Bearing.App.Services;
 using Bearing.Core.Data;
 using Bearing.Data;
+using Bearing.Sessions;
 
 namespace Bearing.App.Views;
 
@@ -98,6 +99,7 @@ public partial class ConnectionDialog : Window
             ConfirmWritesBox.IsChecked = existing.RequireWriteConfirmation;
             ReadOnlyBox.IsChecked = existing.ReadOnly;
             ManualCommitBox.IsChecked = existing.ManualCommit;
+            ExternalAccessBox.IsChecked = ExternalAccessPolicy.IsExposed(existing);
             // 0 is "no limit" and shows as an empty box, whose placeholder says 0 — a bare "0" in a field
             // reads as a limit of zero seconds, which is the one thing it does not mean (§1.7).
             StatementTimeoutBox.Text = existing.StatementTimeoutSeconds > SessionPolicy.NoTimeout
@@ -463,6 +465,14 @@ public partial class ConnectionDialog : Window
         // nothing will ever open a transaction because nothing writes.
         if (CommitPolicy.Advice(ManualCommitBox.IsChecked == true, ReadOnlyBox.IsChecked == true) is { Length: > 0 } commit)
             advice = advice.Length > 0 ? advice + "\n" + commit : commit;
+        // What exposing it lets in, from the same pure policy the record is built with — and appended
+        // rather than folded in, for CommitPolicy's reason: it is not a thing the server is asked for, and
+        // the engine still decides one clause of it (who refuses a write, §1.9a).
+        if (ExternalAccessPolicy.Advice(
+                ExternalAccessBox.IsChecked == true ? ExternalAccess.ReadOnly : ExternalAccess.None,
+                SelectedProvider().EnforcesReadOnlyOnServer) is { Length: > 0 } exposed)
+            advice = advice.Length > 0 ? advice + "\n" + exposed : exposed;
+
         if (UnreadableTimeout() is { } typed)
             advice = $"“{typed}” isn't a whole number of seconds, so this connection will be saved "
                      + "with no statement timeout. Enter seconds (30), or leave it empty for no limit."
@@ -556,7 +566,9 @@ public partial class ConnectionDialog : Window
     /// options this dialog does not show). Everything else is this dialog's own boxes, or is carried from
     /// the record being edited.
     /// </summary>
-    private ConnectionInfo BuildConnection() => _model.Apply(new ConnectionInfo
+    /// <summary>The record the dialog would save. Internal rather than private so a test can assert the
+    /// round trip through a control instead of asserting the control against itself (§4.5).</summary>
+    internal ConnectionInfo BuildConnection() => _model.Apply(new ConnectionInfo
     {
         Id = _id,
         Name = string.IsNullOrWhiteSpace(NameBox.Text) ? BuildFallbackName() : NameBox.Text!.Trim(),
@@ -567,6 +579,9 @@ public partial class ConnectionDialog : Window
         RequireWriteConfirmation = ConfirmWritesBox.IsChecked == true,
         ReadOnly = ReadOnlyBox.IsChecked == true,
         ManualCommit = ManualCommitBox.IsChecked == true,
+        ExternalAccess = ExternalAccessBox.IsChecked == true
+            ? ExternalAccess.ReadOnly
+            : ExternalAccess.None,
         StatementTimeoutSeconds = TypedTimeoutSeconds(),
         CredentialKind = SelectedCredentialKind(),
         Tls = SelectedTls(),

@@ -7,7 +7,7 @@ using Bearing.Core.Data;
 using Bearing.Core.Schema;
 using Bearing.Core.Workspace;
 
-namespace Bearing.App.Connections;
+namespace Bearing.Sessions;
 
 /// <summary>
 /// Default <see cref="IConnectionSessionManager"/>. Live sessions and in-flight connects/schema-loads

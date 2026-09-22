@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Bearing.Core.Data;
+using Bearing.Sessions;
 
 namespace Bearing.App.Connections;
 

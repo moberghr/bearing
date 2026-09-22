@@ -12,6 +12,7 @@ using Bearing.Core.Workspace;
 using Bearing.Persistence;
 using Bearing.App.Workspace;
 using Bearing.Core.Schema;
+using Bearing.Sessions;
 using Bearing.Sql;
 
 namespace Bearing.App.ViewModels;

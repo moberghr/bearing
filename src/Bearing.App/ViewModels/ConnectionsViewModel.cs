@@ -15,6 +15,7 @@ using Bearing.Core.Schema;
 using Bearing.Core.Workspace;
 using Bearing.Data.Postgres;
 using Bearing.Persistence.Import;
+using Bearing.Sessions;
 
 namespace Bearing.App.ViewModels;
 

@@ -123,4 +123,37 @@ public sealed class PostgresDialect : ISqlDialect
         // Procedural blocks that can write arbitrarily.
         "CALL", "DO",
     };
+
+    /// <summary>The reads a host outside Bearing may send. Postgres answers <c>SHOW</c> for a setting,
+    /// <c>TABLE t</c> as shorthand for <c>SELECT * FROM t</c>, and <c>VALUES</c> as a standalone row
+    /// constructor; all three are reads and all three are useful to an agent exploring a database.</summary>
+    public IReadOnlySet<string> ExternalReadVerbs { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "SELECT", "WITH", "EXPLAIN", "SHOW", "TABLE", "VALUES",
+    };
+
+    /// <summary>
+    /// Postgres functions an exposed connection refuses, grouped by what they reach past.
+    /// <para>
+    /// Every one of these is callable from a plain <c>SELECT</c> and most are unaffected by
+    /// <c>default_transaction_read_only</c> — <c>pg_terminate_backend</c> is a signal rather than a write
+    /// (§9.13), and <c>pg_read_file</c> is a read, just not of the data. Measured on a superuser
+    /// connection: <c>select pg_read_file('/etc/passwd')</c> returned the file with read-only fully in
+    /// force. So this list is not redundant with the read-only session; it covers a different axis.
+    /// </para>
+    /// </summary>
+    public IReadOnlySet<string> ExternalDeniedFunctions { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        // Other people's sessions.
+        "pg_terminate_backend", "pg_cancel_backend",
+        // The server's filesystem.
+        "pg_read_file", "pg_read_binary_file", "pg_ls_dir", "pg_stat_file", "pg_ls_logdir", "pg_ls_waldir",
+        // Large objects — lo_import/lo_export are file I/O wearing a data-type costume.
+        "lo_import", "lo_export", "lo_unlink",
+        // This session's own settings. set_config is SET in SELECT clothing, so the allow-list above
+        // cannot see it — and it is the exact escape that would shed a role the startup packet set.
+        "set_config",
+        // The server's configuration and log files.
+        "pg_reload_conf", "pg_rotate_logfile", "pg_stat_reset",
+    };
 }

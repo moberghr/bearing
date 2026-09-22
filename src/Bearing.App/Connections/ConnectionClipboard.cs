@@ -60,6 +60,20 @@ public static class ConnectionClipboard
         // client-side rather than asked of the server (#131). Pasting a manual-commit connection as an
         // auto-commit one is the same silent downgrade.
         public bool ManualCommit { get; init; }
+        // ExternalAccess is deliberately NOT here, and it is the one omission in this record that is a
+        // decision rather than an oversight — the reflection test names it for exactly that reason.
+        //
+        // Every setting above preserves a *restriction* when it is carried, so dropping one downgrades the
+        // pasted connection and the comment above says why that must not happen. Exposure runs the other
+        // way: carrying it would grant a third party access on whatever machine the paste lands on, and the
+        // person pasting never made that decision. The asymmetry in what it costs to be wrong settles it —
+        // a lost restriction announces itself the first time a write is refused, while an arrived-with
+        // permission is invisible until something uses it.
+        //
+        // This is not in tension with the field travelling in project.json (see ConnectionInfo.ExternalAccess).
+        // Opening a shared project is taking that project's configuration as a whole, exposure visible in the
+        // connection list with it; a paste mints a fresh id and a fresh connection in the recipient's own
+        // project, which is them authoring one rather than accepting one. Re-exposing it is one checkbox.
         public CredentialKind CredentialKind { get; init; } = CredentialKind.StoredPassword;
         public Dictionary<string, string> Options { get; init; } = new();
     }

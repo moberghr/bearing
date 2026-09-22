@@ -1,6 +1,6 @@
 using System;
 
-namespace Bearing.App.Connections;
+namespace Bearing.Sessions;
 
 /// <summary>Thrown when a connection cannot be established; carries a user-facing message.</summary>
 public sealed class ConnectionFailedException : Exception

@@ -10,6 +10,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Bearing.App.Connections;
 using Bearing.Core.Data;
+using Bearing.Sessions;
 
 namespace Bearing.App.Views;
 

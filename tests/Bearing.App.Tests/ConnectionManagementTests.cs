@@ -372,6 +372,9 @@ public class ConnectionClipboardTests
         Tls = TlsMode.VerifyFull,
         ReadOnly = true,
         StatementTimeoutSeconds = 30,
+        // Exposed, so the deliberate omission from the payload is exercised rather than asserted against a
+        // value that was already the default. See A_pasted_connection_is_never_exposed_to_external_tools.
+        ExternalAccess = ExternalAccess.ReadOnly,
         CredentialKind = CredentialKind.EntraToken,
         Options = new Dictionary<string, string> { ["sslmode"] = "require" },
     };
@@ -395,10 +398,14 @@ public class ConnectionClipboardTests
 
         var got = read.Single();
 
-        // Id is the one deliberate exception: it is the secret-store lookup key, and a payload that could
-        // express one could leak one. The_id_is_never_carried_across covers that directly.
+        // Two deliberate exceptions, each with a test of its own so that "excluded" never quietly becomes
+        // "forgotten": Id is the secret-store lookup key, and a payload that could express one could leak
+        // one (The_id_is_never_carried_across); ExternalAccess grants a third party access on the machine
+        // the paste lands on rather than restricting the connection, which is the one direction this
+        // payload must not carry (A_pasted_connection_is_never_exposed_to_external_tools).
         var carried = typeof(ConnectionInfo).GetProperties()
             .Where(p => p.Name != nameof(ConnectionInfo.Id))
+            .Where(p => p.Name != nameof(ConnectionInfo.ExternalAccess))
             .ToList();
         Assert.NotEmpty(carried);
 
@@ -432,6 +439,22 @@ public class ConnectionClipboardTests
         Assert.Equal(TlsMode.VerifyFull, got.Tls);
         Assert.True(got.ReadOnly);
         Assert.Equal(30, got.StatementTimeoutSeconds);
+    }
+
+    [Fact]
+    public void A_pasted_connection_is_never_exposed_to_external_tools()
+    {
+        // The mirror of the test above, and the reason it is worth a name: every setting there has to
+        // survive the copy, and this one has to not. The connection being copied is exposed read-only.
+        var source = Conn();
+        Assert.Equal(ExternalAccess.ReadOnly, source.ExternalAccess);
+
+        Assert.True(ConnectionClipboard.TryRead(ConnectionClipboard.Write(new[] { source }), out var read));
+
+        // Not merely absent from the payload — absent from what comes out of it, which is what a recipient
+        // ends up with. Re-exposing it on their own machine is their decision to make.
+        Assert.Equal(ExternalAccess.None, read.Single().ExternalAccess);
+        Assert.False(ExternalAccessPolicy.IsExposed(read.Single()));
     }
 
     [Fact]

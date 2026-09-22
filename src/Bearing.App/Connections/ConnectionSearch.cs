@@ -1,5 +1,6 @@
 using System;
 using Bearing.Core.Data;
+using Bearing.Sessions;
 
 namespace Bearing.App.Connections;
 

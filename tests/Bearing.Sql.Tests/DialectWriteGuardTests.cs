@@ -116,6 +116,16 @@ public class DialectWriteGuardTests
         public string Id => "unreadable";
         public bool HasDialectAwareGuard => false;
         public IReadOnlySet<string> RiskyVerbs => Ss.RiskyVerbs;
+
+        /// <summary>Nothing. A dialect whose scanner cannot read the engine cannot vouch that any statement
+        /// is a read, so an exposed connection on it runs none — the same fail-safe as
+        /// <see cref="HasDialectAwareGuard"/>, pointed the other way. An empty allow-list is the honest
+        /// value here; borrowing another engine's would be vouching on its behalf.</summary>
+        public IReadOnlySet<string> ExternalReadVerbs { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        public IReadOnlySet<string> ExternalDeniedFunctions { get; }
+            = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         public IReadOnlyList<StatementRisk> DescribeStatements(string sql) => Ss.DescribeStatements(sql);
         public IReadOnlyList<StatementSpan> SplitStatements(string sql) => Ss.SplitStatements(sql);
         public string? TransactionControl(IReadOnlyList<string> words) => Ss.TransactionControl(words);

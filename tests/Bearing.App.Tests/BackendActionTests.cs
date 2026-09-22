@@ -1,6 +1,7 @@
 using System;
 using Bearing.App.Services;
 using Bearing.Core.Data;
+using Bearing.Sessions;
 using Xunit;
 
 namespace Bearing.App.Tests;

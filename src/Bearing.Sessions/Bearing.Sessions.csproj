@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Bearing.Sessions: live connections — credential resolution, the connect recipe, pooled sessions and
+       their leases, the schema browser, and the read-only refusal. Everything that has to happen before a
+       statement can run, and nothing that needs a window.
+
+       Its own tier above Sql/Data (§2.2) rather than part of Bearing.App, because a second host needs the
+       same machinery: the headless MCP process runs an agent's SQL through this, and a second copy of the
+       connect recipe or of WriteRefusal is exactly the drift §1.9 exists to prevent. Deliberately no
+       Avalonia and no Persistence reference — it takes its stores through Core's interfaces. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\Bearing.Core\Bearing.Core.csproj" />
+    <ProjectReference Include="..\Bearing.Sql\Bearing.Sql.csproj" />
+    <ProjectReference Include="..\Bearing.Data\Bearing.Data.csproj" />
+  </ItemGroup>
+
+</Project>

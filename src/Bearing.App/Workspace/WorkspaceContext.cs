@@ -8,6 +8,7 @@ using Bearing.Core.Data;
 using Bearing.Core.Logging;
 using Bearing.Core.Workspace;
 using Bearing.Persistence;
+using Bearing.Sessions;
 
 namespace Bearing.App.Workspace;
 

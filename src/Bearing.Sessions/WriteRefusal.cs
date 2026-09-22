@@ -4,16 +4,18 @@ using System.Linq;
 using Bearing.Core.Data;
 using Bearing.Sql;
 
-namespace Bearing.App.Services;
+namespace Bearing.Sessions;
 
 /// <summary>
 /// Whether a batch is refused outright because its connection is read-only (#99), and the sentence that says
-/// so. The counterpart to <see cref="WriteConfirmation"/> and deliberately a different shape: that one builds
+/// so. The counterpart to <c>WriteConfirmation</c> and deliberately a different shape: that one builds
 /// a dialog to ask a question, this one answers it. A read-only connection has nothing to confirm.
 /// <para>
-/// Pure, and in the App layer rather than <c>Core</c> because it reads <see cref="StatementRisk"/> from
-/// <c>Bearing.Sql</c>, which <c>Core</c> may not reference (§2.2). Tested without a window, like
-/// <see cref="WriteConfirmation"/>.
+/// Pure, and here rather than in <c>Core</c> because it reads <see cref="StatementRisk"/> from
+/// <c>Bearing.Sql</c>, which <c>Core</c> may not reference (§2.2). Beside the sessions it judges rather than
+/// beside the dialog that asks, because the refusal has to be the same one wherever the statement came from:
+/// the editor, an inline-grid save, or a host with no window at all. Tested without a window, like
+/// <c>WriteConfirmation</c>.
 /// </para>
 /// <para>
 /// This is the <em>early</em> half of #99 and not the enforcement: the server's

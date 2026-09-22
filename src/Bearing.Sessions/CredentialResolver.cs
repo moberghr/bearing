@@ -5,7 +5,7 @@ using System.Threading.Tasks;
 using Bearing.Core.Data;
 using Bearing.Core.Workspace;
 
-namespace Bearing.App.Connections;
+namespace Bearing.Sessions;
 
 /// <summary>
 /// Resolves the secret a connection authenticates with, according to its <see cref="CredentialKind"/>:

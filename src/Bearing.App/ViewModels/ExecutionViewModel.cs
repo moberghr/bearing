@@ -15,6 +15,7 @@ using Bearing.Core.Data;
 using Bearing.Core.Explain;
 using Bearing.Core.Logging;
 using Bearing.Core.Schema;
+using Bearing.Sessions;
 using Bearing.Sql;
 
 namespace Bearing.App.ViewModels;

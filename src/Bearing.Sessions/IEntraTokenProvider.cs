@@ -2,7 +2,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Bearing.Core.Data;
 
-namespace Bearing.App.Connections;
+namespace Bearing.Sessions;
 
 /// <summary>Obtains a Microsoft Entra access token for a connection to authenticate with — Azure Database
 /// for PostgreSQL and Azure SQL both, minted for that engine's own audience

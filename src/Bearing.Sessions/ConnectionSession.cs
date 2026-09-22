@@ -3,7 +3,7 @@ using System.Threading.Tasks;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
 
-namespace Bearing.App.Connections;
+namespace Bearing.Sessions;
 
 /// <summary>
 /// One live connection: the factory (owns the pool), an executor and metadata reader built on it,
