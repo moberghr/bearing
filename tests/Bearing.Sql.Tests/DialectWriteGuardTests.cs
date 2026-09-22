@@ -123,8 +123,18 @@ public class DialectWriteGuardTests
         /// value here; borrowing another engine's would be vouching on its behalf.</summary>
         public IReadOnlySet<string> ExternalReadVerbs { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        public bool SupportsExplainPlan => false;
+
         public IReadOnlySet<string> ExternalDeniedFunctions { get; }
             = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        public IReadOnlySet<string> ExternalDeniedRelations { get; }
+            = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Nothing to scan: an engine whose SQL this build cannot lex vouches for no name in it, which is
+        // the same posture as its empty allow-list above.
+        public (IReadOnlySet<string> Called, IReadOnlySet<string> Mentioned) ExternalNameScan(string statement)
+            => (new HashSet<string>(), new HashSet<string>());
 
         public IReadOnlyList<StatementRisk> DescribeStatements(string sql) => Ss.DescribeStatements(sql);
         public IReadOnlyList<StatementSpan> SplitStatements(string sql) => Ss.SplitStatements(sql);

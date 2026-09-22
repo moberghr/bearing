@@ -98,6 +98,81 @@ public class ExternalSqlPolicyTests
         Assert.NotNull(TSql("select xp_cmdshell('dir')"));
     }
 
+    /// <summary>
+    /// A SQL comment is whitespace to the engine and is not whitespace to a regex, so the text match this
+    /// scan used to be was defeated by four characters: <c>select pg_read_file/**/('/etc/passwd')</c> is
+    /// valid Postgres, is a plain SELECT the allow-list admits, and skipped the denied list entirely.
+    /// <para>
+    /// Not one of the evasions the list openly accepts — a wrapper function, a search_path, SQL built at
+    /// runtime — every one of which needs prior write access on the server. This needed a comment. Read off
+    /// the lexer's tokens now, where comments are already gone.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("select pg_read_file/**/('/etc/passwd')")]
+    [InlineData("select set_config/* off we go */('default_transaction_read_only','off',false)")]
+    [InlineData("select pg_terminate_backend  /**/  (pid) from pg_stat_activity")]
+    [InlineData("select pg_read_file\n-- a line comment\n('/etc/passwd')")]
+    public void A_comment_between_the_name_and_its_parenthesis_does_not_hide_the_call(string sql)
+    {
+        Assert.NotNull(Pg(sql));
+    }
+
+    /// <summary>
+    /// The other half of reading tokens rather than text: a name inside a string literal is not a call and
+    /// never was. The text match refused this, which was a false positive on an ordinary read.
+    /// </summary>
+    [Fact]
+    public void A_denied_name_inside_a_string_literal_is_not_a_call()
+    {
+        Assert.Null(Pg("select 'pg_read_file(' as sample"));
+        Assert.Null(Pg("select * from audit where action = 'pg_terminate_backend(1)'"));
+    }
+
+    /// <summary>
+    /// §1.8 names three catalogs that hold credentials and forbids Bearing's own reads from selecting
+    /// them — and an exposed connection reintroduced every one, because each is a plain SELECT the
+    /// allow-list admits. <c>pg_user_mappings</c> is the practical one: <c>umoptions</c> is shown in full to
+    /// the mapping's <i>owner</i>, so it does not need the superuser connection the other two do.
+    /// </summary>
+    [Theory]
+    [InlineData("select rolname, rolpassword from pg_authid")]
+    [InlineData("select * from pg_authid")]
+    [InlineData("select * from pg_shadow")]
+    [InlineData("select subconninfo from pg_subscription")]
+    [InlineData("select umoptions from pg_user_mappings")]
+    [InlineData("select * from pg_catalog.pg_user_mappings")]
+    [InlineData("select * from \"pg_authid\"")]
+    [InlineData("with c as (select * from pg_authid) select * from c")]
+    public void A_catalog_that_holds_credentials_is_not_readable(string sql)
+    {
+        Assert.NotNull(Pg(sql));
+    }
+
+    /// <summary>
+    /// The view that masks the hash is how anyone should read roles (§1.7), so it stays readable — the
+    /// denied list is about what a catalog <i>holds</i>, not about the subject being sensitive.
+    /// </summary>
+    [Fact]
+    public void The_masked_role_view_is_still_readable()
+    {
+        Assert.Null(Pg("select rolname, rolcanlogin from pg_roles"));
+        Assert.Null(Pg("select * from pg_stat_activity"));
+    }
+
+    /// <summary>
+    /// The plan text is Postgres' (<c>EXPLAIN (FORMAT JSON)</c>) and the parser reads Postgres' plan JSON
+    /// back, so the flag is what stops `bearing explain` handing a SQL Server caller the server's own
+    /// syntax error for a command the help advertised. SQL Server's showplan is different XML with
+    /// different measurements: serving it is a feature, not a second spelling.
+    /// </summary>
+    [Fact]
+    public void Only_the_engine_whose_plan_format_we_read_serves_explain()
+    {
+        Assert.True(PostgresDialect.Instance.SupportsExplainPlan);
+        Assert.False(SqlServerDialect.Instance.SupportsExplainPlan);
+    }
+
     // ---- what still has to work ----------------------------------------------------------------
 
     [Theory]

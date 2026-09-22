@@ -457,6 +457,13 @@ split is the point: **the flag grants nothing by itself.** `ForExternalHost` is 
 connection, and it is what forces the settings the exposure is safe under. A host that read the saved record
 directly would be running with the user's own settings, which is the bug this shape exists to prevent.
 
+**The mark gates discovery, not access.** It lives in `project.json` and the keychain is keyed by
+`ConnectionInfo.Id`, so anything running as the user can copy that file, set `ExternalAccess` on connections
+nobody exposed, and point `--project` at the copy. Read-only still holds — `ForExternalHost` applies the
+settings when the connection is opened, not when the file is read — so this widens *which servers* a caller
+can reach, never what it may do to them. Inside the stated model below, but the docs said "a real gate" and
+had to say which kind.
+
 **The boundary is "anything running as you", and it must never be described as more.** An external host runs
 as the user and can therefore read the same keychain the app reads; what stops it querying a server is that
 nobody marked the connection. That is a real gate and it is the only one this layer has — it is not a
@@ -660,11 +667,34 @@ through a wrapper function, a search_path that resolves elsewhere, or SQL built 
 that holds is a role without the privilege. WHEN someone asks for exposure to be "safe", the answer is a
 role, not a longer list.
 
-**But a different *spelling of the same name* is not one of those, and has to be caught.** The match is
+**But a different *spelling of the same name* is not one of those, and has to be caught.** The scan reads the
+statement's **tokens** (`SqlNameScan`, off each dialect's own lexer) rather than its text, which settles
+three things at once. The previous text match was
 `\b<name>["\]]?\s*\(` — the optional delimiter is the point. `select "pg_read_file"('/etc/passwd')` is
 ordinary Postgres and went straight through, because the closing quote sits between the name and the `(`,
 while the qualified `pg_catalog.pg_read_file(…)` was caught: an asymmetry with no reason behind it, in a
 list whose whole job is the obvious cases. `]` is T-SQL's spelling of the same thing.
+
+**And a comment defeated it with four characters.** `select pg_read_file/**/('/etc/passwd')` is valid
+Postgres, is a plain SELECT the allow-list admits, and skipped the denied list entirely — a comment is
+whitespace to the engine and is not `\s`. That is *not* one of the evasions this list openly accepts (a
+wrapper, a `search_path`, runtime SQL), every one of which needs prior write access on the server. Tokens
+fix it because comments are on ANTLR's hidden channel before the scan sees anything, and they fix the
+converse too: a name inside a **string literal** is not a call, which the text match refused.
+
+The text match is kept underneath as a fallback **only for a statement the lexer could not read at all**, so
+a lexer that threw cannot quietly widen what is accepted. The distinction has to be typed — `Scan` returns
+null for "could not read" and an empty set for "read it, found nothing", and the first version collapsed
+them, which brought the string-literal false positive straight back (§1.7's rule, in a new place).
+
+**Three catalogs are refused as well as the functions** (`ExternalDeniedRelations`). §1.8 forbids Bearing's
+own catalog reads from selecting `pg_authid.rolpassword`, `pg_subscription.subconninfo` and
+`pg_user_mappings.umoptions` — and an exposed connection reintroduced all three, because each is a plain
+SELECT the allow-list admits. `pg_user_mappings` is the one that does not need an over-privileged
+connection: it shows `umoptions` in full to the mapping's **owner**, so an agent handed a "read-only, safe"
+connection could read a foreign server's password in cleartext. Whole relations rather than columns, because
+`select *` names no column. The `pg_roles` view stays readable — masking the hash is what it is for (§1.7),
+and the list is about what a catalog *holds*, not about the subject being sensitive.
 
 ### §1.11c — One invocation is one connection; concurrency is the server's to bound
 
@@ -719,6 +749,12 @@ only by reading the code that emitted it.
   the host reports that as `Could not write …`. It is also **not logged**: the statement ran, and an audit
   row saying it failed with "Could not find a part of the path" is a false record of what happened on the
   server (§1.11d). A refusal is logged and a failed read is logged; a full disk is neither.
+- **`explain` is PostgreSQL's only, and says so before sending.** `ExplainSql`'s text is
+  `EXPLAIN (FORMAT JSON)` and `ExplainPlanParser` reads Postgres' plan JSON back, with nothing checking the
+  engine — so on a SQL Server connection it could only ever hand the caller `Incorrect syntax near
+  'EXPLAIN'` for a command the help advertised without a caveat. `ISqlDialect.SupportsExplainPlan` gates it
+  in **both** hosts; the app had the same gap. A second plan format is a feature (SQL Server's showplan is
+  different XML with different measurements), not a translation — §5.4a's rule again.
 - **`explain` validates the caller's statement and sends its own.** `EXPLAIN ANALYZE` carries a
   `BEGIN … ROLLBACK` that the allow-list would rightly refuse if it saw it — so what is judged is what the
   caller asked to run, and what is sent is what we wrapped it in. The wrapper is not optional: a plain

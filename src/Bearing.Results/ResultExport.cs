@@ -155,7 +155,12 @@ public static class ResultExport
             // the second yields one empty batch and gets its header. Nothing is moved into place for the
             // first, so a caller that pointed --out at a statement like that keeps whatever was already
             // there rather than having it replaced by a file holding a BOM.
-            if (!header) return new StreamedCsv(0, 0, false);
+            // On `columns`, not on "a batch arrived". A batch whose own Columns list is empty sets the
+            // header flag and writes a bare CRLF, and the move below would then have replaced the caller's
+            // file with that — while the comment here promised it was left alone and the CLI reported "no
+            // rows to write" and exited 1. Two halves of one path disagreeing about whether anything was
+            // written is how a good export gets clobbered by a statement that produced nothing.
+            if (columns == 0) return new StreamedCsv(0, 0, false);
 
             // The move is the file's too: every row is read by now, so a failure here is about the
             // destination and not about the statement.

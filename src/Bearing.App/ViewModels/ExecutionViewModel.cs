@@ -869,6 +869,14 @@ public sealed partial class ExecutionViewModel : ObservableObject
         var info = _ctx.EffectiveConnection(tab);
         if (info is null) { _ctx.SetStatus("Connection no longer exists."); return null; }
 
+        // ExplainSql's text is Postgres' and ExplainPlanParser reads Postgres' plan JSON back, so on any
+        // other engine this could only hand the user the server's own syntax error. Said before it is sent.
+        if (!ProviderTraits.For(info).Dialect.SupportsExplainPlan)
+        {
+            _ctx.SetStatus("Query plans are not available for this engine yet.");
+            return null;
+        }
+
         var request = analyze ? ExplainSql.Measured(sql) : ExplainSql.Plan(sql);
 
         // EXPLAIN ANALYZE runs the statement, so a read-only connection refuses one over a write (#99) — and

@@ -338,6 +338,13 @@ public sealed class DemoExecutor : IQueryExecutor
     {
         Record(sql);
         var result = First(sql);
+
+        // A statement with no result shape streams nothing at all, as both real executors do at
+        // `FieldCount == 0`. Yielding an empty batch for one instead was the §4.6 divergence in the
+        // direction that rule warns about: a consumer written against this fixture would see a shape-less
+        // statement as "one batch, no columns" and pass, while live it sees no batches.
+        if (result.Columns.Count == 0) yield break;
+
         var size = Math.Max(1, options.BatchRows);
 
         // Deliberately the real executors' loop rather than arithmetic over the row list: a full batch is

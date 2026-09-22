@@ -28,6 +28,13 @@ Nothing is reachable unless **both** are true:
 the app reads; what stops it querying a server is that nobody marked the connection. That is a real gate, and
 it is the only one. It is not a sandbox, and nothing here should be described as one.
 
+**And it gates discovery, not access.** The mark lives in `project.json` and the keychain is keyed by the
+connection's id, so anything running as you can copy that file, set the mark on connections you never
+exposed, and point `--project` at the copy. Read-only is still forced — the settings are applied when the
+connection is opened, not read from the file — so what this widens is *which servers* a caller can read, not
+what it can do to them. The mark is the right place for the decision and it is worth making; it is not a
+thing that holds against the account it runs under. The control that holds is the database role.
+
 ## Commands
 
 ```
@@ -40,6 +47,8 @@ bearing [--project <dir>] [--table] <command> [arguments]
   query <connection> [sql]           Run a read-only query. --file <path> to read it from a file
                                      (- for stdin), --out <path> to write .csv or .xlsx.
   explain <connection> [sql]         Its query plan, as a tree. --analyze to measure it.
+                                     PostgreSQL only; other engines report plans in a form this
+                                     cannot read, and say so rather than sending the statement.
 ```
 
 ```console
@@ -127,14 +136,21 @@ agent-reads: cannot execute nextval() in a read-only transaction
 That message is Postgres', not Bearing's. On **SQL Server** there is no session read-only to ask for, so
 layer 1 is the whole of it there.
 
+**2b. Three catalogs are not readable**, because of what they hold rather than what they are:
+`pg_authid` and `pg_shadow` (password hashes), `pg_subscription` (a publisher's connection string) and
+`pg_user_mappings` (a foreign server's password, shown in full to the mapping's owner — so this one does not
+even need a privileged connection). Bearing's own catalog reads have never selected these columns; an
+exposed connection could, until it couldn't.
+
 **3. A handful of functions are refused inside otherwise-ordinary reads** — `pg_terminate_backend`,
 `pg_cancel_backend`, `pg_read_file`, `pg_ls_dir`, `set_config`, `lo_import`/`lo_export`. These are reads, or
 signals, so read-only never bounded them; measured on a superuser connection with read-only fully in force,
 `select pg_read_file('/etc/passwd')` returned the file.
 
-**This third layer stops accidents, not a determined caller**, and it would be dishonest to present it
+**Layers 2b and 3 stop accidents, not a determined caller**, and it would be dishonest to present them
 otherwise: a name can be reached through a wrapper function, a `search_path` that resolves elsewhere, or SQL
-built at runtime.
+built at runtime. They are read off the statement's *tokens*, so a comment between the name and its
+parenthesis no longer hides a call — that one was a text match and four characters defeated it.
 
 ### The boundary is the database role
 

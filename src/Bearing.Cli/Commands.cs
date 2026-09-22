@@ -44,7 +44,7 @@ public static class Commands
           {Describe} <connection> <table>       Columns with types and nullability, the primary key, and
                                            the foreign keys touching the table in either direction.
           {Query} <connection> [sql]           Run a read-only query and print its rows.
-          {Explain} <connection> [sql]         Its query plan, as a tree.
+          {Explain} <connection> [sql]         Its query plan, as a tree. PostgreSQL connections only.
 
         Options
           --project <dir>   The Bearing project to read. Defaults to the most recently opened one.

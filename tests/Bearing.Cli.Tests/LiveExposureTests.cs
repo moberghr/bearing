@@ -546,6 +546,32 @@ public class LiveExposureTests : IAsyncLifetime
         Assert.Contains("\"Deleted Scenes\"", json);
     }
 
+    /// <summary>
+    /// The two fences that are not read-only, against a live server. Both are plain SELECTs a read-only
+    /// session runs perfectly happily, which is the whole reason they need a fence of their own.
+    /// </summary>
+    [SkippableFact]
+    public async Task A_read_that_reaches_past_the_data_is_refused_before_it_is_sent()
+    {
+        var host = await LiveHostAsync();
+
+        // A comment is whitespace to Postgres and not to a regex: this ran, and returned the file, against
+        // the text match the scan used to be.
+        var hidden = await Assert.ThrowsAsync<CommandFailure>(() => host.QueryAsync(
+            Run("agent-reads", "select pg_read_file/**/('/etc/passwd')"), CancellationToken.None));
+        Assert.Contains("pg_read_file", hidden.Message);
+
+        // §1.8's catalogs. The connection here is a superuser, which is exactly the case the fence is for.
+        var credentials = await Assert.ThrowsAsync<CommandFailure>(() => host.QueryAsync(
+            Run("agent-reads", "select rolname, rolpassword from pg_authid"), CancellationToken.None));
+        Assert.Contains("pg_authid", credentials.Message);
+
+        // And the read that replaces it still works, so the refusal is about the hash rather than the topic.
+        var roles = (QueryResponse)await host.QueryAsync(
+            Run("agent-reads", "select rolname from pg_roles order by rolname limit 3"), CancellationToken.None);
+        Assert.NotEmpty(roles.Results[0].Rows);
+    }
+
     /// <summary>A project with one exposed connection and one that is not.</summary>
     private async Task<string> WriteProjectAsync()
     {

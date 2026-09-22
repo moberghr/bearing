@@ -142,6 +142,9 @@ public sealed class PostgresDialect : ISqlDialect
     /// force. So this list is not redundant with the read-only session; it covers a different axis.
     /// </para>
     /// </summary>
+    /// <inheritdoc/>
+    public bool SupportsExplainPlan => true;
+
     public IReadOnlySet<string> ExternalDeniedFunctions { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         // Other people's sessions.
@@ -156,4 +159,31 @@ public sealed class PostgresDialect : ISqlDialect
         // The server's configuration and log files.
         "pg_reload_conf", "pg_rotate_logfile", "pg_stat_reset",
     };
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The three catalogs §1.8 names, and for its reasons. They are not hypothetical on this path: an
+    /// exposed connection admits <c>select * from pg_user_mappings</c> as the plain read it is, and
+    /// <c>umoptions</c> holds a foreign server's password in cleartext for the mapping's owner — no
+    /// superuser needed. <c>pg_authid.rolpassword</c> and <c>pg_subscription.subconninfo</c> do need one,
+    /// which is precisely the over-privileged connection this fence is for.
+    /// <para>
+    /// <c>pg_shadow</c> is <c>pg_authid</c> under another name and has to be listed separately; the
+    /// <c>pg_roles</c> view is deliberately <b>not</b> here, because masking the hash is what it is for
+    /// (§1.7) and it is how anyone should read roles.
+    /// </para>
+    /// </remarks>
+    public IReadOnlySet<string> ExternalDeniedRelations { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "pg_authid", "pg_shadow",
+        "pg_subscription",
+        "pg_user_mappings", "pg_user_mapping",
+    };
+
+    /// <inheritdoc/>
+    public (IReadOnlySet<string> Called, IReadOnlySet<string> Mentioned) ExternalNameScan(string statement)
+    {
+        var tokens = PgParsing.LexAll(statement);
+        return (SqlNameScan.CalledNames(tokens), SqlNameScan.MentionedNames(tokens));
+    }
 }

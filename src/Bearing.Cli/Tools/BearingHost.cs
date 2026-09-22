@@ -143,7 +143,15 @@ public sealed class BearingHost(
     /// </summary>
     public async Task<ICliResponse> ExplainAsync(RunRequest request, CancellationToken ct)
     {
-        var (info, _) = await PrepareAsync(request, ct).ConfigureAwait(false);
+        var (info, traits) = await PrepareAsync(request, ct).ConfigureAwait(false);
+
+        // Before anything is sent. ExplainSql's text is Postgres' and ExplainPlanParser reads Postgres' plan
+        // JSON back, so on another engine this could only ever hand the caller the server's own syntax error
+        // for a command the help said it could run.
+        if (!traits.Dialect.SupportsExplainPlan)
+            throw new CommandFailure(
+                $"'{info.Name}' does not serve query plans through bearing — its engine reports them in a "
+                + "form this command cannot read. Run the query itself, or ask for the plan in Bearing.");
 
         var explain = request.Analyze ? ExplainSql.Measured(request.Sql) : ExplainSql.Plan(request.Sql);
 

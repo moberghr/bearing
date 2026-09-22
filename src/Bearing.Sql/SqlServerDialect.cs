@@ -385,9 +385,35 @@ public sealed class SqlServerDialect : ISqlDialect
     /// access, and the dynamic-SQL entry point — the T-SQL equivalents of the Postgres list, arrived at
     /// per engine rather than translated (§5.4a).
     /// </summary>
+    /// <inheritdoc/>
+    /// <remarks>Its showplan is XML with different measurements in it, so serving this would be a second
+    /// plan reader rather than a second spelling.</remarks>
+    public bool SupportsExplainPlan => false;
+
     public IReadOnlySet<string> ExternalDeniedFunctions { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "xp_cmdshell", "sp_executesql", "xp_dirtree", "xp_fileexist", "xp_subdirs",
         "xp_regread", "xp_regwrite", "openrowset", "opendatasource", "sp_oacreate",
     };
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The T-SQL equivalents of §1.8's three, in this engine's own vocabulary rather than translated:
+    /// <c>sys.sql_logins</c> carries password hashes, <c>sys.credentials</c> and the linked-server catalogs
+    /// carry stored credentials for other servers. <c>sys.server_principals</c> is not here — it is the
+    /// view that does <i>not</i> expose the hash, which makes it this engine's <c>pg_roles</c>.
+    /// </remarks>
+    public IReadOnlySet<string> ExternalDeniedRelations { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "sql_logins", "syslogins",
+        "credentials", "database_credentials",
+        "linked_logins", "sysservers", "servers",
+    };
+
+    /// <inheritdoc/>
+    public (IReadOnlySet<string> Called, IReadOnlySet<string> Mentioned) ExternalNameScan(string statement)
+    {
+        var tokens = TSqlParsing.LexAll(statement);
+        return (SqlNameScan.CalledNames(tokens), SqlNameScan.MentionedNames(tokens));
+    }
 }

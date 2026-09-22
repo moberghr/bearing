@@ -63,6 +63,10 @@ public static class ExternalSqlPolicy
             if (DeniedFunction(dialect, statement.Text) is { } function)
                 return $"'{function}' is not available through an exposed connection. It reaches outside the "
                      + "data — the server's files, its other sessions, or this session's own settings.";
+
+            if (DeniedRelation(dialect, statement.Text) is { } relation)
+                return $"'{relation}' is not readable through an exposed connection. It holds credentials — "
+                     + "a password hash, or a connection string for another server (§1.8).";
         }
 
         return null;
@@ -80,17 +84,65 @@ public static class ExternalSqlPolicy
     /// </para>
     /// </summary>
     public static string? DeniedFunction(ISqlDialect dialect, string statement)
+        => Scan(dialect, statement) is { } scan
+            ? First(dialect.ExternalDeniedFunctions, scan.Called)
+            : FallbackByText(dialect.ExternalDeniedFunctions, statement);
+
+    /// <summary>
+    /// The first credential-bearing catalog this statement names, or null — the same fence with the same
+    /// limits, aimed at a read rather than a call.
+    /// <para>
+    /// §1.8 already forbids Bearing's own catalog reads from selecting these columns, and an exposed
+    /// connection reintroduced every one of them: <c>select umoptions from pg_user_mappings</c> is a plain
+    /// SELECT the allow-list admits, and it returns a foreign server's password in cleartext — to the
+    /// mapping's owner, so not even the over-privileged connection the other two need.
+    /// </para>
+    /// </summary>
+    public static string? DeniedRelation(ISqlDialect dialect, string statement)
+        => Scan(dialect, statement) is { } scan
+            ? First(dialect.ExternalDeniedRelations, scan.Mentioned)
+            // No text fallback for this one, and the asymmetry is deliberate: a bare name matched in text
+            // would fire on the word inside a comment or a string, refusing ordinary reads for a list whose
+            // members are not callable shapes. A statement this engine's lexer cannot read is refused
+            // upstream anyway — an unreadable dialect vouches for no verb (§1.11a).
+            : null;
+
+    private static string? First(IReadOnlySet<string> denied, IReadOnlySet<string> found)
     {
-        foreach (var name in dialect.ExternalDeniedFunctions)
+        foreach (var name in denied)
+            if (found.Contains(name)) return name;
+
+        return null;
+    }
+
+    /// <summary>
+    /// The statement's names, lexed — or <b>null</b> when the lexer could not read it at all.
+    /// <para>
+    /// Null rather than two empty sets, because those are different answers and collapsing them is the
+    /// mistake §1.7 names: "this statement calls nothing denied" and "nothing could be read" would then be
+    /// indistinguishable, and every caller would have to treat the safe case as the unknown one. Here that
+    /// showed up immediately — running the text fallback on a successful empty scan brought back the false
+    /// positive the token scan exists to remove, refusing <c>select 'pg_read_file(' as sample</c>.
+    /// </para>
+    /// </summary>
+    private static (IReadOnlySet<string> Called, IReadOnlySet<string> Mentioned)? Scan(
+        ISqlDialect dialect, string statement)
+    {
+        try { return dialect.ExternalNameScan(statement); }
+        catch (Exception) { return null; }
+    }
+
+    /// <summary>
+    /// The text match this used to be, kept underneath the token scan so a lexer that threw cannot quietly
+    /// widen what an exposed connection accepts. It cannot see past a comment — which is why it is no longer
+    /// the primary — but everything it does catch, it still catches.
+    /// </summary>
+    private static string? FallbackByText(IReadOnlySet<string> denied, string statement)
+    {
+        foreach (var name in denied)
         {
             // The name as a call: a word boundary, the name, an optional closing delimiter, then '(' past
             // any whitespace. A column that merely shares the name is not a call and is left alone.
-            //
-            // The delimiter is why this is not just \b…\s*\(. A quoted identifier is the *same name*, not an
-            // evasion of the kind this list openly does not catch (a wrapper, a search_path, runtime SQL):
-            // `select "pg_read_file"('/etc/passwd')` is ordinary Postgres and ran, while the qualified
-            // `pg_catalog.pg_read_file(…)` was caught — an asymmetry with no reason behind it. `]` is
-            // T-SQL's spelling of the same thing ([xp_cmdshell]).
             if (Regex.IsMatch(statement, $@"\b{Regex.Escape(name)}[""\]]?\s*\(", RegexOptions.IgnoreCase))
                 return name;
         }

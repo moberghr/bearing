@@ -203,6 +203,30 @@ public class StreamedCsvExportTests : IDisposable
             path, Stream(Rows, size: 2, failAfter: new InvalidOperationException("connection lost"), failAt: 2)));
     }
 
+    /// <summary>
+    /// A batch can arrive with an empty column list, and that is still "no shape" — the guard was on
+    /// *whether a batch arrived*, so such a batch wrote a bare CRLF and the move went ahead, replacing the
+    /// caller's file with it while the CLI reported "no rows to write" and exited 1.
+    /// </summary>
+    [Fact]
+    public async Task A_batch_with_no_columns_does_not_clobber_the_file()
+    {
+        var path = Path.Combine(_dir, "kept.csv");
+        File.WriteAllText(path, "still here\r\n");
+
+        var written = await ResultExport.WriteCsvStreamAsync(path, Shapeless());
+
+        Assert.Equal(0, written.Columns);
+        Assert.Equal("still here\r\n", File.ReadAllText(path));
+        Assert.Empty(Directory.GetFiles(_dir, "*.tmp"));
+
+        static async IAsyncEnumerable<RowBatch> Shapeless()
+        {
+            await Task.Yield();
+            yield return new RowBatch([], [], Truncated: false);
+        }
+    }
+
     /// <summary>A row shorter than the header is padded rather than ending its line early — a ragged line
     /// is what turns one bad row into a file a reader rejects wholesale.</summary>
     [Fact]
