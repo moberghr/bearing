@@ -110,7 +110,7 @@ public class CliTests
     [Fact]
     public void An_unknown_command_or_option_is_named_in_the_error()
     {
-        Assert.Contains("'explain'", CliParser.Parse(["explain", "reporting"]).Error);
+        Assert.Contains("'vacuum'", CliParser.Parse(["vacuum", "reporting"]).Error);
         Assert.Contains("'--rows'", CliParser.Parse(["query", "r", "select 1", "--rows", "5"]).Error);
     }
 
@@ -121,12 +121,20 @@ public class CliTests
         Assert.Contains("--max-rows", CliParser.Parse(["query", "r", "select 1", "--max-rows"]).Error);
     }
 
+    /// <summary>
+    /// An explicit number is honoured, not clamped. The small default is the protection; silently
+    /// returning fewer rows than were asked for gives a result the caller cannot tell from the whole
+    /// answer, which is the same defect as advice it cannot act on.
+    /// </summary>
     [Fact]
-    public void A_row_cap_beyond_the_ceiling_is_clamped_and_a_nonsense_one_is_refused()
+    public void An_explicit_row_cap_is_honoured_and_a_nonsense_one_is_refused()
     {
-        // Asking for a million rows is a judgement about how much you want, not a mistake worth failing
-        // over; a negative or non-numeric one cannot be honoured at all.
-        Assert.Equal(Commands.MaxRowsCeiling, CliParser.Parse(["query", "r", "s", "--max-rows", "999999"]).MaxRows);
+        Assert.Equal(999_999, CliParser.Parse(["query", "r", "s", "--max-rows", "999999"]).MaxRows);
+
+        var all = CliParser.Parse(["query", "r", "s", "--max-rows", "all"]);
+        Assert.True(all.UnlimitedRows);
+        Assert.Null(all.MaxRows);
+
         Assert.NotNull(CliParser.Parse(["query", "r", "s", "--max-rows", "0"]).Error);
         Assert.NotNull(CliParser.Parse(["query", "r", "s", "--max-rows", "lots"]).Error);
     }
@@ -300,7 +308,7 @@ public class CliTests
     {
         var host = new RecordingHost
         {
-            Answer = new JsonObject { ["connections"] = new JsonArray { new JsonObject { ["name"] = "reporting" } } },
+            Answer = new ConnectionsResponse([Exposed("reporting")]),
         };
 
         var run = await Cli.RunAsync(host, "connections");
@@ -316,7 +324,7 @@ public class CliTests
         // JSON in HTML; here it would make a column of Croatian names unreadable to person and model alike.
         var host = new RecordingHost
         {
-            Answer = new JsonObject { ["note"] = "račun pročitan" },
+            Answer = new ConnectionsResponse([Exposed("račun pročitan")]),
         };
 
         var run = await Cli.RunAsync(host, "connections");
@@ -330,14 +338,8 @@ public class CliTests
     {
         var host = new RecordingHost
         {
-            Answer = new JsonObject
-            {
-                ["connections"] = new JsonArray
-                {
-                    new JsonObject { ["name"] = "reporting", ["engine"] = "PostgreSQL", ["access"] = "read-only" },
-                    new JsonObject { ["name"] = "warehouse", ["engine"] = "SQL Server", ["access"] = "read-only" },
-                },
-            },
+            Answer = new ConnectionsResponse(
+                [Exposed("reporting"), Exposed("warehouse", "SQL Server")]),
         };
 
         var run = await Cli.RunAsync(host, "connections", "--table");
@@ -361,19 +363,15 @@ public class CliTests
     {
         var host = new RecordingHost
         {
-            Answer = new JsonObject
-            {
-                ["connections"] = new JsonArray
+            Answer = new ConnectionsResponse(
+            [
+                Exposed("reporting"),
+                Exposed("prompted") with
                 {
-                    new JsonObject { ["name"] = "reporting", ["available"] = true },
-                    new JsonObject
-                    {
-                        ["name"] = "prompted",
-                        ["available"] = false,
-                        ["unavailable_reason"] = "asks for its password each session",
-                    },
+                    Available = false,
+                    UnavailableReason = "asks for its password each session",
                 },
-            },
+            ]),
         };
 
         var run = await Cli.RunAsync(host, "connections", "--table");
@@ -387,28 +385,15 @@ public class CliTests
     {
         var host = new RecordingHost
         {
-            Answer = new JsonObject
-            {
-                ["results"] = new JsonArray
-                {
-                    new JsonObject
-                    {
-                        ["columns"] = new JsonArray
-                        {
-                            new JsonObject { ["name"] = "id", ["type"] = "integer" },
-                            new JsonObject { ["name"] = "title", ["type"] = "text" },
-                        },
-                        ["rows"] = new JsonArray
-                        {
-                            new JsonArray { 1, "ACADEMY" },
-                            new JsonArray { 2, null },
-                        },
-                        ["row_count"] = 2,
-                        ["truncated"] = true,
-                        ["duration_ms"] = 88,
-                    },
-                },
-            },
+            Answer = new QueryResponse(
+            [
+                new ResultSet(
+                    [new ColumnHeader("id", "integer"), new ColumnHeader("title", "text")],
+                    [new object?[] { 1, "ACADEMY" }, new object?[] { 2, null }],
+                    RowCount: 2,
+                    Truncated: true,
+                    DurationMs: 88),
+            ]),
         };
 
         var run = await Cli.RunAsync(host, "query", "reporting", "select 1", "--table");
@@ -421,10 +406,13 @@ public class CliTests
     [Fact]
     public async Task An_empty_listing_says_so_rather_than_printing_a_bare_header()
     {
-        var host = new RecordingHost { Answer = new JsonObject { ["connections"] = new JsonArray() } };
+        var host = new RecordingHost { Answer = new ConnectionsResponse([]) };
 
         var run = await Cli.RunAsync(host, "connections", "--table");
 
         Assert.Contains("(none)", run.Out);
     }
+
+    private static ExposedConnection Exposed(string name, string engine = "PostgreSQL")
+        => new(name, engine, Access: "read-only", Available: true);
 }

@@ -37,8 +37,26 @@ bearing [--project <dir>] [--table] <command> [arguments]
   connections                        The exposed connections: name, engine, environment.
   tables <connection>                Tables and views. --schema <name> narrows it.
   describe <connection> <table>      Columns, types, nullability, primary key, foreign keys.
-  query <connection> <sql>           Run a read-only query. --max-rows <n>, up to 1000.
+  query <connection> [sql]           Run a read-only query. --file <path> to read it from a file
+                                     (- for stdin), --out <path> to write .csv or .xlsx.
+  explain <connection> [sql]         Its query plan, as a tree. --analyze to measure it.
 ```
+
+```console
+$ bearing query reporting --file monthly.sql --out report.xlsx
+Wrote 12,480 rows in 3 result sets to /home/k/report.xlsx (xlsx).
+
+$ echo "select count(*) from film" | bearing query reporting --file -
+```
+
+An xlsx takes **one sheet per result set**; a CSV holds one table and refuses a batch that returned more,
+because the caller named a path and a script that finds no file at it is broken in a way an error is not.
+With `--out` the row count is unlimited unless you pass `--max-rows`, since a capped export is a silently
+truncated file. Everywhere else the default is 200 rows — and an explicit `--max-rows` is honoured at any
+size rather than clamped.
+
+`--timeout <secs>` can only **lower** what the connection already allows. Raising it would let a caller
+lift a limit its owner set, which is the inversion §1.9 exists to prevent.
 
 Output is JSON by default — that is what a script or an agent should parse, and it is stable. `--table` is
 for a person reading a terminal and is explicitly *not* stable; it also renders a null and an empty string
@@ -177,9 +195,11 @@ minute and the wrong one inside a loop — prefer one well-aimed `query` with an
 never drift from the project format it reads.
 
 - **macOS** — the Homebrew cask puts it on `PATH`; `brew install --no-quarantine moberghr/bearing/bearing`.
-- **Windows** — it lands in `%LocalAppData%\BearingSql\current\bearing.exe`. That directory is not on
-  `PATH`; add it, or call the full path. *(Putting it on `PATH` from the installer is not done yet.)*
-- **Linux** — beside the app in the install directory, same as Windows.
+- **Windows** — the installer puts the install directory on your user `PATH`, and takes it off again when
+  you uninstall. Every update re-asserts the entry and adding is idempotent, so a reinstall does not leave
+  two. It is read and written unexpanded, so a `%SystemRoot%` already in your `PATH` stays a variable
+  rather than being frozen to today's value.
+- **Linux** — beside the app in the install directory; where that goes on `PATH` is the packager's call.
 
 Inside the install directory there are two executables: `bearing` (this command) and `bearing-app` (the
 window). It is round that way because a command has to be a console program — a Windows GUI executable

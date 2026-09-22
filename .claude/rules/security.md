@@ -658,6 +658,53 @@ ceiling of 10 is never approached and capping it client-side would buy nothing �
 such cap. What is *not* bounded is how many invocations run at once, and no client-side setting can bound
 it. `ALTER ROLE agent_ro CONNECTION LIMIT n` can, which is the same answer as everything else here.
 
+### §1.11e — The command's output is records, and the flags that shape it
+
+Every command answers with a record implementing `ICliResponse`, serialised once in `CliRunner`. They were
+hand-built `JsonObject` literals first, which is the wrong default in a codebase this record-heavy: a key is
+a string nobody checks, an omitted field fails silently, and the CLI's public output contract was readable
+only by reading the code that emitted it.
+
+- **Serialise by the runtime type.** `JsonSerializer.Serialize(response, options)` resolves the contract
+  from the *declared* type, and `ICliResponse` has no properties — so every response went out as `{}`. The
+  tests caught it and nothing else would have: an empty object parses fine, and every "does not contain"
+  assertion passes against it. `CliRunner.Serialize` passes `response.GetType()`.
+- `--table` switches on the response **type**, so a command that gains a shape is a compile error rather
+  than a silently unhandled case. It used to switch on JSON keys, where a renamed field degraded quietly.
+- **An export is unlimited by default**, and the small row cap applies only when nothing was asked for. A
+  capped export is a silently truncated *file*, which is the failure the app guards against with "a
+  workbook missing a sheet is worse than no workbook". An explicit `--max-rows` is honoured at any size —
+  clamping it would give a result the caller cannot tell from the whole answer.
+- **xlsx takes a sheet per result set; CSV holds one table** and refuses a batch that returned more. RFC
+  4180 cannot express two tables and the app's own Export-run is xlsx-only. Refusing beats writing
+  `report.1.csv`: the caller named a path, and a script that finds no file at it is broken in a way an
+  error is not.
+- **`--timeout` may only lower** what the connection allows. Raising it would let a caller lift a limit its
+  owner set (§1.9). Measured: `--timeout 5` gives `statement_timeout = 5s`, `--timeout 600` leaves it 30s.
+- **`explain` validates the caller's statement and sends its own.** `EXPLAIN ANALYZE` carries a
+  `BEGIN … ROLLBACK` that the allow-list would rightly refuse if it saw it — so what is judged is what the
+  caller asked to run, and what is sent is what we wrapped it in. The wrapper is not optional: a plain
+  SELECT can call a volatile function that writes. It is also not a promise that nothing happened.
+
+### §1.11f — `bearing` reaches PATH from the installer, on Windows
+
+`VelopackApp`'s `OnAfterInstallFastCallback` / `OnAfterUpdateFastCallback` / `OnBeforeUninstallFastCallback`
+add and remove the install directory in the user's `Environment` registry key. Per user, because Bearing installs to
+`%LocalAppData%` without elevation and the machine PATH is neither ours nor reachable.
+
+- **Read unexpanded, write back the same kind.** `Environment.GetEnvironmentVariable(…, User)` expands
+  `%SystemRoot%`, so reading with it and writing the result back bakes today's values into the user's PATH
+  permanently — the classic way an installer corrupts one. `RegistryValueOptions.DoNotExpandEnvironmentNames`
+  on the way in, and the existing `RegistryValueKind` on the way out, since a REG_SZ rewrite of a
+  REG_EXPAND_SZ PATH breaks every variable in it.
+- **The editing is pure and the I/O is thin** (`WindowsPathEntry` / `WindowsPath`), because the editing is
+  where the corruption comes from: empty entries dropped (an empty PATH entry means the current directory
+  to the loader), duplicates removed, trailing separators and quotes and case all treated as the same
+  directory, and "nothing to do" reported as null so an update does not rewrite a PATH it agrees with.
+- Appended rather than prepended: nothing here should shadow an existing command.
+- Best-effort (§5.2). A PATH that cannot be edited costs a full path typed once; an install that failed
+  over it costs the install.
+
 ### What a pure check may and may not answer
 `ExternalAccessPolicy.UnavailableReason` reports only what the `CredentialKind` settles — a kind whose whole
 mechanism is asking the user cannot work where there is no user. It deliberately does **not** report whether

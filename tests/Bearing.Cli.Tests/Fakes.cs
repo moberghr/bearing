@@ -15,45 +15,65 @@ internal sealed class RecordingHost : IBearingHost
     public string? FailWith { get; set; }
 
     /// <summary>Returned in place of the default answer, for the output-rendering tests.</summary>
-    public JsonNode? Answer { get; set; }
+    public ICliResponse? Answer { get; set; }
 
+    public RunRequest? Request { get; private set; }
     public string? Connection { get; private set; }
     public string? Schema { get; private set; }
     public string? Table { get; private set; }
-    public string? Sql { get; private set; }
-    public int? MaxRows { get; private set; }
     public List<string> Calls { get; } = [];
 
-    public Task<JsonNode> ListConnectionsAsync(CancellationToken ct) => Respond(Commands.Connections);
+    public string? Sql => Request?.Sql;
+    public int? MaxRows => Request?.MaxRows;
 
-    public Task<JsonNode> ListTablesAsync(string connection, string? schema, CancellationToken ct)
+    public Task<ICliResponse> ListConnectionsAsync(CancellationToken ct) => Respond(Commands.Connections);
+
+    public Task<ICliResponse> ListTablesAsync(string connection, string? schema, CancellationToken ct)
     {
         Connection = connection;
         Schema = schema;
         return Respond(Commands.Tables);
     }
 
-    public Task<JsonNode> DescribeTableAsync(string connection, string table, CancellationToken ct)
+    public Task<ICliResponse> DescribeTableAsync(string connection, string table, CancellationToken ct)
     {
         Connection = connection;
         Table = table;
         return Respond(Commands.Describe);
     }
 
-    public Task<JsonNode> QueryAsync(string connection, string sql, int? maxRows, CancellationToken ct)
+    public Task<ICliResponse> QueryAsync(RunRequest request, CancellationToken ct)
     {
-        Connection = connection;
-        Sql = sql;
-        MaxRows = maxRows;
+        Request = request;
+        Connection = request.Connection;
         return Respond(Commands.Query);
     }
 
-    private Task<JsonNode> Respond(string call)
+    public Task<ICliResponse> ExplainAsync(RunRequest request, CancellationToken ct)
+    {
+        Request = request;
+        Connection = request.Connection;
+        return Respond(Commands.Explain);
+    }
+
+    private Task<ICliResponse> Respond(string call)
     {
         Calls.Add(call);
         if (FailWith is { } reason) throw new CommandFailure(reason);
-        return Task.FromResult(Answer ?? new JsonObject { ["called"] = call });
+        return Task.FromResult(Answer ?? Called(call));
     }
+
+    /// <summary>The default answer: a one-row result naming the command, so a test that does not care what
+    /// came back can still assert that something did.</summary>
+    private static ICliResponse Called(string call) => new QueryResponse(
+    [
+        new ResultSet(
+            [new ColumnHeader("called", "text")],
+            [new object?[] { call }],
+            RowCount: 1,
+            Truncated: false,
+            DurationMs: 0),
+    ]);
 }
 
 /// <summary>Stands in for opening the window, and records whether it was asked to.</summary>

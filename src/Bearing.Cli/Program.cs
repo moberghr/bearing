@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Text.Json.Nodes;
 using Bearing.Cli.Tools;
 using Bearing.Core.Data;
 using Bearing.Data;
@@ -190,15 +189,18 @@ internal static class Program
             "No Bearing project to read. Pass --project <path to the project directory>, or open a project "
             + "in Bearing once so it becomes the most recent one.";
 
-        public Task<JsonNode> ListConnectionsAsync(CancellationToken ct) => throw new CommandFailure(Reason);
+        public Task<ICliResponse> ListConnectionsAsync(CancellationToken ct) => throw new CommandFailure(Reason);
 
-        public Task<JsonNode> ListTablesAsync(string connection, string? schema, CancellationToken ct)
+        public Task<ICliResponse> ListTablesAsync(string connection, string? schema, CancellationToken ct)
             => throw new CommandFailure(Reason);
 
-        public Task<JsonNode> DescribeTableAsync(string connection, string table, CancellationToken ct)
+        public Task<ICliResponse> DescribeTableAsync(string connection, string table, CancellationToken ct)
             => throw new CommandFailure(Reason);
 
-        public Task<JsonNode> QueryAsync(string connection, string sql, int? maxRows, CancellationToken ct)
+        public Task<ICliResponse> QueryAsync(RunRequest request, CancellationToken ct)
+            => throw new CommandFailure(Reason);
+
+        public Task<ICliResponse> ExplainAsync(RunRequest request, CancellationToken ct)
             => throw new CommandFailure(Reason);
     }
 

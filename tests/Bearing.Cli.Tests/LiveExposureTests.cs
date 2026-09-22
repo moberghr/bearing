@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Bearing.Core.Data;
@@ -85,24 +86,25 @@ public class LiveExposureTests : IAsyncLifetime
         var host = await LiveHostAsync();
 
         // ---- it is listed, and named, and nothing else about it is ---------------------------------
-        var listed = Json(await host.ListConnectionsAsync(CancellationToken.None));
-        var connection = Assert.Single((JsonArray)listed["connections"]!)!;
-        Assert.Equal("agent-reads", connection["name"]!.GetValue<string>());
-        Assert.Equal("read-only", connection["access"]!.GetValue<string>());
-        Assert.True(connection["available"]!.GetValue<bool>());
+        var listed = (ConnectionsResponse)await host.ListConnectionsAsync(CancellationToken.None);
+        var connection = Assert.Single(listed.Connections);
+        Assert.Equal("agent-reads", connection.Name);
+        Assert.Equal("read-only", connection.Access);
+        Assert.True(connection.Available);
 
-        // §1.11: the caller gets a handle, not an address. The key set is the assertion that holds — a
-        // field added later has to be argued for here rather than silently carried — and the values are
-        // checked too, because a field could carry an address under an innocent name.
+        // §1.11: the caller gets a handle, not an address. Asserted on the serialised form as well as the
+        // record, because a field could carry an address under an innocent name — and the record's own
+        // shape is now the compiler's business, which is the point of it being a record.
         //
         // The connections are deliberately not named after the database: the first version of this called
         // one "agent-pagila", and "no database name in the output" then failed on the connection's own
         // name. A fixture that cannot express the claim is worse than no test (§4.7).
-        Assert.Equal(
-            ["name", "engine", "access", "available"],
-            connection.AsObject().Select(kv => kv.Key));
+        Assert.Null(connection.Environment);
+        Assert.Null(connection.UnavailableReason);
 
-        var rendered = listed.ToJsonString();
+        // Through the runner's own serializer, so this asserts what a caller actually receives —
+        // and by the runtime type, since the interface has no properties to write.
+        var rendered = CliRunner.Serialize(listed);
         Assert.DoesNotContain(PgTestServer.Host, rendered);
         Assert.DoesNotContain(PgTestServer.User, rendered);
         Assert.DoesNotContain(PgTestServer.Database, rendered);
@@ -117,51 +119,50 @@ public class LiveExposureTests : IAsyncLifetime
         Assert.Equal($"{SessionPolicy.PresetTimeoutSeconds}s", timeout);
 
         // ---- reads work ----------------------------------------------------------------------------
-        var tables = Json(await host.ListTablesAsync("agent-reads", "public", CancellationToken.None));
-        var names = ((JsonArray)tables["tables"]!).Select(t => t!["name"]!.GetValue<string>()).ToList();
+        var tables = (TablesResponse)await host.ListTablesAsync("agent-reads", "public", CancellationToken.None);
+        var names = tables.Tables.Select(t => t.Name).ToList();
         Assert.Contains("payment", names);
         Assert.Contains("customer", names);
 
-        var payment = Json(await host.DescribeTableAsync("agent-reads", "public.payment", CancellationToken.None));
-        var columns = ((JsonArray)payment["columns"]!).Select(c => c!["name"]!.GetValue<string>()).ToList();
-        Assert.Contains("payment_id", columns);
+        var payment = (TableResponse)await host.DescribeTableAsync(
+            "agent-reads", "public.payment", CancellationToken.None);
+        Assert.Contains("payment_id", payment.Columns.Select(c => c.Name));
 
         // pagila's payment is a *partitioned parent* and declares no foreign keys of its own — the three
         // are on each monthly partition. Measured, after this test first asserted the opposite: `select
         // conname from pg_constraint where conrelid='public.payment'::regclass and contype='f'` returns
         // nothing, and relkind is 'p'. Asserted rather than dropped, because it is the shape most likely to
         // be "fixed" by someone who assumed the read was broken (§4.7).
-        Assert.Empty((JsonArray)payment["foreign_keys"]!);
+        Assert.Empty(payment.ForeignKeys);
 
         // So the keys are checked on an ordinary table — and on both of its sides, which is what
-        // "foreign keys touching it" means and the reason a model can ask "what references this".
+        // "foreign keys touching it" means and the reason a caller can ask "what references this".
         //
         // The arithmetic is measured, not assumed: rental declares three (to customer, inventory and
         // staff) and six of payment's monthly partitions reference it, so nine reach this list. Asserting
         // three here was the third wrong premise in this file, and the count is kept split so a future
         // reader can see which half moved.
-        var rental = Json(await host.DescribeTableAsync("agent-reads", "rental", CancellationToken.None));
-        var keys = (JsonArray)rental["foreign_keys"]!;
+        var rental = (TableResponse)await host.DescribeTableAsync("agent-reads", "rental", CancellationToken.None);
 
-        var declared = keys.Where(k => k!["from"]!["table"]!.GetValue<string>() == "public.rental").ToList();
-        var pointingAtIt = keys.Where(k => k!["to"]!["table"]!.GetValue<string>() == "public.rental").ToList();
+        var declared = rental.ForeignKeys.Where(k => k.From.Table == "public.rental").ToList();
+        var pointingAtIt = rental.ForeignKeys.Where(k => k.To.Table == "public.rental").ToList();
         Assert.Equal(3, declared.Count);
         Assert.Equal(6, pointingAtIt.Count);
-        Assert.Equal(keys.Count, declared.Count + pointingAtIt.Count);
+        Assert.Equal(rental.ForeignKeys.Count, declared.Count + pointingAtIt.Count);
 
-        var toCustomer = Assert.Single(declared, k => k!["to"]!["table"]!.GetValue<string>() == "public.customer")!;
-        Assert.Equal("customer_id", toCustomer["from"]!["columns"]![0]!.GetValue<string>());
-        Assert.Equal("customer_id", toCustomer["to"]!["columns"]![0]!.GetValue<string>());
+        var toCustomer = Assert.Single(declared, k => k.To.Table == "public.customer");
+        Assert.Equal("customer_id", toCustomer.From.Columns[0]);
+        Assert.Equal("customer_id", toCustomer.To.Columns[0]);
 
-        var rows = Json(await host.QueryAsync(
-            "agent-reads", "select payment_id, amount from payment order by payment_id", 3, CancellationToken.None));
-        var set = ((JsonArray)rows["results"]!)[0]!;
-        Assert.Equal(3, set["row_count"]!.GetValue<int>());
-        Assert.True(set["truncated"]!.GetValue<bool>());
+        var rows = (QueryResponse)await host.QueryAsync(
+            Run("agent-reads", "select payment_id, amount from payment order by payment_id", maxRows: 3),
+            CancellationToken.None);
+        var set = Assert.Single(rows.Results);
+        Assert.Equal(3, set.RowCount);
+        Assert.True(set.Truncated);
 
         // ---- writes do not -------------------------------------------------------------------------
-        var refused = await Assert.ThrowsAsync<CommandFailure>(() => host.QueryAsync(
-            "agent-reads", "update payment set amount = 0", null, CancellationToken.None));
+        var refused = await Assert.ThrowsAsync<CommandFailure>(() => host.QueryAsync(Run("agent-reads", "update payment set amount = 0"), CancellationToken.None));
         Assert.Contains("reads only", refused.Message);
         Assert.Contains("UPDATE", refused.Message);
 
@@ -178,8 +179,7 @@ public class LiveExposureTests : IAsyncLifetime
         //
         // film_film_id_seq is pagila's own (§4.7 — a fixture's contents are a fact to look up, and this one
         // is looked up rather than assumed).
-        var atServer = await Assert.ThrowsAsync<CommandFailure>(() => host.QueryAsync(
-            "agent-reads", "select nextval('film_film_id_seq')", null, CancellationToken.None));
+        var atServer = await Assert.ThrowsAsync<CommandFailure>(() => host.QueryAsync(Run("agent-reads", "select nextval('film_film_id_seq')"), CancellationToken.None));
         Assert.Contains("read-only transaction", atServer.Message);
     }
 
@@ -209,7 +209,7 @@ public class LiveExposureTests : IAsyncLifetime
                  })
         {
             var refused = await Assert.ThrowsAsync<CommandFailure>(
-                () => host.QueryAsync("agent-reads", attempt, null, CancellationToken.None));
+                () => host.QueryAsync(Run("agent-reads", attempt), CancellationToken.None));
             Assert.NotEmpty(refused.Message);
         }
 
@@ -234,7 +234,7 @@ public class LiveExposureTests : IAsyncLifetime
                  })
         {
             await Assert.ThrowsAsync<CommandFailure>(
-                () => host.QueryAsync("agent-reads", attempt, null, CancellationToken.None));
+                () => host.QueryAsync(Run("agent-reads", attempt), CancellationToken.None));
         }
 
         // And an ordinary read on the same connection still works, so the refusals above are the policy
@@ -251,7 +251,7 @@ public class LiveExposureTests : IAsyncLifetime
     {
         var host = await LiveHostAsync();
 
-        await host.QueryAsync("agent-reads", "select 1", null, CancellationToken.None);
+        await host.QueryAsync(Run("agent-reads", "select 1"), CancellationToken.None);
 
         var row = Assert.Single(_log.Entries);
         Assert.Equal(QueryOrigin.Cli, row.Origin);
@@ -272,8 +272,7 @@ public class LiveExposureTests : IAsyncLifetime
     {
         var host = await LiveHostAsync();
 
-        await Assert.ThrowsAsync<CommandFailure>(() => host.QueryAsync(
-            "agent-reads", "begin read write; select nextval('film_film_id_seq')", null, CancellationToken.None));
+        await Assert.ThrowsAsync<CommandFailure>(() => host.QueryAsync(Run("agent-reads", "begin read write; select nextval('film_film_id_seq')"), CancellationToken.None));
 
         var row = Assert.Single(_log.Entries);
         Assert.Equal(QueryOrigin.Cli, row.Origin);
@@ -300,11 +299,11 @@ public class LiveExposureTests : IAsyncLifetime
         var host = new BearingHost(new JsonProjectStore(), projectDirectory, providers, sessions);
 
         // Only the exposed one is listed at all.
-        var listed = Json(await host.ListConnectionsAsync(CancellationToken.None));
-        Assert.Single((JsonArray)listed["connections"]!);
+        var listed = (ConnectionsResponse)await host.ListConnectionsAsync(CancellationToken.None);
+        Assert.Single(listed.Connections);
 
         var refused = await Assert.ThrowsAsync<CommandFailure>(
-            () => host.QueryAsync("private-reads", "select 1", null, CancellationToken.None));
+            () => host.QueryAsync(Run("private-reads", "select 1"), CancellationToken.None));
 
         // Told plainly rather than reported as missing: a caller that can run this process can read the
         // same project.json, so hiding it would be theatre — and this way it can ask the owner.
@@ -350,15 +349,18 @@ public class LiveExposureTests : IAsyncLifetime
     /// <c>ResultJson</c> renders a bigint as a JSON <i>number</i> (which is the point of it), and a helper
     /// that assumed every scalar was a string threw on the first sequence value it was handed.
     /// </summary>
+    /// <summary>One statement, as the request every run command takes.</summary>
+    private static RunRequest Run(string connection, string sql, int? maxRows = null)
+        => new(connection, sql) { MaxRows = maxRows };
+
+    /// <summary>
+    /// The first cell, as text. Reading the record rather than serialised JSON, so the assertion is about
+    /// the value the command produced and not about how it was spelled on the way out.
+    /// </summary>
     private static async Task<string?> ScalarAsync(BearingHost host, string sql)
     {
-        var json = Json(await host.QueryAsync("agent-reads", sql, null, CancellationToken.None));
-        var cell = ((JsonArray)((JsonArray)json["results"]!)[0]!["rows"]!)[0]![0];
-
-        return cell is null ? null
-            : cell.GetValueKind() == JsonValueKind.String ? cell.GetValue<string>()
-            : cell.ToJsonString();
+        var response = (QueryResponse)await host.QueryAsync(Run("agent-reads", sql), CancellationToken.None);
+        var cell = response.Results[0].Rows[0][0];
+        return cell is null ? null : Convert.ToString(cell, CultureInfo.InvariantCulture);
     }
-
-    private static JsonObject Json(JsonNode node) => (JsonObject)node;
 }

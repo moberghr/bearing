@@ -20,7 +20,26 @@ public sealed record CliOptions
     public string? ProjectDirectory { get; init; }
     public OutputFormat Format { get; init; } = OutputFormat.Json;
     public string? Schema { get; init; }
+
+    /// <summary>Rows to return, or null for the command's own default. An explicit number is honoured
+    /// whatever its size — see <see cref="Commands.DefaultMaxRows"/> for why there is no ceiling.</summary>
     public int? MaxRows { get; init; }
+
+    /// <summary>`--max-rows all`.</summary>
+    public bool UnlimitedRows { get; init; }
+
+    /// <summary>A SQL file to run, or <c>-</c> for standard input. Mutually exclusive with SQL given
+    /// positionally.</summary>
+    public string? File { get; init; }
+
+    /// <summary>Where to write the rows. The extension picks the format, and has already been checked.</summary>
+    public string? Out { get; init; }
+
+    /// <summary>Seconds a statement may run. May only <b>lower</b> what the connection allows (§1.9).</summary>
+    public int? TimeoutSeconds { get; init; }
+
+    /// <summary>`explain --analyze`: run the statement and measure it, rather than only planning it.</summary>
+    public bool Analyze { get; init; }
     public bool Help { get; init; }
     public bool Version { get; init; }
 
@@ -94,12 +113,55 @@ public static class CliParser
                     break;
 
                 case "--max-rows":
-                    if (Next(args, ref i) is not { } rows) return Missing("--max-rows", "a number of rows");
+                    if (Next(args, ref i) is not { } rows)
+                        return Missing("--max-rows", "a number of rows, or 'all'");
+                    if (string.Equals(rows, "all", StringComparison.OrdinalIgnoreCase))
+                    {
+                        options = options with { UnlimitedRows = true, MaxRows = null };
+                        break;
+                    }
+
                     if (!int.TryParse(rows, out var parsed) || parsed < 1)
-                        return new CliOptions { Error = $"--max-rows needs a positive whole number, not '{rows}'." };
-                    // Clamped rather than refused: asking for a million rows is a judgement about how much
-                    // you want, not a mistake worth failing over, and the output says how many came back.
-                    options = options with { MaxRows = Math.Min(parsed, Commands.MaxRowsCeiling) };
+                        return new CliOptions
+                        {
+                            Error = $"--max-rows needs a positive whole number or 'all', not '{rows}'.",
+                        };
+                    // Honoured, not clamped. The small default is the protection, and it applies when
+                    // nobody said otherwise; an explicit number is a judgement about how much you want, and
+                    // silently returning a smaller one gives a result the caller cannot tell from the
+                    // whole answer.
+                    options = options with { MaxRows = parsed, UnlimitedRows = false };
+                    break;
+
+                case "--file":
+                    if (Next(args, ref i) is not { } file)
+                        return Missing("--file", "a path, or - for standard input");
+                    options = options with { File = file };
+                    break;
+
+                case "--out":
+                    if (Next(args, ref i) is not { } outPath) return Missing("--out", "a path");
+                    if (ExportFormats.For(outPath) is null)
+                        return new CliOptions
+                        {
+                            Error = $"--out needs a .csv or .xlsx path; '{outPath}' is neither.",
+                        };
+                    options = options with { Out = outPath };
+                    break;
+
+                case "--timeout":
+                    if (Next(args, ref i) is not { } secs)
+                        return Missing("--timeout", "a number of seconds");
+                    if (!int.TryParse(secs, out var timeout) || timeout < 1)
+                        return new CliOptions
+                        {
+                            Error = $"--timeout needs a positive whole number of seconds, not '{secs}'.",
+                        };
+                    options = options with { TimeoutSeconds = timeout };
+                    break;
+
+                case "--analyze" or "--analyse":
+                    options = options with { Analyze = true };
                     break;
 
                 default:
@@ -116,29 +178,70 @@ public static class CliParser
         if (positional.Count == 0) return options with { Help = true };
 
         var command = positional[0];
-        if (command is not (Commands.Connections or Commands.Tables or Commands.Describe or Commands.Query))
+        if (command is not (Commands.Connections or Commands.Tables or Commands.Describe
+                            or Commands.Query or Commands.Explain))
             return new CliOptions { Error = $"Unknown command '{command}'." };
 
-        var rest = positional.Skip(1).ToList();
-        if (Arity(command) is { } expected && rest.Count != expected.Count)
-            return new CliOptions { Error = $"`{command}` takes {expected.Description}." };
-
-        return options with { Command = command, Arguments = rest };
+        options = options with { Command = command, Arguments = positional.Skip(1).ToList() };
+        return Validate(options) ?? options;
     }
 
     /// <summary>
-    /// How many positional arguments each command takes. Exact rather than "at least", because the shape
-    /// that motivates it is a quoted SQL string the shell split: <c>bearing query db select 1</c>
-    /// would otherwise run <c>select</c> and silently drop the rest.
+    /// What each command needs, once the options are known.
+    /// <para>
+    /// Not a table of argument counts, because the rule that matters cannot be expressed as one: a run
+    /// command takes its SQL positionally <i>or</i> from <c>--file</c>, never both and never neither. The
+    /// counts are still exact rather than "at least", for the shape that motivated them — a quoted SQL
+    /// string the shell split, where <c>bearing query db select 1</c> would otherwise run <c>select</c>
+    /// and drop the rest.
+    /// </para>
     /// </summary>
-    private static (int Count, string Description)? Arity(string command) => command switch
+    private static CliOptions? Validate(CliOptions o)
     {
-        Commands.Connections => (0, "no arguments"),
-        Commands.Tables => (1, "a connection name"),
-        Commands.Describe => (2, "a connection name and a table name"),
-        Commands.Query => (2, "a connection name and one quoted SQL statement"),
-        _ => null,
-    };
+        var runsSql = o.Command is Commands.Query or Commands.Explain;
+
+        // An option that means nothing for this command is a mistake worth naming, not one to ignore: a
+        // caller who typed it believes it is doing something.
+        if (!runsSql && o.File is not null) return Error($"`{o.Command}` does not take --file.");
+        if (!runsSql && o.Out is not null) return Error($"`{o.Command}` does not take --out.");
+        if (!runsSql && o.TimeoutSeconds is not null) return Error($"`{o.Command}` does not take --timeout.");
+        if (o.Command != Commands.Tables && o.Schema is not null)
+            return Error($"`{o.Command}` does not take --schema.");
+        if (o.Command != Commands.Explain && o.Analyze)
+            return Error($"`{o.Command}` does not take --analyze.");
+        if (o.Command == Commands.Explain && o.Out is not null)
+            return Error("`explain` prints a plan; --out writes rows, so the two do not go together.");
+
+        switch (o.Command)
+        {
+            case Commands.Connections when o.Arguments.Count != 0:
+                return Error("`connections` takes no arguments.");
+
+            case Commands.Tables when o.Arguments.Count != 1:
+                return Error("`tables` takes a connection name.");
+
+            case Commands.Describe when o.Arguments.Count != 2:
+                return Error("`describe` takes a connection name and a table name.");
+
+            case Commands.Query or Commands.Explain:
+                if (o.Arguments.Count == 0) return Error($"`{o.Command}` takes a connection name.");
+                if (o.Arguments.Count > 2)
+                    return Error($"`{o.Command}` takes a connection name and one quoted SQL statement.");
+
+                var inline = o.Arguments.Count == 2;
+                if (inline && o.File is not null)
+                    return Error(
+                        "Give the SQL either as an argument or with --file, not both — one of them would "
+                        + "have to be ignored, and neither is the obvious one.");
+                if (!inline && o.File is null)
+                    return Error($"`{o.Command}` needs SQL: quote it as an argument, or pass --file <path>.");
+                break;
+        }
+
+        return null;
+    }
+
+    private static CliOptions Error(string message) => new() { Error = message };
 
     private static string? Next(IReadOnlyList<string> args, ref int i)
         => i + 1 < args.Count ? args[++i] : null;

@@ -1,10 +1,10 @@
 using System.Diagnostics;
-using System.Text.Json.Nodes;
 using Bearing.Core.Data;
 using Bearing.Core.Logging;
 using Bearing.Core.Schema;
 using Bearing.Core.Workspace;
 using Bearing.Sessions;
+using Bearing.Results;
 using Bearing.Sql;
 
 namespace Bearing.Cli.Tools;
@@ -26,45 +26,43 @@ public sealed class BearingHost(
     IConnectionSessionManager sessions,
     IQueryLog? log = null) : IBearingHost
 {
-    public async Task<JsonNode> ListConnectionsAsync(CancellationToken ct)
+    public async Task<ICliResponse> ListConnectionsAsync(CancellationToken ct)
     {
-        var connections = new JsonArray();
+        var connections = new List<ExposedConnection>();
         foreach (var saved in await ExposedAsync(ct).ConfigureAwait(false))
         {
             var unavailable = ExternalAccessPolicy.UnavailableReason(saved);
-            var entry = new JsonObject
-            {
-                ["name"] = saved.Name,
-                ["engine"] = EngineName(saved),
-                // The access level as a sentence rather than the enum's spelling: it is read by a model,
-                // and "read-only" is the fact, while "ReadOnly" is our identifier for it.
-                ["access"] = "read-only",
-                ["available"] = unavailable is null,
-            };
 
             // Nothing about where the server is, who it authenticates as, or what it is called there —
-            // §1.11. The environment label is the exception, and deliberately: it is the user's own word for
-            // how dangerous this connection is, and a model that knows it is pointed at production behaves
-            // better than one that does not.
-            if (!string.IsNullOrWhiteSpace(saved.Environment)) entry["environment"] = saved.Environment;
-            if (unavailable is not null) entry["unavailable_reason"] = unavailable;
-
-            connections.Add(entry);
+            // §1.11. The environment label is the exception, and deliberately: it is the user's own word
+            // for how dangerous this connection is, and a caller that knows it is pointed at production
+            // behaves better than one that does not.
+            connections.Add(new ExposedConnection(
+                saved.Name,
+                EngineName(saved),
+                // The access level as a sentence rather than the enum's spelling: it is read by a caller,
+                // and "read-only" is the fact, while "ReadOnly" is our identifier for it.
+                Access: "read-only",
+                Available: unavailable is null)
+            {
+                Environment = string.IsNullOrWhiteSpace(saved.Environment) ? null : saved.Environment,
+                UnavailableReason = unavailable,
+            });
         }
 
-        return new JsonObject { ["connections"] = connections };
+        return new ConnectionsResponse(connections);
     }
 
-    public async Task<JsonNode> ListTablesAsync(string connection, string? schema, CancellationToken ct)
+    public async Task<ICliResponse> ListTablesAsync(string connection, string? schema, CancellationToken ct)
     {
         var info = await ResolveAsync(connection, ct).ConfigureAwait(false);
         using var lease = await ConnectAsync(info, ct).ConfigureAwait(false);
         var snapshot = await SnapshotAsync(info, lease.Session, ct).ConfigureAwait(false);
 
-        return SchemaJson.Tables(snapshot, schema);
+        return SchemaCatalog.Tables(snapshot, schema);
     }
 
-    public async Task<JsonNode> DescribeTableAsync(string connection, string table, CancellationToken ct)
+    public async Task<ICliResponse> DescribeTableAsync(string connection, string table, CancellationToken ct)
     {
         var info = await ResolveAsync(connection, ct).ConfigureAwait(false);
         using var lease = await ConnectAsync(info, ct).ConfigureAwait(false);
@@ -76,12 +74,120 @@ public sealed class BearingHost(
                 $"'{table}' is not a table or view on '{info.Name}'. "
                 + $"Run `bearing {Commands.Tables} {info.Name}` to see what is.");
 
-        return SchemaJson.Table(snapshot, found);
+        return SchemaCatalog.Table(snapshot, found);
     }
 
-    public async Task<JsonNode> QueryAsync(string connection, string sql, int? maxRows, CancellationToken ct)
+    public async Task<ICliResponse> QueryAsync(RunRequest request, CancellationToken ct)
     {
-        var info = await ResolveAsync(connection, ct).ConfigureAwait(false);
+        var (info, _) = await PrepareAsync(request, ct).ConfigureAwait(false);
+        var sql = request.Sql;
+
+        using var lease = await ConnectAsync(info, ct).ConfigureAwait(false);
+
+        IReadOnlyList<QueryResult> results;
+        var wall = Stopwatch.StartNew();
+        try
+        {
+            results = await lease.Session.Executor
+                .ExecuteAsync(sql, new QueryOptions { MaxRows = Rows(request) }, ct)
+                .ConfigureAwait(false);
+            wall.Stop();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not CommandFailure)
+        {
+            throw new CommandFailure($"The query could not be run on '{info.Name}': {SafeErrorText.Of(ex)}");
+        }
+
+        Log(info, sql, results, wall.Elapsed);
+
+        if (results.FirstOrDefault(r => !r.Success)?.Error is { } error)
+            throw new CommandFailure($"{info.Name}: {error.Message}");
+
+        if (request.OutPath is { } path) return Export(results, path, info.Name);
+
+        // One shape whatever the SQL was. A single statement is the overwhelming case, but a result that
+        // is sometimes an object and sometimes a list is a shape a consumer has to branch on, and the
+        // branch it is least likely to have written is the rare one.
+        return new QueryResponse(results.Select(CellValue.SetOf).ToList());
+    }
+
+    /// <summary>
+    /// The plan for a statement — and with <see cref="RunRequest.Analyze"/>, the measured one.
+    /// <para>
+    /// <b>The allow-list judges the caller's statement, and then we send our own.</b> `EXPLAIN ANALYZE`
+    /// carries its own <c>BEGIN … ROLLBACK</c> (<c>ExplainSql.Measured</c>), which the allow-list would
+    /// refuse if it saw it — rightly, since transaction control from outside is what defeated read-only.
+    /// What is validated is what the caller asked to run; what is sent is what we wrapped it in, and the
+    /// wrapper is ours rather than theirs.
+    /// </para>
+    /// <para>
+    /// The wrapper is not optional. A plain SELECT can call a volatile function that writes, and ANALYZE
+    /// genuinely runs the statement — so the rollback is what keeps "explain this" from being a write. It
+    /// is not a promise that nothing happened: a sequence consumed by <c>nextval</c> does not go back, and
+    /// neither does anything a trigger did outside the database.
+    /// </para>
+    /// </summary>
+    public async Task<ICliResponse> ExplainAsync(RunRequest request, CancellationToken ct)
+    {
+        var (info, _) = await PrepareAsync(request, ct).ConfigureAwait(false);
+
+        var explain = request.Analyze ? ExplainSql.Measured(request.Sql) : ExplainSql.Plan(request.Sql);
+
+        using var lease = await ConnectAsync(info, ct).ConfigureAwait(false);
+
+        IReadOnlyList<QueryResult> results;
+        var wall = Stopwatch.StartNew();
+        try
+        {
+            // No row cap: a plan is one JSON document in one cell, and a ceiling could only truncate it.
+            results = await lease.Session.Executor
+                .ExecuteAsync(explain.Sql, new QueryOptions { MaxRows = null }, ct)
+                .ConfigureAwait(false);
+            wall.Stop();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not CommandFailure)
+        {
+            throw new CommandFailure($"The plan could not be read on '{info.Name}': {SafeErrorText.Of(ex)}");
+        }
+
+        // Logged as what the caller asked for, not as the wrapped batch: the record is of the statement a
+        // person would recognise, and the BEGIN/ROLLBACK around it is ours.
+        Log(info, request.Sql, results, wall.Elapsed);
+
+        if (results.FirstOrDefault(r => !r.Success)?.Error is { } error)
+            throw new CommandFailure($"{info.Name}: {error.Message}");
+
+        // BEGIN and ROLLBACK produce no rows, so the one result that has any is the plan.
+        var json = results.FirstOrDefault(r => r.Rows.Count > 0)?.Rows[0][0]?.ToString();
+        var plan = ExplainPlanParser.Parse(json, explain.Analyzed, explain.RolledBack)
+            ?? throw new CommandFailure($"{info.Name} did not return a query plan.");
+
+        return PlanTree.Of(plan);
+    }
+
+    /// <summary>
+    /// How many rows to materialise. The small default is the protection, so it applies only when nobody
+    /// said otherwise; an explicit number is honoured whatever its size; and an <b>export is unlimited</b>
+    /// unless the caller capped it — a capped export is a silently truncated *file*, which is what the app
+    /// guards against with "a workbook missing a sheet is worse than no workbook".
+    /// </summary>
+    private static int? Rows(RunRequest request)
+    {
+        if (request.UnlimitedRows) return null;
+        if (request.MaxRows is { } asked) return asked;
+        return request.OutPath is null ? Commands.DefaultMaxRows : null;
+    }
+
+    /// <summary>
+    /// Resolve the connection, apply the caller's timeout, and refuse anything that is not a read — what
+    /// every run command shares.
+    /// </summary>
+    private async Task<(ConnectionInfo Info, ProviderTraits Traits)> PrepareAsync(
+        RunRequest request, CancellationToken ct)
+    {
+        var info = WithTimeout(
+            await ResolveAsync(request.Connection, ct).ConfigureAwait(false), request.TimeoutSeconds);
+        var sql = request.Sql;
 
         // The connection's own dialect, never a default: the guard's verdict depends on whether it can read
         // this engine at all, and one it cannot read has every statement treated as risky (§1.2).
@@ -121,43 +227,79 @@ public sealed class BearingHost(
         if (ExternalSqlPolicy.Refuse(traits.Dialect, sql) is { } notARead)
             throw Refused(info, sql, $"{info.Name}: {notARead}");
 
-        using var lease = await ConnectAsync(info, ct).ConfigureAwait(false);
-
-        IReadOnlyList<QueryResult> results;
-        var wall = Stopwatch.StartNew();
-        try
-        {
-            results = await lease.Session.Executor
-                .ExecuteAsync(sql, new QueryOptions { MaxRows = maxRows ?? Commands.DefaultMaxRows }, ct)
-                .ConfigureAwait(false);
-            wall.Stop();
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException and not CommandFailure)
-        {
-            throw new CommandFailure($"The query could not be run on '{info.Name}': {SafeErrorText.Of(ex)}");
-        }
-
-        Log(info, sql, results, wall.Elapsed);
-
-        if (results.FirstOrDefault(r => !r.Success)?.Error is { } error)
-            throw new CommandFailure($"{info.Name}: {error.Message}");
-
-        var sets = new JsonArray();
-        foreach (var result in results) sets.Add(Set(result));
-
-        // One shape whatever the SQL was. A single statement is the overwhelming case, but a result that is
-        // sometimes an object and sometimes a list is a shape a consumer has to branch on, and the branch it
-        // is least likely to have written is the rare one.
-        return new JsonObject { ["results"] = sets };
+        return (info, traits);
     }
 
-    private static JsonObject Set(QueryResult result)
+    /// <summary>
+    /// The caller's timeout, applied only if it <b>lowers</b> what the connection already allows.
+    /// <para>
+    /// Raising it would let a caller lift a limit the connection's owner set, which is the inversion §1.9
+    /// exists to prevent: read-only and the statement timeout are the owner's settings, not the caller's.
+    /// Lowering is always safe, and "do not let this exploratory query run more than five seconds" is a
+    /// thing an agent should be able to say about its own query.
+    /// </para>
+    /// </summary>
+    private static ConnectionInfo WithTimeout(ConnectionInfo exposed, int? seconds)
     {
-        var set = ResultJson.Of(result);
-        // A statement that returned no grid still said something ("SELECT 0", an affected-row count). It is
-        // the only answer such a statement has, so dropping it would report success with nothing in it.
-        if (!string.IsNullOrWhiteSpace(result.Message)) set["message"] = result.Message;
-        return set;
+        if (seconds is not { } asked) return exposed;
+
+        // The exposed record always carries a limit — ExternalAccessPolicy fills one in when the connection
+        // has none — so "lower" is simply the smaller of the two.
+        var current = SessionPolicy.TimeoutSeconds(exposed);
+        return current > SessionPolicy.NoTimeout && asked >= current
+            ? exposed
+            : exposed with { StatementTimeoutSeconds = asked };
+    }
+
+    /// <summary>
+    /// Write the grids to a file and report what landed, rather than returning the rows.
+    /// <para>
+    /// <b>An xlsx takes a sheet per result set; a CSV holds one table.</b> RFC 4180 has no way to express
+    /// two tables and the app does not try either — its Export-run is xlsx-only. Refusing beats writing
+    /// <c>report.1.csv</c> and <c>report.2.csv</c>: the caller named a path, and a script that then finds
+    /// no file at the path it asked for is broken in a way a clear error is not.
+    /// </para>
+    /// <para>
+    /// Only grids count. A statement that returned nothing but a message is not a sheet — an empty tab
+    /// named after a <c>SET</c> would be worse than its absence — so <c>set search_path = …; select …</c>
+    /// still exports as one table.
+    /// </para>
+    /// </summary>
+    private static ExportResponse Export(IReadOnlyList<QueryResult> results, string path, string connection)
+    {
+        var format = ExportFormats.For(path)
+            ?? throw new CommandFailure($"'{path}' is not a .csv or .xlsx path.");
+
+        var grids = results.Where(r => r.Columns.Count > 0).ToList();
+        if (grids.Count == 0)
+            throw new CommandFailure($"{connection}: that statement returned no rows to write.");
+
+        if (format == ExportFormat.Csv && grids.Count > 1)
+            throw new CommandFailure(
+                $"{connection}: the batch returned {grids.Count} result sets, and a CSV holds one table. "
+                + "Write a .xlsx instead, or run one statement.");
+
+        try
+        {
+            if (format == ExportFormat.Xlsx)
+            {
+                var sheets = grids
+                    .Select((g, i) => new XlsxWriter.Sheet(new TableBlock(g.Columns, g.Rows), $"Result {i + 1}"))
+                    .ToList();
+                ResultExport.WriteWorkbook(path, sheets);
+            }
+            else
+            {
+                ResultExport.Write(path, new TableBlock(grids[0].Columns, grids[0].Rows), format, "Result 1");
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new CommandFailure($"Could not write {path}: {SafeErrorText.Of(ex)}");
+        }
+
+        return new ExportResponse(
+            Path.GetFullPath(path), ExportFormats.Name(format), grids.Count, grids.Sum(g => (long)g.Rows.Count));
     }
 
     // ---- the record -----------------------------------------------------------------------------

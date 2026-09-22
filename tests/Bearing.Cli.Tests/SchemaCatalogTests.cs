@@ -10,7 +10,7 @@ namespace Bearing.Cli.Tests;
 /// resolution rules (search path, casing) are Core's and asserting them against a stand-in would be
 /// asserting our assumptions back (§4.6).
 /// </summary>
-public class SchemaJsonTests
+public class SchemaCatalogTests
 {
     private const long Payment = 1;
     private const long Customer = 2;
@@ -41,25 +41,23 @@ public class SchemaJsonTests
     [Fact]
     public void A_listing_names_every_relation_with_its_kind()
     {
-        var json = SchemaJson.Tables(Pagila(), schema: null);
+        var json = SchemaCatalog.Tables(Pagila(), schema: null);
 
-        var tables = (JsonArray)json["tables"]!;
-        Assert.Equal(3, tables.Count);
-        Assert.Equal(3, json["table_count"]!.GetValue<int>());
-        Assert.Null(json["truncated"]);
+        Assert.Equal(3, json.Tables.Count);
+        Assert.Equal(3, json.TableCount);
+        Assert.Null(json.Truncated);
 
-        var view = tables.Single(t => t!["name"]!.GetValue<string>() == "monthly")!;
-        Assert.Equal("reporting", view["schema"]!.GetValue<string>());
-        Assert.Equal("view", view["kind"]!.GetValue<string>());
+        var view = Assert.Single(json.Tables, t => t.Name == "monthly");
+        Assert.Equal("reporting", view.Schema);
+        Assert.Equal("view", view.Kind);
     }
 
     [Fact]
     public void A_schema_filter_narrows_the_listing_and_ignores_case()
     {
-        var json = SchemaJson.Tables(Pagila(), schema: "REPORTING");
+        var json = SchemaCatalog.Tables(Pagila(), schema: "REPORTING");
 
-        var tables = (JsonArray)json["tables"]!;
-        Assert.Equal("monthly", Assert.Single(tables)!["name"]!.GetValue<string>());
+        Assert.Equal("monthly", Assert.Single(json.Tables).Name);
     }
 
     /// <summary>
@@ -70,16 +68,16 @@ public class SchemaJsonTests
     [Fact]
     public void A_listing_longer_than_the_cap_says_so_rather_than_stopping_quietly()
     {
-        var many = Enumerable.Range(1, SchemaJson.MaxTables + 20)
+        var many = Enumerable.Range(1, SchemaCatalog.MaxTables + 20)
             .Select(i => new TableInfo(i, "public", $"t{i:0000}", RelationKind.Table))
             .ToList();
         var snapshot = new SchemaSnapshot("app", ["public"], many, [], []);
 
-        var json = SchemaJson.Tables(snapshot, schema: null);
+        var json = SchemaCatalog.Tables(snapshot, schema: null);
 
-        Assert.Equal(SchemaJson.MaxTables, ((JsonArray)json["tables"]!).Count);
-        Assert.Equal(SchemaJson.MaxTables + 20, json["table_count"]!.GetValue<int>());
-        Assert.True(json["truncated"]!.GetValue<bool>());
+        Assert.Equal(SchemaCatalog.MaxTables, json.Tables.Count);
+        Assert.Equal(SchemaCatalog.MaxTables + 20, json.TableCount);
+        Assert.True(json.Truncated);
     }
 
     [Fact]
@@ -87,14 +85,13 @@ public class SchemaJsonTests
     {
         var snapshot = Pagila();
 
-        var json = SchemaJson.Table(snapshot, snapshot.TableById(Payment)!);
+        var json = SchemaCatalog.Table(snapshot, snapshot.TableById(Payment)!);
 
-        var columns = (JsonArray)json["columns"]!;
-        Assert.Equal(["payment_id", "customer_id", "amount"], columns.Select(c => c!["name"]!.GetValue<string>()));
-        Assert.True(columns[0]!["primary_key"]!.GetValue<bool>());
-        Assert.False(columns[2]!["primary_key"]!.GetValue<bool>());
-        Assert.True(columns[1]!["not_null"]!.GetValue<bool>());
-        Assert.False(columns[2]!["not_null"]!.GetValue<bool>());
+        Assert.Equal(["payment_id", "customer_id", "amount"], json.Columns.Select(c => c.Name));
+        Assert.True(json.Columns[0].PrimaryKey);
+        Assert.False(json.Columns[2].PrimaryKey);
+        Assert.True(json.Columns[1].NotNull);
+        Assert.False(json.Columns[2].NotNull);
     }
 
     /// <summary>
@@ -107,17 +104,17 @@ public class SchemaJsonTests
     {
         var snapshot = Pagila();
 
-        var declaring = (JsonArray)SchemaJson.Table(snapshot, snapshot.TableById(Payment)!)["foreign_keys"]!;
-        var referenced = (JsonArray)SchemaJson.Table(snapshot, snapshot.TableById(Customer)!)["foreign_keys"]!;
+        var declaring = SchemaCatalog.Table(snapshot, snapshot.TableById(Payment)!).ForeignKeys;
+        var referenced = SchemaCatalog.Table(snapshot, snapshot.TableById(Customer)!).ForeignKeys;
 
         foreach (var side in new[] { declaring, referenced })
         {
-            var fk = Assert.Single(side)!;
-            Assert.Equal("payment_customer_id_fkey", fk["name"]!.GetValue<string>());
-            Assert.Equal("public.payment", fk["from"]!["table"]!.GetValue<string>());
-            Assert.Equal("customer_id", fk["from"]!["columns"]![0]!.GetValue<string>());
-            Assert.Equal("public.customer", fk["to"]!["table"]!.GetValue<string>());
-            Assert.Equal("customer_id", fk["to"]!["columns"]![0]!.GetValue<string>());
+            var fk = Assert.Single(side);
+            Assert.Equal("payment_customer_id_fkey", fk.Name);
+            Assert.Equal("public.payment", fk.From.Table);
+            Assert.Equal("customer_id", fk.From.Columns[0]);
+            Assert.Equal("public.customer", fk.To.Table);
+            Assert.Equal("customer_id", fk.To.Columns[0]);
         }
     }
 

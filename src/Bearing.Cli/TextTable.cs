@@ -1,15 +1,16 @@
+using System.Globalization;
 using System.Text;
-using System.Text.Json.Nodes;
+using System.Text.Json;
+using Bearing.Cli.Tools;
 
 namespace Bearing.Cli;
 
 /// <summary>
-/// The <c>--table</c> rendering: the same JSON, laid out for a person.
+/// The <c>--table</c> rendering: the same responses, laid out for a person.
 /// <para>
-/// It reads the JSON rather than the result objects on purpose. There is one shape of the answer and it is
-/// the JSON one; a second renderer walking the records would be a second definition of what a command
-/// returns, and the two would drift — the grid's own display path is the cautionary tale (§9.10c). This is
-/// a view of the output, never a second output.
+/// It switches on the response <i>type</i>, so a command that gains a shape is a compile error here rather
+/// than a silently unhandled case. It used to read the JSON, which meant the layout depended on key names
+/// and a renamed field degraded quietly to the fallback.
 /// </para>
 /// <para>
 /// A null prints as an empty cell. That is ambiguous against an empty string, and it is why this format is
@@ -18,71 +19,119 @@ namespace Bearing.Cli;
 /// </summary>
 public static class TextTable
 {
-    public static string Render(JsonNode node)
+    public static string Render(ICliResponse response)
     {
         var output = new StringBuilder();
 
-        switch (node)
+        switch (response)
         {
-            case JsonObject o when o["connections"] is JsonArray connections:
-                AppendRecords(output, connections);
+            case ConnectionsResponse connections:
+                Records(output, connections.Connections);
                 break;
 
-            case JsonObject o when o["tables"] is JsonArray tables:
-                AppendRecords(output, tables);
-                if (o["truncated"]?.GetValue<bool>() == true)
-                    output.AppendLine($"({o["table_count"]} in all; this is the first {((JsonArray)o["tables"]!).Count})");
+            case TablesResponse tables:
+                Records(output, tables.Tables);
+                if (tables.Truncated == true)
+                    output.AppendLine($"({tables.TableCount} in all; this is the first {tables.Tables.Count})");
                 break;
 
-            case JsonObject o when o["columns"] is JsonArray columns && o["foreign_keys"] is JsonArray keys:
-                output.AppendLine($"{o["schema"]}.{o["name"]}  ({o["kind"]})");
-                output.AppendLine();
-                AppendRecords(output, columns);
-                if (keys.Count > 0)
-                {
-                    output.AppendLine();
-                    output.AppendLine("Foreign keys");
-                    foreach (var key in keys)
-                        output.AppendLine(
-                            $"  {key!["name"]}: {key["from"]!["table"]}({Join(key["from"]!["columns"]!)})"
-                            + $" -> {key["to"]!["table"]}({Join(key["to"]!["columns"]!)})");
-                }
-
+            case TableResponse table:
+                AppendTable(output, table);
                 break;
 
-            case JsonObject o when o["results"] is JsonArray results:
-                foreach (var set in results) AppendResultSet(output, (JsonObject)set!);
+            case QueryResponse query:
+                foreach (var set in query.Results) AppendSet(output, set);
+                break;
+
+            case ExportResponse export:
+                output.AppendLine(
+                    $"Wrote {export.Rows:N0} row{(export.Rows == 1 ? "" : "s")} "
+                    + $"in {export.Results} result set{(export.Results == 1 ? "" : "s")} "
+                    + $"to {export.Written} ({export.Format}).");
+                break;
+
+            case PlanResponse plan:
+                AppendPlan(output, plan);
                 break;
 
             default:
-                output.AppendLine(node.ToJsonString());
+                output.AppendLine(JsonSerializer.Serialize(response, CliRunner.Json));
                 break;
         }
 
         return output.ToString();
     }
 
-    private static void AppendResultSet(StringBuilder output, JsonObject set)
+    private static void AppendTable(StringBuilder output, TableResponse table)
     {
-        if (set["columns"] is JsonArray columns && columns.Count > 0)
-        {
-            var headers = columns.Select(c => c!["name"]!.GetValue<string>()).ToList();
-            var rows = ((JsonArray)set["rows"]!)
-                .Select(r => ((JsonArray)r!).Select(Cell).ToList())
-                .ToList();
-            AppendGrid(output, headers, rows);
-        }
+        output.AppendLine($"{table.Schema}.{table.Name}  ({table.Kind})");
+        output.AppendLine();
+        Records(output, table.Columns);
 
-        if (set["message"]?.GetValue<string>() is { Length: > 0 } message) output.AppendLine(message);
+        if (table.ForeignKeys.Count == 0) return;
 
-        var count = set["row_count"]!.GetValue<int>();
-        // "cut short" rather than "more rows exist": the read stopped at the ceiling, and saying so is what
-        // stops someone reading a partial answer as the whole one.
-        var truncated = set["truncated"]?.GetValue<bool>() == true ? ", cut short at the row limit" : "";
-        output.AppendLine($"({count} row{(count == 1 ? "" : "s")} in {set["duration_ms"]} ms{truncated})");
+        output.AppendLine();
+        output.AppendLine("Foreign keys");
+        foreach (var key in table.ForeignKeys)
+            output.AppendLine(
+                $"  {key.Name}: {key.From.Table}({string.Join(", ", key.From.Columns)})"
+                + $" -> {key.To.Table}({string.Join(", ", key.To.Columns)})");
     }
 
-    private static void AppendRecords(StringBuilder output, JsonArray records)
+    private static void AppendSet(StringBuilder output, ResultSet set)
+    {
+        if (set.Columns.Count > 0)
+        {
+            var headers = set.Columns.Select(c => c.Name).ToList();
+            var rows = set.Rows.Select(r => r.Select(Cell).ToList()).ToList();
+            Grid(output, headers, rows);
+        }
+
+        if (set.Message is { Length: > 0 } message) output.AppendLine(message);
+
+        // "cut short" rather than "more rows exist": the read stopped at the ceiling, and saying so is what
+        // stops someone reading a partial answer as the whole one.
+        var truncated = set.Truncated ? ", cut short at the row limit" : "";
+        output.AppendLine(
+            $"({set.RowCount} row{(set.RowCount == 1 ? "" : "s")} in {set.DurationMs} ms{truncated})");
+    }
+
+    private static void AppendPlan(StringBuilder output, PlanResponse plan)
+    {
+        output.AppendLine(plan.Analyzed
+            ? $"Measured plan (rolled back: {(plan.RolledBack ? "yes" : "no")})"
+            : "Estimated plan — the statement was not run");
+        if (plan.PlanningMs is { } planning) output.AppendLine($"Planning: {planning} ms");
+        if (plan.ExecutionMs is { } execution) output.AppendLine($"Execution: {execution} ms");
+        output.AppendLine();
+
+        AppendNode(output, plan.Plan, 0);
+
+        if (plan.Hotspots.Count == 0) return;
+        output.AppendLine();
+        output.AppendLine("Costliest nodes");
+        foreach (var node in plan.Hotspots) output.AppendLine($"  {Describe(node)}");
+    }
+
+    private static void AppendNode(StringBuilder output, PlanNode node, int depth)
+    {
+        output.AppendLine(new string(' ', depth * 2) + Describe(node));
+        foreach (var child in node.Children ?? []) AppendNode(output, child, depth + 1);
+    }
+
+    private static string Describe(PlanNode node)
+    {
+        var text = new StringBuilder(node.Node);
+        if (node.Relation is { Length: > 0 }) text.Append(" on ").Append(node.Relation);
+        if (node.Index is { Length: > 0 }) text.Append(" using ").Append(node.Index);
+        if (node.ActualMs is { } ms) text.Append(CultureInfo.InvariantCulture, $"  {ms} ms");
+        else if (node.EstimatedCost is { } cost) text.Append(CultureInfo.InvariantCulture, $"  cost {cost}");
+        if (node.ActualRows is { } rows) text.Append(CultureInfo.InvariantCulture, $"  {rows} rows");
+        return text.ToString();
+    }
+
+    /// <summary>A list of records as a grid, with a column per property that any of them sets.</summary>
+    private static void Records<T>(StringBuilder output, IReadOnlyList<T> records)
     {
         if (records.Count == 0)
         {
@@ -90,22 +139,29 @@ public static class TextTable
             return;
         }
 
-        // The union of keys, in first-seen order: an optional field (environment, unavailable_reason) is
-        // present on some rows and not others, and a header taken from row one alone would drop it.
-        var headers = new List<string>();
-        foreach (var record in records)
-            foreach (var property in record!.AsObject())
-                if (!headers.Contains(property.Key))
-                    headers.Add(property.Key);
-
-        var rows = records
-            .Select(r => headers.Select(h => Cell(r!.AsObject().TryGetPropertyValue(h, out var v) ? v : null)).ToList())
+        var properties = typeof(T).GetProperties();
+        var values = records
+            .Select(r => properties.Select(p => Cell(p.GetValue(r))).ToList())
             .ToList();
 
-        AppendGrid(output, headers, rows);
+        // A property no row sets gets no column: an optional field — an environment, an unavailable reason —
+        // is present on some rows and absent on others, and a column of blanks is noise on the rest.
+        var used = Enumerable.Range(0, properties.Length)
+            .Where(i => values.Any(row => row[i].Length > 0))
+            .ToList();
+
+        Grid(
+            output,
+            used.Select(i => Header(properties[i].Name)).ToList(),
+            values.Select(row => used.Select(i => row[i]).ToList()).ToList());
     }
 
-    private static void AppendGrid(StringBuilder output, List<string> headers, List<List<string>> rows)
+    /// <summary>A property name as a column heading, in the same spelling the JSON uses — so the two views
+    /// of one response name the same field the same way.</summary>
+    private static string Header(string property)
+        => JsonNamingPolicy.SnakeCaseLower.ConvertName(property);
+
+    private static void Grid(StringBuilder output, List<string> headers, List<List<string>> rows)
     {
         var widths = headers.Select(h => h.Length).ToList();
         foreach (var row in rows)
@@ -118,13 +174,12 @@ public static class TextTable
             output.AppendLine(string.Join("  ", row.Select((c, i) => c.PadRight(widths[i]))).TrimEnd());
     }
 
-    private static string Cell(JsonNode? value) => value switch
+    private static string Cell(object? value) => value switch
     {
         null => "",
-        JsonValue v when v.TryGetValue<string>(out var s) => s,
-        _ => value.ToJsonString(),
+        string s => s,
+        bool b => b ? "true" : "false",
+        IEnumerable<string> many => string.Join(", ", many),
+        _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? "",
     };
-
-    private static string Join(JsonNode columns)
-        => string.Join(", ", ((JsonArray)columns).Select(c => c!.GetValue<string>()));
 }
