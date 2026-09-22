@@ -6,10 +6,9 @@ using System.Linq;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
-using Bearing.App.Formatting;
 using Bearing.Sessions;
 
-namespace Bearing.App.Results;
+namespace Bearing.Results;
 
 /// <summary>
 /// The text renderings a <see cref="TableBlock"/> can be copied or exported as. Pure: string in, string out,

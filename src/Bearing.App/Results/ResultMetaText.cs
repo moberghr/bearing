@@ -1,4 +1,5 @@
 using Bearing.App.ViewModels;
+using Bearing.Results;
 
 namespace Bearing.App.Results;
 
@@ -40,7 +41,7 @@ public static class ResultMetaText
     private static string KeyDisplay(ResultSetViewModel result, object?[] row)
     {
         foreach (var i in result.PrimaryKeyColumns)
-            if (i < row.Length && row[i] is not null) return Formatting.CellFormat.Display(row[i]);
+            if (i < row.Length && row[i] is not null) return CellFormat.Display(row[i]);
         return "?";
     }
 }

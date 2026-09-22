@@ -7,6 +7,7 @@ using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
+using Bearing.Results;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -56,7 +57,7 @@ public class ResultExportTests : IDisposable
     public void An_xlsx_has_every_part_a_reader_looks_for()
     {
         var path = Path.Combine(_dir, "book.xlsx");
-        ResultExport.Write(path, TableBlock.ForResult(Sample()), ExportFormat.Xlsx, "orders");
+        ResultExport.Write(path, ResultBlocks.ForResult(Sample()), ExportFormat.Xlsx, "orders");
 
         using var zip = ZipFile.OpenRead(path);
         Assert.Equal(
@@ -77,7 +78,7 @@ public class ResultExportTests : IDisposable
         // Excel rejects the file outright if sheetViews / cols / sheetData appear out of order — the kind of
         // mistake that looks fine until the first real open.
         var path = Path.Combine(_dir, "order.xlsx");
-        ResultExport.Write(path, TableBlock.ForResult(Sample()), ExportFormat.Xlsx, "Result");
+        ResultExport.Write(path, ResultBlocks.ForResult(Sample()), ExportFormat.Xlsx, "Result");
         var xml = SheetXml(path);
 
         Assert.True(xml.IndexOf("<sheetViews", StringComparison.Ordinal) < xml.IndexOf("<cols>", StringComparison.Ordinal));
@@ -89,7 +90,7 @@ public class ResultExportTests : IDisposable
     public void Numbers_bools_and_dates_are_typed_cells_not_text()
     {
         var path = Path.Combine(_dir, "typed.xlsx");
-        ResultExport.Write(path, TableBlock.ForResult(Sample()), ExportFormat.Xlsx, "Result");
+        ResultExport.Write(path, ResultBlocks.ForResult(Sample()), ExportFormat.Xlsx, "Result");
         var xml = SheetXml(path);
 
         Assert.Contains("""<c r="A2"><v>1</v></c>""", xml);                    // int → bare number
@@ -112,7 +113,7 @@ public class ResultExportTests : IDisposable
             new QueryResult(columns, rows, 1, TimeSpan.Zero, null, null, false), null, pageable: false);
 
         var path = Path.Combine(_dir, "tz.xlsx");
-        ResultExport.Write(path, TableBlock.ForResult(rs), ExportFormat.Xlsx, "Result");
+        ResultExport.Write(path, ResultBlocks.ForResult(rs), ExportFormat.Xlsx, "Result");
 
         // Converting it to a serial would silently drop "+02:00"; the ISO text keeps the whole value.
         Assert.Contains("2026-08-11 14:03:22+02:00", SheetXml(path));
@@ -128,7 +129,7 @@ public class ResultExportTests : IDisposable
             new QueryResult(columns, rows, 1, TimeSpan.Zero, null, null, false), null, pageable: false);
 
         var path = Path.Combine(_dir, "ctrl.xlsx");
-        ResultExport.Write(path, TableBlock.ForResult(rs), ExportFormat.Xlsx, "Result");
+        ResultExport.Write(path, ResultBlocks.ForResult(rs), ExportFormat.Xlsx, "Result");
         var xml = SheetXml(path);
 
         // Ordinal on purpose: xUnit's default overload compares culture-aware, and ICU treats U+0001 as
@@ -169,7 +170,7 @@ public class ResultExportTests : IDisposable
             new QueryResult(columns, rows, 1, TimeSpan.Zero, null, null, false), null, pageable: false);
 
         var path = Path.Combine(_dir, "names.csv");
-        ResultExport.Write(path, TableBlock.ForResult(rs), ExportFormat.Csv, "Result");
+        ResultExport.Write(path, ResultBlocks.ForResult(rs), ExportFormat.Csv, "Result");
 
         var bytes = File.ReadAllBytes(path);
         // Without the BOM Excel guesses the system code page and mangles every non-ASCII value.
@@ -182,7 +183,7 @@ public class ResultExportTests : IDisposable
     {
         var path = Path.Combine(_dir, "twice.csv");
         File.WriteAllText(path, "stale");
-        ResultExport.Write(path, TableBlock.ForResult(Sample()), ExportFormat.Csv, "Result");
+        ResultExport.Write(path, ResultBlocks.ForResult(Sample()), ExportFormat.Csv, "Result");
 
         Assert.DoesNotContain("stale", File.ReadAllText(path));
         Assert.Equal(new[] { "twice.csv" }, Directory.GetFiles(_dir).Select(Path.GetFileName)); // no .tmp
@@ -197,12 +198,12 @@ public class ResultExportTests : IDisposable
         var target = new EditTarget("public", "orders", [new EditableColumn(0, "id", true)]);
 
         Assert.Equal("orders-20260811-140322.csv",
-            ResultExport.SuggestedName(Sample(target), "query 1", at, ExportFormat.Csv));
+            ResultBlocks.SuggestedName(Sample(target), "query 1", at, ExportFormat.Csv));
         // No single table (a join, a view) → the tab's name, sanitised, with the right extension.
         Assert.Equal("my-query-20260811-140322.xlsx",
-            ResultExport.SuggestedName(Sample(), "my query", at, ExportFormat.Xlsx));
+            ResultBlocks.SuggestedName(Sample(), "my query", at, ExportFormat.Xlsx));
         Assert.Equal("result-20260811-140322.csv",
-            ResultExport.SuggestedName(Sample(), null, at, ExportFormat.Csv));
+            ResultBlocks.SuggestedName(Sample(), null, at, ExportFormat.Csv));
     }
 
     [Theory]

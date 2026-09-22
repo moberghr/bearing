@@ -3,6 +3,7 @@ using System.Linq;
 using Bearing.App.Formatting;
 using Bearing.App.Results;
 using Bearing.Core.Workspace;
+using Bearing.Results;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -236,7 +237,7 @@ public class TimeZoneDisplayTests
         try
         {
             CellFormat.Zone = Plus3;
-            var block = TableBlock.ForResult(Ui.ResultsHarness.SingleColumn(
+            var block = ResultBlocks.ForResult(Ui.ResultsHarness.SingleColumn(
                 "at", "timestamptz", typeof(DateTime), primaryKey: false, Utc3Pm));
             using var stream = new System.IO.MemoryStream();
             XlsxWriter.Write(stream, block, "t");

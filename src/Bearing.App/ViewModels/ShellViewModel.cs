@@ -18,6 +18,7 @@ using Bearing.Core.Data;
 using Bearing.Core.Logging;
 using Bearing.Core.Schema;
 using Bearing.Core.Workspace;
+using Bearing.Results;
 using Bearing.Sessions;
 using Bearing.Sql;
 

@@ -10,6 +10,7 @@ using Bearing.Demo;
 using Bearing.App.ViewModels;
 using Bearing.App.Formatting;
 using Bearing.Core.Data;
+using Bearing.Results;
 using Xunit;
 
 namespace Bearing.App.Tests.Ui;

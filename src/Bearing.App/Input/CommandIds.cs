@@ -1,4 +1,5 @@
 using Bearing.App.Results;
+using Bearing.Results;
 
 namespace Bearing.App.Input;
 

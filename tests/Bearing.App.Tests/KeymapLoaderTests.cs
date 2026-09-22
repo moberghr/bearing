@@ -3,6 +3,7 @@ using System.Linq;
 using Avalonia.Input;
 using Bearing.App.Input;
 using Bearing.App.Results;
+using Bearing.Results;
 using Xunit;
 
 namespace Bearing.App.Tests;

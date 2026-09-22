@@ -4,6 +4,7 @@ using Bearing.App.Controls;
 using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
+using Bearing.Results;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -350,7 +351,7 @@ public class ColumnLayoutTests
         var result = Result(columns: 3, rows: 2);
         result.ColumnLayout.Hide(1);
 
-        var block = TableBlock.ForResult(result);
+        var block = ResultBlocks.ForResult(result);
 
         Assert.Equal(3, block.Columns.Count);
         Assert.Equal(["c0", "c1", "c2"], block.Columns.Select(c => c.Name));

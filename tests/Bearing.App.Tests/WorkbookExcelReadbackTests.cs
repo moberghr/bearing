@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
+using Bearing.Results;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -312,6 +313,6 @@ public class WorkbookExcelReadbackTests : IDisposable
             [new ColumnDescriptor("id", "int4", typeof(int)), new ColumnDescriptor("name", "text", typeof(string))],
             rows.ToList(), rows.Count, TimeSpan.Zero, null, null, false);
         var vm = new ResultSetViewModel(result, $"select * from {name}", pageable: false);
-        return new XlsxWriter.Sheet(TableBlock.ForResult(vm), name);
+        return new XlsxWriter.Sheet(ResultBlocks.ForResult(vm), name);
     }
 }

@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace Bearing.App.Results;
+namespace Bearing.Results;
 
 /// <summary>
 /// Turns a run's wanted sheet names into a set Excel will accept (#12). Pure, because the interesting cases

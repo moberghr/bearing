@@ -7,6 +7,7 @@
     <Project Path="src/Bearing.Desktop/Bearing.Desktop.csproj" />
     <Project Path="src/Bearing.Cli/Bearing.Cli.csproj" />
     <Project Path="src/Bearing.Persistence/Bearing.Persistence.csproj" />
+    <Project Path="src/Bearing.Results/Bearing.Results.csproj" />
     <Project Path="src/Bearing.Sessions/Bearing.Sessions.csproj" />
     <Project Path="src/Bearing.Sql/Bearing.Sql.csproj" />
     <Project Path="src/Bearing.Updates/Bearing.Updates.csproj" />

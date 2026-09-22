@@ -6,6 +6,7 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Bearing.App.Results;
+using Bearing.Results;
 using static Bearing.App.Controls.Tokens;
 
 namespace Bearing.App.Views;

@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Bearing.App.Results;
+using Bearing.Results;
 
 namespace Bearing.App.Controls;
 

@@ -6,7 +6,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Text;
 
-namespace Bearing.App.Results;
+namespace Bearing.Results;
 
 /// <summary>
 /// Writes a <see cref="TableBlock"/> as a minimal <c>.xlsx</c> workbook, by hand.
@@ -172,7 +172,7 @@ public static class XlsxWriter
     /// </summary>
     private static DateTime InDisplayZone(DateTime utc)
         => DateTime.SpecifyKind(
-            TimeZoneInfo.ConvertTimeFromUtc(utc, Formatting.CellFormat.Zone), DateTimeKind.Unspecified);
+            TimeZoneInfo.ConvertTimeFromUtc(utc, CellFormat.Zone), DateTimeKind.Unspecified);
 
     /// <summary>Days since Excel's epoch, or null for a date outside what Excel can represent (its serial
     /// numbering starts at 1900 and has no room for anything earlier).</summary>
@@ -227,7 +227,7 @@ public static class XlsxWriter
     }
 
     /// <summary>A sheet name Excel will accept: ≤31 characters, none of <c>[]:*?/\</c>, never blank.</summary>
-    internal static string SafeSheetName(string name)
+    public static string SafeSheetName(string name)
     {
         var sb = new StringBuilder(name.Length);
         foreach (var ch in name)

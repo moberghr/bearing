@@ -1,6 +1,7 @@
 using Bearing.Core.Data;
 using Bearing.Data;
 using Bearing.Data.Postgres;
+using Bearing.Results;
 using Bearing.Testing;
 using Xunit;
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Bearing.App.Formatting;
+using Bearing.Results;
 
 namespace Bearing.App.Results;
 

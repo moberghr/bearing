@@ -4,6 +4,7 @@ using System.Linq;
 using Bearing.App.Results;
 using Bearing.Core.Data;
 using Bearing.Core.Logging;
+using Bearing.Results;
 using Xunit;
 
 namespace Bearing.App.Tests;

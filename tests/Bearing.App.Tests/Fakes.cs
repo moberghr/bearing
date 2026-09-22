@@ -9,6 +9,7 @@ using Bearing.Core.Data;
 using Bearing.Core.Schema;
 using Bearing.Core.Updates;
 using Bearing.Core.Workspace;
+using Bearing.Results;
 using Bearing.Sessions;
 
 namespace Bearing.App.Tests;
@@ -647,9 +648,9 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
     public string? ExportPath { get; set; }
 
     /// <summary>The (suggested name, format) pairs the export picker was opened with, in order.</summary>
-    public List<(string SuggestedName, Bearing.App.Results.ExportFormat Format)> ExportPickers { get; } = new();
+    public List<(string SuggestedName, ExportFormat Format)> ExportPickers { get; } = new();
 
-    public Task<string?> PickExportFileAsync(string suggestedName, Bearing.App.Results.ExportFormat format)
+    public Task<string?> PickExportFileAsync(string suggestedName, ExportFormat format)
     {
         ExportPickers.Add((suggestedName, format));
         return Task.FromResult(ExportPath);

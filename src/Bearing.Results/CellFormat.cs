@@ -1,7 +1,7 @@
 using System;
 using System.Globalization;
 
-namespace Bearing.App.Formatting;
+namespace Bearing.Results;
 
 /// <summary>
 /// Renders result-grid cell values to strings. Dates use a fixed ISO-8601 shape

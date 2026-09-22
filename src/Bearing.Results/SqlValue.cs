@@ -2,7 +2,7 @@ using System;
 using System.Globalization;
 using Bearing.Sql;
 
-namespace Bearing.App.Results;
+namespace Bearing.Results;
 
 /// <summary>
 /// Renders a typed value as a SQL literal. Used wherever SQL is produced as *text* rather than
@@ -21,7 +21,7 @@ namespace Bearing.App.Results;
 /// and binary are spelled differently, and on the foreign-key-lookup path this literal is SQL that runs.
 /// </para>
 /// </summary>
-internal static class SqlValue
+public static class SqlValue
 {
     /// <summary>A value as a PostgreSQL literal; <c>null</c> becomes the keyword <c>null</c>.</summary>
     public static string Literal(object? value) => Literal(SqlLiteralStyle.Postgres, value);

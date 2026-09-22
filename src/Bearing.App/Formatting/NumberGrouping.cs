@@ -1,4 +1,5 @@
 using System.Text;
+using Bearing.Results;
 
 namespace Bearing.App.Formatting;
 

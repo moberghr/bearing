@@ -12,16 +12,17 @@ Layered clean architecture. Reference: `.claude/references/architecture-principl
 
 ## §2.2 — Dependency direction (never invert)
 ```
-Core  ←  Sql, Data, Persistence, Updates  ←  Sessions  ←  App  ←  Desktop
-                                                       ↖  Cli   (bearing)
+Core  ←  Sql, Data, Persistence, Updates  ←  Sessions  ←  Results  ←  App  ←  Desktop
+                                                                    ↖  Cli   (the `bearing` command)
 ```
 - `Sql` (SQL parsing/completion), `Data` (Postgres/Npgsql, SQL Server), `Persistence` (SQLite), `Updates`
   (Velopack release feed / self-update) each depend on `Core` only.
 - `Sessions` depends on `Core`, `Sql` and `Data` — see §2.6.
+- `Results` depends on those plus `Sessions` — see §2.7.
 - `App` (Avalonia MVVM) composes them; `Desktop` is the thin entry point.
 - `Cli` is a **second host** over the same `Sessions`, not a layer under `App`: a windowless console exe
   with its own composition root (§1.11). It must never reference `App`.
-- DO NOT reference `App`/Avalonia types from `Core`/`Sql`/`Data`/`Persistence`/`Sessions`.
+- DO NOT reference `App`/Avalonia types from `Core`/`Sql`/`Data`/`Persistence`/`Sessions`/`Results`.
 
 ## §2.3 — MVVM boundaries
 - Business logic (DB access, connection lifecycle, SQL execution, editing) lives in ViewModels or the
@@ -62,3 +63,21 @@ holds in the editor and not in the other host is worse than no refusal, because 
 - `SqlLiteralStyle` moved to `Bearing.Sql` in the same pass — it is a fact about an engine's SQL *text*, and
   `ProviderTraits` (which pairs it with the dialect) is no longer in the App layer. The renderer that reads
   it, `Results.SqlValue`, stayed where it was.
+
+## §2.7 — `Bearing.Results` is how a result set becomes text, a table or a file
+`CellFormat` (the cell renderer), `TableFormats` (CSV / Markdown / JSON / SQL / HTML), `XlsxWriter`,
+`SqlValue`, `SheetNames` and `ResultExport`. Extracted from `Bearing.App` when a second host started
+writing these files: the app's Export menu and the `bearing` command's export flag.
+
+**The reason is §2.6's, and it is not effort.** A second CSV writer in the CLI would be a second definition
+of what an export *is*, and the two would drift — the app's xlsx writes numbers as typed cells so they still
+sum in Excel, and its CSV carries a BOM so Excel does not mangle non-ASCII (§9.10c). Sharing the writers
+makes both hosts produce byte-identical files by construction rather than by review.
+
+- **What stayed in `App` is what needs a view model**: `Results/ResultBlocks` — building a block from a live
+  result or a grid selection, and the names an export suggests. A command line has a result, no tab to name
+  a file after, and no selection at all.
+- `CellFormat.Zone` is process-wide, so **every host has to set it**. The app does at startup and on change
+  (#77); a host that forgets renders timestamps in UTC while the app beside it renders them in the user's
+  zone, and nothing would say so.
+- WHEN adding an output format, it goes here and not in either host — that is the whole point of the tier.

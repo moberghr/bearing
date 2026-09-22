@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Numerics;
 using System.Text.Json.Nodes;
 using Bearing.Core.Data;
+using Bearing.Results;
 
 namespace Bearing.Cli.Tools;
 

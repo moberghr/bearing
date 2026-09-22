@@ -8,6 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Bearing.Data\Bearing.Data.csproj" />
     <ProjectReference Include="..\..\src\Bearing.Core\Bearing.Core.csproj" />
+    <ProjectReference Include="..\..\src\Bearing.Results\Bearing.Results.csproj" />
     <ProjectReference Include="..\..\src\Bearing.Sql\Bearing.Sql.csproj" />
   </ItemGroup>
 

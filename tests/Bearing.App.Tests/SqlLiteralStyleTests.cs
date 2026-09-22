@@ -1,6 +1,7 @@
 using System;
 using Bearing.App.Formatting;
 using Bearing.App.Results;
+using Bearing.Results;
 using Bearing.Sql;
 using Xunit;
 

@@ -11,6 +11,7 @@ using Bearing.App.Input;
 using Bearing.App.Results;
 using Bearing.App.Services;
 using Bearing.App.ViewModels;
+using Bearing.Results;
 using Avalonia.Input.Platform;
 using Avalonia;
 
@@ -588,7 +589,7 @@ public sealed class GridSelectionController
         if (!ReferenceEquals(Model.Result, result) || Model.Cells.Count == 0) return;
         if (format == CopyFormat.Tsv) { Copy(result); return; }
 
-        var block = TableBlock.ForSelection(result, Model.Cells);
+        var block = ResultBlocks.ForSelection(result, Model.Cells);
         var text = CopyRenderer.Render(result, block, format);
         if (CopyRenderer.IsRichHtml(format))
         {

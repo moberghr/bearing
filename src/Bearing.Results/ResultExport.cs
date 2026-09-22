@@ -4,10 +4,9 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
-using Bearing.App.ViewModels;
 using Bearing.Core.Data;
 
-namespace Bearing.App.Results;
+namespace Bearing.Results;
 
 /// <summary>A result-set export target. CSV is text; Excel is a real workbook (<see cref="XlsxWriter"/>).</summary>
 public enum ExportFormat
@@ -157,48 +156,9 @@ public static class ResultExport
         return $"{Slug(stem)}-{now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)}.xlsx";
     }
 
-    /// <summary>
-    /// A default file name for a result: the table it came from when that's known, else the tab name, else
-    /// "result" — with a timestamp, since exporting the same query twice is the normal case and silently
-    /// overwriting yesterday's file is not what anyone means by Export.
-    /// </summary>
-    public static string SuggestedName(ResultSetViewModel result, string? tabName, DateTime now, ExportFormat format)
-    {
-        var stem = result.EditTarget?.Table
-            ?? (string.IsNullOrWhiteSpace(tabName) ? null : tabName)
-            ?? "result";
-        return $"{Slug(stem)}-{now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)}.{Extension(format)}";
-    }
-
-    /// <summary>The Excel sheet name for a result — the source table when known, else "Result".</summary>
-    public static string SheetName(ResultSetViewModel result)
-        => XlsxWriter.SafeSheetName(result.EditTarget?.Table ?? "Result");
-
-    /// <summary>
-    /// The sheets a run's workbook should hold, in the order the user sees them: the grid results only.
-    /// <para>
-    /// A statement message ("UPDATE 3") and an error are not sheets — an empty tab named after a DELETE would
-    /// be worse than its absence. Result numbers come from the position in the <i>run</i>, not in the filtered
-    /// list, so "Result 3" in the workbook is the third result on screen even when the second was a message.
-    /// </para>
-    /// </summary>
-    public static IReadOnlyList<XlsxWriter.Sheet> RunSheets(IReadOnlyList<ResultSetViewModel> results)
-    {
-        var sheets = new List<XlsxWriter.Sheet>();
-        for (var i = 0; i < results.Count; i++)
-        {
-            if (!results[i].HasGrid) continue;
-            var named = results[i].EditTarget?.Table is { } table
-                ? XlsxWriter.SafeSheetName(table)
-                : $"Result {i + 1}";
-            sheets.Add(new XlsxWriter.Sheet(TableBlock.ForResult(results[i]), named));
-        }
-        return sheets;
-    }
-
     /// <summary>A file-name-safe stem: path separators and the platform's invalid characters become '-',
     /// runs collapse, and the result is capped so a long tab title can't produce an unopenable name.</summary>
-    internal static string Slug(string text)
+    public static string Slug(string text)
     {
         // Both separators explicitly: on Unix, GetInvalidFileNameChars() reports only '/' and NUL, so a tab
         // named "a\b" would keep its backslash — legal here, but a landmine the moment the file is opened on
