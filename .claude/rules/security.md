@@ -820,6 +820,20 @@ add and remove the install directory in the user's `Environment` registry key. P
   to the loader), duplicates removed, trailing separators and quotes and case all treated as the same
   directory, and "nothing to do" reported as null so an update does not rewrite a PATH it agrees with.
 - Appended rather than prepended: nothing here should shadow an existing command.
+- **Velopack writes the Start Menu shortcut at install time and never revisits it**, aimed straight at
+  `current\<mainExe>` rather than at the stub — `Update.exe` has no shortcut command, which was checked
+  rather than assumed. So renaming the window's executable in 1.1.0 left every machine upgrading from 1.0.x
+  with a shortcut pointing at what is now the *command*. It still opened Bearing, because the command with
+  no arguments launches the window, but through a console program, so a console flashed on the way. Found
+  on a real machine one update later, which is what §1.11 said to watch for.
+  `WindowsShortcut` repairs it from the install and update hooks: a one-time migration in the shape of
+  `LegacySecretFiles.Purge`, idempotent, and a no-op on a fresh install and on every update after.
+  Three conditions before anything is rewritten — the target sits in the install directory, its file name is
+  the stale one, and the correction is a different name — because the failure this could cause is editing a
+  shortcut somebody else owns, which no reinstall undoes. Per-user locations only, since the install is.
+- **WHEN a release renames anything the installer wrote at install time** — an executable, a shortcut, a
+  registry value — decide what happens to the copies already on disk. An update swaps files; it does not
+  revisit decisions a previous installer made.
 - Best-effort (§5.2). A PATH that cannot be edited costs a full path typed once; an install that failed
   over it costs the install.
 

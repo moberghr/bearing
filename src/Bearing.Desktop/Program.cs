@@ -36,8 +36,8 @@ internal static class Program
             // Both install and update: an update lands in a new directory and swaps `current`, so the
             // entry is re-asserted rather than assumed. Add is idempotent, so the usual case writes
             // nothing and broadcasts nothing.
-            .OnAfterInstallFastCallback(_ => OnPath(add: true))
-            .OnAfterUpdateFastCallback(_ => OnPath(add: true))
+            .OnAfterInstallFastCallback(_ => OnInstalled())
+            .OnAfterUpdateFastCallback(_ => OnInstalled())
             .OnBeforeUninstallFastCallback(_ => OnPath(add: false))
             .Run();
 #pragma warning restore CA1416
@@ -64,6 +64,27 @@ internal static class Program
             CrashLog.Write("Startup (fatal)", ex);
             throw;
         }
+    }
+
+    /// <summary>
+    /// What an install or an update has to put right, in order. Both callbacks do the same work: an update
+    /// lands in the same directory and swaps its contents, so everything here is written to be idempotent
+    /// and to report "nothing to do" rather than rewriting what it agrees with.
+    /// </summary>
+    private static void OnInstalled()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        OnPath(add: true);
+
+        // A one-time repair for machines crossing 1.1.0. Velopack aims the Start Menu shortcut straight at
+        // `current\<mainExe>` when the app is *installed* and never revisits it — Update.exe has no command
+        // that would — so renaming the window's executable to make room for the `bearing` command (§1.11)
+        // left every upgrading machine with a shortcut pointing at what is now the command. It still opens
+        // Bearing, because the command with no arguments does exactly that, but through a console program,
+        // so a console flashes on the way. A no-op on a fresh install and on every update after this one.
+        var directory = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, '/');
+        WindowsShortcut.Retarget(directory, staleExe: "bearing.exe", appExe: "bearing-app.exe");
     }
 
     /// <summary>
