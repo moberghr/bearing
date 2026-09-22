@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Bearing.Core.Data;
 using Bearing.Sessions;
 
 namespace Bearing.Results;
@@ -40,18 +41,37 @@ public static class TableFormats
     /// </summary>
     public static string Csv(TableBlock block)
     {
-        var sb = new StringBuilder();
-        sb.Append(string.Join(",", block.Columns.Select(c => CsvField(c.Name)))).Append("\r\n");
-        for (var r = 0; r < block.Rows.Count; r++)
+        var writer = new StringWriter();
+        WriteCsvHeader(writer, block.Columns);
+        for (var r = 0; r < block.Rows.Count; r++) WriteCsvRow(writer, block.Rows[r], block.Columns.Count);
+        return writer.ToString();
+    }
+
+    /// <summary>
+    /// The header row, written rather than returned, so an export that has every row in hand and one that
+    /// streams them share this code instead of agreeing by inspection (<c>ResultExport.WriteCsvStreamAsync</c>).
+    /// </summary>
+    /// <remarks>The line ending is written explicitly: a <see cref="TextWriter"/>'s own is the platform's,
+    /// and CSV's is CRLF everywhere.</remarks>
+    public static void WriteCsvHeader(TextWriter writer, IReadOnlyList<ColumnDescriptor> columns)
+    {
+        writer.Write(string.Join(",", columns.Select(c => CsvField(c.Name))));
+        writer.Write("\r\n");
+    }
+
+    /// <summary>
+    /// One row, padded with NULLs where it is shorter than <paramref name="columnCount"/> — the tolerance
+    /// <see cref="TableBlock.Value"/> already has, kept here because the streaming path has no block to ask.
+    /// </summary>
+    public static void WriteCsvRow(TextWriter writer, IReadOnlyList<object?> row, int columnCount)
+    {
+        for (var c = 0; c < columnCount; c++)
         {
-            for (var c = 0; c < block.Columns.Count; c++)
-            {
-                if (c > 0) sb.Append(',');
-                if (Text(block.Value(r, c)) is { } text) sb.Append(CsvField(text));
-            }
-            sb.Append("\r\n");
+            if (c > 0) writer.Write(',');
+            var value = c < row.Count ? row[c] : null;
+            if (Text(value) is { } text) writer.Write(CsvField(text));
         }
-        return sb.ToString();
+        writer.Write("\r\n");
     }
 
     private static string CsvField(string value)

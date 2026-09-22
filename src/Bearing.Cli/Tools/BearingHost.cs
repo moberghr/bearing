@@ -79,10 +79,24 @@ public sealed class BearingHost(
 
     public async Task<ICliResponse> QueryAsync(RunRequest request, CancellationToken ct)
     {
-        var (info, _) = await PrepareAsync(request, ct).ConfigureAwait(false);
+        var (info, traits) = await PrepareAsync(request, ct).ConfigureAwait(false);
         var sql = request.Sql;
 
+        // Settled before anything runs. The check has to happen either way, and finding out that .txt is not
+        // an export format is worth nothing after a minute of reading rows nobody will now receive.
+        var format = request.OutPath is { } outPath
+            ? ExportFormats.For(outPath) ?? throw new CommandFailure($"'{outPath}' is not a .csv or .xlsx path.")
+            : (ExportFormat?)null;
+
         using var lease = await ConnectAsync(info, ct).ConfigureAwait(false);
+
+        // One statement written to a CSV is the shape that streams: rows go to the file a batch at a time
+        // and the whole result is never in memory at once, which is what makes `--out` safe to point at a
+        // table larger than this process. Everything else materialises — a workbook needs every row to build
+        // the sheet (XlsxWriter), and a batch returning several grids is not one table anyway.
+        if (format == ExportFormat.Csv && traits.Dialect.SplitStatements(sql).Count == 1)
+            return await StreamCsvAsync(info, lease.Session, sql, request.OutPath!, Rows(request), ct)
+                .ConfigureAwait(false);
 
         IReadOnlyList<QueryResult> results;
         var wall = Stopwatch.StartNew();
@@ -103,7 +117,7 @@ public sealed class BearingHost(
         if (results.FirstOrDefault(r => !r.Success)?.Error is { } error)
             throw new CommandFailure($"{info.Name}: {error.Message}");
 
-        if (request.OutPath is { } path) return Export(results, path, info.Name);
+        if (request.OutPath is { } path) return Export(results, path, format!.Value, info.Name);
 
         // One shape whatever the SQL was. A single statement is the overwhelming case, but a result that
         // is sometimes an object and sometimes a list is a shape a consumer has to branch on, and the
@@ -265,11 +279,9 @@ public sealed class BearingHost(
     /// still exports as one table.
     /// </para>
     /// </summary>
-    private static ExportResponse Export(IReadOnlyList<QueryResult> results, string path, string connection)
+    private static ExportResponse Export(
+        IReadOnlyList<QueryResult> results, string path, ExportFormat format, string connection)
     {
-        var format = ExportFormats.For(path)
-            ?? throw new CommandFailure($"'{path}' is not a .csv or .xlsx path.");
-
         var grids = results.Where(r => r.Columns.Count > 0).ToList();
         if (grids.Count == 0)
             throw new CommandFailure($"{connection}: that statement returned no rows to write.");
@@ -299,7 +311,61 @@ public sealed class BearingHost(
         }
 
         return new ExportResponse(
-            Path.GetFullPath(path), ExportFormats.Name(format), grids.Count, grids.Sum(g => (long)g.Rows.Count));
+            Path.GetFullPath(path), ExportFormats.Name(format), grids.Count, grids.Sum(g => (long)g.Rows.Count))
+        {
+            Truncated = grids.Any(g => g.Truncated),
+        };
+    }
+
+    /// <summary>
+    /// The streamed half of <see cref="Export"/>: one row-returning statement, written to a CSV batch by
+    /// batch. The file is the same bytes the materialising path would have produced — both render through
+    /// <c>TableFormats.WriteCsvHeader</c>/<c>WriteCsvRow</c> — and the temp-file-and-move means a read that
+    /// fails part-way (a timeout, a dropped connection, a server error at row 900,000) leaves no file rather
+    /// than a plausible-looking fraction of one.
+    /// <para>
+    /// The log entry is written here rather than through <see cref="Log"/>, because there is no
+    /// <c>QueryResult</c> to take a row count and an error from — the count is what reached the file.
+    /// </para>
+    /// </summary>
+    private async Task<ICliResponse> StreamCsvAsync(
+        ConnectionInfo info, ConnectionSession session, string sql, string path, int? maxRows,
+        CancellationToken ct)
+    {
+        var wall = Stopwatch.StartNew();
+        ResultExport.StreamedCsv written;
+        try
+        {
+            written = await ResultExport.WriteCsvStreamAsync(
+                path,
+                session.Executor.StreamRowsAsync(sql, new QueryOptions { MaxRows = maxRows }, ct),
+                ct).ConfigureAwait(false);
+            wall.Stop();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not CommandFailure)
+        {
+            // A streamed read reports failure by throwing, so unlike the materialising path there is no
+            // unsuccessful QueryResult to log. Recording it by hand keeps a failed export in the history
+            // beside a failed query, which is the whole point of logging this path at all (§1.11f).
+            wall.Stop();
+            var reason = SafeErrorText.Of(ex);
+            Write(info, sql, wall.Elapsed, rows: 0, success: false, error: reason);
+            throw new CommandFailure($"The query could not be run on '{info.Name}': {reason}");
+        }
+
+        Write(info, sql, wall.Elapsed, written.Rows, success: true, error: null);
+
+        // No shape at all — not merely no rows. Nothing was written (WriteCsvStreamAsync moves nothing into
+        // place without a header), so this refuses exactly as the materialising path does and leaves any
+        // file already at that path alone.
+        if (written.Columns == 0)
+            throw new CommandFailure($"{info.Name}: that statement returned no rows to write.");
+
+        return new ExportResponse(
+            Path.GetFullPath(path), ExportFormats.Name(ExportFormat.Csv), Results: 1, written.Rows)
+        {
+            Truncated = written.Truncated,
+        };
     }
 
     // ---- the record -----------------------------------------------------------------------------

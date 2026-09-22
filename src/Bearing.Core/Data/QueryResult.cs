@@ -77,8 +77,27 @@ public sealed record QueryResult(
 /// end. <see cref="Truncated"/> is set only on the final batch, and only when the read stopped at
 /// <see cref="QueryOptions.MaxRows"/> with rows still waiting on the server — that is how a caller tells
 /// "this is the whole result" from "this is where the ceiling cut it", without a second query.
+/// <para>
+/// A row-returning statement yields <b>at least one batch</b>, and the last one is emitted whether or not it
+/// holds rows. A statement with no result shape at all (an UPDATE, a DDL) yields none. So "no batches" means
+/// "nothing to stream" rather than "no rows", and a consumer building a file out of the stream alone always
+/// has the columns it needs for a header.
+/// </para>
+/// <para>
+/// <b><see cref="Columns"/> is on every batch, not only the first.</b> It is really a property of the
+/// stream, but an async iterator has nowhere else to put it, and "set on the first batch only" is the kind
+/// of implicit rule a consumer gets wrong once and then works around forever. Every batch carrying the same
+/// list costs one reference and means a batch is always self-describing.
+/// </para>
+/// <para>
+/// It is positional rather than an optional property so that a provider cannot quietly omit it: the one
+/// consumer that needs it — a CSV export with no result already on screen to take headers from — would
+/// otherwise get an empty header row and no error (§1.9's lesson about a field omitted from the assertions
+/// too).
+/// </para>
 /// </summary>
-public sealed record RowBatch(IReadOnlyList<object?[]> Rows, bool Truncated);
+public sealed record RowBatch(
+    IReadOnlyList<ColumnDescriptor> Columns, IReadOnlyList<object?[]> Rows, bool Truncated);
 
 public sealed record QueryOptions
 {

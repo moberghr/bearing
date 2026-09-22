@@ -123,3 +123,30 @@ WHEN adding a catalog read that calls a size or location function (`pg_total_rel
 decide what the absence means before `GetInt64` decides for you. Found by CI: this suite's own
 schema-creating tests race the enumerating ones, and a shared runner lost a race one fast machine kept
 winning for a whole session.
+
+## §5.7 — A streamed batch names its columns, and a row-returning stream always yields one
+`RowBatch` carries `Columns` **positionally**, and every batch carries them rather than only the first
+(`IQueryExecutor.StreamRowsAsync`). It is really a property of the stream, but an async iterator has nowhere
+else to put one, and "set on the first batch only" is the kind of implicit rule a consumer gets wrong once
+and then works around forever. Positional so a provider cannot quietly omit it: the consumer that needs it —
+a CSV written straight off the stream, with no result on screen to take headers from — would otherwise get an
+empty header row and no error. The app never noticed the gap because it streams only to *append* to a grid it
+already built.
+
+The tail batch is **unconditional**. It was emitted only when it held rows or when the cap had stopped the
+read, which meant a query matching nothing yielded no batches at all and a file built from the stream had no
+header — a CSV `read_csv` cannot parse, where every other export path writes one. A statement with no result
+shape (an UPDATE, DDL) still yields nothing, so "no batches" means *nothing to stream* rather than *no rows*,
+and `ResultExport.WriteCsvStreamAsync` moves nothing into place for it.
+
+- `TableFormats.WriteCsvHeader` / `WriteCsvRow` are the one rendering. The batch writer (`TableFormats.Csv`)
+  and the streaming one both go through them, and `StreamedCsvExportTests` asserts the two files are
+  **byte-identical** on the same rows rather than asserting what CSV looks like — two renderings of one
+  format is how a quoting rule, a line ending or a BOM drifts between "exported from the app" and "exported
+  from the command".
+- **The fakes follow the real loop, not arithmetic over a row list.** `DemoProvider` and the app's
+  `PageableExecutor` were rewritten to fill-and-yield the way the executors do, so an exact multiple of the
+  batch size ends with an empty batch there as it does against a server (§4.6 — a fixture that behaves
+  unlike the thing it stands in for lets a consumer pass here and break live).
+- xlsx has no streaming form: `XlsxWriter` needs every row to build the sheet. That is a stated limit of the
+  export, not an omission to be fixed by buffering somewhere else.

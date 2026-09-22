@@ -22,6 +22,12 @@ internal static class Program
         // call is present in the entry assembly's Main and refuses to package without it, and that check is
         // worth keeping — an app that never runs its hooks installs and updates incorrectly. Everything else
         // about updating (the feed, UpdateManager) still lives behind IUpdateService in Bearing.Updates.
+        // CA1416: the three Fast callbacks are annotated Windows-only. They are registered unconditionally
+        // anyway, because they are *registrations* — on any other OS Velopack never invokes them, and the
+        // handler itself returns immediately off Windows. Guarding the chain would mean splitting it, and
+        // §9.6 pins it as one statement: `vpk pack` looks for it in the entry assembly and refuses to
+        // package without it.
+#pragma warning disable CA1416
         VelopackApp.Build()
             // Put the install directory on the user's PATH so `bearing` is a command, and take it off
             // again on uninstall (§1.11). These run inside the installer's own invocation of this exe, so
@@ -34,6 +40,7 @@ internal static class Program
             .OnAfterUpdateFastCallback(_ => OnPath(add: true))
             .OnBeforeUninstallFastCallback(_ => OnPath(add: false))
             .Run();
+#pragma warning restore CA1416
 
         // Last-resort backstops so an escaped exception is recorded rather than lost. UI-thread faults
         // are handled (and surfaced) inside the app via Dispatcher.UnhandledException; these catch the

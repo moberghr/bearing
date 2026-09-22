@@ -4,6 +4,8 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using Bearing.Core.Data;
 
 namespace Bearing.Results;
@@ -59,6 +61,76 @@ public static class ResultExport
                 }
             }
             File.Move(temp, path, overwrite: true);
+        }
+        finally
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); } catch { /* best effort (§5.2) */ }
+        }
+    }
+
+    /// <summary>What a streamed CSV turned out to hold, since nothing counted the rows beforehand.</summary>
+    /// <param name="Rows">Rows written, header excluded.</param>
+    /// <param name="Columns">Columns in the header row — 0 only when the statement returned no shape at all.</param>
+    /// <param name="Truncated">The row ceiling stopped the read with rows still on the server.</param>
+    public sealed record StreamedCsv(long Rows, int Columns, bool Truncated);
+
+    /// <summary>
+    /// Write a CSV from a row stream (<c>IQueryExecutor.StreamRowsAsync</c>), holding one batch in memory at
+    /// a time rather than the whole result. Byte-for-byte what <see cref="Write"/> produces from the same
+    /// rows — both go through <see cref="TableFormats.WriteCsvHeader"/> and
+    /// <see cref="TableFormats.WriteCsvRow"/>, so there is no second rendering to drift.
+    /// <para>
+    /// The same temp-file-and-move as everything else here, and it earns its keep on this path in particular:
+    /// a stream reports a failure by <b>throwing part-way</b>, with rows already written. The half-file goes
+    /// in the <c>finally</c> and the caller is left with either the whole export or no file at all — never a
+    /// truncated one that a script would happily read.
+    /// </para>
+    /// <para>
+    /// Only the batch path can write xlsx: <see cref="XlsxWriter"/> needs every row to build the sheet, so a
+    /// workbook export stays bounded by memory however it was asked for.
+    /// </para>
+    /// </summary>
+    public static async Task<StreamedCsv> WriteCsvStreamAsync(
+        string path, IAsyncEnumerable<RowBatch> batches, CancellationToken ct = default)
+    {
+        var temp = path + ".tmp";
+        try
+        {
+            long rows = 0;
+            var columns = 0;
+            var truncated = false;
+            var header = false;
+            await using (var file = File.Create(temp))
+            {
+                // A BOM for the same reason Write has one: Excel guesses the system code page without it.
+                var writer = new StreamWriter(file, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+                await using (writer.ConfigureAwait(false))
+                {
+                    await foreach (var batch in batches.WithCancellation(ct).ConfigureAwait(false))
+                    {
+                        // From the first batch, and every batch carries them — so an empty result still gets
+                        // its header, which is what a reader like pandas needs to parse the file at all.
+                        if (!header)
+                        {
+                            TableFormats.WriteCsvHeader(writer, batch.Columns);
+                            columns = batch.Columns.Count;
+                            header = true;
+                        }
+                        foreach (var row in batch.Rows) TableFormats.WriteCsvRow(writer, row, columns);
+                        rows += batch.Rows.Count;
+                        truncated = batch.Truncated;
+                    }
+                }
+            }
+
+            // A stream that named no columns is a statement with no result shape, not a result with no rows —
+            // the second yields one empty batch and gets its header. Nothing is moved into place for the
+            // first, so a caller that pointed --out at a statement like that keeps whatever was already
+            // there rather than having it replaced by a file holding a BOM.
+            if (!header) return new StreamedCsv(0, 0, false);
+
+            File.Move(temp, path, overwrite: true);
+            return new StreamedCsv(rows, columns, truncated);
         }
         finally
         {

@@ -86,7 +86,13 @@ public sealed record ColumnHeader(string Name, string Type);
 
 /// <summary>What a <c>--out</c> run wrote. The full path, because a caller that passed a relative one
 /// should not have to work out where it landed.</summary>
-public sealed record ExportResponse(string Written, string Format, int Results, long Rows) : ICliResponse;
+public sealed record ExportResponse(string Written, string Format, int Results, long Rows) : ICliResponse
+{
+    /// <summary>The row ceiling stopped the read with rows still waiting, so the file is part of the answer.
+    /// Always present rather than omitted when false: a script that writes a file and does not check this
+    /// would act on a truncated export, and the reassuring case is the one worth stating.</summary>
+    public bool Truncated { get; init; }
+}
 
 // ---- plans -------------------------------------------------------------------------------------
 

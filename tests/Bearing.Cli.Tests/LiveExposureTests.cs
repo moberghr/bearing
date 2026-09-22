@@ -8,6 +8,7 @@ using Bearing.Data;
 using Bearing.Data.Postgres;
 using Bearing.Cli.Tools;
 using Bearing.Persistence;
+using Bearing.Results;
 using Bearing.Sessions;
 using Bearing.Testing;
 using Xunit;
@@ -310,6 +311,72 @@ public class LiveExposureTests : IAsyncLifetime
         Assert.Contains("not exposed", refused.Message);
     }
 
+    /// <summary>
+    /// <c>--out report.csv</c> against a live server. One statement to a CSV is the streamed path
+    /// (<c>ResultExport.WriteCsvStreamAsync</c>), so this is the only place the whole of it runs: a real
+    /// reader, real batches, a real file.
+    /// <para>
+    /// The file is compared with the one the materialising writer produces from the same query, rather than
+    /// with a hand-written expectation — an equality that fails if either half of the CSV rendering ever
+    /// drifts, which is the risk introduced by there being two ways to write this format at all.
+    /// </para>
+    /// </summary>
+    [SkippableFact]
+    public async Task A_single_statement_csv_export_streams_and_matches_the_materialised_file()
+    {
+        var host = await LiveHostAsync();
+        const string sql = "select film_id, title, rental_rate from film order by film_id";
+
+        var streamed = Path.Combine(_root, "streamed.csv");
+        var response = (ExportResponse)await host.QueryAsync(
+            Run("agent-reads", sql) with { OutPath = streamed }, CancellationToken.None);
+
+        // Unlimited by default for an export: a capped file is a silently truncated one.
+        Assert.Equal(1000, response.Rows);
+        Assert.Equal(1, response.Results);
+        Assert.False(response.Truncated);
+        Assert.Equal(Path.GetFullPath(streamed), response.Written);
+
+        // The same bytes the app's own export would have written for these rows.
+        var rows = (QueryResponse)await host.QueryAsync(
+            Run("agent-reads", sql) with { UnlimitedRows = true }, CancellationToken.None);
+        var materialised = Path.Combine(_root, "materialised.csv");
+        ResultExport.Write(
+            materialised,
+            new TableBlock(
+                rows.Results[0].Columns.Select(c => new ColumnDescriptor(c.Name, c.Type, typeof(object))).ToList(),
+                rows.Results[0].Rows.Select(r => r.ToArray()).ToList()),
+            ExportFormat.Csv,
+            "Result 1");
+
+        Assert.Equal(File.ReadAllBytes(materialised), File.ReadAllBytes(streamed));
+
+        // And it is in the history like any other statement the caller ran, with the rows that reached the
+        // file — a streamed read has no QueryResult to take that count from, so it is counted on the way past.
+        var logged = _log.Entries.Last(e => e.SqlText == sql && e.Success);
+        Assert.Equal(1000, logged.RowCount);
+        Assert.Equal(QueryOrigin.Cli, logged.Origin);
+    }
+
+    /// <summary>
+    /// The row ceiling reaches the caller even though the rows went to a file. A truncated export is the one
+    /// outcome a script must not mistake for a complete one, and nothing in the file itself says so.
+    /// </summary>
+    [SkippableFact]
+    public async Task A_capped_export_says_it_was_capped()
+    {
+        var host = await LiveHostAsync();
+        var path = Path.Combine(_root, "capped.csv");
+
+        var response = (ExportResponse)await host.QueryAsync(
+            Run("agent-reads", "select film_id from film order by film_id", maxRows: 10) with { OutPath = path },
+            CancellationToken.None);
+
+        Assert.Equal(10, response.Rows);
+        Assert.True(response.Truncated);
+        Assert.Equal(11, File.ReadAllLines(path).Length);   // the header and ten rows
+    }
+
     /// <summary>A project with one exposed connection and one that is not.</summary>
     private async Task<string> WriteProjectAsync()
     {
@@ -344,11 +411,6 @@ public class LiveExposureTests : IAsyncLifetime
         return directory;
     }
 
-    /// <summary>
-    /// The first cell, as text. A string comes back unquoted and anything else as its JSON — because
-    /// <c>ResultJson</c> renders a bigint as a JSON <i>number</i> (which is the point of it), and a helper
-    /// that assumed every scalar was a string threw on the first sequence value it was handed.
-    /// </summary>
     /// <summary>One statement, as the request every run command takes.</summary>
     private static RunRequest Run(string connection, string sql, int? maxRows = null)
         => new(connection, sql) { MaxRows = maxRows };

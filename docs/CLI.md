@@ -53,7 +53,17 @@ An xlsx takes **one sheet per result set**; a CSV holds one table and refuses a 
 because the caller named a path and a script that finds no file at it is broken in a way an error is not.
 With `--out` the row count is unlimited unless you pass `--max-rows`, since a capped export is a silently
 truncated file. Everywhere else the default is 200 rows — and an explicit `--max-rows` is honoured at any
-size rather than clamped.
+size rather than clamped. If a cap did stop the read, the response says so (`"truncated": true`) — the file
+itself cannot.
+
+**One statement written to a CSV streams**: rows reach the file a batch at a time and the whole result is
+never in memory, so `--out report.csv` can be pointed at a table larger than this process. It is written to
+a temp file and moved into place at the end, so a read that fails part-way — a timeout, a dropped
+connection, a server error at row 900,000 — leaves no file rather than a convincing fraction of one.
+
+**An xlsx cannot stream.** A workbook has to be built from every row, so an `.xlsx` export is bounded by
+memory however it was asked for. So is a CSV of a multi-statement batch, which would not be one table
+anyway. For a very large result, ask for one statement and a `.csv`.
 
 `--timeout <secs>` can only **lower** what the connection already allows. Raising it would let a caller
 lift a limit its owner set, which is the inversion §1.9 exists to prevent.
