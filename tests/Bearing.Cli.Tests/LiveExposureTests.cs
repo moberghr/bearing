@@ -496,6 +496,56 @@ public class LiveExposureTests : IAsyncLifetime
         Assert.NotNull(measured.ExecutionMs);
     }
 
+    /// <summary>
+    /// A path that cannot be written is reported as the file's failure, and — the half that only the log can
+    /// show — is <b>not recorded as a failed execution</b>. The statement ran; an audit row saying it failed
+    /// with "Could not find a part of the path" is a false record of what happened on the server (§1.11d).
+    /// </summary>
+    [SkippableFact]
+    public async Task An_export_to_an_unwritable_path_is_not_recorded_as_a_failed_statement()
+    {
+        var host = await LiveHostAsync();
+        var path = Path.Combine(_root, "no-such-directory", "report.csv");
+        var before = _log.Entries.Count;
+
+        var failed = await Assert.ThrowsAsync<CommandFailure>(() => host.QueryAsync(
+            Run("agent-reads", "select film_id from film limit 5") with { OutPath = path },
+            CancellationToken.None));
+
+        Assert.Contains("Could not write", failed.Message);
+        Assert.DoesNotContain("could not be run", failed.Message);
+
+        // Nothing about a statement that ran fine. A refusal *is* logged (§1.11d) and a failed read is too;
+        // a full disk is neither.
+        Assert.Equal(before, _log.Entries.Count);
+    }
+
+    /// <summary>
+    /// An array column, against the real driver. The unit tests hand <c>CellValue</c> a <c>string[]</c> they
+    /// made themselves; only this says the type Npgsql actually produces for <c>text[]</c> lands in the same
+    /// arm. It did not: every array column answered with the literal string "System.String[]" — the value
+    /// gone rather than formatted oddly, in the output a caller parses.
+    /// </summary>
+    [SkippableFact]
+    public async Task An_array_column_reaches_the_caller_as_an_array()
+    {
+        var host = await LiveHostAsync();
+
+        var response = (QueryResponse)await host.QueryAsync(
+            Run("agent-reads", "select special_features from film where film_id = 1"),
+            CancellationToken.None);
+
+        var cell = response.Results[0].Rows[0][0];
+        var features = Assert.IsAssignableFrom<IEnumerable<object?>>(cell);
+        Assert.Contains("Deleted Scenes", features.Select(f => f?.ToString()));
+
+        // And through the serializer, because a value that is right in the record and wrong in the JSON is
+        // still wrong — this is the text the caller receives.
+        var json = CliRunner.Serialize(response);
+        Assert.DoesNotContain("System.String", json);
+        Assert.Contains("\"Deleted Scenes\"", json);
+    }
+
     /// <summary>A project with one exposed connection and one that is not.</summary>
     private async Task<string> WriteProjectAsync()
     {

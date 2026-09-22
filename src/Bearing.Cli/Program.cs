@@ -188,7 +188,17 @@ internal static class Program
 
         if (options.ProjectDirectory is { } given)
         {
-            var full = Path.GetFullPath(given);
+            // GetFullPath throws on a path the platform cannot express — an invalid character, a path past
+            // the limit — and this runs outside Main's handler, which catches only cancellation. A caller
+            // who typed a bad path gets the usage error it is, not a stack trace.
+            string full;
+            try { full = Path.GetFullPath(given); }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                error = $"'{given}' is not a usable path: {ex.Message}";
+                return null;
+            }
+
             if (Directory.Exists(full)) return full;
             error = $"No such directory: {full}";
             return null;

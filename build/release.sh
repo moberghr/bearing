@@ -38,6 +38,12 @@ CONFIG="${CONFIG:-Release}"
 PROJECT="src/Bearing.Desktop/Bearing.Desktop.csproj"
 APP_ID="bearing"
 APP_NAME="Bearing"
+
+# What `dotnet publish` actually produces, which is no longer the same as APP_ID: Bearing.Desktop's
+# AssemblyName became `bearing-app` when the `bearing` name was given to the CLI (§1.11). Only the lookup
+# below changes — this archive ships the window and nothing else, so what it installs stays `bearing`, the
+# name it has always had here. (The Velopack package ships both, and there `bearing` is the command.)
+APP_EXE="bearing-app"
 DIST="$ROOT/dist"
 
 # Target OS family drives packaging (binary suffix, archive format, installer).
@@ -111,7 +117,7 @@ dotnet publish "$PROJECT" \
   --nologo
 echo
 
-BIN="$PUBDIR/${APP_ID}${EXE_SUFFIX}"
+BIN="$PUBDIR/${APP_EXE}${EXE_SUFFIX}"
 if [[ ! -f "$BIN" ]]; then
   echo "ERROR: expected published binary at $BIN" >&2
   exit 1

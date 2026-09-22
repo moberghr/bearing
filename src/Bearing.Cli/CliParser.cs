@@ -248,8 +248,19 @@ public static class CliParser
 
     private static CliOptions Error(string message) => new() { Error = message };
 
+    /// <summary>
+    /// The value after an option, or null when there is none — which every caller turns into
+    /// <see cref="Missing"/>.
+    /// <para>
+    /// <b>A blank value counts as none.</b> A shell that expanded a variable to nothing hands over an empty
+    /// argument, not a missing one, and every consumer downstream treats that as a value it was given:
+    /// <c>--project ""</c> reached <c>Path.GetFullPath("")</c> and came out as an unhandled
+    /// <c>ArgumentException</c> and a stack trace instead of the usage error it is. <c>bearing --project
+    /// "$PROJ" query …</c> with <c>$PROJ</c> unset is the ordinary way to arrive here.
+    /// </para>
+    /// </summary>
     private static string? Next(IReadOnlyList<string> args, ref int i)
-        => i + 1 < args.Count ? args[++i] : null;
+        => i + 1 < args.Count && !string.IsNullOrWhiteSpace(args[i + 1]) ? args[++i] : null;
 
     private static CliOptions Missing(string option, string what)
         => new() { Error = $"{option} needs {what}." };

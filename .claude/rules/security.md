@@ -511,7 +511,10 @@ published into one directory by `build/velopack.sh`, so "beside me" is how the C
 it opens the enclosing `.app` rather than the binary, because Launch Services is what gives it a Dock entry.
 
 DO NOT "tidy" the GUI apphost back to `bearing`: the two would collide in one directory, and the one that
-lost would be the one people type. The update identity is `$PACK_ID`, not an exe name (§9.6), so the rename
+lost would be the one people type. **The rename reaches every script that names the published binary**, and
+`build/release.sh` was missed — it looked for `$PUBDIR/bearing` and died at its own existence check, so the
+kept archive path was broken by a change that only touched `velopack.sh`. It has an `APP_EXE` separate from
+`APP_ID` now: that archive ships the window and nothing else, so what it *installs* is still `bearing`. The update identity is `$PACK_ID`, not an exe name (§9.6), so the rename
 does not orphan an installed client — but it does change the Start Menu shortcut's target, so the first
 update across it is worth watching.
 
@@ -657,6 +660,12 @@ through a wrapper function, a search_path that resolves elsewhere, or SQL built 
 that holds is a role without the privilege. WHEN someone asks for exposure to be "safe", the answer is a
 role, not a longer list.
 
+**But a different *spelling of the same name* is not one of those, and has to be caught.** The match is
+`\b<name>["\]]?\s*\(` — the optional delimiter is the point. `select "pg_read_file"('/etc/passwd')` is
+ordinary Postgres and went straight through, because the closing quote sits between the name and the `(`,
+while the qualified `pg_catalog.pg_read_file(…)` was caught: an asymmetry with no reason behind it, in a
+list whose whole job is the obvious cases. `]` is T-SQL's spelling of the same thing.
+
 ### §1.11c — One invocation is one connection; concurrency is the server's to bound
 
 Measured: `select count(*) from pg_stat_activity where usename = current_user and datname =
@@ -693,6 +702,23 @@ only by reading the code that emitted it.
   `--max-rows`, which was accepted and silently ignored on `connections`, `tables`, `describe` and `explain`.
   The principle was already written into `Validate` for every other flag; the one that predated it was the
   one that did not follow it. A caller who typed it believes it is doing something.
+- **Every CLR type a driver produces needs an arm, and the fallback cannot be trusted to be sane.**
+  `CellValue.For` had none for `Array`, and an array is neither `IConvertible` nor `IFormattable` — so the
+  invariant `Convert.ToString` fallback answered **`"System.String[]"`** and every `text[]`/`int[]` column
+  handed a caller the type name where the value should have been. Lost data wearing the shape of data, in
+  the output a program parses, while `--table` rendered the same cell as a list: the two disagreed. An
+  array is a JSON array (elements converted the same way, so they nest), hstore is a JSON object, and
+  `byte[]` keeps its base64 arm *above* both because a bytea is not a list of 200 numbers.
+- **A blank option value is a missing one.** A shell that expanded a variable to nothing hands over an
+  empty argument rather than no argument, and `--project ""` reached `Path.GetFullPath("")` and came out as
+  an unhandled `ArgumentException` and a stack trace — on the ordinary path, since `bearing --project
+  "$PROJ" query …` with `$PROJ` unset is how anybody would write it. `Next` treats blank as absent for
+  every option, and `ResolveProject` catches what a path can still throw.
+- **A failure to write the file is not a failure of the statement.** Only the streamed export can hit both
+  inside one call, so `ResultExport` throws `ExportWriteException` from the file operations specifically and
+  the host reports that as `Could not write …`. It is also **not logged**: the statement ran, and an audit
+  row saying it failed with "Could not find a part of the path" is a false record of what happened on the
+  server (§1.11d). A refusal is logged and a failed read is logged; a full disk is neither.
 - **`explain` validates the caller's statement and sends its own.** `EXPLAIN ANALYZE` carries a
   `BEGIN … ROLLBACK` that the allow-list would rightly refuse if it saw it — so what is judged is what the
   caller asked to run, and what is sent is what we wrapped it in. The wrapper is not optional: a plain

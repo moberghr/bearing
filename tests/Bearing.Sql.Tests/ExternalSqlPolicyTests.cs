@@ -74,6 +74,30 @@ public class ExternalSqlPolicyTests
         Assert.NotNull(Pg(sql));
     }
 
+    /// <summary>
+    /// A quoted identifier is the <b>same name</b>, not one of the evasions this list openly does not catch.
+    /// <c>select "pg_read_file"('/etc/passwd')</c> is ordinary Postgres and got through, because the closing
+    /// quote sat between the name and the <c>(</c> — while the qualified <c>pg_catalog.pg_read_file(…)</c>
+    /// was caught. An asymmetry with no reason behind it, in a list whose stated job is the obvious cases.
+    /// </summary>
+    [Theory]
+    [InlineData("select \"pg_read_file\"('/etc/passwd')")]
+    [InlineData("select \"pg_ls_dir\" ('/etc')")]
+    [InlineData("select pg_catalog.pg_read_file('/etc/passwd')")]
+    [InlineData("select PG_READ_FILE('/etc/passwd')")]
+    public void A_denied_function_is_refused_however_it_is_spelled(string sql)
+    {
+        Assert.NotNull(Pg(sql));
+    }
+
+    /// <summary>T-SQL spells the same thing with brackets.</summary>
+    [Fact]
+    public void A_bracketed_name_is_the_same_name_on_sql_server()
+    {
+        Assert.NotNull(TSql("select [xp_cmdshell]('dir')"));
+        Assert.NotNull(TSql("select xp_cmdshell('dir')"));
+    }
+
     // ---- what still has to work ----------------------------------------------------------------
 
     [Theory]

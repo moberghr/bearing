@@ -173,6 +173,36 @@ public class StreamedCsvExportTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// A path that cannot be created is the caller's mistake about the <b>file</b>, and it is told apart
+    /// from a failure of the read by where it was thrown rather than by guessing at an exception type. It
+    /// matters because the CLI attributes the two differently: reporting a bad directory as "the query
+    /// could not be run" also writes a failed-execution row to the audit log for a statement that ran
+    /// perfectly well (§1.11d).
+    /// </summary>
+    [Fact]
+    public async Task A_path_that_cannot_be_created_is_the_files_failure_not_the_reads()
+    {
+        var path = Path.Combine(_dir, "no-such-directory", "report.csv");
+
+        var ex = await Assert.ThrowsAsync<ResultExport.ExportWriteException>(
+            () => ResultExport.WriteCsvStreamAsync(path, Stream(Rows, size: 2)));
+
+        Assert.Equal(path, ex.Path);
+        Assert.Contains(path, ex.Message);
+    }
+
+    /// <summary>And the other side of that line: a failure while the rows are being read is the read's, and
+    /// reaches the caller as whatever the driver threw.</summary>
+    [Fact]
+    public async Task A_failure_while_reading_is_still_the_reads()
+    {
+        var path = Path.Combine(_dir, "partial.csv");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ResultExport.WriteCsvStreamAsync(
+            path, Stream(Rows, size: 2, failAfter: new InvalidOperationException("connection lost"), failAt: 2)));
+    }
+
     /// <summary>A row shorter than the header is padded rather than ending its line early — a ragged line
     /// is what turns one bad row into a file a reader rejects wholesale.</summary>
     [Fact]

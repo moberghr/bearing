@@ -94,6 +94,84 @@ public class CellValueTests
         Assert.Equal("AQID", Text(new byte[] { 1, 2, 3 }));
     }
 
+    /// <summary>
+    /// A Postgres array is a JSON array, not a string and emphatically not its type name. There was no arm
+    /// for it, and an Array is neither IConvertible nor IFormattable — so the invariant ToString fallback
+    /// answered "System.String[]" and `select special_features from film` handed a caller that, in the
+    /// field where the value should have been. Lost data wearing the shape of data.
+    /// </summary>
+    [Fact]
+    public void An_array_is_a_json_array_rather_than_its_type_name()
+    {
+        var value = CellValue.For(new[] { "Trailers", "Commentaries" });
+
+        Assert.Equal(new object?[] { "Trailers", "Commentaries" }, Assert.IsAssignableFrom<IEnumerable<object?>>(value));
+    }
+
+    [Fact]
+    public void An_arrays_elements_are_converted_like_any_other_cell()
+    {
+        // Numbers stay numbers, a null element stays null, and a date inside an array gets the same
+        // round-trip spelling it would get in a column of its own.
+        var value = (IEnumerable<object?>)CellValue.For(new object?[]
+        {
+            42, null, new DateTime(2026, 9, 3, 10, 0, 0, DateTimeKind.Utc),
+        })!;
+
+        Assert.Equal(
+            new object?[] { 42, null, "2026-09-03T10:00:00.0000000Z" },
+            value);
+    }
+
+    [Fact]
+    public void A_nested_array_nests()
+    {
+        var value = (IEnumerable<object?>)CellValue.For(new[] { new[] { 1, 2 }, new[] { 3 } })!;
+
+        Assert.Equal(
+            [new object?[] { 1, 2 }, new object?[] { 3 }],
+            value.Select(v => ((IEnumerable<object?>)v!).ToArray()));
+    }
+
+    /// <summary>A bytea is an Array too, and it is not a list of 200 numbers — so its arm has to come
+    /// first, and this is the assertion that says so.</summary>
+    [Fact]
+    public void Bytes_are_still_base64_even_though_a_byte_array_is_an_array()
+    {
+        Assert.Equal("AQID", CellValue.For(new byte[] { 1, 2, 3 }));
+    }
+
+    /// <summary>hstore, which Npgsql hands over as a dictionary. It reached the same ToString fallback and
+    /// produced the same class of nonsense.</summary>
+    [Fact]
+    public void An_hstore_is_a_json_object()
+    {
+        var value = Assert.IsAssignableFrom<IDictionary<string, object?>>(
+            CellValue.For(new Dictionary<string, string> { ["colour"] = "red", ["size"] = "L" }));
+
+        Assert.Equal("red", value["colour"]);
+        Assert.Equal("L", value["size"]);
+    }
+
+    /// <summary>
+    /// The whole point of the arms above: what a caller actually receives. Asserted through the runner's
+    /// own serializer, because a value that is right in the record and wrong in the JSON is still wrong.
+    /// </summary>
+    [Fact]
+    public void An_array_column_serialises_as_an_array()
+    {
+        var result = new QueryResult(
+            [new ColumnDescriptor("special_features", "text[]", typeof(string[]))],
+            [new object?[] { new[] { "Trailers", "Deleted Scenes" } }],
+            RowCount: 1, Duration: TimeSpan.Zero, Message: null, Error: null, Truncated: false);
+
+        var json = CliRunner.Serialize(new QueryResponse([CellValue.SetOf(result)]));
+
+        Assert.Contains("\"Trailers\"", json);
+        Assert.Contains("\"Deleted Scenes\"", json);
+        Assert.DoesNotContain("System.String", json);
+    }
+
     [Fact]
     public void A_result_reports_its_columns_its_rows_and_whether_it_was_cut_short()
     {

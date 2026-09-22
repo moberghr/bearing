@@ -68,6 +68,22 @@ public static class ResultExport
         }
     }
 
+    /// <summary>
+    /// A failure that was the <b>file's</b>, not the data's — thrown only by
+    /// <see cref="WriteCsvStreamAsync"/>, which is the one place here where both can happen inside one call.
+    /// <para>
+    /// Everything else in this class only writes, so a caller can attribute its failures by where it stood.
+    /// A streaming write is reading from a server and writing to a disk at the same time, and the two want
+    /// different sentences: "the query could not be run" about a directory that does not exist is wrong
+    /// twice over, since it also puts a failed *statement* in the query log for a statement that ran fine.
+    /// </para>
+    /// </summary>
+    public sealed class ExportWriteException(string path, Exception inner)
+        : IOException($"Could not write {path}: {inner.Message}", inner)
+    {
+        public string Path { get; } = path;
+    }
+
     /// <summary>What a streamed CSV turned out to hold, since nothing counted the rows beforehand.</summary>
     /// <param name="Rows">Rows written, header excluded.</param>
     /// <param name="Columns">Columns in the header row — 0 only when the statement returned no shape at all.</param>
@@ -100,7 +116,19 @@ public static class ResultExport
             var columns = 0;
             var truncated = false;
             var header = false;
-            await using (var file = File.Create(temp))
+
+            // Separately, and first: a path that cannot be created is the caller's mistake about the file
+            // and has nothing to do with the statement. Everything after this point can fail for either
+            // reason, so the two are told apart by where they were thrown rather than by guessing at an
+            // exception type.
+            FileStream created;
+            try { created = File.Create(temp); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new ExportWriteException(path, ex);
+            }
+
+            await using (var file = created)
             {
                 // A BOM for the same reason Write has one: Excel guesses the system code page without it.
                 var writer = new StreamWriter(file, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
@@ -129,7 +157,14 @@ public static class ResultExport
             // there rather than having it replaced by a file holding a BOM.
             if (!header) return new StreamedCsv(0, 0, false);
 
-            File.Move(temp, path, overwrite: true);
+            // The move is the file's too: every row is read by now, so a failure here is about the
+            // destination and not about the statement.
+            try { File.Move(temp, path, overwrite: true); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new ExportWriteException(path, ex);
+            }
+
             return new StreamedCsv(rows, columns, truncated);
         }
         finally

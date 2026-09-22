@@ -83,9 +83,15 @@ public static class ExternalSqlPolicy
     {
         foreach (var name in dialect.ExternalDeniedFunctions)
         {
-            // The name as a call: a word boundary, the name, then '(' past any whitespace. A column that
-            // merely shares the name is not a call and is left alone.
-            if (Regex.IsMatch(statement, $@"\b{Regex.Escape(name)}\s*\(", RegexOptions.IgnoreCase))
+            // The name as a call: a word boundary, the name, an optional closing delimiter, then '(' past
+            // any whitespace. A column that merely shares the name is not a call and is left alone.
+            //
+            // The delimiter is why this is not just \b…\s*\(. A quoted identifier is the *same name*, not an
+            // evasion of the kind this list openly does not catch (a wrapper, a search_path, runtime SQL):
+            // `select "pg_read_file"('/etc/passwd')` is ordinary Postgres and ran, while the qualified
+            // `pg_catalog.pg_read_file(…)` was caught — an asymmetry with no reason behind it. `]` is
+            // T-SQL's spelling of the same thing ([xp_cmdshell]).
+            if (Regex.IsMatch(statement, $@"\b{Regex.Escape(name)}[""\]]?\s*\(", RegexOptions.IgnoreCase))
                 return name;
         }
 

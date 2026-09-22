@@ -342,11 +342,18 @@ public sealed class BearingHost(
                 ct).ConfigureAwait(false);
             wall.Stop();
         }
+        // The file, not the statement. Reported as what it is and **not logged as a failed execution**: the
+        // statement ran, and an audit row saying it failed with "Could not find a part of the path" is a
+        // false record of what happened on the server (§1.11d).
+        catch (ResultExport.ExportWriteException ex)
+        {
+            throw new CommandFailure(ex.Message);
+        }
         catch (Exception ex) when (ex is not OperationCanceledException and not CommandFailure)
         {
             // A streamed read reports failure by throwing, so unlike the materialising path there is no
             // unsuccessful QueryResult to log. Recording it by hand keeps a failed export in the history
-            // beside a failed query, which is the whole point of logging this path at all (§1.11f).
+            // beside a failed query, which is the whole point of logging this path at all (§1.11d).
             wall.Stop();
             var reason = SafeErrorText.Of(ex);
             Write(info, sql, wall.Elapsed, rows: 0, success: false, error: reason);

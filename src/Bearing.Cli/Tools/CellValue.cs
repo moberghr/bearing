@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Globalization;
 using System.Numerics;
 using Bearing.Core.Data;
@@ -57,7 +58,21 @@ public static class CellValue
 
         // Base64 rather than the engine's own literal spelling, which is not the same on both (`\x…`
         // against `0x…`) and would make a consumer branch on which engine answered.
+        // Before the arms below it, because a byte[] is an Array and a bytea is not a list of 200 numbers.
         byte[] bytes => Convert.ToBase64String(bytes),
+
+        // A Postgres array as a JSON array, element by element — so text[] nests, int[] stays numbers, and a
+        // null element stays null. Without this arm it fell to the invariant ToString below, and an Array is
+        // neither IConvertible nor IFormattable, so `select special_features from film` answered with the
+        // literal string "System.String[]": the value gone rather than merely formatted oddly, and looking
+        // enough like data to be stored. The same shape TableFormats.Json already writes for the clipboard.
+        Array array => array.Cast<object?>().Select(For).ToList(),
+
+        // hstore, which Npgsql hands over as a dictionary. A JSON object, values converted like any other
+        // cell — it reached the same ToString and produced the same class of nonsense.
+        IDictionary dictionary => dictionary.Keys
+            .Cast<object>()
+            .ToDictionary(k => Convert.ToString(k, CultureInfo.InvariantCulture) ?? "", k => For(dictionary[k])),
 
         // The fallback is invariant, and the culture matters: ToString() on a Croatian machine renders a
         // decimal with a comma, so a consumer's parse would depend on where the user was sitting (§9.10c

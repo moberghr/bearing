@@ -128,6 +128,37 @@ public class RunOptionsTests : IDisposable
         Assert.Null(CliParser.Parse(["query", "reporting", "select 1", "--out", path]).Error);
     }
 
+    /// <summary>
+    /// A shell that expanded a variable to nothing hands over an <i>empty</i> argument, not a missing one,
+    /// and everything downstream treated that as a value it was given: <c>bearing --project "$PROJ"</c> with
+    /// <c>$PROJ</c> unset reached <c>Path.GetFullPath("")</c> and came out as an unhandled
+    /// <c>ArgumentException</c> and a stack trace, on the ordinary path, instead of the usage error it is.
+    /// </summary>
+    [Theory]
+    [InlineData("--project")]
+    [InlineData("--file")]
+    [InlineData("--out")]
+    [InlineData("--schema")]
+    [InlineData("--max-rows")]
+    [InlineData("--timeout")]
+    public void An_option_given_a_blank_value_is_a_usage_error_rather_than_a_crash(string option)
+    {
+        var options = CliParser.Parse(["query", "reporting", "select 1", option, ""]);
+
+        Assert.NotNull(options.Error);
+        Assert.Contains(option, options.Error);
+    }
+
+    [Fact]
+    public async Task A_blank_project_exits_as_a_usage_error_and_prints_no_stack_trace()
+    {
+        var run = await Cli.RunAsync(new RecordingHost(), "--project", "", "connections");
+
+        Assert.Equal(CliRunner.Usage, run.ExitCode);
+        Assert.DoesNotContain("Exception", run.Error);
+        Assert.Empty(run.Out);
+    }
+
     // ---- where the SQL comes from -------------------------------------------------------------
 
     [Fact]
