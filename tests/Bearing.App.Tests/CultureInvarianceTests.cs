@@ -6,6 +6,7 @@ using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
+using Bearing.Results;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -71,7 +72,7 @@ public class CultureInvarianceTests
     {
         // The original report. Under hr-HR the decimal rendered "9,5", which then tripped CsvField's comma
         // check and left as the *string* "9,5" — so every consumer read the column as text.
-        var row = TableFormats.Csv(TableBlock.ForResult(Sample())).Split("\r\n")[1];
+        var row = TableFormats.Csv(ResultBlocks.ForResult(Sample())).Split("\r\n")[1];
         Assert.Equal("1,9.5", row);
         Assert.DoesNotContain("\"", row);
     });
@@ -79,7 +80,7 @@ public class CultureInvarianceTests
     [Fact]
     public void Markdown_and_html_carry_the_invariant_number_too() => InCulture("hr-HR", () =>
     {
-        var block = TableBlock.ForResult(Sample());
+        var block = ResultBlocks.ForResult(Sample());
         Assert.Contains("| 1 | 9.5 |", TableFormats.Markdown(block));
         Assert.Contains(">9.5<", TableFormats.Html(block));
     });
@@ -87,7 +88,7 @@ public class CultureInvarianceTests
     [Fact]
     public void Sql_insert_and_in_list_stay_invariant() => InCulture("hr-HR", () =>
     {
-        var block = TableBlock.ForResult(Sample());
+        var block = ResultBlocks.ForResult(Sample());
         Assert.Contains("values (1, 9.5)", TableFormats.SqlInsert(block, "public", "t"));
         Assert.Equal("1, 9.5", TableFormats.InList(block));
     });

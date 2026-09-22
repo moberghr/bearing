@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Bearing.App.ViewModels;
+using Bearing.Results;
 
 namespace Bearing.App.Results;
 

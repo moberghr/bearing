@@ -166,6 +166,10 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
 
         if (reader.FieldCount == 0) yield break; // not row-returning — nothing to stream
 
+        // Read once and carried on every batch: the shape cannot change mid-stream, and a consumer
+        // with no result already on screen has nowhere else to get the header row from.
+        var columns = ReadColumns(reader);
+
         var batch = new List<object?[]>(batchSize);
         var read = 0;
         var truncated = false;
@@ -185,14 +189,17 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
 
             if (batch.Count >= batchSize)
             {
-                yield return new RowBatch(batch, Truncated: false);
+                yield return new RowBatch(columns, batch, Truncated: false);
                 batch = new List<object?[]>(batchSize);
             }
         }
 
-        // The tail. Also emitted when it is empty but the cap stopped us, since Truncated has to reach the
-        // caller even when the ceiling happens to land on a batch boundary.
-        if (batch.Count > 0 || truncated) yield return new RowBatch(batch, truncated);
+        // The tail, always — even empty, and even with nothing truncated. Two reasons it is unconditional:
+        // Truncated has to reach the caller when the ceiling lands exactly on a batch boundary, and a
+        // row-returning statement has to name its columns even when it matched no rows. A consumer building
+        // a file from the stream alone (the CLI's streamed CSV) would otherwise have no header to write, and
+        // would produce a headerless file for an empty result where every other export writes one.
+        yield return new RowBatch(columns, batch, truncated);
     }
 
     public async Task<long?> CountAsync(string countSql, CancellationToken ct)

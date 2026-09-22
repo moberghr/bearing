@@ -7,6 +7,8 @@ using Bearing.Core.Data;
 using Bearing.Data;
 using Bearing.Data.Postgres;
 using Bearing.Data.SqlServer;
+using Bearing.Results;
+using Bearing.Sessions;
 using Bearing.Sql;
 using Xunit;
 

@@ -1,5 +1,6 @@
 using Bearing.App.Formatting;
 using Bearing.App.Results;
+using Bearing.Results;
 using Xunit;
 
 namespace Bearing.App.Tests;

@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Bearing.App.Results;
 using Bearing.App.Views;
 using Bearing.Core.Data;
+using Bearing.Results;
 
 namespace Bearing.App.Services;
 

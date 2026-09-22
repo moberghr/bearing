@@ -123,4 +123,67 @@ public sealed class PostgresDialect : ISqlDialect
         // Procedural blocks that can write arbitrarily.
         "CALL", "DO",
     };
+
+    /// <summary>The reads a host outside Bearing may send. Postgres answers <c>SHOW</c> for a setting,
+    /// <c>TABLE t</c> as shorthand for <c>SELECT * FROM t</c>, and <c>VALUES</c> as a standalone row
+    /// constructor; all three are reads and all three are useful to an agent exploring a database.</summary>
+    public IReadOnlySet<string> ExternalReadVerbs { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "SELECT", "WITH", "EXPLAIN", "SHOW", "TABLE", "VALUES",
+    };
+
+    /// <summary>
+    /// Postgres functions an exposed connection refuses, grouped by what they reach past.
+    /// <para>
+    /// Every one of these is callable from a plain <c>SELECT</c> and most are unaffected by
+    /// <c>default_transaction_read_only</c> — <c>pg_terminate_backend</c> is a signal rather than a write
+    /// (§9.13), and <c>pg_read_file</c> is a read, just not of the data. Measured on a superuser
+    /// connection: <c>select pg_read_file('/etc/passwd')</c> returned the file with read-only fully in
+    /// force. So this list is not redundant with the read-only session; it covers a different axis.
+    /// </para>
+    /// </summary>
+    /// <inheritdoc/>
+    public bool SupportsExplainPlan => true;
+
+    public IReadOnlySet<string> ExternalDeniedFunctions { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        // Other people's sessions.
+        "pg_terminate_backend", "pg_cancel_backend",
+        // The server's filesystem.
+        "pg_read_file", "pg_read_binary_file", "pg_ls_dir", "pg_stat_file", "pg_ls_logdir", "pg_ls_waldir",
+        // Large objects — lo_import/lo_export are file I/O wearing a data-type costume.
+        "lo_import", "lo_export", "lo_unlink",
+        // This session's own settings. set_config is SET in SELECT clothing, so the allow-list above
+        // cannot see it — and it is the exact escape that would shed a role the startup packet set.
+        "set_config",
+        // The server's configuration and log files.
+        "pg_reload_conf", "pg_rotate_logfile", "pg_stat_reset",
+    };
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The three catalogs §1.8 names, and for its reasons. They are not hypothetical on this path: an
+    /// exposed connection admits <c>select * from pg_user_mappings</c> as the plain read it is, and
+    /// <c>umoptions</c> holds a foreign server's password in cleartext for the mapping's owner — no
+    /// superuser needed. <c>pg_authid.rolpassword</c> and <c>pg_subscription.subconninfo</c> do need one,
+    /// which is precisely the over-privileged connection this fence is for.
+    /// <para>
+    /// <c>pg_shadow</c> is <c>pg_authid</c> under another name and has to be listed separately; the
+    /// <c>pg_roles</c> view is deliberately <b>not</b> here, because masking the hash is what it is for
+    /// (§1.7) and it is how anyone should read roles.
+    /// </para>
+    /// </remarks>
+    public IReadOnlySet<string> ExternalDeniedRelations { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "pg_authid", "pg_shadow",
+        "pg_subscription",
+        "pg_user_mappings", "pg_user_mapping",
+    };
+
+    /// <inheritdoc/>
+    public (IReadOnlySet<string> Called, IReadOnlySet<string> Mentioned) ExternalNameScan(string statement)
+    {
+        var tokens = PgParsing.LexAll(statement);
+        return (SqlNameScan.CalledNames(tokens), SqlNameScan.MentionedNames(tokens));
+    }
 }

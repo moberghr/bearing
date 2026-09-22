@@ -16,6 +16,7 @@ using Bearing.App.Services;
 using Bearing.App.ViewModels;
 using Bearing.App.Views;
 using Bearing.Core.Data;
+using Bearing.Sessions;
 
 namespace Bearing.App.Controls;
 

@@ -18,6 +18,8 @@ using Bearing.Core.Data;
 using Bearing.Core.Logging;
 using Bearing.Core.Schema;
 using Bearing.Core.Workspace;
+using Bearing.Results;
+using Bearing.Sessions;
 using Bearing.Sql;
 
 using Bearing.Persistence.Import;
@@ -71,8 +73,8 @@ public sealed partial class ShellViewModel : ObservableObject
         IRecentProjects recentProjects,
         ISecretStore? secretStore = null,
         IDialogService? dialogs = null,
-        Connections.ICredentialPrompt? credentialPrompt = null,
-        Connections.IEntraTokenProvider? entraTokens = null,
+        ICredentialPrompt? credentialPrompt = null,
+        IEntraTokenProvider? entraTokens = null,
         Settings.SettingsService? settings = null)
     {
         _ctx = new WorkspaceContext(providers, projectStore, sessionStore, queryLog, recentProjects, secretStore,

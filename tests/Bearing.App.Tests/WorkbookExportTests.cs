@@ -8,6 +8,7 @@ using Bearing.Demo;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
+using Bearing.Results;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -56,7 +57,7 @@ public class WorkbookExportTests : IDisposable
         new QueryResult([], [], 0, TimeSpan.Zero, null, new QueryError("nope", "42P01", 1), false), null, false);
 
     private static XlsxWriter.Sheet Sheet(string name, int rows = 2)
-        => new(TableBlock.ForResult(Set("v", rows)), name);
+        => new(ResultBlocks.ForResult(Set("v", rows)), name);
 
     // ---- reading the file back -------------------------------------------------------------------
 
@@ -137,7 +138,7 @@ public class WorkbookExportTests : IDisposable
     {
         // The old call is a wrapper over the new one now, so the one-sheet file must not have moved.
         var single = In("one.xlsx");
-        var block = TableBlock.ForResult(Set("v", 3));
+        var block = ResultBlocks.ForResult(Set("v", 3));
         ResultExport.Write(single, block, ExportFormat.Xlsx, "orders");
 
         using var zip = Open(single);
@@ -175,7 +176,7 @@ public class WorkbookExportTests : IDisposable
     {
         // A statement message and an error are not sheets: an empty tab named after a DELETE is worse than its
         // absence.
-        var sheets = ResultExport.RunSheets([Set("a", 2, "orders"), Message(), Failure(), Set("b", 2, "items")]);
+        var sheets = ResultBlocks.RunSheets([Set("a", 2, "orders"), Message(), Failure(), Set("b", 2, "items")]);
 
         Assert.Equal(["orders", "items"], sheets.Select(s => s.Name));
     }
@@ -185,14 +186,14 @@ public class WorkbookExportTests : IDisposable
     {
         // Not by its place among the sheets: "Result 3" has to be the third result on screen, or the workbook
         // and the results pane disagree about which one you are looking at.
-        var sheets = ResultExport.RunSheets([Message(), Set("a", 1), Set("b", 1)]);
+        var sheets = ResultBlocks.RunSheets([Message(), Set("a", 1), Set("b", 1)]);
 
         Assert.Equal(["Result 2", "Result 3"], sheets.Select(s => s.Name));
     }
 
     [Fact]
     public void A_run_of_nothing_but_messages_yields_no_sheets()
-        => Assert.Empty(ResultExport.RunSheets([Message(), Failure()]));
+        => Assert.Empty(ResultBlocks.RunSheets([Message(), Failure()]));
 
     [Fact]
     public void The_workbook_is_named_after_the_tab()
@@ -214,7 +215,7 @@ public class WorkbookExportTests : IDisposable
         // Excel refuses a workbook with duplicate sheet names, and one run selecting twice from one table is
         // entirely normal.
         var path = In("dupes.xlsx");
-        ResultExport.WriteWorkbook(path, ResultExport.RunSheets(
+        ResultExport.WriteWorkbook(path, ResultBlocks.RunSheets(
             [Set("a", 1, "orders"), Set("b", 1, "orders"), Set("c", 1, "orders")]));
 
         using var zip = Open(path);
@@ -281,7 +282,7 @@ public class WorkbookExportTests : IDisposable
         var results = ResultSetBuilder.BuildResultSets(DemoCatalog.Run(), "select …", DemoCatalog.Snapshot());
         var path = In("demo.xlsx");
 
-        ResultExport.WriteWorkbook(path, ResultExport.RunSheets(results));
+        ResultExport.WriteWorkbook(path, ResultBlocks.RunSheets(results));
 
         using var zip = Open(path);
         Assert.Equal(results.Count(r => r.HasGrid), SheetNamesOf(zip).Count);

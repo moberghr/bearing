@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Bearing.App.Connections;
 using Bearing.Core.Data;
 using Bearing.Core.Workspace;
+using Bearing.Sessions;
 using Xunit;
 
 namespace Bearing.App.Tests;

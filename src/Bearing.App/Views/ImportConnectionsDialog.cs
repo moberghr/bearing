@@ -9,6 +9,7 @@ using Avalonia.Media;
 using Bearing.App.Connections;
 using Bearing.Core.Data;
 using Bearing.Persistence.Import;
+using Bearing.Sessions;
 
 namespace Bearing.App.Views;
 

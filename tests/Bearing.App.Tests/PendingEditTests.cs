@@ -5,6 +5,7 @@ using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
+using Bearing.Results;
 using Xunit;
 
 namespace Bearing.App.Tests;

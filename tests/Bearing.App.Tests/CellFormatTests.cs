@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using Bearing.App.Formatting;
+using Bearing.Results;
 using Xunit;
 
 namespace Bearing.App.Tests;

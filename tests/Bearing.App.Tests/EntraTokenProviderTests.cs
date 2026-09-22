@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using Bearing.App.Connections;
 using Bearing.Core.Data;
+using Bearing.Sessions;
 using Xunit;
 
 namespace Bearing.App.Tests;

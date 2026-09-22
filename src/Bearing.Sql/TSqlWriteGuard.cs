@@ -69,9 +69,27 @@ public static class TSqlWriteGuard
                     foreach (var w in words)
                         if (riskyVerbs.Contains(w)) { Add(risky, w); break; }
 
+                var topLevel = TSqlScanner.TopLevelWords(statement.Tokens);
+
+                // **T-SQL does not require a separator between statements**, so one span here can be a
+                // whole batch: `select 1 drop table t` splits as a single statement whose leading word is
+                // SELECT. Reading only the lead word therefore says something false about what the text
+                // runs — measured, before this existed: that string came back risky=false and, sent to a
+                // live server, returned its row and dropped the table. Postgres is unaffected; it requires
+                // the semicolon, so its splitter sees two statements.
+                //
+                // Any risky verb at top level counts. Depth is *parenthesis* depth, so a verb inside a
+                // `begin … end` block still counts (it is a statement there too), while a word inside a
+                // string literal or brackets is not a word at all and cannot false-positive. What can is a
+                // column genuinely named after a verb — `select copy from t` — which now asks for
+                // confirmation it does not need; §1.2's stance is that erring toward caution is the right
+                // side to be wrong on, and `[copy]` is the escape.
+                foreach (var w in topLevel)
+                    if (riskyVerbs.Contains(w)) { Add(risky, w); break; }
+
                 // SELECT … INTO creates a table — a write no leading verb reveals. Top level only, so a
                 // subquery's INTO or a PL-style INTO cannot false-positive.
-                if (ReadStarts.Contains(first) && TSqlScanner.TopLevelWords(statement.Tokens).Contains("INTO"))
+                if (ReadStarts.Contains(first) && topLevel.Contains("INTO"))
                     Add(risky, "SELECT INTO");
 
                 // The conservative default: a statement this guard does not recognise as a read is treated

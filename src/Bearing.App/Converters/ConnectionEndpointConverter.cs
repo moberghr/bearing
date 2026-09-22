@@ -3,6 +3,7 @@ using System.Globalization;
 using Avalonia.Data.Converters;
 using Bearing.App.Connections;
 using Bearing.Core.Data;
+using Bearing.Sessions;
 
 namespace Bearing.App.Converters;
 

@@ -9,6 +9,7 @@ using Bearing.App.Workspace;
 using Bearing.Core.Data;
 using Bearing.Core.Workspace;
 using Bearing.Persistence;
+using Bearing.Results;
 using Xunit;
 
 namespace Bearing.App.Tests;

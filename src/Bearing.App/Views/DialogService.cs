@@ -12,6 +12,7 @@ using Bearing.App.Editing;
 using Bearing.App.Results;
 using Bearing.App.Services;
 using Bearing.Core.Data;
+using Bearing.Results;
 
 namespace Bearing.App.Views;
 

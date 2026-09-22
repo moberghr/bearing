@@ -7,6 +7,7 @@ using Bearing.App.Input;
 using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using Bearing.Core.Workspace;
+using Bearing.Results;
 
 namespace Bearing.App.Controls;
 

@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using Bearing.App.Results;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
+using Bearing.Sessions;
 
 namespace Bearing.App.ViewModels;
 
@@ -83,7 +84,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// grid, which knows the result and not the connection. Defaults to Postgres, which is what every
     /// caller did when there was one engine.
     /// </summary>
-    public Connections.ProviderTraits Traits { get; init; } = Connections.ProviderTraits.Postgres;
+    public ProviderTraits Traits { get; init; } = ProviderTraits.Postgres;
 
     /// <summary>
     /// The statement text this set came from, for showing alongside the data (Copy as ▸ table with the

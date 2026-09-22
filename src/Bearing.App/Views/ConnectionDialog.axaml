@@ -108,6 +108,15 @@
       <TextBlock Text="seconds — 0 for no limit" Opacity="0.6" VerticalAlignment="Center"/>
     </StackPanel>
 
+    <!-- External access (§1.11). Last in the group because it is the only one that is not about what *you*
+         may do with this connection — it is about who else may. Off for every connection that exists and
+         every one that ever existed; the exposed session is built read-only whatever the box above says, so
+         the two are independent and a connection you write to yourself can still be handed to an agent that
+         cannot. What it lets in is spelled out in the note below rather than in the label, because it is
+         several sentences and one of them is about what this does *not* bound. -->
+    <CheckBox x:Name="ExternalAccessBox" IsCheckedChanged="OnSafetyToggled"
+              Content="Let the `bearing` command query this connection, read-only"/>
+
     <!-- What these two leave open, in their own words — the same treatment and the same register as the TLS
          block above it (§1.1: the posture is surfaced, never silent). Absent when neither is set, rather than
          saying something reassuring about a connection with no safety settings at all. -->

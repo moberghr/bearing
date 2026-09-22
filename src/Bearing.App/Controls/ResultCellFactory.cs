@@ -12,6 +12,7 @@ using Avalonia.Threading;
 using Bearing.App.Formatting;
 using Bearing.App.Results;
 using Bearing.App.ViewModels;
+using Bearing.Results;
 using static Bearing.App.Controls.Tokens;
 
 namespace Bearing.App.Controls;

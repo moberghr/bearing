@@ -95,11 +95,19 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         if (version < 1) MigrateTo1(conn);
         if (version < 2) MigrateTo2(conn);
         if (version < 3) MigrateTo3(conn);
+        if (version < 4) MigrateTo4(conn);
     }
 
-    /// <summary>The schema this build writes. 2 added the connection id and environment (#113); 3 added
-    /// the transaction id (#131).</summary>
-    private const long SchemaVersion = 3;
+    /// <summary>
+    /// The schema this build writes. 2 added the connection id and environment (#113); 3 added the
+    /// transaction id (#131); 4 added the origin, so a row can say which host ran it (§1.11).
+    /// <para>
+    /// Internal rather than private so the tests that assert a migration ran can say "the log is at the
+    /// current version" — which is the property worth holding — instead of repeating the number and
+    /// needing three edits at the next bump.
+    /// </para>
+    /// </summary>
+    internal const long SchemaVersion = 4;
 
     private static void MigrateTo1(SqliteConnection conn)
     {
@@ -190,6 +198,27 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         transaction.Commit();
     }
 
+    /// <summary>
+    /// v4 adds <c>origin</c>: which host ran the statement — null for Bearing, a name for anything else
+    /// (§1.11). Until now the app was the only writer, so a second one arriving is exactly the kind of
+    /// change the log has to be able to express without rewriting what is already in it.
+    /// <para>
+    /// Same two defences as v2 and v3, for the same two reasons — the write lock up front so two processes
+    /// opening the log on the first launch after an upgrade serialise rather than both seeing "no such
+    /// column", and the per-column guard so an interrupted batch cannot leave the log unopenable. That
+    /// second one matters more here than ever: <b>two</b> processes now open this file, and the CLI may
+    /// well be the one that first migrates it.
+    /// </para>
+    /// </summary>
+    private static void MigrateTo4(SqliteConnection conn)
+    {
+        using var transaction = conn.BeginTransaction(deferred: false);
+        if (!HasColumn(conn, "query_log", "origin"))
+            Execute(conn, "ALTER TABLE query_log ADD COLUMN origin TEXT;");
+        Execute(conn, "PRAGMA user_version = 4;");
+        transaction.Commit();
+    }
+
     /// <summary>Whether a table already has a column, from <c>pragma table_info</c>.</summary>
     private static bool HasColumn(SqliteConnection conn, string table, string column)
     {
@@ -272,8 +301,9 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         cmd.CommandText = """
             INSERT INTO query_log
                 (executed_at, provider_id, connection, connection_id, environment, db, sql_text,
-                 duration_ms, row_count, success, error_message, script_path, transaction_id)
-            VALUES ($at, $provider, $conn, $connId, $env, $db, $sql, $dur, $rows, $ok, $err, $script, $txId);
+                 duration_ms, row_count, success, error_message, script_path, transaction_id, origin)
+            VALUES ($at, $provider, $conn, $connId, $env, $db, $sql, $dur, $rows, $ok, $err, $script, $txId,
+                    $origin);
             """;
         cmd.Parameters.AddWithValue("$at", e.ExecutedAt.ToString("o", CultureInfo.InvariantCulture));
         cmd.Parameters.AddWithValue("$provider", e.ProviderId);
@@ -288,6 +318,7 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         cmd.Parameters.AddWithValue("$err", (object?)e.ErrorMessage ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$script", (object?)e.ScriptPath ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$txId", (object?)e.TransactionId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$origin", (object?)e.Origin ?? DBNull.Value);
         cmd.ExecuteNonQuery();
     }
 
@@ -333,7 +364,7 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         cmd.CommandText =
             "SELECT q.id, q.executed_at, q.provider_id, q.connection, q.db, q.sql_text, q.duration_ms, " +
             "q.row_count, q.success, q.error_message, q.script_path, q.connection_id, q.environment, " +
-            "q.transaction_id " +
+            "q.transaction_id, q.origin " +
             "FROM query_log q" +
             (where.Count > 0 ? " WHERE " + string.Join(" AND ", where) : "") +
             " ORDER BY q.id DESC" + limit + ";";
@@ -362,6 +393,7 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
                     : connectionId,
                 Environment = reader.IsDBNull(12) ? null : reader.GetString(12),
                 TransactionId = reader.IsDBNull(13) ? null : reader.GetString(13),
+                Origin = reader.IsDBNull(14) ? null : reader.GetString(14),
             });
         }
         return results;

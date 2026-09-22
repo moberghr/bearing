@@ -141,6 +141,66 @@ public interface ISqlDialect
     IReadOnlySet<string> RiskyVerbs { get; }
 
     /// <summary>
+    /// Leading keywords this engine considers a read, for a host outside Bearing — the <b>allow</b>-list
+    /// that <see cref="ExternalSqlPolicy"/> applies, the mirror image of <see cref="RiskyVerbs"/>.
+    /// <para>
+    /// Per engine and not a translation, the shape <see cref="EditExpressions"/> already has: Postgres
+    /// answers <c>SHOW</c> and <c>TABLE</c>, T-SQL does not, and a keyword that means a read in one may
+    /// mean something else in the other. Keep it small — a verb added here is a shape an agent may send at
+    /// a production server, and the default for anything absent is refusal, which is the point.
+    /// </para>
+    /// </summary>
+    IReadOnlySet<string> ExternalReadVerbs { get; }
+
+    /// <summary>
+    /// Whether <see cref="ExplainSql"/>'s text is this engine's. It is Postgres' — <c>EXPLAIN (FORMAT
+    /// JSON)</c>, and <c>ExplainPlanParser</c> reads Postgres' plan JSON back — and nothing checked, so
+    /// `bearing explain` against a SQL Server connection failed with a raw <c>Incorrect syntax near
+    /// 'EXPLAIN'</c> while the help advertised the command for any exposed connection.
+    /// <para>
+    /// A flag rather than a second plan format: SQL Server's showplan is different XML with different
+    /// measurements, and producing <see cref="Core.Explain.ExplainPlan"/> from it is a feature, not a
+    /// translation (§5.4a's rule). Until then the honest answer is that this engine is not served, said
+    /// before the statement is sent.
+    /// </para>
+    /// </summary>
+    bool SupportsExplainPlan { get; }
+
+    /// <summary>
+    /// Functions refused on an exposed connection even inside an otherwise-ordinary read — the ones that
+    /// reach the server's filesystem, its other sessions, or this session's own settings.
+    /// <para>
+    /// Accident prevention, not a boundary: see <see cref="ExternalSqlPolicy.DeniedFunction"/> for why a
+    /// name scan cannot be one. Bare names, no schema and no argument list; the policy matches a call.
+    /// </para>
+    /// </summary>
+    IReadOnlySet<string> ExternalDeniedFunctions { get; }
+
+    /// <summary>
+    /// Catalogs refused on an exposed connection because of what they hold: credentials (§1.8). The same
+    /// accident-prevention posture as <see cref="ExternalDeniedFunctions"/>, aimed at a read rather than a
+    /// call.
+    /// <para>
+    /// §1.8 already forbids Bearing's own catalog reads from selecting these, and an exposed connection
+    /// reintroduced every one of them: <c>select umoptions from pg_user_mappings</c> is a plain SELECT, the
+    /// allow-list admits it, and a foreign server's password comes back in cleartext — to the mapping's
+    /// <i>owner</i>, not only to a superuser, so it does not even need the over-privileged connection the
+    /// other two do.
+    /// </para>
+    /// <para>
+    /// Whole relations rather than columns, because <c>select *</c> names no column and would otherwise walk
+    /// straight past a column list. Bare names, no schema; the policy matches a mention.
+    /// </para>
+    /// </summary>
+    IReadOnlySet<string> ExternalDeniedRelations { get; }
+
+    /// <summary>
+    /// The identifiers this statement calls as functions, and the ones it mentions at all — lexed, so
+    /// comments, delimiters and string literals are already dealt with. Per dialect because the lexer is.
+    /// </summary>
+    (IReadOnlySet<string> Called, IReadOnlySet<string> Mentioned) ExternalNameScan(string statement);
+
+    /// <summary>
     /// Split a batch into statements and classify each, in <b>this engine's</b> lexical rules. The
     /// guard is a keyword scan, so the lexing is the whole ballgame: a lexer that cannot see a
     /// delimited identifier reads the words inside one as clause keywords, and a lexer that does not

@@ -183,4 +183,35 @@ public class HistoryPanelTests
         => new(
             (_, _) => Task.FromResult(entries),
             name => name == "prod" ? "#E46876" : "#7AA89F");
+
+    /// <summary>
+    /// A history where an agent's statements are indistinguishable from your own is the gap §1.11's record
+    /// exists to close, so the mark is in the list line rather than only in the detail — it is a thing you
+    /// scan for, not one you look up.
+    /// </summary>
+    [Fact]
+    public void A_row_something_else_ran_is_marked_in_the_list()
+    {
+        var mine = new HistoryRowViewModel(Entry(DateTimeOffset.Now, ok: true), null);
+        var agents = new HistoryRowViewModel(
+            Entry(DateTimeOffset.Now, ok: true) with { Origin = QueryOrigin.Cli }, null);
+
+        Assert.False(mine.IsExternal);
+        Assert.Equal("select 1", mine.DisplayQuery);
+
+        Assert.True(agents.IsExternal);
+        Assert.Equal("[cli] select 1", agents.DisplayQuery);
+        Assert.Contains("cli", agents.Detail);
+    }
+
+    /// <summary>Both marks survive together: a refused statement an agent sent is the row most worth
+    /// seeing, and it is an error *and* external.</summary>
+    [Fact]
+    public void A_failed_external_row_carries_both_marks()
+    {
+        var row = new HistoryRowViewModel(
+            Entry(DateTimeOffset.Now, ok: false) with { Origin = QueryOrigin.Cli }, null);
+
+        Assert.Equal("✕ [cli] select 1", row.DisplayQuery);
+    }
 }

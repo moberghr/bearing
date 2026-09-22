@@ -366,4 +366,61 @@ public sealed class SqlServerDialect : ISqlDialect
         var s = sql.TrimEnd();
         return s.EndsWith(';') ? s[..^1] : s;
     }
+
+    /// <summary>The reads a host outside Bearing may send. Smaller than Postgres': T-SQL has no
+    /// <c>SHOW</c> and no <c>TABLE</c> shorthand, and <c>DECLARE</c> is deliberately absent even though it
+    /// opens many ordinary read scripts — it is also how dynamic SQL is staged, and the whole point of an
+    /// allow-list is that an ambiguous shape defaults to refusal.</summary>
+    public IReadOnlySet<string> ExternalReadVerbs { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        // No VALUES: a standalone `VALUES (1)` is not a T-SQL statement (it is a table constructor inside
+        // INSERT or FROM), and listing it here was Postgres' vocabulary carried across — the exact mistake
+        // §5.4a warns about. It was also dead: TSqlWriteGuard's ReadStarts has no VALUES, so such a
+        // statement hit the conservative default and was refused as a write before reaching this list.
+        "SELECT", "WITH",
+    };
+
+    /// <summary>
+    /// SQL Server procedures and functions an exposed connection refuses. Shells, file and registry
+    /// access, and the dynamic-SQL entry point — the T-SQL equivalents of the Postgres list, arrived at
+    /// per engine rather than translated (§5.4a).
+    /// </summary>
+    /// <inheritdoc/>
+    /// <remarks>Its showplan is XML with different measurements in it, so serving this would be a second
+    /// plan reader rather than a second spelling.</remarks>
+    public bool SupportsExplainPlan => false;
+
+    public IReadOnlySet<string> ExternalDeniedFunctions { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "xp_cmdshell", "sp_executesql", "xp_dirtree", "xp_fileexist", "xp_subdirs",
+        "xp_regread", "xp_regwrite", "openrowset", "opendatasource", "sp_oacreate",
+    };
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The T-SQL equivalents of §1.8's three, in this engine's own vocabulary rather than translated:
+    /// <c>sys.sql_logins</c> carries password hashes, <c>sys.credentials</c> and the linked-server catalogs
+    /// carry stored credentials for other servers. <c>sys.server_principals</c> is not here — it is the
+    /// view that does <i>not</i> expose the hash, which makes it this engine's <c>pg_roles</c>.
+    /// </remarks>
+    public IReadOnlySet<string> ExternalDeniedRelations { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        // **Qualified**, unlike the Postgres list, and that is not a style choice. These views are reachable
+        // only as `sys.<name>`, while their bare names are ordinary English words: `credentials` and
+        // `servers` are entirely plausible table and column names, and matching them bare refused
+        // `select credentials from app_users` with a sentence claiming that table holds password hashes — a
+        // false statement about the user's own data, which is worse than the gap it was closing.
+        "sys.sql_logins", "sys.credentials", "sys.database_credentials",
+        "sys.servers", "sys.linked_logins", "sys.master_key_passwords",
+        // The backward-compatibility views are the exception: they genuinely resolve unqualified, and
+        // nobody names a table `syslogins`.
+        "syslogins", "sysservers",
+    };
+
+    /// <inheritdoc/>
+    public (IReadOnlySet<string> Called, IReadOnlySet<string> Mentioned) ExternalNameScan(string statement)
+    {
+        var tokens = TSqlParsing.LexAll(statement);
+        return (SqlNameScan.CalledNames(tokens), SqlNameScan.MentionedNames(tokens));
+    }
 }

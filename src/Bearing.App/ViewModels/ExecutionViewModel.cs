@@ -15,6 +15,8 @@ using Bearing.Core.Data;
 using Bearing.Core.Explain;
 using Bearing.Core.Logging;
 using Bearing.Core.Schema;
+using Bearing.Results;
+using Bearing.Sessions;
 using Bearing.Sql;
 
 namespace Bearing.App.ViewModels;
@@ -867,6 +869,14 @@ public sealed partial class ExecutionViewModel : ObservableObject
         var info = _ctx.EffectiveConnection(tab);
         if (info is null) { _ctx.SetStatus("Connection no longer exists."); return null; }
 
+        // ExplainSql's text is Postgres' and ExplainPlanParser reads Postgres' plan JSON back, so on any
+        // other engine this could only hand the user the server's own syntax error. Said before it is sent.
+        if (!ProviderTraits.For(info).Dialect.SupportsExplainPlan)
+        {
+            _ctx.SetStatus("Query plans are not available for this engine yet.");
+            return null;
+        }
+
         var request = analyze ? ExplainSql.Measured(sql) : ExplainSql.Plan(sql);
 
         // EXPLAIN ANALYZE runs the statement, so a read-only connection refuses one over a write (#99) — and
@@ -1073,14 +1083,14 @@ public sealed partial class ExecutionViewModel : ObservableObject
             return;
         }
 
-        var suggested = ResultExport.SuggestedName(rs, tab.Header, DateTime.Now, format);
+        var suggested = ResultBlocks.SuggestedName(rs, tab.Header, DateTime.Now, format);
         if (await dialogs.PickExportFileAsync(suggested, format) is not { } path) return;
 
         // Snapshot the rows on this (UI) thread — Rows is an observable collection the grid keeps mutating —
         // then format and write off it: a 200k-row workbook is seconds of pure CPU, and doing that on the
         // dispatcher would freeze the window (the same reasoning as the data layer's ConfigureAwait pass).
-        var block = TableBlock.ForResult(rs);
-        var sheet = ResultExport.SheetName(rs);
+        var block = ResultBlocks.ForResult(rs);
+        var sheet = ResultBlocks.SheetName(rs);
         _ctx.SetStatus($"Exporting {block.Rows.Count:N0} rows…");
         try
         {
@@ -1135,7 +1145,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
         // Snapshot on this (UI) thread — Rows is an observable collection the grid keeps mutating — then
         // format and write off it, as the single-set export does.
-        var sheets = ResultExport.RunSheets(results);
+        var sheets = ResultBlocks.RunSheets(results);
         var rows = sheets.Sum(sheet => sheet.Block.Rows.Count);
         _ctx.SetStatus($"Exporting {sheets.Count} result{(sheets.Count == 1 ? "" : "s")}, {rows:N0} rows…");
         try

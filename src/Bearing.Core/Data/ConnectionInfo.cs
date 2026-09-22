@@ -100,6 +100,27 @@ public sealed record ConnectionInfo
     public bool ManualCommit { get; init; }
 
     /// <summary>
+    /// What a host outside Bearing may do with this connection — default <see cref="ExternalAccess.None"/>,
+    /// so nothing is exposed until someone says so. <see cref="ExternalAccessPolicy"/> is what the setting
+    /// <i>means</i>; this is only where the answer is written down.
+    /// <para>
+    /// A typed field rather than an <see cref="Options"/> entry, for <see cref="Tls"/>'s reason: it decides
+    /// who may reach the server, and a bag that travels in a shared <c>project.json</c> is the wrong place
+    /// for a security setting — the same rule that stops a stray <c>Password</c> key outranking the secret
+    /// store.
+    /// </para>
+    /// <para>
+    /// <b>It does travel in the project file, and that is the right scope.</b> "This connection may be
+    /// queried by tooling" is a fact about the connection, and a team that shares a project shares its
+    /// connections' settings already. It deliberately does <b>not</b> travel across the clipboard — see
+    /// <c>ConnectionClipboard</c>, where the asymmetry is set out: every other setting there preserves a
+    /// restriction when carried, and this one would carry a permission onto a machine whose owner never
+    /// granted it.
+    /// </para>
+    /// </summary>
+    public ExternalAccess ExternalAccess { get; init; } = ExternalAccess.None;
+
+    /// <summary>
     /// What this connection demands of the transport (#23). Default <see cref="TlsMode.Prefer"/> — the
     /// driver's own default, so a missing value in an older project file keeps the behaviour it already had.
     /// <para>

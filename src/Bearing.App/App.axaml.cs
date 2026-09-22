@@ -19,6 +19,8 @@ using Bearing.App.Demo;
 using Bearing.Core.Data;
 using Bearing.Demo;
 using Bearing.Persistence;
+using Bearing.Results;
+using Bearing.Sessions;
 using Bearing.Updates;
 
 namespace Bearing.App;
@@ -84,7 +86,7 @@ public partial class App : Application
             // The timezone setting's picker, validation and description live in the app layer: resolving a
             // zone id means TimeZoneInfo, and Core holds abstractions and records only (§2.1, #77).
             Formatting.DisplayTimeZone.InstallSettingsHooks();
-            Formatting.CellFormat.Zone = Formatting.DisplayTimeZone.Resolve(settings.Current.DisplayTimeZone);
+            CellFormat.Zone = Formatting.DisplayTimeZone.Resolve(settings.Current.DisplayTimeZone);
             // Grouped digits are a layer *over* CellFormat.Display, not a change to it — the grouped form
             // never leaves the cell's TextBlock (see NumberGrouping).
             Formatting.NumberGrouping.Enabled = settings.Current.GroupNumbersInResults;
@@ -106,7 +108,7 @@ public partial class App : Application
                 // string (§2.2). Read once at startup, so a mid-session flip cannot leave half the log
                 // redacted and half not.
                 redactSql: settings.Current.QueryLogRedactLiterals
-                    ? (providerId, sql) => Connections.ProviderTraits.For(providerId).Dialect.RedactLiterals(sql)
+                    ? (providerId, sql) => ProviderTraits.For(providerId).Dialect.RedactLiterals(sql)
                     : null);
             IRecentProjects recentProjects = _demo?.RecentProjects ?? new FileRecentProjects();
 
@@ -128,7 +130,7 @@ public partial class App : Application
                 Theming.FontScale.Apply(s.UiFontSize, s.GridFontSize);
                 // The zone reaches the grid the same way a font size does — the cell text is built in code,
                 // so the results have to be re-rendered rather than left to a binding (#77).
-                Formatting.CellFormat.Zone = Formatting.DisplayTimeZone.Resolve(s.DisplayTimeZone);
+                CellFormat.Zone = Formatting.DisplayTimeZone.Resolve(s.DisplayTimeZone);
                 Formatting.NumberGrouping.Enabled = s.GroupNumbersInResults;
                 Dispatcher.UIThread.Post(window.RefreshTypeScale);
             };

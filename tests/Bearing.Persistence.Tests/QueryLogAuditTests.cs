@@ -130,7 +130,7 @@ public class QueryLogAuditTests : IDisposable
         Assert.Equal("old-name", row.ConnectionName);
         Assert.Null(row.ConnectionId);      // there was no column to read it from
         Assert.Null(row.Environment);
-        Assert.Equal(3, SchemaVersion(path));
+        Assert.Equal(SqliteQueryLog.SchemaVersion, SchemaVersion(path));
     }
 
     [Fact]
@@ -160,7 +160,7 @@ public class QueryLogAuditTests : IDisposable
         await using (var first = new SqliteQueryLog(path)) { }
         await using var second = new SqliteQueryLog(path);
 
-        Assert.Equal(3, SchemaVersion(path));
+        Assert.Equal(SqliteQueryLog.SchemaVersion, SchemaVersion(path));
         Assert.Empty(await Read(second, new QueryLogQuery { Limit = null }));
     }
 
@@ -196,7 +196,7 @@ public class QueryLogAuditTests : IDisposable
 
         Assert.Single(rows);
         Assert.Equal("select 1", rows[0].SqlText);
-        Assert.Equal(3, SchemaVersion(path));
+        Assert.Equal(SqliteQueryLog.SchemaVersion, SchemaVersion(path));
     }
 
     [Fact]
@@ -329,5 +329,49 @@ public class QueryLogAuditTests : IDisposable
         var version = Convert.ToInt64(cmd.ExecuteScalar());
         SqliteConnection.ClearPool(conn);
         return version;
+    }
+
+    /// <summary>
+    /// v4's column, and the property that makes it readable at a glance: null means Bearing itself, and
+    /// unlike #113's <c>connection_id</c> that null is <b>not</b> ambiguous — nothing but the app could
+    /// write to this log until the column and the second host arrived together, so no historical row could
+    /// have been external.
+    /// </summary>
+    [Fact]
+    public async Task Origin_round_trips_and_the_app_writes_none()
+    {
+        Directory.CreateDirectory(_dir);
+        await using var log = new SqliteQueryLog(Path_("origin.sqlite"));
+
+        var rows = await Appended(
+            log,
+            Entry(DateTimeOffset.UtcNow, "select one") with { Origin = QueryOrigin.Cli },
+            Entry(DateTimeOffset.UtcNow, "select two"));
+
+        Assert.Equal(QueryOrigin.Cli, rows.Single(r => r.SqlText == "select one").Origin);
+        // The app writes no name of its own: it is the overwhelming majority of rows, and null for "us"
+        // against a name for "not us" is what reads correctly in a history list.
+        Assert.Null(rows.Single(r => r.SqlText == "select two").Origin);
+    }
+
+    /// <summary>
+    /// The migration is what an existing log takes on the first launch after an upgrade, and it has to be
+    /// an append: the rows already there are the user's own record of what they did (§1.6).
+    /// </summary>
+    [Fact]
+    public async Task An_existing_log_gains_the_column_and_keeps_its_rows()
+    {
+        Directory.CreateDirectory(_dir);
+        var path = Path_("upgraded.sqlite");
+
+        await using (var before = new SqliteQueryLog(path))
+            await Appended(before, Entry(DateTimeOffset.UtcNow, "select before"));
+
+        await using var after = new SqliteQueryLog(path);
+        var rows = await Appended(after, Entry(DateTimeOffset.UtcNow, "select after") with { Origin = QueryOrigin.Cli });
+
+        Assert.Equal(2, rows.Count);
+        Assert.Null(rows.Single(r => r.SqlText == "select before").Origin);
+        Assert.Equal(QueryOrigin.Cli, rows.Single(r => r.SqlText == "select after").Origin);
     }
 }

@@ -116,6 +116,26 @@ public class DialectWriteGuardTests
         public string Id => "unreadable";
         public bool HasDialectAwareGuard => false;
         public IReadOnlySet<string> RiskyVerbs => Ss.RiskyVerbs;
+
+        /// <summary>Nothing. A dialect whose scanner cannot read the engine cannot vouch that any statement
+        /// is a read, so an exposed connection on it runs none — the same fail-safe as
+        /// <see cref="HasDialectAwareGuard"/>, pointed the other way. An empty allow-list is the honest
+        /// value here; borrowing another engine's would be vouching on its behalf.</summary>
+        public IReadOnlySet<string> ExternalReadVerbs { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        public bool SupportsExplainPlan => false;
+
+        public IReadOnlySet<string> ExternalDeniedFunctions { get; }
+            = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        public IReadOnlySet<string> ExternalDeniedRelations { get; }
+            = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Nothing to scan: an engine whose SQL this build cannot lex vouches for no name in it, which is
+        // the same posture as its empty allow-list above.
+        public (IReadOnlySet<string> Called, IReadOnlySet<string> Mentioned) ExternalNameScan(string statement)
+            => (new HashSet<string>(), new HashSet<string>());
+
         public IReadOnlyList<StatementRisk> DescribeStatements(string sql) => Ss.DescribeStatements(sql);
         public IReadOnlyList<StatementSpan> SplitStatements(string sql) => Ss.SplitStatements(sql);
         public string? TransactionControl(IReadOnlyList<string> words) => Ss.TransactionControl(words);

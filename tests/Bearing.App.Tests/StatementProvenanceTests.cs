@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Bearing.App.Results;
 using Bearing.Core.Data;
+using Bearing.Results;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -40,7 +41,7 @@ public class StatementProvenanceTests
 
         // Which is what reaches the clipboard: the second grid is captioned with the second query, and not
         // with the first — the whole point of the exercise.
-        var html = CopyRenderer.Render(sets[1], TableBlock.ForResult(sets[1]), CopyFormat.HtmlWithQuery);
+        var html = CopyRenderer.Render(sets[1], ResultBlocks.ForResult(sets[1]), CopyFormat.HtmlWithQuery);
         Assert.Contains("from actor", html);
         Assert.DoesNotContain("from film", html);
     }

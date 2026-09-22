@@ -4,6 +4,7 @@ using System.Linq;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
+using Bearing.Sessions;
 using Bearing.Sql;
 
 namespace Bearing.App.Results;
@@ -20,7 +21,7 @@ internal static class ResultSetBuilder
     /// result off it is editable and the lock chip says so.</param>
     public static List<ResultSetViewModel> BuildResultSets(
         IReadOnlyList<QueryResult> results, string sql, ISchemaSnapshot? snapshot,
-        Connections.ProviderTraits? traits = null, bool connectionReadOnly = false)
+        ProviderTraits? traits = null, bool connectionReadOnly = false)
     {
         var pageable = results.Count == 1 && results[0].Success && results[0].Columns.Count > 0;
         var statements = StatementsBehind(results, sql);
@@ -34,7 +35,7 @@ internal static class ResultSetBuilder
                 var vm = new ResultSetViewModel(r, statements?[i] ?? sql, pageable)
                 {
                     // So Copy as ▸ SQL renders this engine's literals and quoting, not Postgres'.
-                    Traits = traits ?? Connections.ProviderTraits.Postgres,
+                    Traits = traits ?? ProviderTraits.Postgres,
                     ForeignKeyColumns = DetectForeignKeyColumns(snapshot, r.Columns),
                     PrimaryKeyColumns = DetectPrimaryKeyColumns(snapshot, r.Columns),
                     EditTarget = target,

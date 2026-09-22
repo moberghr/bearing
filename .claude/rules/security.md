@@ -447,3 +447,386 @@ every end has to be in the record: a history that only recorded the ones the use
 the `finally`, so an end that **failed** is recorded too (`Success = false` with the message) — the scope has
 released its connection either way, and leaving it out would put the statements in the log with a transaction
 id nothing matches, which reads exactly like one still open.
+
+## §1.11 — A connection is reachable from outside Bearing only if it says so, and only for reads
+
+`ConnectionInfo.ExternalAccess` (`None` by default) is what lets a host that is not the app see a connection
+at all. Today that host is **`bearing`** (`src/Bearing.Cli`), a console exe run by a person, a script or
+an agent with a shell. `ExternalAccessPolicy` is what the setting *means*, and the
+split is the point: **the flag grants nothing by itself.** `ForExternalHost` is the only route to an exposed
+connection, and it is what forces the settings the exposure is safe under. A host that read the saved record
+directly would be running with the user's own settings, which is the bug this shape exists to prevent.
+
+**The mark gates discovery, not access.** It lives in `project.json` and the keychain is keyed by
+`ConnectionInfo.Id`, so anything running as the user can copy that file, set `ExternalAccess` on connections
+nobody exposed, and point `--project` at the copy. Read-only still holds — `ForExternalHost` applies the
+settings when the connection is opened, not when the file is read — so this widens *which servers* a caller
+can reach, never what it may do to them. Inside the stated model below, but the docs said "a real gate" and
+had to say which kind.
+
+**The boundary is "anything running as you", and it must never be described as more.** An external host runs
+as the user and can therefore read the same keychain the app reads; what stops it querying a server is that
+nobody marked the connection. That is a real gate and it is the only one this layer has — it is not a
+sandbox, and §1.1's rule against asserting an arrangement nobody made applies to the docs, the dialog and the
+tool descriptions alike.
+
+### Three settings are decided for the host, not read from the record
+- **`ReadOnly` is forced on**, whatever the connection is for the user. The two are deliberately independent:
+  the usual reason to expose a connection is that you still write to it yourself. On an engine with
+  `IDbProvider.EnforcesReadOnlyOnServer` this rides the startup packet and the **server** refuses (§1.9);
+  where it does not, the client-side refusal is the whole of it and a write hidden from the lexer still
+  reaches the server, so the host has to say which it is (§1.9a). Exposing a SQL Server connection is a
+  weaker arrangement than exposing a Postgres one, and the wording is where that difference lives.
+- **`ManualCommit` is forced off.** Inert while nothing writes, since it is the first *write* that opens a
+  transaction (§1.10) — but an external host has no Commit button, no chip and no quit guard, so a
+  transaction opened on one would be precisely the unreachable transaction that rule is about. A setting
+  that cannot be honoured is cleared rather than left inert for a reason that could stop being true.
+- **A missing statement timeout is filled in** with `SessionPolicy.PresetTimeoutSeconds`. A timeout the user
+  *set* is kept, however long: the fill stops a runaway outliving the caller, it does not second-guess a
+  connection pointed at slow analytical work. `RequireWriteConfirmation` is carried across untouched — there
+  is nobody to confirm to and the write is already refused, and clearing a safety flag to tidy up a record is
+  how one stops being set when it starts mattering again.
+
+`ExternalAccessTests.Nothing_but_the_three_forced_settings_differs_from_the_saved_connection` pins that list
+by reflection, so a fourth forced setting has to be an argued addition rather than a quiet one.
+
+### The mark is shown on the row, because a rule leans on it
+`ServerNodeViewModel.Detail` appends · bearing to the connection's host:port when it is exposed. Nothing
+rendered it for the whole of this work, which made the paragraph below false: opening a colleague's project
+exposed their marked connections to anything running as the user, and the only way to find out which was to
+open each connection's dialog in turn. **WHEN an argument for a design rests on something being visible,
+check that something renders it.**
+
+### It travels with the project and not with the clipboard
+The field is in `project.json`, which is right: "this connection may be queried by tooling" is a fact about
+the connection, and a team sharing a project already shares its connections' settings. `ConnectionClipboard`
+**drops it**, and is the one deliberate omission in that payload besides the id.
+
+Every other setting there preserves a *restriction* when carried, so losing one downgrades the pasted
+connection — which is the whole reason they were added (#23 / #99 / #105). Exposure runs the other way: it
+would carry a *permission* onto a machine whose owner never granted it. The asymmetry in being wrong settles
+it — a lost restriction announces itself the first time a write is refused, while an arrived-with permission
+is invisible until something uses it. Opening a shared project is taking that project's configuration whole,
+exposure visible in the connection list with it; a paste mints a fresh id and a fresh connection in the
+recipient's own project, which is authoring one rather than accepting one.
+
+### `ReadWrite` is absent, and that is the decision
+Not because writes from outside are unthinkable, but because what makes a write safe here does not exist. In
+the app a guarded write is confirmed by a human reading the row count (§1.5); an external host has nobody to
+ask, so the level would have to raise a dialog on a screen the caller cannot see — blocking an unattended
+agent on a prompt nobody answers — or drop the confirmation, which is §1.2 narrowed for the caller least able
+to notice it went wrong. Adding the enum member is the easy half.
+
+### `bearing` is the command and `bearing-app` is the window
+The console exe takes the plain name; the GUI apphost is renamed. A command **has** to be the console one —
+a WinExe cannot write to a pipe or return a useful exit code — and the name a person already knows is the
+one they will type, so `bearing` with no arguments launches `bearing-app` (`AppLauncher`). Both are
+published into one directory by `build/velopack.sh`, so "beside me" is how the CLI finds the app; on macOS
+it opens the enclosing `.app` rather than the binary, because Launch Services is what gives it a Dock entry.
+
+DO NOT "tidy" the GUI apphost back to `bearing`: the two would collide in one directory, and the one that
+lost would be the one people type. **The rename reaches every script that names the published binary**, and
+`build/release.sh` was missed — it looked for `$PUBDIR/bearing` and died at its own existence check, so the
+kept archive path was broken by a change that only touched `velopack.sh`. It has an `APP_EXE` separate from
+`APP_ID` now: that archive ships the window and nothing else, so what it *installs* is still `bearing`. The update identity is `$PACK_ID`, not an exe name (§9.6), so the rename
+does not orphan an installed client — but it does change the Start Menu shortcut's target, so the first
+update across it is worth watching.
+
+### The front end is a CLI, and an MCP server was built and dropped
+Both were written over the same `IBearingHost`; the protocol skin was deleted rather than shipped beside it.
+A CLI is reachable from a shell, a script, CI and any agent that can run a command, costs nothing in context
+until it is invoked, and shows up in shell history where a refusal can be read afterwards. The MCP server
+reached Claude Desktop and Cursor, which have no shell, and kept one pooled connection and one catalog read
+for a whole session — which the CLI cannot, since **every invocation is a fresh process and therefore a
+fresh connection**, and `tables`/`describe` re-read the catalog each time. That cost is the known trade, and
+it is the right one at a few calls a minute; it would be the wrong one inside a loop.
+
+WHEN an MCP server is wanted again, it is another skin over `IBearingHost` and not a second implementation.
+
+### An external host owns its own session manager
+`SessionKey` is (connection id, database), and the exposed `ConnectionInfo` differs from the saved one only
+in settings the key does not cover. `ConnectionSessionManager` reuses a live session only when
+`SameConnection` matches, and that compares `ReadOnly` and the timeout (§1.9) — so a manager serving both the
+UI and an external host would tear down and rebuild the same pool on every alternate use, silently, each
+rebuild costing a handshake. Today they are separate processes and the question does not arise. WHEN an
+external host is ever hosted **inside** the app, give it its own manager rather than sharing the UI's, or
+give `SessionKey` a principal.
+
+### A refusal has to give advice the caller can act on
+`WriteRefusal` decides whether a batch runs, and `BearingHost` never re-implements that verdict (§2.6) — but
+it writes its **own sentence**. `WriteRefusal.Reason` ends "Turn read-only off for this connection to write
+to it", which is right for the person at the keyboard and wrong twice through here: read-only is not this
+connection's setting, and turning it off changes nothing because exposure forces it back on. Found by running
+the built binary rather than by reading it. Telling a caller to do something that cannot work is §1.1's
+failure in its plainest form, so the exposed path says "exposed for reads only … its owner can widen that".
+
+### §1.11a — The exposed path is an allow-list, because the deny-list was measured and failed
+
+`ExternalSqlPolicy.Refuse` runs a statement only when its leading keyword is on **this engine's**
+`ISqlDialect.ExternalReadVerbs`. Everything else is refused, including shapes nobody has thought about.
+`WriteGuard` is unchanged and still runs first — it names the verb of an outright write in the sentence a
+caller most needs — but it is a **deny-list**, and a deny-list is the wrong default for a caller who is not
+the person at the keyboard.
+
+**This is not theoretical.** Against the live test server, on a connection exposed read-only:
+
+```
+begin read write; select nextval('film_film_id_seq')          -> 1002, ran
+set transaction read write; select nextval('film_film_id_seq') -> 1001, ran
+```
+
+Neither `BEGIN` nor `SET` is a risky verb, so the guard passed them, and Postgres honoured them — the
+sequence really advanced. §1.9 says this in words ("a user who types `SET default_transaction_read_only =
+off` or `BEGIN READ WRITE` turns it off"); what it means for an untrusted caller is that the server-side
+read-only session is **not** a barrier on its own. `LiveExposureTests.The_read_only_barrier_cannot_be_lifted_from_outside`
+pins all four spellings and asserts the sequence did not move, because "the command failed" is a weaker
+claim than "nothing happened".
+
+Two things that did *not* work, recorded so nobody re-derives them: `set default_transaction_read_only =
+off` alone changes the GUC but not the transaction already in progress, so it achieves nothing by itself;
+and `SELECT … INTO` *is* caught by the dialect scanner, which the risky-verb list alone does not suggest.
+
+- **The tables are per engine and not translations** (§5.4a's rule): Postgres reads `SHOW`, `TABLE` and
+  `VALUES`, T-SQL does not, and T-SQL deliberately omits `DECLARE` although it opens many ordinary read
+  scripts — it is also how dynamic SQL is staged, and an ambiguous shape defaults to refusal.
+- **A dialect whose scanner cannot be trusted gets an empty allow-list.** `HasDialectAwareGuard == false`
+  already means "assume every statement writes"; the mirror of it is "vouch for none". Borrowing another
+  engine's verbs would be vouching on its behalf.
+
+### §1.11a-bis — T-SQL needs no separator, so the leading word is not the statement
+
+`TSqlScanner.Split` breaks on `;` and standalone `GO`, but **T-SQL does not require either between
+statements**. So one span can be a whole batch, and its leading word says nothing about what the text runs:
+
+```
+select 1 drop table t            -> statements=1  verb=SELECT  risky=false
+select 1 begin drop table t end  -> statements=1  verb=SELECT  risky=false
+```
+
+Found by code review and measured: sent to a live SQL Server, the first returned its row **and dropped the
+table**. Postgres is unaffected — it requires the semicolon, so its splitter sees two statements.
+
+**This was a `WriteGuard` hole first and an exposed-path hole second**, which is why the fix is in
+`TSqlWriteGuard.Describe` rather than in `ExternalSqlPolicy`: on a guarded T-SQL connection the *editor*
+did not prompt for it either (§1.2). A risky verb anywhere in the statement's **top-level** words now counts.
+
+- `TSqlToken.Depth` is *parenthesis* depth, so a verb inside a `begin … end` block still counts — it is a
+  statement there too — while a word inside a string literal or square brackets is not a word at all and
+  cannot false-positive.
+- What can false-positive is a column genuinely named after a verb (`select copy from t`), which now asks
+  for a confirmation it does not need. §1.2's stance is that this is the right side to be wrong on, and
+  `[copy]` is the escape. Widening the guard is always allowed; narrowing it is what needs an argument.
+- `ExternalSqlPolicy` asks `NamesAWrite`, not `IsRisky`, before saying a statement writes: the T-SQL
+  verdict is generous by design, and "'DECLARE' writes" would assert a cause nobody checked (§1.1). Such a
+  statement is still refused — by the allow-list, in its own words.
+- `VALUES` was removed from T-SQL's `ExternalReadVerbs`. A standalone `VALUES (1)` is not a T-SQL statement
+  (it is a table constructor inside INSERT or FROM); the entry was Postgres' vocabulary carried across,
+  which is precisely what §5.4a says not to do, and it was dead anyway.
+
+### §1.11d — What an external host runs is in the record, refusals included
+
+`query_log` is at `user_version = 4`: `origin` names the host that ran the statement — null for Bearing,
+`QueryOrigin.Cli` for the `bearing` command. Stepwise and additive like every migration before it (§1.6),
+with the write lock taken up front and the per-column guard, which matter **more** here than ever because
+two processes now open this file and the CLI may well be the one that migrates it first.
+
+- **A null origin is not ambiguous**, unlike #113's null `connection_id`. Nothing but the app could write to
+  this log until the column and the second host arrived together, so no historical row could have been
+  external. A report does not have to hedge about old rows the way the connection id's does.
+- **Bearing writes no name of its own.** It is the overwhelming majority of rows, and null for "us" against
+  a name for "not us" is what reads correctly in a history list at a glance.
+- **A refusal is recorded**, with `Success = false` and the reason as the error — the shape a failed
+  execution already has. Strictly nothing ran, and §1.3 calls the log the record of SQL the user *ran*; the
+  exception is deliberate, because the caller here is not the person at the keyboard and "an agent tried to
+  lift read-only and was stopped" is the single most useful line this log can hold. The statement is stored
+  verbatim, since an audit that recorded only "refused" could not say what of.
+- **The CLI honours the user's own settings** for retention and redaction rather than defaulting them:
+  §1.3 makes redaction a property of *when a row was written*, and someone who asked for literals to be
+  stripped did not ask for that to stop applying to what an agent ran.
+- **`tables` and `describe` are not logged.** They read the catalog, and §9.13's precedent is that a panel's
+  own reads are not the record of what someone ran.
+- **The audit export carries an `origin` column, and its notes had to change with it.** The report used to
+  state "Every execution here was run by the person using this Bearing installation … there is nothing to put
+  in [a user column]", which after this feature is a compliance document *denying a second actor exists* —
+  handed to an auditor, about a period that may contain an agent's statements. The account claim is still
+  true and still made; what it may no longer do is stand in for "a person typed this". Bearing's own rows
+  read `bearing` rather than blank, because a blank cell beside `cli` reads as a missing value rather than
+  as an answer. Found by review, after `docs/CLI.md` had already claimed the export carried it.
+- The log is held and disposed by the command, not merely handed to the host: `Append` returns before the
+  row is written, so exiting without disposing loses the entry the command just produced.
+- **Nothing on the way to finding a project may end the command.** `FileRecentProjects.ListAsync` does not
+  swallow — a truncated `recent.json` throws `JsonException` — and `Main` catches only cancellation, so a
+  plain `bearing connections` exited with a stack trace over a convenience file. An unreadable list is *no
+  remembered project*, which is a sentence the command already knows how to say.
+
+### §1.11b — Read-only bounds writes; it does not bound reads or signals
+
+Measured on a superuser connection with read-only fully in force, every one of these a plain `SELECT`:
+
+```
+select pg_read_file('/etc/passwd')   -> the file
+select pg_ls_dir('/etc')             -> the directory
+```
+
+`pg_terminate_backend` needs no write at all (§9.13 says so for the activity panel). So
+`ISqlDialect.ExternalDeniedFunctions` refuses the obvious ones — other sessions, the server's filesystem,
+large-object file I/O, and `set_config`, which is `SET` in a `SELECT`'s clothing and therefore invisible to
+the verb allow-list.
+
+**That list stops accidents, not a determined caller, and must never be described as more.** A name reaches
+through a wrapper function, a search_path that resolves elsewhere, or SQL built at runtime. The boundary
+that holds is a role without the privilege. WHEN someone asks for exposure to be "safe", the answer is a
+role, not a longer list.
+
+**But a different *spelling of the same name* is not one of those, and has to be caught.** The scan reads the
+statement's **tokens** (`SqlNameScan`, off each dialect's own lexer) rather than its text, which settles
+three things at once. The previous text match was
+`\b<name>["\]]?\s*\(` — the optional delimiter is the point. `select "pg_read_file"('/etc/passwd')` is
+ordinary Postgres and went straight through, because the closing quote sits between the name and the `(`,
+while the qualified `pg_catalog.pg_read_file(…)` was caught: an asymmetry with no reason behind it, in a
+list whose whole job is the obvious cases. `]` is T-SQL's spelling of the same thing.
+
+**And a comment defeated it with four characters.** `select pg_read_file/**/('/etc/passwd')` is valid
+Postgres, is a plain SELECT the allow-list admits, and skipped the denied list entirely — a comment is
+whitespace to the engine and is not `\s`. That is *not* one of the evasions this list openly accepts (a
+wrapper, a `search_path`, runtime SQL), every one of which needs prior write access on the server. Tokens
+fix it because comments are on ANTLR's hidden channel before the scan sees anything, and they fix the
+converse too: a name inside a **string literal** is not a call, which the text match refused.
+
+The text match is kept underneath as a fallback **only for a statement the lexer could not read at all**, so
+a lexer that threw cannot quietly widen what is accepted. The distinction has to be typed — `Scan` returns
+null for "could not read" and an empty set for "read it, found nothing", and the first version collapsed
+them, which brought the string-literal false positive straight back (§1.7's rule, in a new place).
+
+**The denied *relations* are qualified on T-SQL and bare on Postgres, and that asymmetry is the design.**
+`pg_catalog` is on the search_path, so `pg_authid` alone means that catalog and nothing else. SQL Server's
+catalog views are reachable only as `sys.<name>`, and their bare names — `credentials`, `servers` — are
+ordinary English words that make perfectly good table and column names: matching those bare refused
+`select credentials from app_users` with a sentence saying that table holds password hashes, which is a
+false claim about the user's own data and worse than the gap it closed. The backward-compatibility views
+(`syslogins`, `sysservers`) stay bare, because those really do resolve unqualified.
+
+**Three catalogs are refused as well as the functions** (`ExternalDeniedRelations`). §1.8 forbids Bearing's
+own catalog reads from selecting `pg_authid.rolpassword`, `pg_subscription.subconninfo` and
+`pg_user_mappings.umoptions` — and an exposed connection reintroduced all three, because each is a plain
+SELECT the allow-list admits. `pg_user_mappings` is the one that does not need an over-privileged
+connection: it shows `umoptions` in full to the mapping's **owner**, so an agent handed a "read-only, safe"
+connection could read a foreign server's password in cleartext. Whole relations rather than columns, because
+`select *` names no column. The `pg_roles` view stays readable — masking the hash is what it is for (§1.7),
+and the list is about what a catalog *holds*, not about the subject being sensitive.
+
+### §1.11c — One invocation is one connection; concurrency is the server's to bound
+
+Measured: `select count(*) from pg_stat_activity where usename = current_user and datname =
+current_database()` returns **1** during a CLI run. A command runs its batch sequentially, so the pool's
+ceiling of 10 is never approached and capping it client-side would buy nothing — which is why there is no
+such cap. What is *not* bounded is how many invocations run at once, and no client-side setting can bound
+it. `ALTER ROLE agent_ro CONNECTION LIMIT n` can, which is the same answer as everything else here.
+
+### §1.11e — The command's output is records, and the flags that shape it
+
+Every command answers with a record implementing `ICliResponse`, serialised once in `CliRunner`. They were
+hand-built `JsonObject` literals first, which is the wrong default in a codebase this record-heavy: a key is
+a string nobody checks, an omitted field fails silently, and the CLI's public output contract was readable
+only by reading the code that emitted it.
+
+- **Serialise by the runtime type.** `JsonSerializer.Serialize(response, options)` resolves the contract
+  from the *declared* type, and `ICliResponse` has no properties — so every response went out as `{}`. The
+  tests caught it and nothing else would have: an empty object parses fine, and every "does not contain"
+  assertion passes against it. `CliRunner.Serialize` passes `response.GetType()`.
+- `--table` switches on the response **type**, so a command that gains a shape is a compile error rather
+  than a silently unhandled case. It used to switch on JSON keys, where a renamed field degraded quietly.
+- **An export is unlimited by default**, and the small row cap applies only when nothing was asked for. A
+  capped export is a silently truncated *file*, which is the failure the app guards against with "a
+  workbook missing a sheet is worse than no workbook". An explicit `--max-rows` is honoured at any size —
+  clamping it would give a result the caller cannot tell from the whole answer.
+- **xlsx takes a sheet per result set; CSV holds one table** and refuses a batch that returned more. RFC
+  4180 cannot express two tables and the app's own Export-run is xlsx-only. Refusing beats writing
+  `report.1.csv`: the caller named a path, and a script that finds no file at it is broken in a way an
+  error is not.
+- **`--timeout` may only lower** what the connection allows. Raising it would let a caller lift a limit its
+  owner set (§1.9). Measured, and now pinned live in both directions plus the equal case, which is where an
+  off-by-one would hide: `--timeout 5` gives `statement_timeout = 5s`, `--timeout 600` leaves it 30s.
+- **An option that means nothing for the command it was typed on is refused by name**, including
+  `--max-rows`, which was accepted and silently ignored on `connections`, `tables`, `describe` and `explain`.
+  The principle was already written into `Validate` for every other flag; the one that predated it was the
+  one that did not follow it. A caller who typed it believes it is doing something.
+- **Every CLR type a driver produces needs an arm, and the fallback cannot be trusted to be sane.**
+  `CellValue.For` had none for `Array`, and an array is neither `IConvertible` nor `IFormattable` — so the
+  invariant `Convert.ToString` fallback answered **`"System.String[]"`** and every `text[]`/`int[]` column
+  handed a caller the type name where the value should have been. Lost data wearing the shape of data, in
+  the output a program parses, while `--table` rendered the same cell as a list: the two disagreed. An
+  array is a JSON array (elements converted the same way, so they nest), hstore is a JSON object, and
+  `byte[]` keeps its base64 arm *above* both because a bytea is not a list of 200 numbers.
+- **The `bearing` process may not run under `InvariantGlobalization`, and the project file says why.**
+  It was set there on the theory that a JSON-emitting command has nothing culture-sensitive in it. That
+  stopped being true when this host had to set `CellFormat.Zone`, and it failed silently: measured on
+  Windows, `FindSystemTimeZoneById("Europe/Zagreb")` resolves with ICU and throws `TimeZoneNotFoundException`
+  without it, because mapping an IANA id to a Windows zone is ICU-backed — and `DisplayZone.Resolve` turns a
+  throw into UTC *by design*, so a user whose display zone was an IANA id got their zone in the app and UTC
+  from the command, in the same export. It also folded `OrdinalIgnoreCase` to ASCII only, so a connection
+  named in another script matched differently in the two hosts. A test reads the project file, because the
+  flag lives in the *app's* runtimeconfig and nothing in a test host can observe it.
+- **A blank option value is a missing one.** A shell that expanded a variable to nothing hands over an
+  empty argument rather than no argument, and `--project ""` reached `Path.GetFullPath("")` and came out as
+  an unhandled `ArgumentException` and a stack trace — on the ordinary path, since `bearing --project
+  "$PROJ" query …` with `$PROJ` unset is how anybody would write it. `Next` treats blank as absent for
+  every option, and `ResolveProject` catches what a path can still throw.
+- **A failure to write the file is not a failure of the statement.** Only the streamed export can hit both
+  inside one call, so `ResultExport` throws `ExportWriteException` from the file operations specifically and
+  the host reports that as `Could not write …`. It is also **not logged**: the statement ran, and an audit
+  row saying it failed with "Could not find a part of the path" is a false record of what happened on the
+  server (§1.11d). A refusal is logged and a failed read is logged; a full disk is neither.
+- **A refusal may name a verb only when the guard *named* it.** The exposed path built its sentence from
+  `IsRisky`, and the T-SQL verdict is generous by design — so `declare @id int; select …`, ordinary T-SQL
+  for a read, was refused with "so DECLARE will not run", asserting a write nobody checked (§1.1). It reads
+  `NamesAWrite` now and produces that sentence only when there is one; everything else falls through to the
+  allow-list, whose "'DECLARE' is not a read" is the true sentence. §1.11a-bis already said this about
+  `ExternalSqlPolicy`; the call site above it was not following it.
+- **`--timeout` is floored as well as capped.** 0 is "no limit" in both engines, so a non-positive ask is a
+  request to *remove* the owner's limit — the same inversion arriving as a smaller number rather than a
+  larger one. `CliParser` refuses it too, but the guarantee is enforced in `WithTimeout`, which is where it
+  is stated and which `IBearingHost` exposes.
+- **`explain` is PostgreSQL's only, and says so before sending.** `ExplainSql`'s text is
+  `EXPLAIN (FORMAT JSON)` and `ExplainPlanParser` reads Postgres' plan JSON back, with nothing checking the
+  engine — so on a SQL Server connection it could only ever hand the caller `Incorrect syntax near
+  'EXPLAIN'` for a command the help advertised without a caveat. `ISqlDialect.SupportsExplainPlan` gates it
+  in **both** hosts; the app had the same gap. A second plan format is a feature (SQL Server's showplan is
+  different XML with different measurements), not a translation — §5.4a's rule again.
+- **`explain` validates the caller's statement and sends its own.** `EXPLAIN ANALYZE` carries a
+  `BEGIN … ROLLBACK` that the allow-list would rightly refuse if it saw it — so what is judged is what the
+  caller asked to run, and what is sent is what we wrapped it in. The wrapper is not optional: a plain
+  SELECT can call a volatile function that writes. It is also not a promise that nothing happened.
+
+### §1.11f — `bearing` reaches PATH from the installer, on Windows
+
+`VelopackApp`'s `OnAfterInstallFastCallback` / `OnAfterUpdateFastCallback` / `OnBeforeUninstallFastCallback`
+add and remove the install directory in the user's `Environment` registry key. Per user, because Bearing installs to
+`%LocalAppData%` without elevation and the machine PATH is neither ours nor reachable.
+
+- **Read unexpanded, write back the same kind.** `Environment.GetEnvironmentVariable(…, User)` expands
+  `%SystemRoot%`, so reading with it and writing the result back bakes today's values into the user's PATH
+  permanently — the classic way an installer corrupts one. `RegistryValueOptions.DoNotExpandEnvironmentNames`
+  on the way in, and the existing `RegistryValueKind` on the way out, since a REG_SZ rewrite of a
+  REG_EXPAND_SZ PATH breaks every variable in it.
+- **Read the value before asking for its kind.** `RegistryKey.GetValueKind` reports a missing value by
+  *throwing*, so asking it first turned a profile with no `HKCU\Environment\Path` — a clean Windows install —
+  into a silent no-op through the best-effort catch: `bearing` never became a command for that user, with
+  nothing said anywhere. A missing value is created as `ExpandString`, since a PATH is the canonical
+  REG_EXPAND_SZ. `WindowsPath.Apply` takes the key so this is testable against a scratch one rather than
+  against the developer's own PATH.
+- **The editing is pure and the I/O is thin** (`WindowsPathEntry` / `WindowsPath`), because the editing is
+  where the corruption comes from: empty entries dropped (an empty PATH entry means the current directory
+  to the loader), duplicates removed, trailing separators and quotes and case all treated as the same
+  directory, and "nothing to do" reported as null so an update does not rewrite a PATH it agrees with.
+- Appended rather than prepended: nothing here should shadow an existing command.
+- Best-effort (§5.2). A PATH that cannot be edited costs a full path typed once; an install that failed
+  over it costs the install.
+
+### What a pure check may and may not answer
+`ExternalAccessPolicy.UnavailableReason` reports only what the `CredentialKind` settles — a kind whose whole
+mechanism is asking the user cannot work where there is no user. It deliberately does **not** report whether
+the credential can be obtained *right now*: an unreachable keyring, an expired `az` session, a password never
+stored are runtime facts, and a pure function claiming them would be asserting a cause nobody checked (§1.1).
+A host reports those when the connect fails, with what the attempt actually said.
+

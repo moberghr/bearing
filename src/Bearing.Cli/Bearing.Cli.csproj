@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The `bearing` command: read-only access to the connections their owner exposed (§1.11), for a
+       person, a script, or an agent with a shell.
+
+       This is the exe named `bearing`; the GUI apphost beside it is `bearing-app`, because a command has
+       to be a console program and the name people know should be the one they can type. Run with no
+       arguments it launches that (AppLauncher).
+
+       No Avalonia, no Velopack, no window. Everything it runs an agent's SQL through is Bearing.Sessions,
+       so the refusal and the connect recipe are the ones the app uses rather than copies of them (§2.6).
+       An MCP server was built over the same IBearingHost and dropped in favour of this - see docs/CLI.md. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>bearing</AssemblyName>
+
+    <!-- InvariantGlobalization was set here on the theory that nothing in a JSON-emitting command is
+         culture-sensitive. That stopped being true the moment this host had to set CellFormat.Zone (§2.7),
+         and it failed in the worst way available: silently.
+
+         Measured on this machine — with ICU, FindSystemTimeZoneById("Europe/Zagreb") resolves; in invariant
+         mode it throws TimeZoneNotFoundException, because mapping an IANA id to a Windows zone is
+         ICU-backed. DisplayZone.Resolve catches that and falls back to UTC by design (a typo in a settings
+         file must not shift every timestamp), so a user whose display zone is an IANA id got their zone in
+         the app and UTC from the command, in the same export, with nothing anywhere saying so. That is
+         precisely the drift DisplayZone was extracted into Bearing.Results to prevent.
+
+         It also made OrdinalIgnoreCase fold ASCII only, so a connection or schema named in another script
+         matched differently here than in the app. DO NOT set it again: this process renders values the app
+         also renders, and the two have to agree. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Bearing.Core\Bearing.Core.csproj" />
+    <ProjectReference Include="..\Bearing.Sql\Bearing.Sql.csproj" />
+    <ProjectReference Include="..\Bearing.Data\Bearing.Data.csproj" />
+    <ProjectReference Include="..\Bearing.Persistence\Bearing.Persistence.csproj" />
+    <ProjectReference Include="..\Bearing.Results\Bearing.Results.csproj" />
+    <ProjectReference Include="..\Bearing.Sessions\Bearing.Sessions.csproj" />
+  </ItemGroup>
+
+</Project>

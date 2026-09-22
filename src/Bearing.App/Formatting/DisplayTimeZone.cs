@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 
 using Bearing.Core.Workspace;
+using Bearing.Results;
 
 namespace Bearing.App.Formatting;
 
@@ -38,33 +39,16 @@ public static class DisplayTimeZone
         SettingsCatalog.TimeZoneDescriber = Describe;
     }
 
-    /// <summary>The setting value meaning "whatever this machine is set to".</summary>
-    public const string SystemId = "system";
+    /// <inheritdoc cref="DisplayZone.SystemId"/>
+    public const string SystemId = DisplayZone.SystemId;
 
-    /// <summary>The setting value meaning UTC, and what an empty or unreadable setting falls back to.</summary>
-    public const string UtcId = "UTC";
+    /// <inheritdoc cref="DisplayZone.UtcId"/>
+    public const string UtcId = DisplayZone.UtcId;
 
-    /// <summary>
-    /// The zone a setting's text names.
-    /// <para>
-    /// An unknown id falls back to UTC rather than throwing or silently using the machine's zone: a typo in a
-    /// settings file must not shift every timestamp by an unpredictable amount, and UTC is the one answer
-    /// that is never wrong about the instant.
-    /// </para>
-    /// </summary>
-    public static TimeZoneInfo Resolve(string? id)
-    {
-        if (string.IsNullOrWhiteSpace(id)) return TimeZoneInfo.Utc;
-        if (id.Equals(SystemId, StringComparison.OrdinalIgnoreCase)) return TimeZoneInfo.Local;
-        if (id.Equals(UtcId, StringComparison.OrdinalIgnoreCase)) return TimeZoneInfo.Utc;
-
-        try { return TimeZoneInfo.FindSystemTimeZoneById(id); }
-        catch (Exception)
-        {
-            // TimeZoneNotFoundException, InvalidTimeZoneException, or a platform without the zone database.
-            return TimeZoneInfo.Utc;
-        }
-    }
+    /// <inheritdoc cref="DisplayZone.Resolve"/>
+    /// <remarks>The resolving itself lives in <c>Bearing.Results</c> beside the property it feeds, because
+    /// every host has to set that property and the CLI cannot reference this project (§2.2, §2.7).</remarks>
+    public static TimeZoneInfo Resolve(string? id) => DisplayZone.Resolve(id);
 
     /// <summary>Whether a setting's text names a zone this machine can resolve — for validating what the user
     /// typed, without waiting for a timestamp to render wrongly.</summary>

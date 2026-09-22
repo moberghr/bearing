@@ -337,20 +337,41 @@ public sealed class DemoExecutor : IQueryExecutor
         string sql, QueryOptions options, [EnumeratorCancellation] CancellationToken ct)
     {
         Record(sql);
-        var rows = First(sql).Rows;
-        var ceiling = options.MaxRows ?? rows.Count;
-        var yielded = 0;
-        var batch = Math.Max(1, options.BatchRows);
+        var result = First(sql);
 
-        while (yielded < Math.Min(ceiling, rows.Count))
+        // A statement with no result shape streams nothing at all, as both real executors do at
+        // `FieldCount == 0`. Yielding an empty batch for one instead was the §4.6 divergence in the
+        // direction that rule warns about: a consumer written against this fixture would see a shape-less
+        // statement as "one batch, no columns" and pass, while live it sees no batches.
+        if (result.Columns.Count == 0) yield break;
+
+        var size = Math.Max(1, options.BatchRows);
+
+        // Deliberately the real executors' loop rather than arithmetic over the row list: a full batch is
+        // emitted when it fills, the cap is noticed one row *past* itself, and the tail is unconditional.
+        // That last part is what makes an exact multiple of the batch size end with an empty batch here as
+        // it does against a server, and what makes an empty result still name its columns (§4.6 — the
+        // fixture has to behave like the thing it stands in for, or a consumer written against it breaks
+        // live).
+        var batch = new List<object?[]>(size);
+        var read = 0;
+        var truncated = false;
+
+        foreach (var row in result.Rows)
         {
             ct.ThrowIfCancellationRequested();
+            if (options.MaxRows is { } max && read >= max) { truncated = true; break; }
+            batch.Add(row);
+            read++;
+            if (batch.Count < size) continue;
+
             await Task.Yield();   // a real reader hands control back; a test needs the same interleaving
-            var take = Math.Min(batch, Math.Min(ceiling, rows.Count) - yielded);
-            yielded += take;
-            var truncated = yielded == ceiling && rows.Count > ceiling;
-            yield return new RowBatch(rows.Skip(yielded - take).Take(take).ToList(), truncated);
+            yield return new RowBatch(result.Columns, batch, Truncated: false);
+            batch = new List<object?[]>(size);
         }
+
+        await Task.Yield();
+        yield return new RowBatch(result.Columns, batch, truncated);
     }
 
     public Task<long?> CountAsync(string sql, CancellationToken ct)

@@ -12,6 +12,7 @@ using Bearing.Core.Workspace;
 using Bearing.Persistence;
 using Bearing.App.Workspace;
 using Bearing.Core.Schema;
+using Bearing.Sessions;
 using Bearing.Sql;
 
 namespace Bearing.App.ViewModels;
@@ -355,7 +356,7 @@ public sealed partial class ServerNodeViewModel : SchemaNodeViewModel
     /// <param name="mode">Passed on to each database node; see <see cref="DatabaseNodeViewModel"/>.</param>
     public ServerNodeViewModel(
         ConnectionInfo connection, ISchemaBrowser browser, Func<SchemaTreeMode>? mode = null)
-        : base("⛁", connection.Name, ConnectionEndpoint.HostPort(connection), hasChildren: true)
+        : base("⛁", connection.Name, RowDetail(connection), hasChildren: true)
     {
         Connection = connection;
         _browser = browser;
@@ -377,9 +378,30 @@ public sealed partial class ServerNodeViewModel : SchemaNodeViewModel
     {
         Connection = edited;
         Title = edited.Name;
-        Detail = ConnectionEndpoint.HostPort(edited);
+        Detail = RowDetail(edited);
         OnPropertyChanged(nameof(RowAccentColor));
     }
+
+    /// <summary>
+    /// The row's subtitle: where the server is, plus a mark when this connection is exposed to the
+    /// <c>bearing</c> command (§1.11).
+    /// <para>
+    /// The mark is the whole justification for <c>ExternalAccess</c> travelling in <c>project.json</c>
+    /// rather than being per-machine — §1.11 argues that opening a shared project is taking its
+    /// configuration whole, "exposure visible in the connection list with it". Nothing rendered it, so
+    /// opening a colleague's project exposed their marked connections to anything running as you and the
+    /// only way to see which was to open each connection's dialog in turn. A claim a rule leans on has to
+    /// be true.
+    /// </para>
+    /// <para>
+    /// In <see cref="SchemaNodeViewModel.Detail"/> rather than as a new badge: this is the one line on the
+    /// row that already says what kind of connection it is, and a glyph would need a legend.
+    /// </para>
+    /// </summary>
+    private static string RowDetail(ConnectionInfo connection)
+        => ExternalAccessPolicy.IsExposed(connection)
+            ? $"{ConnectionEndpoint.HostPort(connection)} · bearing"
+            : ConnectionEndpoint.HostPort(connection);
 
     public override bool IsServer => true;
     public override string? RowAccentColor => Connection.EnvironmentColor;

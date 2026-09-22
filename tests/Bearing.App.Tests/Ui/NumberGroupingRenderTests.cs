@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using Bearing.App.Controls;
 using Bearing.App.Formatting;
 using Bearing.App.Results;
+using Bearing.Results;
 using Xunit;
 
 namespace Bearing.App.Tests.Ui;

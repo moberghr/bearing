@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
 using Bearing.Core.Logging;
+using Bearing.Sessions;
 
 namespace Bearing.App.Connections;
 

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Bearing.Results: turning a result set into text, a table, or a file — the cell renderer, the CSV /
+       Markdown / JSON / SQL formats, the xlsx writer, and the export that lands them on disk.
+
+       Its own tier beside Bearing.Sessions rather than part of Bearing.App, because two hosts write these
+       files now: the app's Export menu, and the CLI's export flag. A second CSV writer in the CLI would be a
+       second definition of what an export *is*, and the two would drift — the app's xlsx writes numbers as
+       typed cells so they still sum in Excel, and its CSV carries a BOM so Excel does not mangle non-ASCII
+       (§9.10c). Reused rather than reimplemented, both hosts produce byte-identical files.
+
+       What stayed in Bearing.App is what needs a view model: the names an export suggests, and building a
+       block from a grid's selection. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\Bearing.Core\Bearing.Core.csproj" />
+    <ProjectReference Include="..\Bearing.Sql\Bearing.Sql.csproj" />
+    <ProjectReference Include="..\Bearing.Sessions\Bearing.Sessions.csproj" />
+  </ItemGroup>
+
+</Project>

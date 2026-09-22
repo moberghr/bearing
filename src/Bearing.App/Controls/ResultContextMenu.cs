@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Avalonia.Controls;
 using Bearing.App.Results;
 using Bearing.App.ViewModels;
+using Bearing.Results;
 
 namespace Bearing.App.Controls;
 

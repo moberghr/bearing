@@ -8,6 +8,8 @@ using Bearing.App.Services;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
+using Bearing.Results;
+using Bearing.Sessions;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -62,7 +64,7 @@ public class TableFormatsTests
         // Ctrl-clicked diagonal: (row0,col0) and (row1,col1) only. TSV blanks the two gaps to keep a
         // spreadsheet paste aligned; the structured formats need real data, so the rectangle is filled.
         var cells = new List<(object?[] Row, int Col)> { (rs.Rows[0], 0), (rs.Rows[1], 1) };
-        var block = TableBlock.ForSelection(rs, cells);
+        var block = ResultBlocks.ForSelection(rs, cells);
 
         Assert.Equal(new[] { "id", "name" }, block.Columns.Select(c => c.Name));
         Assert.Equal(2, block.Rows.Count);
@@ -77,15 +79,15 @@ public class TableFormatsTests
     public void An_empty_or_stranded_selection_makes_an_empty_block()
     {
         var rs = Sample();
-        Assert.True(TableBlock.ForSelection(rs, Array.Empty<(object?[], int)>()).IsEmpty);
+        Assert.True(ResultBlocks.ForSelection(rs, Array.Empty<(object?[], int)>()).IsEmpty);
         var dropped = new object?[] { 99, "gone", 0m, null }; // a discarded pending-new row
-        Assert.True(TableBlock.ForSelection(rs, new[] { (dropped, 0) }).IsEmpty);
+        Assert.True(ResultBlocks.ForSelection(rs, new[] { (dropped, 0) }).IsEmpty);
     }
 
     [Fact]
     public void A_result_block_is_every_loaded_row_and_column()
     {
-        var block = TableBlock.ForResult(Sample());
+        var block = ResultBlocks.ForResult(Sample());
         Assert.Equal(4, block.Columns.Count);
         Assert.Equal(2, block.Rows.Count);
     }
@@ -95,7 +97,7 @@ public class TableFormatsTests
     [Fact]
     public void Csv_has_a_header_crlf_lines_and_iso_dates()
     {
-        var csv = TableFormats.Csv(TableBlock.ForResult(Sample()));
+        var csv = TableFormats.Csv(ResultBlocks.ForResult(Sample()));
         var lines = csv.Split("\r\n");
         Assert.Equal("id,name,price,at", lines[0]);
         Assert.Equal("1,widget,9.5,2026-08-11 14:03:22", lines[1]);
@@ -108,7 +110,7 @@ public class TableFormatsTests
     {
         // Postgres's own COPY … CSV makes exactly this distinction: NULL is an empty *unquoted* field.
         var rs = Result([("a", "text", typeof(string)), ("b", "text", typeof(string))], [null, ""]);
-        var row = TableFormats.Csv(TableBlock.ForResult(rs)).Split("\r\n")[1];
+        var row = TableFormats.Csv(ResultBlocks.ForResult(rs)).Split("\r\n")[1];
         Assert.Equal(",\"\"", row);
     }
 
@@ -121,7 +123,7 @@ public class TableFormatsTests
     public void Csv_quotes_only_what_needs_quoting(string value, string expected)
     {
         var rs = Result([("a", "text", typeof(string))], [value]);
-        Assert.Equal(expected, TableFormats.Csv(TableBlock.ForResult(rs)).Split("\r\n")[1]);
+        Assert.Equal(expected, TableFormats.Csv(ResultBlocks.ForResult(rs)).Split("\r\n")[1]);
     }
 
     // ---- Markdown ----------------------------------------------------------------------------
@@ -130,7 +132,7 @@ public class TableFormatsTests
     public void Markdown_is_a_table_with_escaped_pipes_and_no_raw_newlines()
     {
         var rs = Result([("a", "text", typeof(string))], ["x|y"], ["two\nlines"]);
-        var md = TableFormats.Markdown(TableBlock.ForResult(rs));
+        var md = TableFormats.Markdown(ResultBlocks.ForResult(rs));
         var lines = md.TrimEnd('\n').Split('\n');
 
         Assert.Equal("| a |", lines[0]);
@@ -145,7 +147,7 @@ public class TableFormatsTests
     [Fact]
     public void Json_keeps_types_rather_than_stringifying_everything()
     {
-        var json = TableFormats.Json(TableBlock.ForResult(Sample()));
+        var json = TableFormats.Json(ResultBlocks.ForResult(Sample()));
         using var doc = System.Text.Json.JsonDocument.Parse(json);
         var first = doc.RootElement[0];
 
@@ -161,7 +163,7 @@ public class TableFormatsTests
     {
         var rs = Result([("tags", "text[]", typeof(string[])), ("blob", "bytea", typeof(byte[]))],
             [new[] { "a", "b" }, new byte[] { 0xDE, 0xAD }]);
-        using var doc = System.Text.Json.JsonDocument.Parse(TableFormats.Json(TableBlock.ForResult(rs)));
+        using var doc = System.Text.Json.JsonDocument.Parse(TableFormats.Json(ResultBlocks.ForResult(rs)));
         var row = doc.RootElement[0];
 
         Assert.Equal(new[] { "a", "b" }, row.GetProperty("tags").EnumerateArray().Select(e => e.GetString()));
@@ -174,7 +176,7 @@ public class TableFormatsTests
     {
         // `select a.id, b.id from …` — a consumer keyed by name would otherwise lose one silently.
         var rs = Result([("id", "int4", typeof(int)), ("id", "int4", typeof(int))], [1, 2]);
-        using var doc = System.Text.Json.JsonDocument.Parse(TableFormats.Json(TableBlock.ForResult(rs)));
+        using var doc = System.Text.Json.JsonDocument.Parse(TableFormats.Json(ResultBlocks.ForResult(rs)));
         Assert.Equal(1, doc.RootElement[0].GetProperty("id").GetInt32());
         Assert.Equal(2, doc.RootElement[0].GetProperty("id_2").GetInt32());
     }
@@ -185,7 +187,7 @@ public class TableFormatsTests
     public void Html_is_an_escaped_table_with_inline_styling()
     {
         var rs = Result([("a", "text", typeof(string))], ["<b>&</b>"]);
-        var html = TableFormats.Html(TableBlock.ForResult(rs));
+        var html = TableFormats.Html(ResultBlocks.ForResult(rs));
 
         Assert.StartsWith("<table ", html);
         Assert.EndsWith("</table>", html);
@@ -213,7 +215,7 @@ public class TableFormatsTests
     public void Html_can_carry_the_query_that_produced_the_rows()
     {
         var rs = Sample();
-        var block = TableBlock.ForResult(rs);
+        var block = ResultBlocks.ForResult(rs);
 
         var html = TableFormats.Html(block, "select id, name\nfrom t\nwhere name <> 'a & b'");
 
@@ -233,7 +235,7 @@ public class TableFormatsTests
     [Fact]
     public void The_query_row_is_omitted_rather_than_left_empty_when_there_is_no_query()
     {
-        var block = TableBlock.ForResult(Sample());
+        var block = ResultBlocks.ForResult(Sample());
 
         foreach (var nothing in new[] { null, "", "   \n\t " })
             Assert.DoesNotContain("colspan", TableFormats.Html(block, nothing));
@@ -256,8 +258,8 @@ public class TableFormatsTests
 
         Assert.Null(rs.SourceSql);
         Assert.Equal("select * from t", rs.ExecutedSql);
-        Assert.Contains("select * from t", CopyRenderer.Render(rs, TableBlock.ForResult(rs), CopyFormat.HtmlWithQuery));
-        Assert.DoesNotContain("select * from t", CopyRenderer.Render(rs, TableBlock.ForResult(rs), CopyFormat.Html));
+        Assert.Contains("select * from t", CopyRenderer.Render(rs, ResultBlocks.ForResult(rs), CopyFormat.HtmlWithQuery));
+        Assert.DoesNotContain("select * from t", CopyRenderer.Render(rs, ResultBlocks.ForResult(rs), CopyFormat.Html));
     }
 
     /// <summary>
@@ -351,7 +353,7 @@ public class TableFormatsTests
     {
         // Pasted *between* the parens of `where id in (…)`, so supplying its own would double them.
         var rs = Result([("id", "int4", typeof(int))], [1], [2], [3]);
-        Assert.Equal("1, 2, 3", TableFormats.InList(TableBlock.ForResult(rs)));
+        Assert.Equal("1, 2, 3", TableFormats.InList(ResultBlocks.ForResult(rs)));
     }
 
     [Fact]
@@ -361,7 +363,7 @@ public class TableFormatsTests
             [("name", "text", typeof(string)), ("at", "timestamp", typeof(DateTime))],
             ["O'Brien", new DateTime(2026, 8, 11, 14, 3, 22)]);
 
-        Assert.Equal("'O''Brien', '2026-08-11 14:03:22'", TableFormats.InList(TableBlock.ForResult(rs)));
+        Assert.Equal("'O''Brien', '2026-08-11 14:03:22'", TableFormats.InList(ResultBlocks.ForResult(rs)));
     }
 
     [Fact]
@@ -372,19 +374,19 @@ public class TableFormatsTests
         // might — and in a `not in (…)` list it makes the predicate unknown for every row, silently
         // returning no rows at all.
         var rs = Result([("id", "int4", typeof(int))], [7], [7], [null], [8], [7]);
-        Assert.Equal("7, 8", TableFormats.InList(TableBlock.ForResult(rs)));
+        Assert.Equal("7, 8", TableFormats.InList(ResultBlocks.ForResult(rs)));
 
         // `new object?[] { null }`, not `[null]`: as the sole argument to a `params object?[][]`, the
         // collection expression binds as the params array itself — one *null row* rather than one null cell.
         var allNull = Result([("id", "int4", typeof(int))], new object?[] { null });
-        Assert.Equal("", TableFormats.InList(TableBlock.ForResult(allNull)));
+        Assert.Equal("", TableFormats.InList(ResultBlocks.ForResult(allNull)));
     }
 
     [Fact]
     public void An_in_list_of_a_multi_column_selection_takes_every_value_in_reading_order()
     {
         var rs = Result([("a", "int4", typeof(int)), ("b", "int4", typeof(int))], [1, 2], [3, 4]);
-        Assert.Equal("1, 2, 3, 4", TableFormats.InList(TableBlock.ForResult(rs)));
+        Assert.Equal("1, 2, 3, 4", TableFormats.InList(ResultBlocks.ForResult(rs)));
     }
 
     // ---- SQL ---------------------------------------------------------------------------------
@@ -393,7 +395,7 @@ public class TableFormatsTests
     public void Sql_insert_quotes_identifiers_and_renders_typed_literals()
     {
         var rs = Sample();
-        var sql = TableFormats.SqlInsert(TableBlock.ForResult(rs), "public", "orders");
+        var sql = TableFormats.SqlInsert(ResultBlocks.ForResult(rs), "public", "orders");
         var statements = sql.TrimEnd('\n').Split(";\n");
 
         Assert.Equal(2, statements.Length);
@@ -408,7 +410,7 @@ public class TableFormatsTests
         var rs = Result([("name", "text", typeof(string))], ["O'Brien"]);
         // A join / view / expression select has no single table, so the placeholder is deliberately
         // conspicuous rather than a plausible-looking guess.
-        var sql = CopyRenderer.Render(rs, TableBlock.ForResult(rs), CopyFormat.SqlInsert);
+        var sql = CopyRenderer.Render(rs, ResultBlocks.ForResult(rs), CopyFormat.SqlInsert);
         Assert.Contains(CopyRenderer.UnknownTable, sql);
         Assert.Contains("'O''Brien'", sql);
     }
@@ -425,7 +427,7 @@ public class TableFormatsTests
         };
 
         Assert.Contains("\"public\".\"orders\"",
-            CopyRenderer.Render(editable, TableBlock.ForResult(editable), CopyFormat.SqlInsert));
+            CopyRenderer.Render(editable, ResultBlocks.ForResult(editable), CopyFormat.SqlInsert));
     }
 
     // ---- dispatch ----------------------------------------------------------------------------
@@ -434,7 +436,7 @@ public class TableFormatsTests
     public void Every_alternative_renders_and_is_offered_in_the_menu()
     {
         var rs = Sample();
-        var block = TableBlock.ForResult(rs);
+        var block = ResultBlocks.ForResult(rs);
         foreach (var format in CopyRenderer.Alternatives)
         {
             var text = CopyRenderer.Render(rs, block, format);
@@ -457,7 +459,7 @@ public class TableFormatsTests
     public void Sql_insert_uses_the_result_engines_literals_and_quoting()
     {
         var rs = TwoColumnResult();
-        var block = TableBlock.ForResult(rs);
+        var block = ResultBlocks.ForResult(rs);
 
         var pg = TableFormats.SqlInsert(block, ProviderTraits.Postgres, "public", "t");
         Assert.Contains("\"public\".\"t\"", pg);
@@ -481,7 +483,7 @@ public class TableFormatsTests
             new object?[][] { new object?[] { new byte[] { 0x01, 0x02 } } },
             RowCount: 1, TimeSpan.Zero, null, null, false);
         var rs = new ResultSetViewModel(result, "select b from t", pageable: false);
-        var block = TableBlock.ForResult(rs);
+        var block = ResultBlocks.ForResult(rs);
 
         var ms = TableFormats.InList(block, ProviderTraits.SqlServer);
         Assert.Equal("0x0102", ms);
@@ -504,7 +506,7 @@ public class TableFormatsTests
             "select * from t", pageable: false) { Traits = ProviderTraits.SqlServer };
 
         var rendered = CopyRenderer.Render(
-            onSqlServer, TableBlock.ForResult(onSqlServer), CopyFormat.SqlInsert);
+            onSqlServer, ResultBlocks.ForResult(onSqlServer), CopyFormat.SqlInsert);
         // No edit target, so the table name is the placeholder — but it is bracketed, and the bit
         // column is 1 rather than true, which is what proves the engine came from the result.
         Assert.Contains("[", rendered);
@@ -543,7 +545,7 @@ public class TableFormatsTests
             [("created_time", "text", typeof(string)), ("name", "text", typeof(string))],
             ["2026-07-16 14:16:49.688644+00:00", "Čevapčići"]);
 
-        var json = TableFormats.Json(TableBlock.ForResult(result));
+        var json = TableFormats.Json(ResultBlocks.ForResult(result));
 
         Assert.Contains("+00:00", json);
         Assert.DoesNotContain("u002B", json);
@@ -567,7 +569,7 @@ public class TableFormatsTests
 
         var result = Result([("note", "text", typeof(string))], [value]);
 
-        var json = TableFormats.Json(TableBlock.ForResult(result));
+        var json = TableFormats.Json(ResultBlocks.ForResult(result));
 
         using var parsed = System.Text.Json.JsonDocument.Parse(json);
         Assert.Equal(value, parsed.RootElement[0].GetProperty("note").GetString());
@@ -585,7 +587,7 @@ public class TableFormatsTests
     {
         var result = Result([("note", "text", typeof(string))], ["<script>alert(1)</script> & co"]);
 
-        var html = TableFormats.Html(TableBlock.ForResult(result));
+        var html = TableFormats.Html(ResultBlocks.ForResult(result));
 
         Assert.DoesNotContain("<script>", html);
         Assert.Contains("&lt;script&gt;", html);

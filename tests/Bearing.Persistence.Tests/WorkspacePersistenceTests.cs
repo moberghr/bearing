@@ -156,6 +156,47 @@ public class WorkspacePersistenceTests : IDisposable
         Assert.Equal(CredentialKind.StoredPassword, legacyOpened.Manifest.Connections.Single().CredentialKind);
     }
 
+    /// <summary>
+    /// The project file is where exposure is written down, so this is the setting actually taking effect.
+    /// The legacy half is the one that matters: every project.json in existence today has no such property,
+    /// and all of them have to open as not exposed.
+    /// </summary>
+    [Fact]
+    public async Task ExternalAccess_round_trips_and_defaults_to_none_for_legacy_manifests()
+    {
+        var dir = Path.Combine(_root, "extproj");
+        var store = new JsonProjectStore();
+        var created = await store.CreateAsync(dir, "Exposed", CancellationToken.None);
+        created.Manifest.Connections.Add(new ConnectionInfo
+        {
+            Id = Guid.NewGuid(),
+            Name = "reporting",
+            ProviderId = "postgres",
+            Host = "db",
+            Database = "app",
+            User = "svc",
+            ExternalAccess = ExternalAccess.ReadOnly,
+        });
+        await store.SaveAsync(created, CancellationToken.None);
+
+        var manifestText = await File.ReadAllTextAsync(Path.Combine(dir, "project.json"));
+        Assert.Contains("\"externalAccess\": \"ReadOnly\"", manifestText);
+        var reopened = await store.OpenAsync(dir, CancellationToken.None);
+        Assert.Equal(ExternalAccess.ReadOnly, reopened.Manifest.Connections.Single().ExternalAccess);
+
+        // A manifest written before the setting existed. externalAccess sits between manualCommit and tls,
+        // so its own line carries the trailing comma and dropping it keeps the JSON valid.
+        var legacy = string.Join('\n',
+            manifestText.Split('\n').Where(l => !l.Contains("externalAccess")));
+        Assert.DoesNotContain("externalAccess", legacy);
+        await File.WriteAllTextAsync(Path.Combine(dir, "project.json"), legacy);
+
+        var legacyOpened = await store.OpenAsync(dir, CancellationToken.None);
+        var conn = legacyOpened.Manifest.Connections.Single();
+        Assert.Equal(ExternalAccess.None, conn.ExternalAccess);
+        Assert.Null(ExternalAccessPolicy.ForExternalHost(conn));
+    }
+
     [Fact]
     public async Task Session_round_trips_scratch_name_and_side_pane_state()
     {

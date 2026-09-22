@@ -135,8 +135,22 @@ public sealed class HistoryRowViewModel
         Time = entry.ExecutedAt.LocalDateTime.ToString("HH:mm");
         Query = OneLine(entry.SqlText);
         Detail = $"{entry.ExecutedAt.LocalDateTime:dd.MM.yyyy HH:mm:ss} · {entry.ConnectionName} · {entry.RowCount} row(s) · {(long)entry.Duration.TotalMilliseconds} ms"
+                 + (entry.Origin is null ? "" : $" · {entry.Origin}")
                  + (entry.Success ? "" : $"  ⚠ {entry.ErrorMessage}");
     }
+
+    /// <summary>
+    /// Which host ran this, or null for Bearing itself — the row-level answer to "did I run this?".
+    /// <para>
+    /// Marked in the list rather than only in the detail line, because the question it answers is one you
+    /// scan for rather than look up: a history where an agent's statements are indistinguishable from your
+    /// own is the gap §1.11's record exists to close. Null is the overwhelming majority, so the mark is on
+    /// the exception.
+    /// </para>
+    /// </summary>
+    public string? Origin => Entry.Origin;
+
+    public bool IsExternal => Entry.Origin is not null;
 
     /// <summary>The logged row behind this projection. Kept so a rebuild can find the row the user had
     /// selected — the projections themselves are new objects every time (see <c>Regroup</c>).</summary>
@@ -149,8 +163,13 @@ public sealed class HistoryRowViewModel
     public string Query { get; }
     public string Detail { get; }
 
-    /// <summary>Error rows are prefixed with a cross in the list.</summary>
-    public string DisplayQuery => IsError ? "✕ " + Query : Query;
+    /// <summary>
+    /// Error rows are prefixed with a cross in the list, and a row something other than Bearing ran carries
+    /// its origin. Both are text rather than colour, because the list is already colour-coded by connection
+    /// and a second hue would be one too many to tell apart at a glance.
+    /// </summary>
+    public string DisplayQuery
+        => (IsError ? "✕ " : "") + (IsExternal ? $"[{Origin}] " : "") + Query;
 
     /// <summary>Row text color (via HexBrush): error red, else primary text.</summary>
     public string QueryColorHex => IsError ? "#D2555A" : "#D8DEE6";

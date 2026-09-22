@@ -9,6 +9,8 @@ using Bearing.Core.Data;
 using Bearing.Core.Schema;
 using Bearing.Core.Updates;
 using Bearing.Core.Workspace;
+using Bearing.Results;
+using Bearing.Sessions;
 
 namespace Bearing.App.Tests;
 
@@ -367,6 +369,8 @@ internal sealed class PageableExecutor : IQueryExecutor
         LastStreamSql = sql;
 
         var batchSize = System.Math.Max(1, options.BatchRows);
+        // The one column this fake's rows have. Carried on every batch, as a real provider does.
+        var columns = new[] { new ColumnDescriptor("n", "integer", typeof(int)) };
         var batch = new List<object?[]>();
         var streamed = 0;
         var batches = 0;
@@ -375,7 +379,7 @@ internal sealed class PageableExecutor : IQueryExecutor
         {
             if (options.MaxRows is { } max && streamed >= max)
             {
-                yield return new RowBatch(batch, Truncated: true);
+                yield return new RowBatch(columns, batch, Truncated: true);
                 yield break;
             }
 
@@ -388,11 +392,13 @@ internal sealed class PageableExecutor : IQueryExecutor
             if (StreamError is not null && batches > StreamErrorAfterBatches) throw StreamError;
             if (PageDelayMs > 0) await Task.Delay(PageDelayMs, ct);
             ct.ThrowIfCancellationRequested();
-            yield return new RowBatch(batch, Truncated: false);
+            yield return new RowBatch(columns, batch, Truncated: false);
             batch = new List<object?[]>();
         }
 
-        if (batch.Count > 0) yield return new RowBatch(batch, Truncated: false);
+        // Unconditional, as the real executors are: a row-returning stream ends with a batch whether or not
+        // it holds rows, which is what lets a consumer take its columns from the stream alone.
+        yield return new RowBatch(columns, batch, Truncated: false);
     }
 
     public Task<long?> CountAsync(string sql, CancellationToken ct)
@@ -646,9 +652,9 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
     public string? ExportPath { get; set; }
 
     /// <summary>The (suggested name, format) pairs the export picker was opened with, in order.</summary>
-    public List<(string SuggestedName, Bearing.App.Results.ExportFormat Format)> ExportPickers { get; } = new();
+    public List<(string SuggestedName, ExportFormat Format)> ExportPickers { get; } = new();
 
-    public Task<string?> PickExportFileAsync(string suggestedName, Bearing.App.Results.ExportFormat format)
+    public Task<string?> PickExportFileAsync(string suggestedName, ExportFormat format)
     {
         ExportPickers.Add((suggestedName, format));
         return Task.FromResult(ExportPath);

@@ -15,6 +15,8 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
+    <!-- The registry tests are Windows-only and skip elsewhere (§4.2), rather than passing by returning. -->
+    <PackageReference Include="Xunit.SkippableFact" />
   </ItemGroup>
 
 </Project>
