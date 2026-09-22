@@ -490,6 +490,13 @@ tool descriptions alike.
 `ExternalAccessTests.Nothing_but_the_three_forced_settings_differs_from_the_saved_connection` pins that list
 by reflection, so a fourth forced setting has to be an argued addition rather than a quiet one.
 
+### The mark is shown on the row, because a rule leans on it
+`ServerNodeViewModel.Detail` appends · bearing to the connection's host:port when it is exposed. Nothing
+rendered it for the whole of this work, which made the paragraph below false: opening a colleague's project
+exposed their marked connections to anything running as the user, and the only way to find out which was to
+open each connection's dialog in turn. **WHEN an argument for a design rests on something being visible,
+check that something renders it.**
+
 ### It travels with the project and not with the clipboard
 The field is in `project.json`, which is right: "this connection may be queried by tooling" is a fact about
 the connection, and a team sharing a project already shares its connections' settings. `ConnectionClipboard`
@@ -647,6 +654,10 @@ two processes now open this file and the CLI may well be the one that migrates i
   as an answer. Found by review, after `docs/CLI.md` had already claimed the export carried it.
 - The log is held and disposed by the command, not merely handed to the host: `Append` returns before the
   row is written, so exiting without disposing loses the entry the command just produced.
+- **Nothing on the way to finding a project may end the command.** `FileRecentProjects.ListAsync` does not
+  swallow — a truncated `recent.json` throws `JsonException` — and `Main` catches only cancellation, so a
+  plain `bearing connections` exited with a stack trace over a convenience file. An unreadable list is *no
+  remembered project*, which is a sentence the command already knows how to say.
 
 ### §1.11b — Read-only bounds writes; it does not bound reads or signals
 
@@ -686,6 +697,14 @@ The text match is kept underneath as a fallback **only for a statement the lexer
 a lexer that threw cannot quietly widen what is accepted. The distinction has to be typed — `Scan` returns
 null for "could not read" and an empty set for "read it, found nothing", and the first version collapsed
 them, which brought the string-literal false positive straight back (§1.7's rule, in a new place).
+
+**The denied *relations* are qualified on T-SQL and bare on Postgres, and that asymmetry is the design.**
+`pg_catalog` is on the search_path, so `pg_authid` alone means that catalog and nothing else. SQL Server's
+catalog views are reachable only as `sys.<name>`, and their bare names — `credentials`, `servers` — are
+ordinary English words that make perfectly good table and column names: matching those bare refused
+`select credentials from app_users` with a sentence saying that table holds password hashes, which is a
+false claim about the user's own data and worse than the gap it closed. The backward-compatibility views
+(`syslogins`, `sysservers`) stay bare, because those really do resolve unqualified.
 
 **Three catalogs are refused as well as the functions** (`ExternalDeniedRelations`). §1.8 forbids Bearing's
 own catalog reads from selecting `pg_authid.rolpassword`, `pg_subscription.subconninfo` and
@@ -739,6 +758,15 @@ only by reading the code that emitted it.
   the output a program parses, while `--table` rendered the same cell as a list: the two disagreed. An
   array is a JSON array (elements converted the same way, so they nest), hstore is a JSON object, and
   `byte[]` keeps its base64 arm *above* both because a bytea is not a list of 200 numbers.
+- **The `bearing` process may not run under `InvariantGlobalization`, and the project file says why.**
+  It was set there on the theory that a JSON-emitting command has nothing culture-sensitive in it. That
+  stopped being true when this host had to set `CellFormat.Zone`, and it failed silently: measured on
+  Windows, `FindSystemTimeZoneById("Europe/Zagreb")` resolves with ICU and throws `TimeZoneNotFoundException`
+  without it, because mapping an IANA id to a Windows zone is ICU-backed — and `DisplayZone.Resolve` turns a
+  throw into UTC *by design*, so a user whose display zone was an IANA id got their zone in the app and UTC
+  from the command, in the same export. It also folded `OrdinalIgnoreCase` to ASCII only, so a connection
+  named in another script matched differently in the two hosts. A test reads the project file, because the
+  flag lives in the *app's* runtimeconfig and nothing in a test host can observe it.
 - **A blank option value is a missing one.** A shell that expanded a variable to nothing hands over an
   empty argument rather than no argument, and `--project ""` reached `Path.GetFullPath("")` and came out as
   an unhandled `ArgumentException` and a stack trace — on the ordinary path, since `bearing --project
@@ -749,6 +777,16 @@ only by reading the code that emitted it.
   the host reports that as `Could not write …`. It is also **not logged**: the statement ran, and an audit
   row saying it failed with "Could not find a part of the path" is a false record of what happened on the
   server (§1.11d). A refusal is logged and a failed read is logged; a full disk is neither.
+- **A refusal may name a verb only when the guard *named* it.** The exposed path built its sentence from
+  `IsRisky`, and the T-SQL verdict is generous by design — so `declare @id int; select …`, ordinary T-SQL
+  for a read, was refused with "so DECLARE will not run", asserting a write nobody checked (§1.1). It reads
+  `NamesAWrite` now and produces that sentence only when there is one; everything else falls through to the
+  allow-list, whose "'DECLARE' is not a read" is the true sentence. §1.11a-bis already said this about
+  `ExternalSqlPolicy`; the call site above it was not following it.
+- **`--timeout` is floored as well as capped.** 0 is "no limit" in both engines, so a non-positive ask is a
+  request to *remove* the owner's limit — the same inversion arriving as a smaller number rather than a
+  larger one. `CliParser` refuses it too, but the guarantee is enforced in `WithTimeout`, which is where it
+  is stated and which `IBearingHost` exposes.
 - **`explain` is PostgreSQL's only, and says so before sending.** `ExplainSql`'s text is
   `EXPLAIN (FORMAT JSON)` and `ExplainPlanParser` reads Postgres' plan JSON back, with nothing checking the
   engine — so on a SQL Server connection it could only ever hand the caller `Incorrect syntax near

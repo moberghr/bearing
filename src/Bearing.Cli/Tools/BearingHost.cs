@@ -228,12 +228,21 @@ public sealed class BearingHost(
         // not this connection's setting, it is forced on because the connection is exposed, and turning the
         // setting off would change nothing. Telling a caller to do something that cannot work is §1.1's
         // failure in its plainest form.
-        if (WriteRefusal.Reason(info, risks) is not null)
+        // The verbs are taken from NamesAWrite, not from IsRisky, and the sentence is only produced when
+        // there is at least one — §1.11a-bis's rule, which this call site was breaking. The guard's verdict
+        // is generous by design: on T-SQL anything whose lead word is not a known read counts as risky so
+        // that it gets confirmed. That is the right answer to "must this be confirmed?" and the wrong one to
+        // "does this write?", so `declare @id int; select * from t` — ordinary T-SQL for a read — was being
+        // refused with "so DECLARE will not run", asserting a write nobody checked (§1.1).
+        //
+        // Such a statement is still refused, by the allow-list below, in the words that are true of it:
+        // "'DECLARE' is not a read". Falling through to it is the whole of the fix.
+        var named = risks.Where(r => r.NamesAWrite).Select(r => r.Label).Distinct(StringComparer.Ordinal).ToList();
+        if (named.Count > 0 && WriteRefusal.Reason(info, risks) is not null)
         {
-            var verbs = risks.Where(r => r.IsRisky).Select(r => r.Label).Distinct(StringComparer.Ordinal).ToList();
             throw Refused(
                 info, sql,
-                $"'{info.Name}' is exposed to external tools for reads only, so {string.Join(", ", verbs)} "
+                $"'{info.Name}' is exposed to external tools for reads only, so {string.Join(", ", named)} "
                 + "will not run. Its owner can widen that in Bearing, or run the statement there themselves.");
         }
 
@@ -264,6 +273,12 @@ public sealed class BearingHost(
     private static ConnectionInfo WithTimeout(ConnectionInfo exposed, int? seconds)
     {
         if (seconds is not { } asked) return exposed;
+
+        // Zero is "no limit" in both engines, so a non-positive ask is a request to *remove* the owner's
+        // timeout — the exact inversion this method exists to prevent, arriving as a number rather than as a
+        // larger one. CliParser refuses anything below 1, but this method owns the rule and IBearingHost is
+        // public: the guarantee has to hold where it is stated, not only where it is currently reachable.
+        if (asked <= SessionPolicy.NoTimeout) return exposed;
 
         // The exposed record always carries a limit — ExternalAccessPolicy fills one in when the connection
         // has none — so "lower" is simply the smaller of the two.

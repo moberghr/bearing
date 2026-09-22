@@ -182,7 +182,10 @@ internal static class Program
     /// interactive case is worse.
     /// </para>
     /// </summary>
-    private static string? ResolveProject(CliOptions options, out string? error)
+    /// <param name="recent">The remembered-projects list; the real one when a caller does not say. A
+    /// parameter so a test can hand over one that fails, which is the case this method exists to survive.</param>
+    internal static string? ResolveProject(
+        CliOptions options, out string? error, IRecentProjects? recent = null)
     {
         error = null;
 
@@ -204,10 +207,24 @@ internal static class Program
             return null;
         }
 
-        var recent = new FileRecentProjects().ListAsync(CancellationToken.None).GetAwaiter().GetResult();
+        // FileRecentProjects.ListAsync does not swallow: a truncated or hand-edited recent.json throws
+        // JsonException and a locked one throws IOException, and Main catches only cancellation — so a plain
+        // `bearing connections` exited with a stack trace over a file that is only a convenience. The same
+        // class as the --project "" crash, on the path taken when nobody passed --project at all.
+        //
+        // An unreadable list means "no remembered project", which is what the command already says how to
+        // fix: pass --project.
+        IReadOnlyList<string> remembered;
+        try
+        {
+            remembered = (recent ?? new FileRecentProjects())
+                .ListAsync(CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return null; }
+
         // A remembered project whose folder has gone is a stale list entry rather than an error, and the
         // next one down is very likely the answer.
-        return recent.FirstOrDefault(Directory.Exists);
+        return remembered.FirstOrDefault(Directory.Exists);
     }
 
     /// <summary>

@@ -173,6 +173,43 @@ public class ExternalSqlPolicyTests
         Assert.False(SqlServerDialect.Instance.SupportsExplainPlan);
     }
 
+    /// <summary>
+    /// The T-SQL list is <b>qualified</b>, and has to be: <c>credentials</c> and <c>servers</c> are ordinary
+    /// English words and perfectly good names for a user's own table or column, while the catalog views that
+    /// bear those names are reachable only as <c>sys.&lt;name&gt;</c>. Matching them bare refused an ordinary
+    /// read with a sentence claiming that table holds password hashes — a false statement about the user's
+    /// own data, which is worse than the gap it closed.
+    /// </summary>
+    [Theory]
+    [InlineData("select credentials from app_users")]
+    [InlineData("select * from dbo.servers")]
+    [InlineData("select name, credentials from dbo.Integrations order by name")]
+    [InlineData("select s.servers from dbo.Tenants s")]
+    public void An_ordinary_table_that_shares_a_catalog_name_is_still_readable(string sql)
+    {
+        Assert.Null(TSql(sql));
+    }
+
+    [Theory]
+    [InlineData("select * from sys.sql_logins")]
+    [InlineData("select name, credential_identity from sys.credentials")]
+    [InlineData("select * from sys.servers")]
+    [InlineData("select * from [sys].[sql_logins]")]
+    [InlineData("select * from syslogins")]
+    public void The_sql_server_catalogs_that_hold_credentials_are_refused(string sql)
+    {
+        Assert.NotNull(TSql(sql));
+    }
+
+    /// <summary>Postgres keeps bare names, and correctly: <c>pg_catalog</c> is on the search_path, so
+    /// <c>pg_authid</c> alone means that catalog and nothing else — and nobody names a table <c>pg_*</c>.</summary>
+    [Fact]
+    public void The_postgres_catalogs_stay_matchable_unqualified()
+    {
+        Assert.NotNull(Pg("select * from pg_authid"));
+        Assert.NotNull(Pg("select * from pg_catalog.pg_authid"));
+    }
+
     // ---- what still has to work ----------------------------------------------------------------
 
     [Theory]

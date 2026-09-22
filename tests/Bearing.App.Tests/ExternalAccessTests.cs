@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using Bearing.App.ViewModels;
 using Bearing.Core.Data;
 using Xunit;
 
@@ -183,4 +184,72 @@ public class ExternalAccessTests
 
         Assert.Null(ExternalAccessPolicy.UnavailableReason(conn));
     }
+    /// <summary>
+    /// The mark the connection list shows. It is the whole justification for <c>ExternalAccess</c>
+    /// travelling in <c>project.json</c> rather than being per-machine — §1.11 argues that opening a shared
+    /// project takes its configuration whole, "exposure visible in the connection list with it" — and
+    /// nothing rendered it, so opening a colleague's project exposed their marked connections to anything
+    /// running as you, findable only by opening each connection's dialog in turn.
+    /// </summary>
+    [Fact]
+    public void An_exposed_connection_says_so_on_its_row()
+    {
+        var exposed = new ConnectionInfo
+        {
+            Id = Guid.NewGuid(),
+            Name = "agent-reads",
+            ProviderId = "postgres",
+            Host = "db.internal",
+            Port = 5432,
+            ExternalAccess = ExternalAccess.ReadOnly,
+        };
+
+        var node = Node(exposed);
+
+        Assert.Contains("bearing", node.Detail);
+        Assert.Contains("db.internal", node.Detail);   // still says where the server is
+    }
+
+    [Fact]
+    public void An_ordinary_connection_carries_no_mark()
+    {
+        var plain = new ConnectionInfo
+        {
+            Id = Guid.NewGuid(),
+            Name = "mine",
+            ProviderId = "postgres",
+            Host = "db.internal",
+            Port = 5432,
+        };
+
+        Assert.DoesNotContain("bearing", Node(plain).Detail);
+    }
+
+    /// <summary>The row is re-labelled when the connection is edited, or unticking the box would appear to
+    /// do nothing until the panel was rebuilt — which is the same class of bug as not showing it at all.</summary>
+    [Fact]
+    public void Withdrawing_exposure_takes_the_mark_off_the_row()
+    {
+        var exposed = new ConnectionInfo
+        {
+            Id = Guid.NewGuid(),
+            Name = "agent-reads",
+            ProviderId = "postgres",
+            Host = "db.internal",
+            Port = 5432,
+            ExternalAccess = ExternalAccess.ReadOnly,
+        };
+        var node = Node(exposed);
+
+        node.Adopt(exposed with { ExternalAccess = ExternalAccess.None });
+
+        Assert.DoesNotContain("bearing", node.Detail);
+    }
+
+    /// <summary>A server row. The browser is never reached: <c>Detail</c> is composed in the constructor and
+    /// only <c>LoadChildrenAsync</c> would ask it anything, so a fifteen-method fake would say nothing these
+    /// assertions depend on.</summary>
+    private static ServerNodeViewModel Node(ConnectionInfo connection)
+        => new(connection, browser: null!);
+
 }

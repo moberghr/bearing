@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Bearing.Cli.Tools;
+using Bearing.Results;
 using Xunit;
 
 namespace Bearing.Cli.Tests;
@@ -415,4 +416,86 @@ public class CliTests
 
     private static ExposedConnection Exposed(string name, string engine = "PostgreSQL")
         => new(name, engine, Access: "read-only", Available: true);
+    /// <summary>
+    /// A timezone id has to resolve here exactly as it does in the app, or the same rows export in two
+    /// different zones. <c>InvariantGlobalization</c> was set on this project and broke it silently:
+    /// measured on this machine, <c>FindSystemTimeZoneById("Europe/Zagreb")</c> resolves with ICU and throws
+    /// <c>TimeZoneNotFoundException</c> without it, which <see cref="DisplayZone.Resolve"/> turns into UTC
+    /// by design.
+    /// <para>
+    /// This pins the resolution the CLI depends on; it does <b>not</b> catch the flag coming back, because a
+    /// test host has its own runtimeconfig and never inherits the app's.
+    /// <see cref="The_cli_does_not_ask_for_invariant_globalization"/> is the one that does.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("Europe/Zagreb")]
+    [InlineData("America/New_York")]
+    public void An_iana_timezone_id_resolves_to_something_other_than_utc(string id)
+    {
+        var zone = DisplayZone.Resolve(id);
+
+        // Not Assert.Equal(id, zone.Id): the point is that it resolved at all, and a platform may report a
+        // Windows id for the same zone. UTC is what the silent failure looks like.
+        Assert.NotEqual(TimeZoneInfo.Utc, zone);
+        Assert.NotEqual(TimeSpan.Zero, zone.BaseUtcOffset);
+    }
+
+    /// <summary>The two spellings that mean something of their own, and the fallback. An unknown id is UTC
+    /// rather than an exception or the machine's zone — a typo must not shift every timestamp.</summary>
+    [Fact]
+    public void The_named_zones_and_the_fallback_are_unchanged()
+    {
+        Assert.Equal(TimeZoneInfo.Utc, DisplayZone.Resolve("UTC"));
+        Assert.Equal(TimeZoneInfo.Local, DisplayZone.Resolve("system"));
+        Assert.Equal(TimeZoneInfo.Utc, DisplayZone.Resolve(null));
+        Assert.Equal(TimeZoneInfo.Utc, DisplayZone.Resolve("Not/A/Zone"));
+    }
+
+    /// <summary>
+    /// Case-insensitive matching has to fold the same way the app does. Under invariant globalization
+    /// <c>OrdinalIgnoreCase</c> folds ASCII only, so a connection named in another script matched here and
+    /// not there — the second thing that flag broke.
+    /// </summary>
+    [Fact]
+    public void Case_folding_is_not_ascii_only()
+    {
+        // Both are the connection-name comparison BearingHost.ResolveAsync makes. Under invariant mode
+        // these fold ASCII only, so the accented pair stops matching and a connection typed in another
+        // case resolves here and not in the app.
+        Assert.Equal("Ärger", "ärger", StringComparer.OrdinalIgnoreCase);
+        Assert.Equal("ÖSTERREICH", "österreich", StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The guard for the above, and it has to read the project file: the flag is written into the *app's*
+    /// runtimeconfig, so nothing running in a test host can observe it. Re-adding it would silently render
+    /// every exported timestamp in UTC while the app beside it used the user's zone.
+    /// </summary>
+    [SkippableFact]
+    public void The_cli_does_not_ask_for_invariant_globalization()
+    {
+        var csproj = RepoFile("src/Bearing.Cli/Bearing.Cli.csproj");
+        Skip.If(csproj is null, "Running outside the repository, so the project file is not there to read.");
+
+        var text = File.ReadAllText(csproj!);
+
+        Assert.DoesNotContain("<InvariantGlobalization>true", text, StringComparison.OrdinalIgnoreCase);
+        // The reason, kept beside the property so removing one does not orphan the other.
+        Assert.Contains("InvariantGlobalization", text);
+    }
+
+    /// <summary>A repo file by its path from the root, found by walking up from the test binary. Null when
+    /// there is no repository above it, which is a reason to skip rather than to fail.</summary>
+    private static string? RepoFile(string relative)
+    {
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        {
+            var candidate = Path.Combine(dir.FullName, relative);
+            if (File.Exists(candidate)) return candidate;
+        }
+
+        return null;
+    }
+
 }

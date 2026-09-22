@@ -572,6 +572,21 @@ public class LiveExposureTests : IAsyncLifetime
         Assert.NotEmpty(roles.Results[0].Rows);
     }
 
+    /// <summary>
+    /// <c>--timeout 0</c> is "no limit" in both engines, so a non-positive ask is a request to *remove* the
+    /// owner's timeout — the inversion <c>WithTimeout</c> exists to prevent, arriving as a smaller number
+    /// rather than a larger one. The parser refuses it today, but this method owns the rule and
+    /// <c>IBearingHost</c> is public, so the guarantee is asserted where it is stated.
+    /// </summary>
+    [SkippableFact]
+    public async Task A_caller_cannot_remove_the_timeout_by_asking_for_zero()
+    {
+        var host = await LiveHostAsync();
+
+        Assert.Equal($"{SessionPolicy.PresetTimeoutSeconds}s", await TimeoutWith(host, 0));
+        Assert.Equal($"{SessionPolicy.PresetTimeoutSeconds}s", await TimeoutWith(host, -1));
+    }
+
     /// <summary>A project with one exposed connection and one that is not.</summary>
     private async Task<string> WriteProjectAsync()
     {

@@ -52,9 +52,30 @@ internal static class SqlNameScan
     public static HashSet<string> MentionedNames(IList<IToken> tokens)
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Qualified forms as well as bare ones, because whether a bare name is enough to identify a catalog
+        // depends on the engine. Postgres puts pg_catalog on the search_path, so `pg_authid` alone means
+        // that catalog and nothing else. SQL Server's modern catalog views are reachable only as
+        // `sys.<name>`, and their bare names — `credentials`, `servers` — are ordinary English words that
+        // make perfectly good table and column names. Matching those bare refused `select credentials from
+        // app_users` with a sentence claiming that table holds password hashes, which is a false statement
+        // about the user's own data.
+        string? previous = null;
+        var afterDot = false;
+
         foreach (var token in Visible(tokens))
         {
-            if (Bare(token.Text) is { Length: > 0 } name) names.Add(name);
+            if (token.Text == ".") { afterDot = previous is not null; continue; }
+
+            var name = Bare(token.Text);
+            if (name.Length > 0)
+            {
+                names.Add(name);
+                if (afterDot && previous is not null) names.Add($"{previous}.{name}");
+            }
+
+            afterDot = false;
+            previous = name.Length > 0 ? name : null;
         }
 
         return names;

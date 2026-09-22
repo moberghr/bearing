@@ -1,4 +1,6 @@
+using Bearing.Cli;
 using Bearing.Cli.Tools;
+using Bearing.Core.Workspace;
 using Xunit;
 
 namespace Bearing.Cli.Tests;
@@ -277,4 +279,45 @@ public class RunOptionsTests : IDisposable
         await Cli.RunAsync(planned, "explain", "reporting", "select 1");
         Assert.False(planned.Request!.Analyze);
     }
+    /// <summary>
+    /// The recent-projects list is a convenience, and reading it must not be able to end the command.
+    /// <c>FileRecentProjects.ListAsync</c> does not swallow — a truncated or hand-edited <c>recent.json</c>
+    /// throws <c>JsonException</c>, a locked one throws <c>IOException</c> — and <c>Main</c> catches only
+    /// cancellation, so a plain <c>bearing connections</c> exited with a stack trace over a file nobody
+    /// asked it to read. The same class as the <c>--project ""</c> crash, on the default path.
+    /// </summary>
+    [Fact]
+    public void An_unreadable_recent_projects_list_is_no_project_rather_than_a_crash()
+    {
+        var options = CliParser.Parse(["connections"]);
+
+        var resolved = Program.ResolveProject(options, out var error, new ThrowingRecentProjects());
+
+        Assert.Null(resolved);      // "no remembered project", which the command already says how to fix
+        Assert.Null(error);         // and not a usage error: the caller did nothing wrong
+    }
+
+    /// <summary>An explicit <c>--project</c> never reads the list at all, so a broken one cannot affect the
+    /// form anybody should be putting in a script.</summary>
+    [Fact]
+    public void An_explicit_project_does_not_touch_the_remembered_list()
+    {
+        var options = CliParser.Parse(["--project", _dir, "connections"]);
+
+        var resolved = Program.ResolveProject(options, out var error, new ThrowingRecentProjects());
+
+        Assert.Equal(Path.GetFullPath(_dir), resolved);
+        Assert.Null(error);
+    }
+
+    private sealed class ThrowingRecentProjects : IRecentProjects
+    {
+        public Task<IReadOnlyList<string>> ListAsync(CancellationToken ct)
+            => throw new System.Text.Json.JsonException("recent.json is truncated");
+
+        public Task AddAsync(string directory, CancellationToken ct) => Task.CompletedTask;
+
+        public Task RemoveAsync(string directory, CancellationToken ct) => Task.CompletedTask;
+    }
+
 }

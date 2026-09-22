@@ -405,9 +405,16 @@ public sealed class SqlServerDialect : ISqlDialect
     /// </remarks>
     public IReadOnlySet<string> ExternalDeniedRelations { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        "sql_logins", "syslogins",
-        "credentials", "database_credentials",
-        "linked_logins", "sysservers", "servers",
+        // **Qualified**, unlike the Postgres list, and that is not a style choice. These views are reachable
+        // only as `sys.<name>`, while their bare names are ordinary English words: `credentials` and
+        // `servers` are entirely plausible table and column names, and matching them bare refused
+        // `select credentials from app_users` with a sentence claiming that table holds password hashes — a
+        // false statement about the user's own data, which is worse than the gap it was closing.
+        "sys.sql_logins", "sys.credentials", "sys.database_credentials",
+        "sys.servers", "sys.linked_logins", "sys.master_key_passwords",
+        // The backward-compatibility views are the exception: they genuinely resolve unqualified, and
+        // nobody names a table `syslogins`.
+        "syslogins", "sysservers",
     };
 
     /// <inheritdoc/>
