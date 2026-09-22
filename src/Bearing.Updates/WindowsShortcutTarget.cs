@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 
 namespace Bearing.Updates;
 
@@ -47,23 +46,23 @@ public static class WindowsShortcutTarget
         var trimmed = target.Trim().Trim('"').Trim();
         if (trimmed.Length == 0) return null;
 
-        string targetDirectory;
-        string targetName;
-        try
-        {
-            targetDirectory = Path.GetDirectoryName(trimmed) ?? "";
-            targetName = Path.GetFileName(trimmed);
-        }
-        catch (ArgumentException)
-        {
-            // A target the platform cannot parse as a path is not one we put there.
-            return null;
-        }
+        // Split by hand rather than with Path.GetFileName/GetDirectoryName, because those follow the
+        // *running* platform's separator rules and this is always a Windows path: on Linux they treat the
+        // whole of `C:\…\bearing.exe` as one file name with no directory, so every comparison below
+        // silently answers "not ours". The shipped behaviour was never wrong — this only ever runs on
+        // Windows — but logic that means different things on different hosts cannot be tested on either,
+        // and CI caught it on the pure half within minutes.
+        var separator = trimmed.LastIndexOfAny(['\\', '/']);
+        if (separator <= 0) return null;                       // no directory at all is not our shortcut
+
+        var targetDirectory = trimmed[..separator];
+        var targetName = trimmed[(separator + 1)..];
 
         if (!string.Equals(targetName, staleExe, StringComparison.OrdinalIgnoreCase)) return null;
         if (!SameDirectory(targetDirectory, appDirectory)) return null;
 
-        return Path.Combine(targetDirectory, appExe);
+        // The directory as the shortcut spelled it, so the repair changes the file name and nothing else.
+        return $@"{targetDirectory}\{appExe}";
     }
 
     /// <summary>
