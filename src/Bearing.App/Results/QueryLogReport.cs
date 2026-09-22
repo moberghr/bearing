@@ -70,7 +70,13 @@ public static class QueryLogReport
         new("outcome", "text", typeof(string)),
         new("error", "text", typeof(string)),
         new("script", "text", typeof(string)),
+        new("origin", "text", typeof(string)),
     ];
+
+    /// <summary>What an entry with no recorded origin is called in the report — the app itself (§1.11d).
+    /// Spelled out rather than left blank, because a blank cell beside "cli" reads as a missing value
+    /// rather than as an answer, and this column's whole job is to say who ran the statement.</summary>
+    private const string BearingOrigin = "bearing";
 
     /// <summary>
     /// Build the report over <paramref name="entries"/> (already narrowed by date at the store, since that
@@ -113,6 +119,7 @@ public static class QueryLogReport
                 entry.Success ? "ok" : "error",
                 entry.ErrorMessage ?? "",
                 entry.ScriptPath ?? "",
+                entry.Origin ?? BearingOrigin,
             ]);
         }
 
@@ -183,9 +190,14 @@ public static class QueryLogReport
             $"Generated {DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture)}",
             $"Executions: {kept.Count.ToString("N0", CultureInfo.InvariantCulture)}",
             $"Period: {Period(kept, filter)}",
-            // There is no other user, and a column of identical names would look like the start of one.
-            "Every execution here was run by the person using this Bearing installation. The log records no "
-            + "other user, and this report does not have a user column because there is nothing to put in it.",
+            // One human, possibly several hosts. Saying "one user" and stopping was true until an external
+            // host could write to this log (§1.11d), and a report that denies a second actor exists is the
+            // one way this document can mislead the person it is written for.
+            "Every execution here was run under the account of the person using this Bearing installation, so "
+            + "there is no user column — the log records no second user. The origin column says which host ran "
+            + "each statement: \"" + BearingOrigin + "\" is Bearing itself, and any other value is an external "
+            + "tool run under that same account, which may have been a script or an agent rather than a person "
+            + "at the keyboard.",
         };
 
         if (filter.WritesOnly)

@@ -353,13 +353,21 @@ public sealed class BearingHost(
             throw new CommandFailure($"The query could not be run on '{info.Name}': {reason}");
         }
 
-        Write(info, sql, wall.Elapsed, written.Rows, success: true, error: null);
-
         // No shape at all — not merely no rows. Nothing was written (WriteCsvStreamAsync moves nothing into
         // place without a header), so this refuses exactly as the materialising path does and leaves any
         // file already at that path alone.
+        //
+        // Judged *before* the row is logged: the command exits 1 having written no file, and recording that
+        // as a successful execution would put a line in the user's history that the command's own exit code
+        // contradicts.
         if (written.Columns == 0)
-            throw new CommandFailure($"{info.Name}: that statement returned no rows to write.");
+        {
+            var refusal = $"{info.Name}: that statement returned no rows to write.";
+            Write(info, sql, wall.Elapsed, rows: 0, success: false, error: refusal);
+            throw new CommandFailure(refusal);
+        }
+
+        Write(info, sql, wall.Elapsed, written.Rows, success: true, error: null);
 
         return new ExportResponse(
             Path.GetFullPath(path), ExportFormats.Name(ExportFormat.Csv), Results: 1, written.Rows)

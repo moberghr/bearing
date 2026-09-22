@@ -565,9 +565,11 @@ public partial class ConnectionDialog : Window
     /// options — is the model's (<see cref="ConnectionFieldModel.Apply"/>, which also carries forward the
     /// options this dialog does not show). Everything else is this dialog's own boxes, or is carried from
     /// the record being edited.
+    /// <para>
+    /// Internal rather than private so a test can assert the round trip through a control instead of
+    /// asserting the control against itself (§4.5).
+    /// </para>
     /// </summary>
-    /// <summary>The record the dialog would save. Internal rather than private so a test can assert the
-    /// round trip through a control instead of asserting the control against itself (§4.5).</summary>
     internal ConnectionInfo BuildConnection() => _model.Apply(new ConnectionInfo
     {
         Id = _id,

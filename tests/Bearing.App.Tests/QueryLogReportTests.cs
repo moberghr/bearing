@@ -39,7 +39,8 @@ public class QueryLogReportTests
         Guid? id = null,
         string? environment = "Production",
         DateTimeOffset? at = null,
-        bool ok = true) => new()
+        bool ok = true,
+        string? origin = null) => new()
         {
             ExecutedAt = at ?? new DateTimeOffset(2026, 9, 3, 10, 0, 0, TimeSpan.Zero),
             ProviderId = "postgres",
@@ -52,6 +53,7 @@ public class QueryLogReportTests
             RowCount = ok ? 3 : 0,
             Success = ok,
             ErrorMessage = ok ? null : "relation \"nope\" does not exist",
+            Origin = origin,
         };
 
     private static AuditReport Build(
@@ -77,7 +79,7 @@ public class QueryLogReportTests
 
         Assert.Equal(
             ["executed_at", "connection", "environment", "database", "statement",
-             "duration_ms", "rows", "outcome", "error", "script"],
+             "duration_ms", "rows", "outcome", "error", "script", "origin"],
             report.Table.Columns.Select(c => c.Name));
         Assert.Equal(2, report.Table.Rows.Count);
         Assert.Equal(["ok", "error"], Column(report, "outcome"));
@@ -242,7 +244,35 @@ public class QueryLogReportTests
         var report = Build([Entry("select 1")]);
 
         Assert.DoesNotContain("user", report.Table.Columns.Select(c => c.Name));
-        Assert.Contains("run by the person using this Bearing installation", Notes(report));
+        Assert.Contains("under the account of the person using this Bearing installation", Notes(report));
+    }
+
+    /// <summary>
+    /// One account, but no longer one host (§1.11d). The notes used to say the log records no other user
+    /// and stop there, which after the `bearing` command became a report that denies a second actor exists —
+    /// handed to an auditor, about a period that may contain an agent's statements. The account claim is
+    /// still true and still made; what it must not do is stand in for "a person typed this".
+    /// </summary>
+    [Fact]
+    public void The_notes_explain_the_origin_column_rather_than_implying_a_person_ran_everything()
+    {
+        var notes = Notes(Build([Entry("select 1"), Entry("select 2", origin: "cli")]));
+
+        Assert.Contains("origin column", notes);
+        Assert.Contains("external tool", notes);
+        Assert.Contains("script or an agent rather than a person", notes);
+    }
+
+    /// <summary>
+    /// The column that carries it. Bearing's own rows are named rather than left blank: a blank cell beside
+    /// "cli" reads as a missing value, and this column exists to say who ran the statement.
+    /// </summary>
+    [Fact]
+    public void An_external_host_is_named_in_the_report_and_bearings_own_rows_say_so_too()
+    {
+        var report = Build([Entry("select 1"), Entry("select 2", origin: "cli")]);
+
+        Assert.Equal(["bearing", "cli"], Column(report, "origin"));
     }
 
     [Fact]

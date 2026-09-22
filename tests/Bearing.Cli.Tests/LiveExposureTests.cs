@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Bearing.Core.Data;
@@ -375,6 +376,124 @@ public class LiveExposureTests : IAsyncLifetime
         Assert.Equal(10, response.Rows);
         Assert.True(response.Truncated);
         Assert.Equal(11, File.ReadAllLines(path).Length);   // the header and ten rows
+    }
+
+    /// <summary>
+    /// <c>--timeout</c> may only <b>lower</b> what the connection allows. Raising it would let a caller lift
+    /// a limit its owner set, which is the inversion §1.9 exists to prevent — and read back from the server
+    /// rather than off the record, because a setting that never reached the startup packet is a claim.
+    /// </summary>
+    [SkippableFact]
+    public async Task A_caller_may_lower_the_statement_timeout_and_may_not_raise_it()
+    {
+        var host = await LiveHostAsync();
+
+        // Lower: honoured.
+        Assert.Equal("5s", await TimeoutWith(host, 5));
+
+        // Higher than the 30s an exposed connection is given: ignored, and the connection's own stands.
+        Assert.Equal($"{SessionPolicy.PresetTimeoutSeconds}s", await TimeoutWith(host, 600));
+
+        // Equal is not a lowering either, and must not be mistaken for one by an off-by-one.
+        Assert.Equal(
+            $"{SessionPolicy.PresetTimeoutSeconds}s",
+            await TimeoutWith(host, SessionPolicy.PresetTimeoutSeconds));
+    }
+
+    private static async Task<string?> TimeoutWith(BearingHost host, int seconds)
+    {
+        var response = (QueryResponse)await host.QueryAsync(
+            Run("agent-reads", "show statement_timeout") with { TimeoutSeconds = seconds },
+            CancellationToken.None);
+        return Convert.ToString(response.Results[0].Rows[0][0], CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// The materialising export: more than one statement, so the streamed single-statement path does not
+    /// apply. An xlsx takes a sheet per result set — the app's own Export-run rule, reached through the same
+    /// writer — and the file is read back rather than trusted, since a workbook that is subtly malformed
+    /// fails at the user's desk (§4.4).
+    /// </summary>
+    [SkippableFact]
+    public async Task A_batch_exports_one_sheet_per_result_set()
+    {
+        var host = await LiveHostAsync();
+        var path = Path.Combine(_root, "book.xlsx");
+
+        var response = (ExportResponse)await host.QueryAsync(
+            Run("agent-reads", "select title from film order by title limit 3; select first_name from actor order by actor_id limit 2")
+                with { OutPath = path },
+            CancellationToken.None);
+
+        Assert.Equal(2, response.Results);
+        Assert.Equal(5, response.Rows);
+        Assert.False(response.Truncated);
+
+        using var zip = ZipFile.OpenRead(path);
+        Assert.NotNull(zip.GetEntry("xl/worksheets/sheet1.xml"));
+        Assert.NotNull(zip.GetEntry("xl/worksheets/sheet2.xml"));
+    }
+
+    /// <summary>
+    /// A CSV holds one table, so a batch that returned two is refused rather than written as the first one
+    /// — the caller asked for a file of the answer, and a file of part of it is the outcome no error
+    /// message can undo later. Nothing is written at the path.
+    /// </summary>
+    [SkippableFact]
+    public async Task A_csv_refuses_a_batch_that_returned_more_than_one_table()
+    {
+        var host = await LiveHostAsync();
+        var path = Path.Combine(_root, "two.csv");
+
+        var refused = await Assert.ThrowsAsync<CommandFailure>(() => host.QueryAsync(
+            Run("agent-reads", "select 1 as a; select 2 as b") with { OutPath = path },
+            CancellationToken.None));
+
+        Assert.Contains("holds one table", refused.Message);
+        Assert.False(File.Exists(path));
+    }
+
+    /// <summary>The ceiling reaches the caller from a materialised export too, not only the streamed one —
+    /// and it is the OR across the grids, since any truncated sheet makes the workbook partial.</summary>
+    [SkippableFact]
+    public async Task A_capped_workbook_says_it_was_capped()
+    {
+        var host = await LiveHostAsync();
+        var path = Path.Combine(_root, "capped.xlsx");
+
+        var response = (ExportResponse)await host.QueryAsync(
+            Run("agent-reads", "select film_id from film order by film_id; select actor_id from actor order by actor_id", maxRows: 3)
+                with { OutPath = path },
+            CancellationToken.None);
+
+        Assert.Equal(2, response.Results);
+        Assert.Equal(6, response.Rows);
+        Assert.True(response.Truncated);
+    }
+
+    /// <summary>
+    /// <c>explain</c> plans without running, and <c>--analyze</c> runs inside a transaction that is rolled
+    /// back. The second is what keeps "explain this" from being a write — a plain SELECT can call a volatile
+    /// function that writes — so the flag on the response is the thing to assert, not merely that a plan
+    /// came back.
+    /// </summary>
+    [SkippableFact]
+    public async Task Explain_plans_without_running_and_analyze_runs_inside_a_rollback()
+    {
+        var host = await LiveHostAsync();
+        const string sql = "select title from film where film_id = 1";
+
+        var planned = (PlanResponse)await host.ExplainAsync(Run("agent-reads", sql), CancellationToken.None);
+        Assert.False(planned.Analyzed);
+        Assert.False(planned.RolledBack);
+        Assert.Null(planned.ExecutionMs);        // nothing ran, so there is no execution time
+        Assert.NotEmpty(planned.Hotspots);
+
+        var measured = (PlanResponse)await host.ExplainAsync(
+            Run("agent-reads", sql) with { Analyze = true }, CancellationToken.None);
+        Assert.True(measured.Analyzed);
+        Assert.True(measured.RolledBack);
+        Assert.NotNull(measured.ExecutionMs);
     }
 
     /// <summary>A project with one exposed connection and one that is not.</summary>

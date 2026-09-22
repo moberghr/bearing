@@ -1,8 +1,10 @@
 using System.Reflection;
 using Bearing.Cli.Tools;
 using Bearing.Core.Data;
+using Bearing.Core.Workspace;
 using Bearing.Data;
 using Bearing.Persistence;
+using Bearing.Results;
 using Bearing.Sessions;
 
 namespace Bearing.Cli;
@@ -79,6 +81,17 @@ internal static class Program
     /// composition root rather than an exception to the first.</summary>
     private static async Task<HostSession> HostAsync(string? projectDirectory, CancellationToken ct)
     {
+        // The user's own settings, read once: the display zone here and the query log's retention and
+        // redaction below all come from them.
+        var settings = Settings();
+
+        // Before anything can render a cell. CellFormat.Zone is process-wide and every host has to set it
+        // (§2.7): left at its UTC default, this command's exports would render a timestamptz in UTC while
+        // the app's Export menu rendered the same rows in the user's display zone — two files that disagree
+        // with nothing on either to say which is which. The JSON output is unaffected (it carries values,
+        // not rendered text), which is exactly why the gap could sit here unnoticed.
+        CellFormat.Zone = DisplayZone.Resolve(settings.DisplayTimeZone);
+
         if (projectDirectory is null) return new HostSession(NoHost.Instance, null);
 
         // The real keychain. A machine with none yields NoSecretStore, whose reads return null — so a
@@ -98,7 +111,7 @@ internal static class Program
 
         // Held, not just handed over: Append returns before the row is written, so the log has to be
         // disposed on the way out or the command's own entry is lost with the process.
-        var log = QueryLog();
+        var log = QueryLog(settings);
 
         return new HostSession(
             new BearingHost(new JsonProjectStore(), projectDirectory, providers, sessions, log),
@@ -120,11 +133,10 @@ internal static class Program
     /// question it was asked; §5.2's stance, and the app's on the same file.
     /// </para>
     /// </summary>
-    private static SqliteQueryLog? QueryLog()
+    private static SqliteQueryLog? QueryLog(AppSettings settings)
     {
         try
         {
-            var settings = new AppSettingsStore().Load();
             return new SqliteQueryLog(
                 retentionDays: settings.QueryLogRetentionDays,
                 redactSql: settings.QueryLogRedactLiterals
@@ -135,6 +147,18 @@ internal static class Program
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// The user's settings, or the defaults when they cannot be read. A settings file that is missing,
+    /// locked or malformed is not a reason to fail the command someone asked for (§5.2) — it means this
+    /// process renders timestamps in UTC and prunes history on the default schedule, which is what a first
+    /// run does anyway.
+    /// </summary>
+    private static AppSettings Settings()
+    {
+        try { return new AppSettingsStore().Load(); }
+        catch { return new AppSettings(); }
     }
 
     private sealed record HostSession(

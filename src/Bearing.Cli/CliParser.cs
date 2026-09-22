@@ -209,6 +209,11 @@ public static class CliParser
             return Error($"`{o.Command}` does not take --schema.");
         if (o.Command != Commands.Explain && o.Analyze)
             return Error($"`{o.Command}` does not take --analyze.");
+        // Only `query` returns rows to cap. `explain` runs with no ceiling by design (a plan is one document
+        // in one cell), and the catalog commands have their own limit, so a caller who wrote --max-rows for
+        // any of them is asking for something that will not happen.
+        if (o.Command != Commands.Query && (o.MaxRows is not null || o.UnlimitedRows))
+            return Error($"`{o.Command}` does not take --max-rows.");
         if (o.Command == Commands.Explain && o.Out is not null)
             return Error("`explain` prints a plan; --out writes rows, so the two do not go together.");
 

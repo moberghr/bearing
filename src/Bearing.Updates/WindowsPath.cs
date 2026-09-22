@@ -36,6 +36,18 @@ public static class WindowsPath
     /// <summary>Remove every copy of <paramref name="directory"/>.</summary>
     public static bool Remove(string directory) => Edit(path => WindowsPathEntry.WithoutEntry(path, directory));
 
+    /// <summary>
+    /// The kind to write the value back as — the existing one, or <c>ExpandString</c> when there is no value
+    /// yet. <see cref="RegistryKey.GetValueKind"/> reports absence by throwing rather than by a return value,
+    /// which is the whole reason this is a method: a PATH is the canonical REG_EXPAND_SZ, and creating one as
+    /// REG_SZ means the first <c>%SystemRoot%</c> anybody adds to it later stops resolving.
+    /// </summary>
+    private static RegistryValueKind KindOf(RegistryKey key)
+    {
+        try { return key.GetValueKind(PathValue); }
+        catch (IOException) { return RegistryValueKind.ExpandString; }
+    }
+
     private static bool Edit(Func<string, string?> change)
     {
         try
@@ -43,16 +55,8 @@ public static class WindowsPath
             using var key = Registry.CurrentUser.OpenSubKey(EnvironmentKey, writable: true);
             if (key is null) return false;
 
-            // A user who has never had a PATH of their own has no value here at all, which is not an error.
-            var kind = key.GetValueKind(PathValue);
-            var current = key.GetValue(PathValue, "", RegistryValueOptions.DoNotExpandEnvironmentNames) as string
-                          ?? "";
+            if (!Apply(key, change)) return false;
 
-            if (change(current) is not { } updated) return false;
-
-            // The kind is preserved: a PATH holding %SystemRoot% must stay REG_EXPAND_SZ or those entries
-            // stop resolving, and rewriting it as REG_SZ is the second classic way to break one.
-            key.SetValue(PathValue, updated, kind);
             Broadcast();
             return true;
         }
@@ -60,6 +64,31 @@ public static class WindowsPath
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Read the value, apply <paramref name="change"/>, write it back — the whole of the registry work, and
+    /// the only part a test can drive, since the real one is the developer's own PATH. A test points this at
+    /// a scratch key instead (internal, per this repo's <c>InternalsVisibleTo</c> pattern).
+    /// </summary>
+    /// <returns>Whether anything was written, which is what tells the caller whether to broadcast.</returns>
+    internal static bool Apply(RegistryKey key, Func<string, string?> change)
+    {
+        // A user who has never had a PATH of their own has no value here at all, which is not an error —
+        // and this is the order that makes that true. GetValueKind *throws* on a missing value, so
+        // asking it first turned a clean profile with no HKCU\Environment\Path into a silent no-op via
+        // Edit's catch: `bearing` never reached PATH, with nothing said. Found by review.
+        var current = key.GetValue(PathValue, "", RegistryValueOptions.DoNotExpandEnvironmentNames) as string
+                      ?? "";
+
+        var kind = KindOf(key);
+
+        if (change(current) is not { } updated) return false;
+
+        // The kind is preserved: a PATH holding %SystemRoot% must stay REG_EXPAND_SZ or those entries
+        // stop resolving, and rewriting it as REG_SZ is the second classic way to break one.
+        key.SetValue(PathValue, updated, kind);
+        return true;
     }
 
     /// <summary>

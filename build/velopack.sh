@@ -231,7 +231,16 @@ fi
 # It costs almost nothing: both publishes write the same runtime files into the same directory, so the
 # second one overwrites an identical set rather than adding a copy.
 echo "==> Publishing $CLI_PROJECT ($CLI_EXE) into the same directory"
-dotnet publish "$CLI_PROJECT"   -c "$CONFIG"   -r "$RID"   --no-self-contained   -p:DebugType=none   -p:DebugSymbols=false   -p:Version="$VERSION"   -p:InformationalVersion="$VERSION"   -o "$PUBDIR"   --nologo
+dotnet publish "$CLI_PROJECT" \
+  -c "$CONFIG" \
+  -r "$RID" \
+  --self-contained true \
+  -p:DebugType=none \
+  -p:DebugSymbols=false \
+  -p:Version="$VERSION" \
+  -p:InformationalVersion="$VERSION" \
+  -o "$PUBDIR" \
+  --nologo
 echo
 
 if [[ ! -f "$PUBDIR/$CLI_EXE" ]]; then

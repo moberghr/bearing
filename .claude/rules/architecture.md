@@ -79,5 +79,9 @@ makes both hosts produce byte-identical files by construction rather than by rev
   a file after, and no selection at all.
 - `CellFormat.Zone` is process-wide, so **every host has to set it**. The app does at startup and on change
   (#77); a host that forgets renders timestamps in UTC while the app beside it renders them in the user's
-  zone, and nothing would say so.
+  zone, and nothing would say so. The CLI did forget, which is why `DisplayZone.Resolve` now lives here
+  beside the property rather than in `App.Formatting.DisplayTimeZone`: a host that cannot reach the resolver
+  either copies it or skips it, and this one skipped it. Only the *exports* were wrong — the JSON output
+  carries values rather than rendered text — which is exactly why it could sit there unnoticed. The picker's
+  own members (suggestions, validator, description) stay in `App`, which is the only project with a picker.
 - WHEN adding an output format, it goes here and not in either host — that is the whole point of the tier.

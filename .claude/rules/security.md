@@ -628,6 +628,13 @@ two processes now open this file and the CLI may well be the one that migrates i
   stripped did not ask for that to stop applying to what an agent ran.
 - **`tables` and `describe` are not logged.** They read the catalog, and §9.13's precedent is that a panel's
   own reads are not the record of what someone ran.
+- **The audit export carries an `origin` column, and its notes had to change with it.** The report used to
+  state "Every execution here was run by the person using this Bearing installation … there is nothing to put
+  in [a user column]", which after this feature is a compliance document *denying a second actor exists* —
+  handed to an auditor, about a period that may contain an agent's statements. The account claim is still
+  true and still made; what it may no longer do is stand in for "a person typed this". Bearing's own rows
+  read `bearing` rather than blank, because a blank cell beside `cli` reads as a missing value rather than
+  as an answer. Found by review, after `docs/CLI.md` had already claimed the export carried it.
 - The log is held and disposed by the command, not merely handed to the host: `Append` returns before the
   row is written, so exiting without disposing loses the entry the command just produced.
 
@@ -680,7 +687,12 @@ only by reading the code that emitted it.
   `report.1.csv`: the caller named a path, and a script that finds no file at it is broken in a way an
   error is not.
 - **`--timeout` may only lower** what the connection allows. Raising it would let a caller lift a limit its
-  owner set (§1.9). Measured: `--timeout 5` gives `statement_timeout = 5s`, `--timeout 600` leaves it 30s.
+  owner set (§1.9). Measured, and now pinned live in both directions plus the equal case, which is where an
+  off-by-one would hide: `--timeout 5` gives `statement_timeout = 5s`, `--timeout 600` leaves it 30s.
+- **An option that means nothing for the command it was typed on is refused by name**, including
+  `--max-rows`, which was accepted and silently ignored on `connections`, `tables`, `describe` and `explain`.
+  The principle was already written into `Validate` for every other flag; the one that predated it was the
+  one that did not follow it. A caller who typed it believes it is doing something.
 - **`explain` validates the caller's statement and sends its own.** `EXPLAIN ANALYZE` carries a
   `BEGIN … ROLLBACK` that the allow-list would rightly refuse if it saw it — so what is judged is what the
   caller asked to run, and what is sent is what we wrapped it in. The wrapper is not optional: a plain
@@ -697,6 +709,12 @@ add and remove the install directory in the user's `Environment` registry key. P
   permanently — the classic way an installer corrupts one. `RegistryValueOptions.DoNotExpandEnvironmentNames`
   on the way in, and the existing `RegistryValueKind` on the way out, since a REG_SZ rewrite of a
   REG_EXPAND_SZ PATH breaks every variable in it.
+- **Read the value before asking for its kind.** `RegistryKey.GetValueKind` reports a missing value by
+  *throwing*, so asking it first turned a profile with no `HKCU\Environment\Path` — a clean Windows install —
+  into a silent no-op through the best-effort catch: `bearing` never became a command for that user, with
+  nothing said anywhere. A missing value is created as `ExpandString`, since a PATH is the canonical
+  REG_EXPAND_SZ. `WindowsPath.Apply` takes the key so this is testable against a scratch one rather than
+  against the developer's own PATH.
 - **The editing is pure and the I/O is thin** (`WindowsPathEntry` / `WindowsPath`), because the editing is
   where the corruption comes from: empty entries dropped (an empty PATH entry means the current directory
   to the loader), duplicates removed, trailing separators and quotes and case all treated as the same
