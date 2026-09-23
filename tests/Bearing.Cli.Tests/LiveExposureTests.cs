@@ -300,9 +300,12 @@ public class LiveExposureTests : IAsyncLifetime
             providers, () => null, idleTimeout: null, clock: null, runSweepTimer: false);
         var host = new BearingHost(new JsonProjectStore(), projectDirectory, providers, sessions);
 
-        // Only the exposed one is listed at all.
+        // Only the exposed one is listed as a connection; the other is named and nothing more, so a caller
+        // can ask for it to be exposed instead of concluding it does not exist.
         var listed = (ConnectionsResponse)await host.ListConnectionsAsync(CancellationToken.None);
         Assert.Single(listed.Connections);
+        Assert.Equal(["private-reads"], listed.NotExposed);
+        Assert.Equal(projectDirectory, listed.Project?.Directory);
 
         var refused = await Assert.ThrowsAsync<CommandFailure>(
             () => host.QueryAsync(Run("private-reads", "select 1"), CancellationToken.None));

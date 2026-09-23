@@ -39,9 +39,11 @@ thing that holds against the account it runs under. The control that holds is th
 
 ```
 bearing                                Open the Bearing window.
-bearing [--project <dir>] [--table] <command> [arguments]
+bearing [--project <dir>] [--table | --tsv] <command> [arguments]
 
-  connections                        The exposed connections: name, engine, environment.
+  connections                        The exposed connections: name, engine, environment. Also
+                                     the project it read, and the names of the connections in
+                                     it that are not exposed.
   tables <connection>                Tables and views. --schema <name> narrows it.
   describe <connection> <table>      Columns, types, nullability, primary key, foreign keys.
   query <connection> [sql]           Run a read-only query. --file <path> to read it from a file
@@ -77,9 +79,16 @@ anyway. For a very large result, ask for one statement and a `.csv`.
 `--timeout <secs>` can only **lower** what the connection already allows. Raising it would let a caller
 lift a limit its owner set, which is the inversion §1.9 exists to prevent.
 
-Output is JSON by default — that is what a script or an agent should parse, and it is stable. `--table` is
-for a person reading a terminal and is explicitly *not* stable; it also renders a null and an empty string
-identically, which only the JSON tells apart.
+Output is JSON by default — that is what a script should parse, and it is stable. `--table` is for a person
+reading a terminal and is explicitly *not* stable; it also renders a null and an empty string identically.
+`--tsv` is the same layout tab-separated, for an agent reading the output rather than parsing it: JSON
+repeats every key on every row, and a padded grid spends its width on spaces. Every cell is escaped
+(`\t`, `\n`, `\r`, `\\`) and a null is `\N` — Postgres' COPY text conventions — so unlike `--table` it
+is unambiguous. Its shape is no more promised than `--table`'s; only the escaping is.
+
+**Several statements in one `query`** run in order, and each is its own result set: one entry in the JSON
+`results` array, or one grid after another (a blank line between) under `--table` / `--tsv`. If any of them
+fails, the command fails and prints nothing but the error — there are no partial results.
 
 Exit codes: `0` fine, `1` the command could not be completed (the reason is on stderr), `2` the arguments
 were wrong. A refusal never writes to stdout, so a caller reading stdout gets data or nothing.
@@ -182,7 +191,14 @@ manual-commit setting is cleared, because nothing here can press Commit.
 ## Which project
 
 `--project <dir>`, or the most recently opened project when it is omitted. Put the explicit form in anything
-you save: the fallback follows whoever last opened a project in Bearing.
+you save: the fallback follows whoever last opened a project in Bearing. `connections` names the project it
+read (`project` in the JSON) — an agent cannot see which one "most recent" is, so it is told.
+
+It also lists, by name only, the project's connections that are **not** exposed (`not_exposed`). Without it
+an agent shown only `prod` cannot tell "there is no staging" from "staging exists and nobody exposed it",
+and only the second is something it can ask the owner about. That is not a widening of the gate: naming
+the connection on a direct hit already answered it ("'stage' is not exposed…"), and anything that can run
+this command can read the same `project.json`. Engine, environment and address stay with the exposed ones.
 
 The project file is re-read on every invocation, so revoking a connection's exposure takes effect on the next
 command — there is no cached grant to wait out.

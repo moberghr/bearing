@@ -14,7 +14,31 @@ public interface ICliResponse;
 
 // ---- connections -------------------------------------------------------------------------------
 
-public sealed record ConnectionsResponse(IReadOnlyList<ExposedConnection> Connections) : ICliResponse;
+public sealed record ConnectionsResponse(IReadOnlyList<ExposedConnection> Connections) : ICliResponse
+{
+    /// <summary>
+    /// Which project was read. Named because the default is "the one most recently opened in Bearing",
+    /// and an agent cannot see which that is — without this it could only guess whether the connection it
+    /// wanted is missing or lives in a different project.
+    /// </summary>
+    public ProjectSummary? Project { get; init; }
+
+    /// <summary>
+    /// The names of this project's connections that are <b>not</b> exposed, and nothing else about them.
+    /// A caller that finds only <c>prod</c> listed cannot otherwise tell "there is no staging" from "staging
+    /// is there and nobody exposed it" — and the second is the one it can do something about, by asking.
+    /// <para>
+    /// Not a widening of §1.11: naming a connection that exists is already what a direct hit on it answers
+    /// ("'stage' is not exposed…"), and anything that can run this command can read the same project.json.
+    /// The name only — no engine, environment or address, which is what the gate is actually about.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> NotExposed { get; init; } = [];
+}
+
+/// <summary>The project a listing came from: its own name, and the directory to pass as
+/// <c>--project</c> to keep reading it whatever gets opened next.</summary>
+public sealed record ProjectSummary(string Name, string Directory);
 
 /// <summary>
 /// One exposed connection. Deliberately <b>not</b> host, port, database or user: the name is the handle,

@@ -28,8 +28,11 @@ public sealed class BearingHost(
 {
     public async Task<ICliResponse> ListConnectionsAsync(CancellationToken ct)
     {
+        var project = await OpenProjectAsync(ct).ConfigureAwait(false);
+        var all = project.Manifest.Connections;
+
         var connections = new List<ExposedConnection>();
-        foreach (var saved in await ExposedAsync(ct).ConfigureAwait(false))
+        foreach (var saved in all.Where(ExternalAccessPolicy.IsExposed))
         {
             var unavailable = ExternalAccessPolicy.UnavailableReason(saved);
 
@@ -50,7 +53,11 @@ public sealed class BearingHost(
             });
         }
 
-        return new ConnectionsResponse(connections);
+        return new ConnectionsResponse(connections)
+        {
+            Project = new ProjectSummary(project.Manifest.Name, project.Directory),
+            NotExposed = all.Where(c => !ExternalAccessPolicy.IsExposed(c)).Select(c => c.Name).ToList(),
+        };
     }
 
     public async Task<ICliResponse> ListTablesAsync(string connection, string? schema, CancellationToken ct)
@@ -458,19 +465,16 @@ public sealed class BearingHost(
 
     // ---- resolution ---------------------------------------------------------------------------
 
-    private async Task<IReadOnlyList<ConnectionInfo>> ExposedAsync(CancellationToken ct)
+    private async Task<Project> OpenProjectAsync(CancellationToken ct)
     {
-        Project project;
         try
         {
-            project = await projects.OpenAsync(projectDirectory, ct).ConfigureAwait(false);
+            return await projects.OpenAsync(projectDirectory, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             throw new CommandFailure($"The Bearing project could not be read: {SafeErrorText.Of(ex)}");
         }
-
-        return project.Manifest.Connections.Where(ExternalAccessPolicy.IsExposed).ToList();
     }
 
     /// <summary>
@@ -484,15 +488,7 @@ public sealed class BearingHost(
     /// </summary>
     private async Task<ConnectionInfo> ResolveAsync(string name, CancellationToken ct)
     {
-        Project project;
-        try
-        {
-            project = await projects.OpenAsync(projectDirectory, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            throw new CommandFailure($"The Bearing project could not be read: {SafeErrorText.Of(ex)}");
-        }
+        var project = await OpenProjectAsync(ct).ConfigureAwait(false);
 
         var matches = project.Manifest.Connections
             .Where(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase))
