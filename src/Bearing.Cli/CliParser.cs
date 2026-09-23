@@ -8,8 +8,21 @@ public enum OutputFormat
     Json,
 
     /// <summary>For a person at a terminal. Deliberately <b>not</b> stable — it is free to change shape,
-    /// which is the whole reason JSON is what everything else reads.</summary>
+    /// which is the whole reason JSON is what a script reads.</summary>
     Table,
+
+    /// <summary>
+    /// The <see cref="Table"/> layout with a tab between cells instead of padding, and every cell escaped so
+    /// it cannot break the line it is on: <c>\t</c>, <c>\n</c>, <c>\r</c> and <c>\\</c>, with a null written
+    /// <c>\N</c>. Postgres' COPY text conventions, so an empty string and a null differ — the one thing
+    /// <see cref="Table"/> cannot say.
+    /// <para>
+    /// For a reader that is a model rather than a program. JSON repeats every key on every row and a padded
+    /// grid spends its width on spaces; this is the shortest form that is still unambiguous. Like
+    /// <see cref="Table"/> it promises nothing about its shape — only the escaping is fixed.
+    /// </para>
+    /// </summary>
+    Tsv,
 }
 
 /// <summary>What one invocation asked for, or why it could not be understood.</summary>
@@ -94,6 +107,10 @@ public static class CliParser
 
                 case "--table":
                     options = options with { Format = OutputFormat.Table };
+                    break;
+
+                case "--tsv":
+                    options = options with { Format = OutputFormat.Tsv };
                     break;
 
                 case "--json":

@@ -37,19 +37,28 @@ public static class Commands
           bearing [options] <command> [arguments]
 
         Commands
-          {Connections}                              List the exposed connections: name, engine, environment.
+          {Connections,-33}List the exposed connections: name, engine, environment.
                                            Never the host, port, database, user or password - the
-                                           name is the handle every other command takes.
-          {Tables} <connection>                Tables and views. --schema <name> narrows it.
-          {Describe} <connection> <table>       Columns with types and nullability, the primary key, and
+                                           name is the handle every other command takes. Also names
+                                           the project it read, and any connections in it that are
+                                           not exposed - those only their owner can open up.
+          {Tables + " <connection>",-33}Tables and views. --schema <name> narrows it.
+          {Describe + " <connection> <table>",-33}Columns with types and nullability, the primary key, and
                                            the foreign keys touching the table in either direction.
-          {Query} <connection> [sql]           Run a read-only query and print its rows.
-          {Explain} <connection> [sql]         Its query plan, as a tree. PostgreSQL connections only.
+          {Query + " <connection> [sql]",-33}Run a read-only query and print its rows. Several
+                                           statements run in order, and each is its own result set:
+                                           one entry in `results`, or one grid after another. If any
+                                           of them fails, nothing is printed but the error.
+          {Explain + " <connection> [sql]",-33}Its query plan, as a tree. PostgreSQL connections only.
 
         Options
-          --project <dir>   The Bearing project to read. Defaults to the most recently opened one.
-          --table           Human-readable output. The default is JSON, which is what a script or an
-                            agent should parse; it is stable, and --table is not.
+          --project <dir>   The Bearing project to read. Defaults to the most recently opened one,
+                            which `{Connections}` names; pass it to stay on one project.
+          --table           Output aligned for reading. The default is JSON: stable, and what a
+                            script should parse. --table and --tsv are not stable.
+          --tsv             Output tab-separated: the --table layout, compact enough to read in
+                            an agent's context. Tabs, newlines and backslashes in a value are
+                            escaped (\t \n \\), and a null is \N, so unlike --table it is unambiguous.
           --schema <name>   For `{Tables}`.
           --file <path>     Read the SQL from a file instead of an argument; - for standard input.
           --out <path>      Write the rows to a .csv or .xlsx file instead of printing them. An xlsx
@@ -66,7 +75,7 @@ public static class Commands
 
         The connection is opened read-only whatever its owner does with it, and only statements this
         engine calls reads are sent at all - anything else is refused before it reaches the server.
-        Only connections marked for external access are visible; a connection that asks for its
+        Only connections marked for external access can be queried; a connection that asks for its
         password each session can only be opened in Bearing itself.
 
         Exit codes: 0 fine, 1 the command could not be completed, 2 the arguments were wrong.

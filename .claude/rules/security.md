@@ -736,6 +736,16 @@ only by reading the code that emitted it.
   assertion passes against it. `CliRunner.Serialize` passes `response.GetType()`.
 - `--table` switches on the response **type**, so a command that gains a shape is a compile error rather
   than a silently unhandled case. It used to switch on JSON keys, where a renamed field degraded quietly.
+- **`--tsv` is `--table`'s layout with a different separator, not a third renderer**, so the two cannot
+  disagree about a response. It exists because agents in practice read `--table` rather than parse the
+  JSON — the first feedback from one said so — and a padded grid can't say null versus `''`, or where a
+  value containing a newline ends. Escaped COPY-text style (`\N` for null, backslash first); a row is
+  never trimmed, since a trailing empty cell is a trailing tab.
+- **`connections` names the project and the unexposed connections**, the latter by name only. Both answer
+  what an agent could not find out by trying: *which* project the recent-project default picked, and
+  whether a connection it wanted is absent or merely unexposed. The name was already disclosed on a direct
+  hit (`ResolveAsync`), so this is §1.11's "the mark gates discovery" unchanged — and it is still the
+  mark, not the name, that the gate is about.
 - **An export is unlimited by default**, and the small row cap applies only when nothing was asked for. A
   capped export is a silently truncated *file*, which is the failure the app guards against with "a
   workbook missing a sheet is worse than no workbook". An explicit `--max-rows` is honoured at any size —
@@ -758,6 +768,13 @@ only by reading the code that emitted it.
   the output a program parses, while `--table` rendered the same cell as a list: the two disagreed. An
   array is a JSON array (elements converted the same way, so they nest), hstore is a JSON object, and
   `byte[]` keeps its base64 arm *above* both because a bytea is not a list of 200 numbers.
+  **And the fix moved the bug rather than ending it.** `--table` had rendered an array as a list only
+  because a `string[]` matched its `IEnumerable<string>` arm; once `CellValue` handed it a `List<object?>`
+  instead, `TextTable.Cell` fell through to the same `ToString` and printed
+  ``System.Collections.Generic.List`1[System.Object]`` — found by review when `--tsv` arrived. Arrays and
+  hstore now render as compact JSON in both layouts, and the test drives them through `CellValue.For`
+  rather than hand-built values, because a hand-built `string[]` would have passed over exactly this.
+  WHEN changing the shape a converter returns, check every consumer of it, not only the one it was for.
 - **The `bearing` process may not run under `InvariantGlobalization`, and the project file says why.**
   It was set there on the theory that a JSON-emitting command has nothing culture-sensitive in it. That
   stopped being true when this host had to set `CellFormat.Zone`, and it failed silently: measured on

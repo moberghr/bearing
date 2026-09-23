@@ -76,9 +76,14 @@ public static class CliRunner
         }
 
         await stdout.WriteLineAsync(
-            options.Format == OutputFormat.Table
-                ? TextTable.Render(response).TrimEnd()
-                : Serialize(response));
+            options.Format switch
+            {
+                OutputFormat.Table => TextTable.Render(response).TrimEnd(),
+                // Only the final line break: a last row ending in an empty cell ends in a tab, and trimming
+                // that would take a column off it.
+                OutputFormat.Tsv => TextTable.Render(response, tabs: true).TrimEnd('\r', '\n'),
+                _ => Serialize(response),
+            });
 
         return Ok;
     }

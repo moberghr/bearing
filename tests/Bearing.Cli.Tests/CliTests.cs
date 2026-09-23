@@ -49,6 +49,7 @@ public class CliTests
         Assert.Equal(OutputFormat.Json, CliParser.Parse(["connections"]).Format);
         Assert.Equal(OutputFormat.Json, CliParser.Parse(["connections", "--json"]).Format);
         Assert.Equal(OutputFormat.Table, CliParser.Parse(["connections", "--table"]).Format);
+        Assert.Equal(OutputFormat.Tsv, CliParser.Parse(["connections", "--tsv"]).Format);
     }
 
     /// <summary>
@@ -413,6 +414,369 @@ public class CliTests
 
         Assert.Contains("(none)", run.Out);
     }
+
+    [Fact]
+    public async Task The_listing_names_its_project_and_the_connections_nobody_exposed()
+    {
+        // An agent handed only `prod` cannot otherwise tell "there is no staging" from "staging exists and
+        // was not exposed" — nor which project the default picked for it.
+        var host = new RecordingHost
+        {
+            Answer = new ConnectionsResponse([Exposed("prod")])
+            {
+                Project = new ProjectSummary("Payments", "/work/payments"),
+                NotExposed = ["stage", "dev"],
+            },
+        };
+
+        var json = JsonNode.Parse((await Cli.RunAsync(host, "connections")).Out)!;
+        Assert.Equal("Payments", json["project"]!["name"]!.GetValue<string>());
+        Assert.Equal("/work/payments", json["project"]!["directory"]!.GetValue<string>());
+        Assert.Equal(["stage", "dev"], json["not_exposed"]!.AsArray().Select(n => n!.GetValue<string>()));
+
+        var table = (await Cli.RunAsync(host, "connections", "--table")).Out;
+        Assert.Contains("project: Payments (/work/payments)", table);
+        Assert.Contains("not exposed: stage, dev", table);
+    }
+
+    /// <summary>The one case the hint is for: nothing is exposed, and the listing must still say what is
+    /// there rather than stopping at "(none)".</summary>
+    [Fact]
+    public async Task An_empty_listing_still_names_what_was_not_exposed()
+    {
+        var host = new RecordingHost { Answer = new ConnectionsResponse([]) { NotExposed = ["stage"] } };
+
+        var run = await Cli.RunAsync(host, "connections", "--table");
+
+        Assert.Contains("(none)", run.Out);
+        Assert.Contains("not exposed: stage", run.Out);
+    }
+
+    [Fact]
+    public async Task Tsv_separates_cells_with_tabs_and_escapes_what_would_break_a_row()
+    {
+        var host = new RecordingHost
+        {
+            Answer = new QueryResponse(
+            [
+                new ResultSet(
+                    [new ColumnHeader("id", "integer"), new ColumnHeader("note", "text"), new ColumnHeader("tail", "text")],
+                    [
+                        new object?[] { 1, "two\tcells\nand a line", "" },
+                        new object?[] { 2, null, @"C:\temp" },
+                    ],
+                    RowCount: 2,
+                    Truncated: false,
+                    DurationMs: 5),
+            ]),
+        };
+
+        var run = await Cli.RunAsync(host, "query", "reporting", "select 1", "--tsv");
+        var lines = run.Out.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
+
+        Assert.Equal("id\tnote\ttail", lines[0]);
+        // The tab and newline inside the value are escaped, so the row is still one line of three cells —
+        // and the empty last cell keeps its tab rather than being trimmed off.
+        Assert.Equal("1\t" + @"two\tcells\nand a line" + "\t", lines[1]);
+        // A null is \N and a backslash is doubled, so neither can be mistaken for the other or for "".
+        Assert.Equal("2\t" + @"\N" + "\t" + @"C:\\temp", lines[2]);
+        Assert.Contains("2 rows in 5 ms", run.Out);
+    }
+
+    /// <summary>
+    /// A text[] and an hstore reach the renderer as whatever <c>CellValue</c> built for the JSON — a list and
+    /// a dictionary — and fell through to <c>ToString</c>, printing the .NET type name in every row. Driven
+    /// through <c>CellValue.For</c> rather than hand-built, so a change to its shapes is caught here too.
+    /// </summary>
+    [Theory]
+    [InlineData("--tsv")]
+    [InlineData("--table")]
+    public async Task An_array_or_hstore_cell_prints_its_value_not_a_type_name(string format)
+    {
+        var host = new RecordingHost
+        {
+            Answer = new QueryResponse(
+            [
+                new ResultSet(
+                    [new ColumnHeader("features", "text[]"), new ColumnHeader("attrs", "hstore")],
+                    [
+                        new object?[]
+                        {
+                            CellValue.For(new[] { "Trailers", null, "Deleted Scenes" }),
+                            CellValue.For(new Dictionary<string, string?> { ["colour"] = "red" }),
+                        },
+                    ],
+                    RowCount: 1,
+                    Truncated: false,
+                    DurationMs: 1),
+            ]),
+        };
+
+        var run = await Cli.RunAsync(host, "query", "reporting", "select 1", format);
+
+        Assert.DoesNotContain("System.", run.Out);
+        Assert.Contains("""["Trailers",null,"Deleted Scenes"]""", run.Out);
+        Assert.Contains("""{"colour":"red"}""", run.Out);
+    }
+
+    [Theory]
+    [InlineData("--table")]
+    [InlineData("--tsv")]
+    public async Task Several_result_sets_print_one_after_another_with_a_gap_between(string format)
+    {
+        ResultSet Set(string column, object value) => new(
+            [new ColumnHeader(column, "integer")], [new object?[] { value }], RowCount: 1, Truncated: false,
+            DurationMs: 1);
+        var host = new RecordingHost { Answer = new QueryResponse([Set("first", 1), Set("second", 2)]) };
+
+        var run = await Cli.RunAsync(host, "query", "reporting", "select 1 as first; select 2 as second", format);
+        var lines = Lines(run.Out);
+
+        // Exactly one gap, between the two sets — not one before the first or after the last.
+        var gap = Assert.Single(Enumerable.Range(0, lines.Count), i => lines[i] == "");
+        Assert.StartsWith("first", lines[0]);
+        Assert.StartsWith("second", lines[gap + 1]);
+        Assert.Contains("(1 row in 1 ms)", lines[gap - 1]);
+    }
+
+    [Fact]
+    public void Several_result_sets_in_json_are_one_array_in_statement_order()
+    {
+        ResultSet Set(string column) => new(
+            [new ColumnHeader(column, "integer")], [new object?[] { 1 }], RowCount: 1, Truncated: false,
+            DurationMs: 1);
+
+        var json = JsonNode.Parse(CliRunner.Serialize(new QueryResponse([Set("first"), Set("second")])))!;
+
+        var results = json["results"]!.AsArray();
+        Assert.Equal(2, results.Count);
+        Assert.Equal("first", results[0]!["columns"]![0]!["name"]!.GetValue<string>());
+        Assert.Equal("second", results[1]!["columns"]![0]!["name"]!.GetValue<string>());
+    }
+
+    // ---- tsv ----------------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData("plain", "plain")]
+    [InlineData("a\tb", @"a\tb")]
+    [InlineData("a\nb", @"a\nb")]
+    [InlineData("a\r\nb", @"a\r\nb")]
+    [InlineData(@"C:\temp", @"C:\\temp")]
+    // The backslash is escaped first, or this would come out as \\t and read back as a backslash and a t.
+    [InlineData("\\\t", @"\\\t")]
+    [InlineData(@"\N", @"\\N")]
+    [InlineData("", "")]
+    public void Escape_leaves_no_character_that_could_break_a_row(string value, string escaped)
+    {
+        Assert.Equal(escaped, TextTable.Escape(value));
+        Assert.DoesNotContain('\t', TextTable.Escape(value));
+        Assert.DoesNotContain('\n', TextTable.Escape(value));
+        Assert.DoesNotContain('\r', TextTable.Escape(value));
+    }
+
+    /// <summary>A literal <c>\N</c> in the data and a null must not print the same — the whole reason the
+    /// null has a spelling of its own.</summary>
+    [Fact]
+    public async Task Tsv_tells_a_null_from_the_text_backslash_n_and_from_an_empty_string()
+    {
+        var host = new RecordingHost
+        {
+            Answer = new QueryResponse(
+            [
+                new ResultSet(
+                    [new ColumnHeader("v", "text")],
+                    [new object?[] { null }, new object?[] { @"\N" }, new object?[] { "" }],
+                    RowCount: 3,
+                    Truncated: false,
+                    DurationMs: 1),
+            ]),
+        };
+
+        var lines = Lines((await Cli.RunAsync(host, "query", "reporting", "select 1", "--tsv")).Out);
+
+        Assert.Equal(["v", TextTable.Null, @"\\N", ""], lines.Take(4));
+    }
+
+    [Fact]
+    public async Task Tsv_escapes_a_column_name_as_well_as_a_value()
+    {
+        var host = new RecordingHost
+        {
+            Answer = new QueryResponse(
+            [
+                new ResultSet(
+                    [new ColumnHeader("two\twords", "text"), new ColumnHeader("b", "text")],
+                    [new object?[] { "x", "y" }],
+                    RowCount: 1,
+                    Truncated: false,
+                    DurationMs: 1),
+            ]),
+        };
+
+        var lines = Lines((await Cli.RunAsync(host, "query", "reporting", "select 1", "--tsv")).Out);
+
+        Assert.Equal(@"two\twords" + "\tb", lines[0]);
+    }
+
+    [Fact]
+    public async Task Tsv_has_no_rule_under_the_header()
+    {
+        var host = new RecordingHost { Answer = new ConnectionsResponse([Exposed("reporting")]) };
+
+        var lines = Lines((await Cli.RunAsync(host, "connections", "--tsv")).Out);
+
+        Assert.Equal("name\tengine\taccess\tavailable", lines[0]);
+        Assert.Equal("reporting\tPostgreSQL\tread-only\ttrue", lines[1]);
+        Assert.DoesNotContain(lines, l => l.StartsWith("---"));
+    }
+
+    /// <summary>
+    /// A record list's optional column: a null on one row is <c>\N</c> under <c>--tsv</c>, where
+    /// <c>--table</c> can only leave it blank.
+    /// </summary>
+    [Fact]
+    public async Task Tsv_marks_an_absent_optional_field_as_null()
+    {
+        var host = new RecordingHost
+        {
+            Answer = new ConnectionsResponse(
+                [Exposed("prod") with { Environment = "production" }, Exposed("scratch")]),
+        };
+
+        var lines = Lines((await Cli.RunAsync(host, "connections", "--tsv")).Out);
+
+        Assert.EndsWith("\tproduction", lines[1]);
+        Assert.EndsWith("\t" + TextTable.Null, lines[2]);
+    }
+
+    /// <summary>
+    /// The runner trims what it prints, and under <c>--tsv</c> a trailing tab is a cell. The last line of
+    /// the whole output ending in an empty value is the case the runner's own trim could reach.
+    /// </summary>
+    [Fact]
+    public async Task Tsv_keeps_the_trailing_tab_of_an_empty_last_cell_on_the_last_line()
+    {
+        var host = new RecordingHost
+        {
+            Answer = new ConnectionsResponse(
+                [Exposed("prod") with { Environment = "production" }, Exposed("scratch") with { Environment = "" }]),
+        };
+
+        var run = await Cli.RunAsync(host, "connections", "--tsv");
+
+        Assert.EndsWith("scratch\tPostgreSQL\tread-only\ttrue\t", Lines(run.Out)[^1]);
+    }
+
+    [Fact]
+    public async Task Tsv_names_the_project_and_the_unexposed_connections_too()
+    {
+        var host = new RecordingHost
+        {
+            Answer = new ConnectionsResponse([Exposed("prod")])
+            {
+                Project = new ProjectSummary("Payments", "/work/payments"),
+                NotExposed = ["stage"],
+            },
+        };
+
+        var lines = Lines((await Cli.RunAsync(host, "connections", "--tsv")).Out);
+
+        Assert.Equal("project: Payments (/work/payments)", lines[0]);
+        Assert.Equal("not exposed: stage", lines[^1]);
+    }
+
+    [Fact]
+    public async Task A_nested_array_cell_nests_rather_than_flattening()
+    {
+        var host = new RecordingHost
+        {
+            Answer = new QueryResponse(
+            [
+                new ResultSet(
+                    [new ColumnHeader("grid", "integer[]")],
+                    [new object?[] { CellValue.For(new[] { new[] { 1, 2 }, new[] { 3 } }) }],
+                    RowCount: 1,
+                    Truncated: false,
+                    DurationMs: 1),
+            ]),
+        };
+
+        var lines = Lines((await Cli.RunAsync(host, "query", "reporting", "select 1", "--tsv")).Out);
+
+        Assert.Equal("[[1,2],[3]]", lines[1]);
+    }
+
+    // ---- connections: project and unexposed ----------------------------------------------------
+
+    [Fact]
+    public async Task A_listing_with_no_project_omits_the_field_and_still_carries_an_empty_not_exposed()
+    {
+        var host = new RecordingHost { Answer = new ConnectionsResponse([Exposed("prod")]) };
+
+        var json = JsonNode.Parse((await Cli.RunAsync(host, "connections")).Out)!.AsObject();
+
+        Assert.False(json.ContainsKey("project"));
+        Assert.Empty(json["not_exposed"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task The_table_says_nothing_about_unexposed_connections_when_there_are_none()
+    {
+        var host = new RecordingHost { Answer = new ConnectionsResponse([Exposed("prod")]) };
+
+        var run = await Cli.RunAsync(host, "connections", "--table");
+
+        Assert.DoesNotContain("not exposed", run.Out);
+        Assert.DoesNotContain("project:", run.Out);
+    }
+
+    // ---- help ---------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Help_answers_the_questions_the_first_agent_had_to_guess_at()
+    {
+        var help = (await Cli.RunAsync(new RecordingHost(), "--help")).Out;
+
+        Assert.Contains("--tsv", help);
+        Assert.Contains(@"\N", help);
+        Assert.Contains("not exposed", help);
+        Assert.Contains("Several", help);
+        Assert.Contains("statements run in order", help);
+        Assert.Contains($"which `{Commands.Connections}` names", help);
+        // Unexposed names are listed now, so "only exposed ones are visible" would be false.
+        Assert.DoesNotContain("are visible", help);
+    }
+
+    /// <summary>
+    /// Every command's description starts in the column its continuation lines are indented to. The source
+    /// pads around <c>{Connections}</c>-style placeholders that print shorter than they are written, which
+    /// is how every description in the list came to sit 2–10 columns off its own second line.
+    /// </summary>
+    [Fact]
+    public void Help_lines_every_command_description_up_with_its_continuation_lines()
+    {
+        var lines = Lines(Commands.Help);
+        var start = lines.IndexOf("Commands") + 1;
+        var end = lines.IndexOf("Options");
+        var block = lines[start..end].Where(l => l.Trim().Length > 0).ToList();
+
+        var continuation = block.Where(l => l.StartsWith("    ")).Select(Indent).Distinct().ToList();
+        var column = Assert.Single(continuation);
+
+        foreach (var command in block.Where(l => !l.StartsWith("    ")))
+        {
+            var description = command.IndexOf("  ", 2, StringComparison.Ordinal);
+            Assert.True(description > 0, command);
+            Assert.True(column == Indent(command[description..]) + description, command);
+        }
+
+        static int Indent(string line) => line.Length - line.TrimStart(' ').Length;
+    }
+
+    /// <summary>The output's lines, without the empty one after the final line break — which is how the
+    /// output ends, not a line of it.</summary>
+    private static List<string> Lines(string output)
+        => (output.EndsWith('\n') ? output[..^1] : output).Split('\n').Select(l => l.TrimEnd('\r')).ToList();
 
     private static ExposedConnection Exposed(string name, string engine = "PostgreSQL")
         => new(name, engine, Access: "read-only", Available: true);
