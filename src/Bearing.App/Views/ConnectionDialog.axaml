@@ -129,6 +129,19 @@
 
     <Separator Margin="0,4"/>
 
+    <!-- The session time zone (#163). Not in Safety: it restricts nothing, it decides what `::date`,
+         `timestamptz::timestamp` and date_trunc compute. Its own group so it can disappear whole for an engine
+         with no session zone to set (SQL Server), where offering it would claim it does something. The hint is
+         always shown, because the thing that made #163 hard to find was that nothing named the zone. -->
+    <StackPanel x:Name="TimeZoneGroup" Spacing="8">
+      <TextBlock Text="Session time zone" Opacity="0.8"/>
+      <ComboBox x:Name="TimeZoneModeBox" HorizontalAlignment="Stretch" SelectionChanged="OnTimeZoneModeChanged"/>
+      <TextBox x:Name="TimeZoneBox" IsVisible="False" PlaceholderText="e.g. UTC, Europe/Zagreb"
+               TextChanged="OnTimeZoneTextChanged"/>
+      <TextBlock x:Name="TimeZoneHint" TextWrapping="Wrap" Opacity="0.7" FontSize="12"/>
+      <Separator Margin="0,4"/>
+    </StackPanel>
+
     <TextBlock Text="Environment" Opacity="0.8"/>
     <StackPanel Orientation="Horizontal" Spacing="6">
       <TextBox x:Name="EnvBox" Width="150" PlaceholderText="label, e.g. production"/>

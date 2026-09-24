@@ -48,6 +48,7 @@ public sealed class DemoProvider : IDbProvider, IProviderRegistry
     /// is not normally reachable with this provider selected.</summary>
     /// <summary>False: there is no server, so nothing on one refuses anything (§9.7).</summary>
     public bool EnforcesReadOnlyOnServer => false;
+    public bool SupportsSessionTimeZone => false;
 
     public bool SupportsIntegratedAuth => false;
 

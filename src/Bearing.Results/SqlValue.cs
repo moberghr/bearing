@@ -38,6 +38,13 @@ public static class SqlValue
         float f => f.ToString("R", CultureInfo.InvariantCulture),
         double d => d.ToString("R", CultureInfo.InvariantCulture),
         decimal m => m.ToString(CultureInfo.InvariantCulture),
+        // A UTC DateTime is a timestamptz (Npgsql's mapping, §5.5) and is an instant, so its literal carries
+        // the offset: without one the server reads the text in the *session's* zone, and since #163 that is
+        // this machine's — Copy as SQL of 15:00 UTC would insert 13:00 UTC from Zagreb, and an FK lookup on a
+        // timestamptz key would match nothing. Unspecified (timestamp without time zone) has no zone to state.
+        // SqlClient never produces Kind = Utc, so a T-SQL literal is unaffected.
+        DateTime { Kind: DateTimeKind.Utc } utc
+            => Quote(utc.ToString("yyyy-MM-dd HH:mm:ss.FFFFFF", CultureInfo.InvariantCulture) + "+00:00"),
         DateTime dt => Quote(dt.ToString("yyyy-MM-dd HH:mm:ss.FFFFFF", CultureInfo.InvariantCulture)),
         DateTimeOffset dto => Quote(dto.ToString("yyyy-MM-dd HH:mm:ss.FFFFFFzzz", CultureInfo.InvariantCulture)),
         DateOnly d => Quote(d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),

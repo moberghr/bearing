@@ -181,6 +181,9 @@ public sealed class ConnectionFieldModel
             // would both read Prefer while the connection ran unencrypted. Per §1.4 a security setting has
             // exactly one source of truth, and writing the field is what makes the field it.
             if (string.Equals(key, TlsPolicy.LegacyOptionKey, StringComparison.OrdinalIgnoreCase)) continue;
+            // The session zone's legacy key, for the same reason (#163): the dialog shows what it resolved to
+            // and writes the field, so a bag entry left behind would outrank a "this machine" the user picked.
+            if (string.Equals(key, SessionTimeZonePolicy.LegacyOptionKey, StringComparison.OrdinalIgnoreCase)) continue;
             if (!Fields.Any(f => string.Equals(f.Key, key, StringComparison.OrdinalIgnoreCase)))
                 _carried[key] = value;
         }
@@ -342,6 +345,7 @@ public sealed class ConnectionFieldModel
         // Belt to Carry's braces: however such an entry got here — carried, or declared as a field by some
         // future provider — the bag must not hold a TLS setting beside the typed one (see Carry).
         options.Remove(TlsPolicy.LegacyOptionKey);
+        options.Remove(SessionTimeZonePolicy.LegacyOptionKey);
 
         // Each intrinsic is written only when this provider declares a field for it. `Get` returning null
         // means "this engine has no such box", which is not the same as an empty box: coercing it to ""

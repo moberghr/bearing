@@ -28,6 +28,7 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
     /// <summary>Matches PostgresProvider (no SSPI path), so the dialog-facing behaviour a test observes
     /// through this fake is the Postgres one — which is what <c>Id</c> already claims to be.</summary>
     public bool EnforcesReadOnlyOnServer => false;
+    public bool SupportsSessionTimeZone => true;   // Postgres has one (#163), and this fake claims to be it
     public bool SupportsIntegratedAuth => false;
     public bool SupportsEntraToken => true;
 

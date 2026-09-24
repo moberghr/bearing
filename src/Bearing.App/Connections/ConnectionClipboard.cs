@@ -60,6 +60,10 @@ public static class ConnectionClipboard
         // client-side rather than asked of the server (#131). Pasting a manual-commit connection as an
         // auto-commit one is the same silent downgrade.
         public bool ManualCommit { get; init; }
+        // Not a safety setting, but it decides what the SQL computes (#163), so a paste that dropped an
+        // explicit UTC would silently move the recipient's `::date` results to their own zone. Copied as the
+        // setting, not the resolved zone: "local" means whoever's machine the connection lands on.
+        public string? SessionTimeZone { get; init; }
         // ExternalAccess is deliberately NOT here, and it is the one omission in this record that is a
         // decision rather than an oversight — the reflection test names it for exactly that reason.
         //
@@ -127,6 +131,7 @@ public static class ConnectionClipboard
         ReadOnly = c.ReadOnly,
         ManualCommit = c.ManualCommit,
         StatementTimeoutSeconds = c.StatementTimeoutSeconds,
+        SessionTimeZone = c.SessionTimeZone,
         CredentialKind = c.CredentialKind,
         Options = c.Options.ToDictionary(kv => kv.Key, kv => kv.Value),
     };
@@ -148,6 +153,7 @@ public static class ConnectionClipboard
         ReadOnly = e.ReadOnly,
         ManualCommit = e.ManualCommit,
         StatementTimeoutSeconds = e.StatementTimeoutSeconds,
+        SessionTimeZone = e.SessionTimeZone,
         CredentialKind = e.CredentialKind,
         Options = e.Options,
     };

@@ -188,6 +188,11 @@ A statement timeout is filled in (30 s) when the connection has none, so a runaw
 caller — it is per statement, so a long script can still take a long time. And the connection's
 manual-commit setting is cleared, because nothing here can press Commit.
 
+The session time zone is **not** changed: it is the connection's own setting, which by default is the zone of
+the machine running `bearing` — the same zone the app on that machine computes in, so `::date` and
+`timestamptz::timestamp` answer the same from both. A script that must not depend on where it runs wants the
+connection pinned to a zone (Session time zone ▸ A specific zone, e.g. `UTC`).
+
 ## Which project
 
 `--project <dir>`, or the most recently opened project when it is omitted. Put the explicit form in anything

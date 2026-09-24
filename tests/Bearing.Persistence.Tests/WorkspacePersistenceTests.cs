@@ -32,6 +32,7 @@ public class WorkspacePersistenceTests : IDisposable
             User = "reader",
             ReadOnly = true,
             StatementTimeoutSeconds = 30,
+            SessionTimeZone = "UTC",
             Options = new Dictionary<string, string> { ["sslmode"] = "require", ["search_path"] = "public,reporting" },
         });
         await store.SaveAsync(created, CancellationToken.None);
@@ -54,6 +55,8 @@ public class WorkspacePersistenceTests : IDisposable
         // (#99 / #105).
         Assert.True(conn.ReadOnly);
         Assert.Equal(30, conn.StatementTimeoutSeconds);
+        // As does the session zone (#163): a team that pins a connection to UTC means every member's `::date`.
+        Assert.Equal("UTC", conn.SessionTimeZone);
     }
 
     [Fact]
@@ -81,6 +84,8 @@ public class WorkspacePersistenceTests : IDisposable
 
         Assert.False(conn.ReadOnly);
         Assert.Equal(0, conn.StatementTimeoutSeconds);
+        // Null is this machine's zone (#163) — deliberately a change for an old file, see ConnectionInfo.
+        Assert.Null(conn.SessionTimeZone);
     }
 
     [Fact]
