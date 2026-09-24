@@ -208,6 +208,74 @@ public class ConnectionEditorTests
         Assert.False(dialog.FindControl<TextBox>("PasswordBox")!.IsVisible);
     });
 
+    // ---- The session time zone (#163) ------------------------------------------------------------
+
+    /// <summary>SQL Server has no session zone to set, so the group leaves with the engine rather than
+    /// staying on screen as a setting that does nothing — and comes back with Postgres.</summary>
+    [Fact]
+    public Task The_time_zone_group_is_offered_only_where_the_engine_has_one() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Dialog();
+        var group = dialog.FindControl<StackPanel>("TimeZoneGroup")!;
+        Assert.True(group.IsVisible);
+
+        ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = 1;
+        Assert.False(group.IsVisible);
+
+        ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = 0;
+        Assert.True(group.IsVisible);
+    });
+
+    [Theory]
+    [InlineData(null, 0, null)]
+    [InlineData("server", 1, "server")]
+    [InlineData("UTC", 2, "UTC")]
+    public Task A_saved_zone_opens_on_its_own_mode_and_saves_back_unchanged(string? saved, int mode, string? built)
+        => _ui.Run(() =>
+        {
+            var dialog = ConnectionEditorProbe.Dialog(Saved("postgres", port: 5432) with { SessionTimeZone = saved });
+
+            Assert.Equal(mode, ConnectionEditorProbe.Combo(dialog, "TimeZoneModeBox").SelectedIndex);
+            var box = dialog.FindControl<TextBox>("TimeZoneBox")!;
+            Assert.Equal(mode == 2, box.IsVisible);
+            // Null for this machine's zone, not "local": the default adds no line to the project file.
+            Assert.Equal(built, dialog.BuildConnection().SessionTimeZone);
+        });
+
+    [Fact]
+    public Task A_zone_set_through_the_options_bag_moves_to_the_field_on_save() => _ui.Run(() =>
+    {
+        // Shown as what it resolves to, and saved as the field with the bag entry dropped — otherwise the bag
+        // would outrank a "this machine" picked here later, and the dialog would say one thing while the
+        // connection ran in another.
+        var legacy = Saved("postgres", port: 5432) with
+        {
+            Options = new Dictionary<string, string> { ["Timezone"] = "UTC", ["search_path"] = "app" },
+        };
+        var dialog = ConnectionEditorProbe.Dialog(legacy);
+
+        Assert.Equal(2, ConnectionEditorProbe.Combo(dialog, "TimeZoneModeBox").SelectedIndex);
+        Assert.Equal("UTC", dialog.FindControl<TextBox>("TimeZoneBox")!.Text);
+
+        var built = dialog.BuildConnection();
+        Assert.Equal("UTC", built.SessionTimeZone);
+        Assert.DoesNotContain(built.Options.Keys, k => k.Equals("timezone", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("app", built.Options["search_path"]);
+    });
+
+    [Fact]
+    public Task The_hint_names_the_zone_the_queries_will_run_in() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Dialog(Saved("postgres", port: 5432) with { SessionTimeZone = "server" });
+        var hint = dialog.FindControl<TextBlock>("TimeZoneHint")!;
+        Assert.Contains("the server's own zone", hint.Text);
+
+        // A selection change is the one thing a test can drive without text input (§4.5) — and the hint has
+        // to follow it, or it describes the zone the dialog opened on rather than the one it will save.
+        ConnectionEditorProbe.Combo(dialog, "TimeZoneModeBox").SelectedIndex = 0;
+        Assert.Contains(SessionTimeZonePolicy.Describe(SessionTimeZonePolicy.Local), hint.Text);
+    });
+
     private static ConnectionInfo Saved(string providerId, int port) => new()
     {
         Id = Guid.NewGuid(),

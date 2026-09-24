@@ -176,8 +176,10 @@ public class PostgresRoleTests
              create table {Schema}.ticket (id serial primary key, note text);
              create table {Schema}.audit (id serial primary key, what text);
              create role {Group} nologin;
+             -- An explicit offset: a bare date is read in the session's zone, which is this machine's since #163, and
+             -- 2030-01-01 in Zagreb is 2029 in UTC.
              create role {Login} login password 'not-a-real-secret'
-                 connection limit 7 valid until '2030-01-01';
+                 connection limit 7 valid until '2030-01-01 00:00:00+00';
              grant {Group} to {Login};
              grant connect on database {PgTestServer.Database} to {Login};
              grant usage on schema {Schema} to {Login};

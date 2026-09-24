@@ -42,6 +42,10 @@ public sealed class SqlServerProvider : IDbProvider
     /// </summary>
     public bool EnforcesReadOnlyOnServer => false;
 
+    /// <inheritdoc />
+    /// <remarks>SQL Server has no session zone; see the interface.</remarks>
+    public bool SupportsSessionTimeZone => false;
+
     public bool SupportsIntegratedAuth => true;
 
     /// <summary>True. SqlClient accepts an access token only via <c>SqlConnection.AccessToken</c>, never as

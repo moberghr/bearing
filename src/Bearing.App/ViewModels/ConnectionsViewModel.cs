@@ -341,13 +341,19 @@ public sealed partial class ConnectionsViewModel : ObservableObject
             var info = _ctx.SelectedTab is { } tab ? _ctx.EffectiveConnection(tab) : null;
             if (info is null) return StatusLabel;
 
-            var marks = new List<string>(3);
+            var marks = new List<string>(4);
             if (SessionPolicy.IsReadOnly(info)) marks.Add("read-only");
             // A setting of the connection, like the two beside it — not "a transaction is open right now",
             // which the status chip says and which is a fact about this tab rather than this connection.
             if (CommitPolicy.IsManualCommit(info)) marks.Add("manual commit");
             if (SessionPolicy.TimeoutSeconds(info) > SessionPolicy.NoTimeout)
                 marks.Add($"statement timeout {SessionPolicy.TimeoutLabel(info)}");
+            // Always, where the engine has one (#163): the zone is not a safety setting to flag when on, it is
+            // what every timestamp expression computes in, and the mismatch it caused was invisible because
+            // nothing ever named it.
+            if (_ctx.Providers.All.FirstOrDefault(p => string.Equals(p.Id, info.ProviderId, StringComparison.OrdinalIgnoreCase))
+                    is { SupportsSessionTimeZone: true })
+                marks.Add($"time zone {SessionTimeZonePolicy.Describe(info)}");
             return marks.Count == 0 ? StatusLabel : $"{StatusLabel} · {string.Join(" · ", marks)}";
         }
     }
@@ -1256,7 +1262,10 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     private static bool SamePool(ConnectionInfo a, ConnectionInfo b)
         => SameNetwork(a, b)
            && SessionPolicy.IsReadOnly(a) == SessionPolicy.IsReadOnly(b)
-           && SessionPolicy.TimeoutSeconds(a) == SessionPolicy.TimeoutSeconds(b);
+           && SessionPolicy.TimeoutSeconds(a) == SessionPolicy.TimeoutSeconds(b)
+           // Also fixed at startup (#163): without it, changing the zone and paging the result on screen would
+           // keep computing in the old one off the old pool.
+           && SessionTimeZonePolicy.ZoneFor(a) == SessionTimeZonePolicy.ZoneFor(b);
 
     /// <summary>Build a throwaway connection and test it (for the dialog's Test button); nothing is persisted.
     /// For an Entra connection the token is minted through the resolver (ignoring the box); prompt / stored

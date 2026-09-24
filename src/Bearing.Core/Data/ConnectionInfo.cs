@@ -79,6 +79,24 @@ public sealed record ConnectionInfo
     public int StatementTimeoutSeconds { get; init; } = SessionPolicy.NoTimeout;
 
     /// <summary>
+    /// The zone this connection's sessions compute in (#163): null or <see cref="SessionTimeZonePolicy.Local"/>
+    /// for this machine's, <see cref="SessionTimeZonePolicy.Server"/> for the server's own, or a zone id.
+    /// <para>
+    /// <b>Null means this machine's zone</b>, which is what pgJDBC sends and so what DBeaver shows. That
+    /// changed existing connections on upgrade, deliberately: a session left on the server's default (UTC on
+    /// RDS) made <c>timestamptz::timestamp</c> and friends disagree with every other client pointed at the
+    /// same database. A legacy <c>Timezone</c> entry in <see cref="Options"/> still wins while this is null —
+    /// see <see cref="SessionTimeZonePolicy.Setting"/>.
+    /// </para>
+    /// <para>
+    /// Rides the startup packet on Postgres, so it holds on every pooled socket (§1.9's reason). SQL Server
+    /// has no session zone to set — <c>SYSDATETIMEOFFSET()</c> is the server OS's — so there it is inert and
+    /// the dialog does not offer it (<see cref="IDbProvider.SupportsSessionTimeZone"/>).
+    /// </para>
+    /// </summary>
+    public string? SessionTimeZone { get; init; }
+
+    /// <summary>
     /// When true, a write on this connection opens a transaction that stays open until the user commits or
     /// rolls it back, rather than committing itself (#131). A read on its own still auto-commits: it is the
     /// first <i>write</i> that opens one, because a transaction left open by nothing but browsing is the

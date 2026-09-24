@@ -110,6 +110,41 @@ Confirmed against **Npgsql 10** (`tests/Bearing.Data.Tests/TemporalMappingTests.
 - A driver major version that changed any row above would stop timestamps showing their zone with nothing
   else in the suite noticing, which is why the mapping has a test of its own rather than being assumed.
 
+## §5.5a — The session time zone is the client's, and rides the startup packet (#163)
+A Postgres session that is sent no `TimeZone` keeps the server's — UTC on RDS — while pgJDBC sends the
+client's, so DBeaver and Bearing returned different numbers for the same query whenever it depended on the
+zone: `timestamptz::timestamp`, `::date`, `date_trunc('day', …)`, `timestamptz - timestamp`. The display
+zone (§5.5, #77) could not help: it renders a value the server already computed, and the grid could show
+local time above SQL that ran in UTC.
+
+- `ConnectionInfo.SessionTimeZone`: **null is this machine's zone**, `server` sends nothing, anything else is
+  a zone id. Null-means-local moved every existing connection on upgrade, and was chosen to: parity with
+  other clients is the fix. A legacy `Timezone` in the options bag still wins while the field is null
+  (`SessionTimeZonePolicy.Setting`, the `sslmode` precedence), and the bag key is **reserved** in
+  `PostgresConnectionString` so it cannot be applied twice.
+- **Sent as Npgsql's `Timezone`**, i.e. the startup packet's own `TimeZone` parameter — every pooled socket,
+  for §1.9's reason. Not a `SET`.
+- **IANA, always.** On Windows `TimeZoneInfo.Local.Id` is `Central Europe Standard Time`, which Postgres
+  refuses at startup, so the connection would not open at all. `ZoneFor` converts a Windows id — and leaves an
+  id alone when it is *also* IANA (`UTC` is both; converting sends `Etc/UTC`). A local zone with no IANA name
+  (.NET's `"Local"`) sends nothing rather than a fixed offset, and `Describe` says so. Anything else is passed
+  through: Postgres knows spellings .NET does not, and a typo fails the connect with the server's own error,
+  which is visible — computing in another zone would not be.
+- It is part of the pool (`SamePool`, `SameConnection`), compared as the **resolved** zone. It is not part of
+  `SameNetwork`: the catalog does not depend on it.
+- **Named in the status tip always** where the engine has one (`IDbProvider.SupportsSessionTimeZone`), not
+  only when set — the #163 mismatch was invisible because nothing ever named the zone. SQL Server has no
+  session zone, so the dialog hides the group there rather than offer a setting that does nothing.
+- **A `timestamptz` rendered as SQL text carries `+00:00`** (`SqlValue.Literal`, `Kind = Utc`). Copy as SQL,
+  the SQL export and the FK lookup build literals as text, and an offset-less one is read in the session's
+  zone — harmless while every session was UTC, two hours off from Zagreb once it was not. Found by review,
+  not by the suite. A `timestamp` (`Unspecified`) stays offset-less: it has no zone to state.
+- **A Windows id is mapped with the machine's region** (`FromWindowsId`). "Central European Standard Time"
+  is Warsaw by default and Zagreb for HR; they agree today and not before 1983, so the region-less mapping
+  moves `::date` on old rows away from what DBeaver computes.
+- A live test that writes a bare timestamp literal now reads it in the test machine's zone. `valid until
+  '2030-01-01'` came back as 2029 in UTC on a Zagreb machine; pin an offset in the literal.
+
 ## §5.6 — A size read tolerates a relation that vanished under it
 `pg_class` is read under the query's MVCC snapshot; `pg_total_relation_size` **stats files**, which is not.
 So a relation someone else drops while `GetRelationSizesAsync` runs is still listed and has no size, and the

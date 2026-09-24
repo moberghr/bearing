@@ -372,6 +372,9 @@ public class ConnectionClipboardTests
         Tls = TlsMode.VerifyFull,
         ReadOnly = true,
         StatementTimeoutSeconds = 30,
+        // Not the default (null, this machine's zone), so a payload that dropped it fails below rather than
+        // comparing null with null (#163).
+        SessionTimeZone = "UTC",
         // Exposed, so the deliberate omission from the payload is exercised rather than asserted against a
         // value that was already the default. See A_pasted_connection_is_never_exposed_to_external_tools.
         ExternalAccess = ExternalAccess.ReadOnly,

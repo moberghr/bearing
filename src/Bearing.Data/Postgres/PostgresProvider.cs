@@ -29,6 +29,9 @@ public sealed class PostgresProvider : IDbProvider
     /// so the server is the one that refuses (#99).</summary>
     public bool EnforcesReadOnlyOnServer => true;
 
+    /// <inheritdoc />
+    public bool SupportsSessionTimeZone => true;
+
     public bool SupportsIntegratedAuth => false;
 
     /// <summary>True: Npgsql takes the Entra access token as the password, which is exactly how Azure

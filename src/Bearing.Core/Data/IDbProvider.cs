@@ -34,6 +34,15 @@ public interface IDbProvider
     /// </summary>
     bool EnforcesReadOnlyOnServer { get; }
 
+    /// <summary>
+    /// Whether this engine has a per-session time zone for <see cref="ConnectionInfo.SessionTimeZone"/> to
+    /// set (#163). Postgres does — <c>TimeZone</c>, sent in the startup packet. SQL Server does not:
+    /// <c>SYSDATETIMEOFFSET()</c> and <c>AT TIME ZONE</c> read the server OS's zone or an explicit one, and
+    /// nothing a client sends changes that. A flag rather than a silently ignored field, because the dialog
+    /// offering the setting there would be a claim that it does something.
+    /// </summary>
+    bool SupportsSessionTimeZone { get; }
+
     /// <summary>Whether this engine can authenticate as the OS identity
     /// (<see cref="CredentialKind.Integrated"/>). The dialog offers that credential kind only where it
     /// works, rather than knowing per-engine which ones have it.</summary>

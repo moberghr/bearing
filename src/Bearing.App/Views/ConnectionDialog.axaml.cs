@@ -117,6 +117,9 @@ public partial class ConnectionDialog : Window
         // import, still carries the mode in the options bag (#23). A new connection's default is computed
         // from the host the provider declared, not from a hardcoded "localhost".
         InitTls(existing is not null ? TlsPolicy.Resolve(existing) : TlsPolicy.DefaultFor(HostValue()));
+        // Resolved for the same reason: a connection that set its zone through the options bag shows that zone
+        // here, and saving writes it to the field (the bag entry is dropped, see ConnectionFieldModel.Carry).
+        InitTimeZone(existing is not null ? SessionTimeZonePolicy.Setting(existing) : SessionTimeZonePolicy.Local);
         // With nowhere to keep a password, a new connection starts on "prompt each time" rather than on a
         // stored password it would silently fail to store. An edited one keeps whatever it was saved as.
         RebuildCredentialKinds(existing?.CredentialKind
@@ -143,6 +146,7 @@ public partial class ConnectionDialog : Window
         _model = _model.SwitchTo(next);
         RenderFields();
         RebuildCredentialKinds(SelectedCredentialKind());
+        UpdateTimeZone();
     }
 
     // ---- Provider-declared fields ----------------------------------------------------------------
@@ -410,6 +414,53 @@ public partial class ConnectionDialog : Window
         TlsWarningText.Text = TlsPolicy.Advice(mode);
     }
 
+    // ---- Session time zone (#163) -------------------------------------------------------------------
+
+    /// <summary>The picker's three entries, in <see cref="TimeZoneModeBox"/> order.</summary>
+    private static readonly string[] TimeZoneModes = ["This machine's zone", "The server's own zone", "A specific zone"];
+
+    private const int TimeZoneSpecific = 2;
+
+    private void InitTimeZone(string setting)
+    {
+        _loading = true;
+        foreach (var mode in TimeZoneModes) TimeZoneModeBox.Items.Add(new ComboBoxItem { Content = mode });
+        TimeZoneModeBox.SelectedIndex = SessionTimeZonePolicy.IsLocal(setting) ? 0
+            : SessionTimeZonePolicy.IsServer(setting) ? 1
+            : TimeZoneSpecific;
+        if (TimeZoneModeBox.SelectedIndex == TimeZoneSpecific) TimeZoneBox.Text = setting;
+        _loading = false;
+        UpdateTimeZone();
+    }
+
+    /// <summary>
+    /// What the record's <see cref="ConnectionInfo.SessionTimeZone"/> should hold: null for this machine's
+    /// zone — the default, so the project file does not gain a line for it — <c>server</c>, or the typed id.
+    /// An empty "specific" box is this machine's zone, and the hint says so rather than saving a blank the
+    /// policy would read the same way anyway.
+    /// </summary>
+    private string? TypedSessionTimeZone() => TimeZoneModeBox.SelectedIndex switch
+    {
+        1 => SessionTimeZonePolicy.Server,
+        TimeZoneSpecific when !string.IsNullOrWhiteSpace(TimeZoneBox.Text) => TimeZoneBox.Text.Trim(),
+        _ => null,
+    };
+
+    private void OnTimeZoneModeChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (!_loading) UpdateTimeZone();
+    }
+
+    private void OnTimeZoneTextChanged(object? sender, TextChangedEventArgs e) => UpdateTimeZone();
+
+    private void UpdateTimeZone()
+    {
+        // Read live from the picker, like the safety note's engine: switching to SQL Server hides the group.
+        TimeZoneGroup.IsVisible = SelectedProvider().SupportsSessionTimeZone;
+        TimeZoneBox.IsVisible = TimeZoneModeBox.SelectedIndex == TimeZoneSpecific;
+        TimeZoneHint.Text = SessionTimeZonePolicy.Advice(TypedSessionTimeZone() ?? SessionTimeZonePolicy.Local);
+    }
+
     /// <summary>Seconds in the timeout box, or <see cref="SessionPolicy.NoTimeout"/> for empty or
     /// unreadable. Unreadable reads as no limit rather than as some default: inventing a timeout nobody typed
     /// would cancel the user's query for them — but it is <em>said</em> rather than swallowed, see
@@ -585,6 +636,7 @@ public partial class ConnectionDialog : Window
             ? ExternalAccess.ReadOnly
             : ExternalAccess.None,
         StatementTimeoutSeconds = TypedTimeoutSeconds(),
+        SessionTimeZone = TypedSessionTimeZone(),
         CredentialKind = SelectedCredentialKind(),
         Tls = SelectedTls(),
         // Not editable here, so carried rather than rebuilt: filing lives in the tree. Omitting it would

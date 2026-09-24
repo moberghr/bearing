@@ -54,6 +54,10 @@ public static class PostgresConnectionString
         // it, and a shared project.json could turn read-only off. Same threat as "Trust Server Certificate"
         // beside "SSL Mode=VerifyFull", and closed the same way.
         StartupOptionsKeyword,
+        // The session zone has a typed field (#163). A bag `Timezone` is still honoured, but through
+        // SessionTimeZonePolicy.Setting while the field is untouched — applying it here too would let it
+        // outrank a zone the dialog wrote, the sslmode precedence again.
+        SessionTimeZonePolicy.LegacyOptionKey,
     };
 
     public static NpgsqlConnectionStringBuilder Build(ConnectionInfo info, string? password)
@@ -71,6 +75,11 @@ public static class PostgresConnectionString
             // Read-only and the statement timeout (#99 / #105). Null when the connection asks for neither,
             // which leaves the keyword out of the connection string entirely.
             Options = StartupOptionsFor(info),
+            // The session TimeZone (#163): this machine's by default, as pgJDBC sends it, so an expression
+            // like `timestamptz::timestamp` computes what DBeaver computes. Npgsql sends it as the startup
+            // packet's own TimeZone parameter — every pooled socket, like the settings above — and null sends
+            // nothing, which leaves the server's zone (or PGTZ, which Npgsql honours as libpq does).
+            Timezone = SessionTimeZonePolicy.ZoneFor(info),
             // No command timeout. Npgsql defaults to 30 seconds, which killed any query that took longer and
             // reported it as "Exception while reading from stream" — a message about the driver's plumbing,
             // for a query that was working. Running a slow analytical query is the point of the tool, and

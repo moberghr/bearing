@@ -550,6 +550,9 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
            && TlsPolicy.Resolve(a) == TlsPolicy.Resolve(b)
            && SessionPolicy.IsReadOnly(a) == SessionPolicy.IsReadOnly(b)
            && SessionPolicy.TimeoutSeconds(a) == SessionPolicy.TimeoutSeconds(b)
+           // The session zone rides the same packet (#163). The *resolved* zone, so "local" on a machine
+           // whose zone changed is a different pool, and an explicit id equal to this machine's is not.
+           && SessionTimeZonePolicy.ZoneFor(a) == SessionTimeZonePolicy.ZoneFor(b)
            && SameOptions(a.Options, b.Options);
 
     private static bool SameOptions(IReadOnlyDictionary<string, string> a, IReadOnlyDictionary<string, string> b)

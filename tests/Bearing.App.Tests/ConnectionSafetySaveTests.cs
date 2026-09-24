@@ -99,6 +99,52 @@ public class ConnectionSafetySaveTests : IDisposable
     }
 
     [Fact]
+    public async Task Changing_the_session_time_zone_rebuilds_the_pool_and_keeps_the_schema()
+    {
+        // The zone rides the same startup packet (#163), so the pool on screen would otherwise go on computing
+        // `::date` in the old zone while the status tip named the new one. It says nothing about the catalog.
+        var conn = Conn() with { SessionTimeZone = "UTC" };
+        var (ctx, vm) = NewVm(conn);
+        Assert.NotNull(await WarmAsync(ctx, conn));
+
+        await vm.AddOrUpdateConnectionAsync(conn with { SessionTimeZone = "Europe/Zagreb" }, password: null);
+
+        Assert.Null(ctx.Sessions.TryGet(SessionKey.For(conn)));
+        Assert.NotNull(ctx.Sessions.TryGetSnapshot(conn.Id, conn.Database));
+    }
+
+    [Theory]
+    [InlineData("UTC", "time zone UTC")]
+    [InlineData("server", "time zone the server's own zone")]
+    public void The_status_tip_names_the_session_zone(string zone, string mark)
+    {
+        // What made #163 hard to find: the grid could show local time over SQL computed in UTC, and nothing
+        // anywhere named the zone the session was in. It is named always, not only when set — every session
+        // computes in some zone.
+        var conn = Conn() with { SessionTimeZone = zone };
+        var (ctx, vm) = NewVm(conn);
+        var tab = new EditorTabViewModel("t1") { ConnectionId = conn.Id };
+        ctx.Tabs.Add(tab);
+        ctx.SelectedTab = tab;
+
+        Assert.EndsWith(" · " + mark, vm.StatusTip);
+    }
+
+    [Fact]
+    public async Task Naming_the_zone_the_connection_already_runs_in_keeps_the_pool()
+    {
+        // Compared as the resolved zone, not the setting's text: "local" on a machine in UTC and an explicit
+        // UTC send the same thing, so there is nothing to rebuild.
+        var conn = Conn() with { SessionTimeZone = "server" };
+        var (ctx, vm) = NewVm(conn);
+        await WarmAsync(ctx, conn);
+
+        await vm.AddOrUpdateConnectionAsync(conn with { SessionTimeZone = "SERVER" }, password: null);
+
+        Assert.NotNull(ctx.Sessions.TryGet(SessionKey.For(conn)));
+    }
+
+    [Fact]
     public async Task A_safety_change_keeps_the_cached_schema()
     {
         // The snapshot describes the catalog, and neither setting touches the catalog. Dropping it would make
