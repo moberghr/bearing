@@ -246,7 +246,9 @@ never drift from the project format it reads.
   you uninstall. Every update re-asserts the entry and adding is idempotent, so a reinstall does not leave
   two. It is read and written unexpanded, so a `%SystemRoot%` already in your `PATH` stays a variable
   rather than being frozen to today's value.
-- **Linux** — beside the app in the install directory; where that goes on `PATH` is the packager's call.
+- **Linux** — the AppImage is the command: started with arguments it runs `bearing`, started with none
+  (or only `--demo`) it opens the window. So `ln -s ~/Applications/BearingSql.AppImage ~/.local/bin/bearing`
+  is the whole install. (The image has a single entry point, the window's, which hands the arguments on.)
 
 Inside the install directory there are two executables: `bearing` (this command) and `bearing-app` (the
 window). It is round that way because a command has to be a console program — a Windows GUI executable

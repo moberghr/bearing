@@ -42,6 +42,16 @@ internal static class Program
             .Run();
 #pragma warning restore CA1416
 
+        // Inside the Linux AppImage this is the only entry point there is — its AppRun starts bearing-app with
+        // every argument — so `bearing query …` through a symlink to the image would open a window and drop
+        // the query. Route it to the command packed beside us instead. After the Velopack hooks, which must
+        // see their own arguments first, and before Avalonia, which a command has no use for.
+        if (AppImageCommand.ShouldForward(
+                args, Environment.GetEnvironmentVariable("APPIMAGE"), [Bearing.Demo.DemoMode.Argument]))
+        {
+            Environment.Exit(AppImageCommand.Forward(args, Console.Error));
+        }
+
         // Last-resort backstops so an escaped exception is recorded rather than lost. UI-thread faults
         // are handled (and surfaced) inside the app via Dispatcher.UnhandledException; these catch the
         // rest: background-thread crashes, unobserved task faults, and anything escaping startup.

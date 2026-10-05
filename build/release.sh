@@ -44,6 +44,11 @@ APP_NAME="Bearing"
 # below changes — this archive ships the window and nothing else, so what it installs stays `bearing`, the
 # name it has always had here. (The Velopack package ships both, and there `bearing` is the command.)
 APP_EXE="bearing-app"
+
+# The window's X11 class, which the launcher's StartupWMClass has to equal or the desktop shows a second,
+# generic icon beside a pinned one. Set in code (AppBuilderFactory.WindowClass) to the Velopack pack id,
+# because that is what vpk writes into the AppImage's own desktop entry — not to APP_ID.
+WM_CLASS="BearingSql"
 DIST="$ROOT/dist"
 
 # Target OS family drives packaging (binary suffix, archive format, installer).
@@ -159,7 +164,7 @@ Exec=__EXEC__ %U
 Icon=$APP_ID
 Terminal=false
 Categories=Development;Database;
-StartupWMClass=$APP_ID
+StartupWMClass=$WM_CLASS
 Keywords=sql;postgres;postgresql;database;query;
 EOF
 
