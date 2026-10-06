@@ -296,8 +296,9 @@ else
     echo
     echo "- **Windows** — \`${PACK_ID}-win-Setup.exe\` (per-user, no admin). Updates itself from here on."
     echo "- **Linux** — \`${PACK_ID}.AppImage\`, \`chmod +x\` and run. Updates itself in place."
-    echo "- **macOS** (Apple Silicon) — \`brew install --cask --no-quarantine moberghr/bearing/bearing\`,"
-    echo "  or \`${PACK_ID}-osx-Setup.pkg\` by hand. Updates itself in place."
+    echo "- **macOS** (Apple Silicon) — \`brew install --cask moberghr/bearing/bearing\`, then"
+    echo "  \`xattr -dr com.apple.quarantine /Applications/Bearing.app\`; or \`${PACK_ID}-osx-Setup.pkg\` by hand."
+    echo "  Updates itself in place."
     echo
     echo "Unsigned, so Windows SmartScreen warns on first run and macOS needs the quarantine flag cleared."
   } > "$NOTES"
@@ -325,7 +326,7 @@ case "$OS_FAMILY" in
     # Signing is opt-in through the environment and absent by default, which is the honest default: there
     # is no Moberg Developer ID cert, and a build that silently skipped a signature it claimed to apply
     # would be worse than one that never claimed it. Unsigned costs the user one Gatekeeper step — see
-    # packaging/homebrew/README.md, where the cask install line carries --no-quarantine because of it.
+    # packaging/homebrew/README.md, where the cask install is followed by an `xattr` because of it.
     #
     # WHEN a Developer ID exists, these three are the whole of it: no other line here changes.
     [[ -n "${SIGN_APP_IDENTITY:-}" ]]     && EXTRA_PACK_ARGS+=(--signAppIdentity "$SIGN_APP_IDENTITY")

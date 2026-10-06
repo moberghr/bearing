@@ -182,8 +182,8 @@ jobs:
       - name: Publish osx-arm64
         # Unsigned and un-notarized: there is no Moberg Developer ID. The .NET SDK ad-hoc signs the
         # apphost, which is enough to *execute* on Apple Silicon, but a quarantined ad-hoc bundle is
-        # refused by Gatekeeper — which is why the Homebrew cask is installed --no-quarantine
-        # (packaging/homebrew/README.md). WHEN a certificate exists, add SIGN_APP_IDENTITY /
+        # refused by Gatekeeper — which is why the Homebrew install is followed by clearing the quarantine
+        # flag with xattr (packaging/homebrew/README.md). WHEN a certificate exists, add SIGN_APP_IDENTITY /
         # SIGN_INSTALL_IDENTITY / NOTARY_PROFILE here and nothing else changes.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
