@@ -195,14 +195,16 @@ public class LookProbe
             var dialog = new ConnectionDialog(existing: null, existingPassword: null,
                 test: (_, _, _) => Task.FromResult(false));
             dialog.Show();
-            ResultsHarness.Pump(dialog);
+            ConnectionEditorProbe.Open(dialog, "Safety");
             Write(dialog, dir, "connection-safety-off.png");
+            ConnectionEditorProbe.Open(dialog, "Environment");
+            Write(dialog, dir, "connection-environment.png");
 
             // What the Production preset turns on, which is the state most connections that matter will be in.
             var production = dialog.GetVisualDescendants().OfType<Button>()
                 .First(b => b.Content as string == "Production");
             production.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
-            ResultsHarness.Pump(dialog);
+            ConnectionEditorProbe.Open(dialog, "Safety");
             Write(dialog, dir, "connection-safety-production.png");
 
             dialog.Close();
@@ -357,7 +359,9 @@ public class LookProbe
             if (dialog.FindControl<TextBox>("DatabaseBox") is { } db) db.Text = "app";
             if (dialog.FindControl<TextBox>("UserBox") is { } user) user.Text = "reporting";
             Pump(dialog);
+            Write(dialog, dir, "connection-general.png");
 
+            ConnectionEditorProbe.Open(dialog, "Safety");
             Write(dialog, dir, "connection-tls.png");
             dialog.Close();
         });

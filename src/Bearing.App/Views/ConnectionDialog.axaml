@@ -1,187 +1,266 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="Bearing.App.Views.ConnectionDialog"
-        Width="440" SizeToContent="Height"
+        Width="500" Height="600" MinWidth="420" MinHeight="360"
         WindowStartupLocation="CenterOwner"
-        CanResize="False"
+        CanResize="True"
         Title="Connection">
 
-  <StackPanel Margin="16" Spacing="8">
+  <!-- Tabs, and a resizable window (the form outgrew one screen once encryption, the safety group and the
+       session zone joined it). The footer — the Test result and the buttons — sits outside the tabs so Save,
+       Test and the last error are reachable whichever tab is open; each tab scrolls on its own, so a window
+       shorter than its content still reaches the bottom row. -->
+  <DockPanel Margin="16,12,16,16">
 
-    <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto">
-      <TextBlock Grid.Row="0" Grid.Column="0" Text="Engine" VerticalAlignment="Center"/>
-      <ComboBox  Grid.Row="0" Grid.Column="1" x:Name="ProviderBox" HorizontalAlignment="Stretch"
-                 SelectionChanged="OnProviderChanged"/>
+    <StackPanel DockPanel.Dock="Bottom" Spacing="8">
+      <!-- Wraps: a failed Test reports a driver message whose useful half (SQLSTATE, host, TLS/auth detail) is
+           past the dialog's right edge and used to be clipped off it. The ScrollViewer caps how much of the
+           footer a paragraph-length message takes, so it can't push the buttons off screen or squeeze the tabs
+           away, and HorizontalScrollBarVisibility must stay Disabled or the content is measured unbounded and
+           never wraps. SelectableTextBlock so the error can be copied. -->
+      <ScrollViewer Margin="0,4,0,0" MaxHeight="110"
+                    HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <SelectableTextBlock x:Name="TestResult" Opacity="0.75" TextWrapping="Wrap" Text=" "/>
+      </ScrollViewer>
 
-      <TextBlock Grid.Row="1" Grid.Column="0" Text="Name" VerticalAlignment="Center" Margin="0,6,0,0"/>
-      <TextBox   Grid.Row="1" Grid.Column="1" x:Name="NameBox" Margin="0,6,0,0"
-                 PlaceholderText="e.g. pagila (local)"/>
-    </Grid>
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" Margin="0,8,0,0">
+        <Button Grid.Column="0" x:Name="DeleteButton" Content="Delete" Click="OnDeleteClick"
+                Foreground="{DynamicResource Error.Red}" IsVisible="False"/>
+        <Button Grid.Column="2" x:Name="TestButton" Content="Test" Click="OnTestClick" Margin="0,0,8,0"/>
+        <Button Grid.Column="3" Content="Cancel" Click="OnCancelClick" Margin="0,0,8,0" IsCancel="True"/>
+        <Button Grid.Column="4" Content="Save" Click="OnSaveClick" IsDefault="True"/>
+      </Grid>
 
-    <!-- Host / Port / Database / User / driver options are NOT written out here: they are whatever the
-         selected provider declares (IDbProvider.ConnectionFields), so the rows are built in code from
-         Connections/ConnectionFieldModel and rebuilt when the engine changes. The code-behind only makes
-         labels and boxes; which fields exist, what they default to and how they map to ConnectionInfo is
-         the model's (§0.5, §2.3). -->
-    <StackPanel x:Name="FieldsHost" Spacing="0"/>
-
-    <TextBlock x:Name="EndpointHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12"
-               Margin="90,2,0,0"/>
-
-    <!-- Live, and advisory only: it names the fields the selected provider can't connect without, and
-         updates as they are filled in. It deliberately does NOT gate Save — this dialog is the only way to
-         edit an existing connection, and one saved before these fields were validated would otherwise be
-         uneditable until every complaint was cleared. -->
-    <TextBlock x:Name="ValidationHint" IsVisible="False" TextWrapping="Wrap" FontSize="12"
-               Foreground="{DynamicResource Warn.Amber}" Margin="90,2,0,0"/>
-
-    <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto">
-      <TextBlock Grid.Row="0" Grid.Column="0" Text="Credential" VerticalAlignment="Center" Margin="0,6,0,0"/>
-      <!-- Items come from Connections/CredentialKindOptions: Windows authentication and the Entra token are
-           each offered only by an engine whose driver can actually honour them. -->
-      <ComboBox  Grid.Row="0" Grid.Column="1" x:Name="CredentialKindBox" Margin="0,6,0,0"
-                 HorizontalAlignment="Stretch" SelectionChanged="OnCredentialKindChanged"/>
-
-      <TextBlock Grid.Row="1" Grid.Column="0" x:Name="PasswordLabel" Text="Password" VerticalAlignment="Center" Margin="0,6,0,0"/>
-      <TextBox   Grid.Row="1" Grid.Column="1" x:Name="PasswordBox" PasswordChar="•" Margin="0,6,0,0"/>
-    </Grid>
-
-    <TextBlock x:Name="EntraHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,4,0,0"
-               Text="Signs in via the Azure CLI (`az account get-access-token`). Run `az login` first. The token is refreshed automatically and never touches the secret store."/>
-
-    <TextBlock x:Name="IntegratedHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,4,0,0"
-               Text="Connects as the Windows account running Bearing. No password is stored, prompted for, or read from the keychain."/>
-
-    <!-- No keychain: nothing is stored anywhere, so say what will happen instead — and why, which the
-         code-behind fills in from what the store actually reported (SecretStorageAdvice). -->
-    <Border x:Name="NoStorageWarning" IsVisible="False"
-            Background="#2F2B22" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
-            Padding="8,6" Margin="0,4,0,0">
-      <TextBlock x:Name="NoStorageWarningText" TextWrapping="Wrap"
-                 Foreground="{DynamicResource Warn.Amber}" FontSize="12"/>
-    </Border>
-
-    <Separator Margin="0,4"/>
-
-    <!-- Transport security (#23). It used to be settable only by hand-editing project.json, so in practice
-         every connection ran on the driver's default: encrypt if offered, tell nobody either way. -->
-    <TextBlock Text="Encryption" Opacity="0.8"/>
-    <ComboBox x:Name="TlsBox" HorizontalAlignment="Stretch" SelectionChanged="OnTlsChanged"/>
-
-    <!-- What the chosen mode leaves open, in its own words. Amber, matching the keychain block: the posture is
-         surfaced, never silent (§1.1) — and it names *which* guarantee is missing, because "require" reads as
-         the secure choice while accepting any certificate at all. -->
-    <Border x:Name="TlsWarning" IsVisible="False"
-            Background="#2F2B22" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
-            Padding="8,6" Margin="0,4,0,0">
-      <TextBlock x:Name="TlsWarningText" TextWrapping="Wrap"
-                 Foreground="{DynamicResource Warn.Amber}" FontSize="12"/>
-    </Border>
-
-    <Separator Margin="0,4"/>
-
-    <!-- Safety. One group with Encryption above it, because a production connection's settings are read
-         together: what the transport guarantees, whether the server will accept a write at all (#99), and how
-         long it will run one (#105). The write-guard checkbox used to sit below the Environment block, which
-         put the whole colour picker between two halves of the same decision. -->
-    <TextBlock Text="Safety" Opacity="0.8"/>
-
-    <CheckBox x:Name="ConfirmWritesBox"
-              Content="Confirm before running writes / destructive DDL on this connection"/>
-
-    <!-- Read-only asks the *server* to refuse writes rather than asking the user about them. Deliberately not
-         described as prevention: it is a USERSET setting a SET can lift, so it stops mistakes and is not a
-         substitute for a role without write privileges (see SessionPolicy). -->
-    <CheckBox x:Name="ReadOnlyBox" IsCheckedChanged="OnSafetyToggled"
-              Content="Read-only — the server refuses writes on this connection"/>
-
-    <!-- Manual commit (#131). Third in the group because it is the one that changes what pressing Run
-         *does* rather than whether it is allowed: a write opens a transaction and waits for you. Reads never
-         open one, which is what keeps a session from sitting in `idle in transaction` after mere browsing. -->
-    <CheckBox x:Name="ManualCommitBox" IsCheckedChanged="OnSafetyToggled"
-              Content="Manual commit — a write waits for Commit or Rollback"/>
-
-    <StackPanel Orientation="Horizontal" Spacing="6">
-      <TextBlock Text="Statement timeout" Opacity="0.8" VerticalAlignment="Center"/>
-      <TextBox x:Name="StatementTimeoutBox" Width="70" PlaceholderText="0"
-               TextChanged="OnTimeoutChanged"/>
-      <TextBlock Text="seconds — 0 for no limit" Opacity="0.6" VerticalAlignment="Center"/>
     </StackPanel>
 
-    <!-- External access (§1.11). Last in the group because it is the only one that is not about what *you*
-         may do with this connection — it is about who else may. Off for every connection that exists and
-         every one that ever existed; the exposed session is built read-only whatever the box above says, so
-         the two are independent and a connection you write to yourself can still be handed to an agent that
-         cannot. What it lets in is spelled out in the note below rather than in the label, because it is
-         several sentences and one of them is about what this does *not* bound. -->
-    <CheckBox x:Name="ExternalAccessBox" IsCheckedChanged="OnSafetyToggled"
-              Content="Let the `bearing` command query this connection, read-only"/>
+    <TabControl x:Name="Sections">
+      <!-- Fluent's TabItem is a 24px heading whose selected marker is a short line under the text — it reads as
+           a link. These are section switches: the main window's result-tab treatment (MainWindow.axaml) —
+           dimmed until hovered or selected, a full-width bar under the selected one. Brand accent rather than
+           ConnectionBrush, since that is the *active* connection's colour, not this one's. -->
+      <TabControl.Styles>
+        <Style Selector="TabItem">
+          <Setter Property="FontSize" Value="13"/>
+          <Setter Property="FontWeight" Value="Normal"/>
+          <Setter Property="MinHeight" Value="0"/>
+          <Setter Property="Padding" Value="14,7"/>
+          <Setter Property="Margin" Value="0"/>
+          <Setter Property="Background" Value="Transparent"/>
+          <Setter Property="BorderBrush" Value="Transparent"/>
+          <Setter Property="BorderThickness" Value="0,0,0,2"/>
+          <Setter Property="Opacity" Value="0.65"/>
+          <Setter Property="Template">
+            <ControlTemplate>
+              <Border Background="{TemplateBinding Background}"
+                      BorderBrush="{TemplateBinding BorderBrush}"
+                      BorderThickness="{TemplateBinding BorderThickness}"
+                      CornerRadius="4,4,0,0"
+                      Padding="{TemplateBinding Padding}">
+                <ContentPresenter Content="{TemplateBinding Header}"
+                                  ContentTemplate="{TemplateBinding HeaderTemplate}"
+                                  VerticalAlignment="Center"/>
+              </Border>
+            </ControlTemplate>
+          </Setter>
+        </Style>
+        <Style Selector="TabItem:pointerover">
+          <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
+          <Setter Property="Opacity" Value="1"/>
+        </Style>
+        <Style Selector="TabItem:selected">
+          <Setter Property="Background" Value="{DynamicResource Bg.Hover}"/>
+          <Setter Property="BorderBrush" Value="{DynamicResource Accent.Brand}"/>
+          <Setter Property="FontWeight" Value="SemiBold"/>
+          <Setter Property="Opacity" Value="1"/>
+        </Style>
+        <!-- The hairline under the strip, so the selected bar sits on an edge rather than floating. -->
+        <Style Selector="TabControl#Sections /template/ ContentPresenter#PART_SelectedContentHost">
+          <Setter Property="BorderBrush" Value="{DynamicResource Border.Control}"/>
+          <Setter Property="BorderThickness" Value="0,1,0,0"/>
+          <Setter Property="Padding" Value="0,12,0,0"/>
+        </Style>
+      </TabControl.Styles>
 
-    <!-- What these two leave open, in their own words — the same treatment and the same register as the TLS
-         block above it (§1.1: the posture is surfaced, never silent). Absent when neither is set, rather than
-         saying something reassuring about a connection with no safety settings at all. -->
-    <Border x:Name="SafetyNote" IsVisible="False"
-            Background="#2F2B22" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
-            Padding="8,6" Margin="0,4,0,0">
-      <TextBlock x:Name="SafetyNoteText" TextWrapping="Wrap"
-                 Foreground="{DynamicResource Warn.Amber}" FontSize="12"/>
-    </Border>
+      <TabItem Header="Connection">
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+          <StackPanel Spacing="8" Margin="0,0,12,0">
 
-    <Separator Margin="0,4"/>
+            <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto">
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="Engine" VerticalAlignment="Center"/>
+              <ComboBox  Grid.Row="0" Grid.Column="1" x:Name="ProviderBox" HorizontalAlignment="Stretch"
+                         SelectionChanged="OnProviderChanged"/>
 
-    <!-- The session time zone (#163). Not in Safety: it restricts nothing, it decides what `::date`,
-         `timestamptz::timestamp` and date_trunc compute. Its own group so it can disappear whole for an engine
-         with no session zone to set (SQL Server), where offering it would claim it does something. The hint is
-         always shown, because the thing that made #163 hard to find was that nothing named the zone. -->
-    <StackPanel x:Name="TimeZoneGroup" Spacing="8">
-      <TextBlock Text="Session time zone" Opacity="0.8"/>
-      <ComboBox x:Name="TimeZoneModeBox" HorizontalAlignment="Stretch" SelectionChanged="OnTimeZoneModeChanged"/>
-      <TextBox x:Name="TimeZoneBox" IsVisible="False" PlaceholderText="e.g. UTC, Europe/Zagreb"
-               TextChanged="OnTimeZoneTextChanged"/>
-      <TextBlock x:Name="TimeZoneHint" TextWrapping="Wrap" Opacity="0.7" FontSize="12"/>
-      <Separator Margin="0,4"/>
-    </StackPanel>
+              <TextBlock Grid.Row="1" Grid.Column="0" Text="Name" VerticalAlignment="Center" Margin="0,6,0,0"/>
+              <TextBox   Grid.Row="1" Grid.Column="1" x:Name="NameBox" Margin="0,6,0,0"
+                         PlaceholderText="e.g. pagila (local)"/>
+            </Grid>
 
-    <TextBlock Text="Environment" Opacity="0.8"/>
-    <StackPanel Orientation="Horizontal" Spacing="6">
-      <TextBox x:Name="EnvBox" Width="150" PlaceholderText="label, e.g. production"/>
-      <TextBox x:Name="EnvColorBox" Width="90" PlaceholderText="#RRGGBB" TextChanged="OnEnvColorTextChanged"/>
-      <!-- Beside the hex, because it is the same value by another route. The swatch is the picker's own
-           button and its content stays bound to the hex box rather than to the picker's colour, so a blank
-           or unparseable entry shows the neutral it will actually resolve to (§9.3a) instead of whatever
-           colour the picker happens to hold. -->
-      <ColorPicker x:Name="EnvColorPicker" Width="48" Height="26" VerticalAlignment="Center"
-                   IsAlphaEnabled="False" IsAlphaVisible="False"
-                   ColorChanged="OnEnvColorPicked">
-        <ColorPicker.Content>
-          <Border x:Name="ColorSwatch" CornerRadius="3" Margin="1"
-                  Background="{Binding #EnvColorBox.Text, Converter={StaticResource HexBrush}}"/>
-        </ColorPicker.Content>
-      </ColorPicker>
-    </StackPanel>
-    <StackPanel Orientation="Horizontal" Spacing="6">
-      <Button Content="Local"      Tag="#3FB950" Click="OnPresetColorClick" Background="#3FB950" Foreground="White" Padding="8,2"/>
-      <Button Content="Staging"    Tag="#D29922" Click="OnPresetColorClick" Background="#D29922" Foreground="White" Padding="8,2"/>
-      <Button Content="Production" Tag="#E5484D" Click="OnPresetColorClick" Background="#E5484D" Foreground="White" Padding="8,2"/>
-    </StackPanel>
+            <!-- Host / Port / Database / User / driver options are NOT written out here: they are whatever the
+                 selected provider declares (IDbProvider.ConnectionFields), so the rows are built in code from
+                 Connections/ConnectionFieldModel and rebuilt when the engine changes. The code-behind only makes
+                 labels and boxes; which fields exist, what they default to and how they map to ConnectionInfo is
+                 the model's (§0.5, §2.3). -->
+            <StackPanel x:Name="FieldsHost" Spacing="0"/>
 
-    <!-- Wraps: a failed Test reports a driver message whose useful half (SQLSTATE, host, TLS/auth detail) is
-         past column 440 and used to be clipped off the edge of this fixed-width dialog. SizeToContent="Height"
-         means wrapping grows the window instead; the ScrollViewer caps that growth so a paragraph-length
-         message can't push the buttons off screen, and HorizontalScrollBarVisibility must stay Disabled or
-         the content is measured unbounded and never wraps. SelectableTextBlock so the error can be copied. -->
-    <ScrollViewer Margin="0,4,0,0" MaxHeight="110"
-                  HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-      <SelectableTextBlock x:Name="TestResult" Opacity="0.75" TextWrapping="Wrap" Text=" "/>
-    </ScrollViewer>
+            <TextBlock x:Name="EndpointHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12"
+                       Margin="90,2,0,0"/>
 
-    <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" Margin="0,8,0,0">
-      <Button Grid.Column="0" x:Name="DeleteButton" Content="Delete" Click="OnDeleteClick"
-              Foreground="{DynamicResource Error.Red}" IsVisible="False"/>
-      <Button Grid.Column="2" x:Name="TestButton" Content="Test" Click="OnTestClick" Margin="0,0,8,0"/>
-      <Button Grid.Column="3" Content="Cancel" Click="OnCancelClick" Margin="0,0,8,0" IsCancel="True"/>
-      <Button Grid.Column="4" Content="Save" Click="OnSaveClick" IsDefault="True"/>
-    </Grid>
+            <!-- Live, and advisory only: it names the fields the selected provider can't connect without, and
+                 updates as they are filled in. It deliberately does NOT gate Save — this dialog is the only way to
+                 edit an existing connection, and one saved before these fields were validated would otherwise be
+                 uneditable until every complaint was cleared. -->
+            <TextBlock x:Name="ValidationHint" IsVisible="False" TextWrapping="Wrap" FontSize="12"
+                       Foreground="{DynamicResource Warn.Amber}" Margin="90,2,0,0"/>
 
-  </StackPanel>
+            <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto">
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="Credential" VerticalAlignment="Center" Margin="0,6,0,0"/>
+              <!-- Items come from Connections/CredentialKindOptions: Windows authentication and the Entra token are
+                   each offered only by an engine whose driver can actually honour them. -->
+              <ComboBox  Grid.Row="0" Grid.Column="1" x:Name="CredentialKindBox" Margin="0,6,0,0"
+                         HorizontalAlignment="Stretch" SelectionChanged="OnCredentialKindChanged"/>
+
+              <TextBlock Grid.Row="1" Grid.Column="0" x:Name="PasswordLabel" Text="Password" VerticalAlignment="Center" Margin="0,6,0,0"/>
+              <TextBox   Grid.Row="1" Grid.Column="1" x:Name="PasswordBox" PasswordChar="•" Margin="0,6,0,0"/>
+            </Grid>
+
+            <TextBlock x:Name="EntraHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,4,0,0"
+                       Text="Signs in via the Azure CLI (`az account get-access-token`). Run `az login` first. The token is refreshed automatically and never touches the secret store."/>
+
+            <TextBlock x:Name="IntegratedHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,4,0,0"
+                       Text="Connects as the Windows account running Bearing. No password is stored, prompted for, or read from the keychain."/>
+
+            <!-- No keychain: nothing is stored anywhere, so say what will happen instead — and why, which the
+                 code-behind fills in from what the store actually reported (SecretStorageAdvice). -->
+            <Border x:Name="NoStorageWarning" IsVisible="False"
+                    Background="#2F2B22" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
+                    Padding="8,6" Margin="0,4,0,0">
+              <TextBlock x:Name="NoStorageWarningText" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Warn.Amber}" FontSize="12"/>
+            </Border>
+
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <TabItem Header="Safety">
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+          <StackPanel Spacing="8" Margin="0,0,12,0">
+
+            <!-- Transport security (#23). It used to be settable only by hand-editing project.json, so in practice
+                 every connection ran on the driver's default: encrypt if offered, tell nobody either way. -->
+            <TextBlock Text="Encryption" Opacity="0.8"/>
+            <ComboBox x:Name="TlsBox" HorizontalAlignment="Stretch" SelectionChanged="OnTlsChanged"/>
+
+            <!-- What the chosen mode leaves open, in its own words. Amber, matching the keychain block: the posture is
+                 surfaced, never silent (§1.1) — and it names *which* guarantee is missing, because "require" reads as
+                 the secure choice while accepting any certificate at all. -->
+            <Border x:Name="TlsWarning" IsVisible="False"
+                    Background="#2F2B22" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
+                    Padding="8,6" Margin="0,4,0,0">
+              <TextBlock x:Name="TlsWarningText" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Warn.Amber}" FontSize="12"/>
+            </Border>
+
+            <Separator Margin="0,4"/>
+
+            <!-- Safety. One group with Encryption above it, because a production connection's settings are read
+                 together: what the transport guarantees, whether the server will accept a write at all (#99), and how
+                 long it will run one (#105). The write-guard checkbox used to sit below the Environment block, which
+                 put the whole colour picker between two halves of the same decision. -->
+            <TextBlock Text="Safety" Opacity="0.8"/>
+
+            <CheckBox x:Name="ConfirmWritesBox"
+                      Content="Confirm before running writes / destructive DDL on this connection"/>
+
+            <!-- Read-only asks the *server* to refuse writes rather than asking the user about them. Deliberately not
+                 described as prevention: it is a USERSET setting a SET can lift, so it stops mistakes and is not a
+                 substitute for a role without write privileges (see SessionPolicy). -->
+            <CheckBox x:Name="ReadOnlyBox" IsCheckedChanged="OnSafetyToggled"
+                      Content="Read-only — the server refuses writes on this connection"/>
+
+            <!-- Manual commit (#131). Third in the group because it is the one that changes what pressing Run
+                 *does* rather than whether it is allowed: a write opens a transaction and waits for you. Reads never
+                 open one, which is what keeps a session from sitting in `idle in transaction` after mere browsing. -->
+            <CheckBox x:Name="ManualCommitBox" IsCheckedChanged="OnSafetyToggled"
+                      Content="Manual commit — a write waits for Commit or Rollback"/>
+
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Text="Statement timeout" Opacity="0.8" VerticalAlignment="Center"/>
+              <TextBox x:Name="StatementTimeoutBox" Width="70" PlaceholderText="0"
+                       TextChanged="OnTimeoutChanged"/>
+              <TextBlock Text="seconds — 0 for no limit" Opacity="0.6" VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <!-- External access (§1.11). Last in the group because it is the only one that is not about what *you*
+                 may do with this connection — it is about who else may. Off for every connection that exists and
+                 every one that ever existed; the exposed session is built read-only whatever the box above says, so
+                 the two are independent and a connection you write to yourself can still be handed to an agent that
+                 cannot. What it lets in is spelled out in the note below rather than in the label, because it is
+                 several sentences and one of them is about what this does *not* bound. -->
+            <CheckBox x:Name="ExternalAccessBox" IsCheckedChanged="OnSafetyToggled"
+                      Content="Let the `bearing` command query this connection, read-only"/>
+
+            <!-- What these two leave open, in their own words — the same treatment and the same register as the TLS
+                 block above it (§1.1: the posture is surfaced, never silent). Absent when neither is set, rather than
+                 saying something reassuring about a connection with no safety settings at all. -->
+            <Border x:Name="SafetyNote" IsVisible="False"
+                    Background="#2F2B22" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
+                    Padding="8,6" Margin="0,4,0,0">
+              <TextBlock x:Name="SafetyNoteText" TextWrapping="Wrap"
+                         Foreground="{DynamicResource Warn.Amber}" FontSize="12"/>
+            </Border>
+
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <!-- What the connection looks like and what its session computes in: neither restricts anything. The
+           Production preset here also switches on the Safety tab's settings (it never switches them off). -->
+      <TabItem Header="Environment">
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+          <StackPanel Spacing="8" Margin="0,0,12,0">
+
+            <TextBlock Text="Environment" Opacity="0.8"/>
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBox x:Name="EnvBox" Width="150" PlaceholderText="label, e.g. production"/>
+              <TextBox x:Name="EnvColorBox" Width="90" PlaceholderText="#RRGGBB" TextChanged="OnEnvColorTextChanged"/>
+              <!-- Beside the hex, because it is the same value by another route. The swatch is the picker's own
+                   button and its content stays bound to the hex box rather than to the picker's colour, so a blank
+                   or unparseable entry shows the neutral it will actually resolve to (§9.3a) instead of whatever
+                   colour the picker happens to hold. -->
+              <ColorPicker x:Name="EnvColorPicker" Width="48" Height="26" VerticalAlignment="Center"
+                           IsAlphaEnabled="False" IsAlphaVisible="False"
+                           ColorChanged="OnEnvColorPicked">
+                <ColorPicker.Content>
+                  <Border x:Name="ColorSwatch" CornerRadius="3" Margin="1"
+                          Background="{Binding #EnvColorBox.Text, Converter={StaticResource HexBrush}}"/>
+                </ColorPicker.Content>
+              </ColorPicker>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <Button Content="Local"      Tag="#3FB950" Click="OnPresetColorClick" Background="#3FB950" Foreground="White" Padding="8,2"/>
+              <Button Content="Staging"    Tag="#D29922" Click="OnPresetColorClick" Background="#D29922" Foreground="White" Padding="8,2"/>
+              <Button Content="Production" Tag="#E5484D" Click="OnPresetColorClick" Background="#E5484D" Foreground="White" Padding="8,2"/>
+            </StackPanel>
+
+            <!-- The session time zone (#163). Not in Safety: it restricts nothing, it decides what `::date`,
+                 `timestamptz::timestamp` and date_trunc compute. Its own group so it can disappear whole for an engine
+                 with no session zone to set (SQL Server), where offering it would claim it does something. The hint is
+                 always shown, because the thing that made #163 hard to find was that nothing named the zone. -->
+            <StackPanel x:Name="TimeZoneGroup" Spacing="8">
+              <Separator Margin="0,4"/>
+              <TextBlock Text="Session time zone" Opacity="0.8"/>
+              <ComboBox x:Name="TimeZoneModeBox" HorizontalAlignment="Stretch" SelectionChanged="OnTimeZoneModeChanged"/>
+              <TextBox x:Name="TimeZoneBox" IsVisible="False" PlaceholderText="e.g. UTC, Europe/Zagreb"
+                       TextChanged="OnTimeZoneTextChanged"/>
+              <TextBlock x:Name="TimeZoneHint" TextWrapping="Wrap" Opacity="0.7" FontSize="12"/>
+            </StackPanel>
+
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+    </TabControl>
+
+  </DockPanel>
 </Window>

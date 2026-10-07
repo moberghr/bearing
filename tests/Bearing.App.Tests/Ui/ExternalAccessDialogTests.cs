@@ -38,12 +38,10 @@ public class ExternalAccessDialogTests
     };
 
     private static CheckBox Box(ConnectionDialog dialog, string name)
-        => Assert.IsType<CheckBox>(Assert.Single(
-            dialog.GetLogicalDescendants().OfType<Control>(), c => c.Name == name));
+        => Assert.IsType<CheckBox>(Assert.Single(ConnectionEditorProbe.Named(dialog, name)));
 
     private static string Note(ConnectionDialog dialog)
-        => dialog.GetLogicalDescendants().OfType<TextBlock>()
-            .Single(t => t.Name == "SafetyNoteText").Text ?? "";
+        => Assert.IsType<TextBlock>(Assert.Single(ConnectionEditorProbe.Named(dialog, "SafetyNoteText"))).Text ?? "";
 
     [Fact]
     public Task The_box_loads_from_the_connection() => _ui.Run(() =>

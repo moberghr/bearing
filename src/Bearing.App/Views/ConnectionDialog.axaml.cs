@@ -71,6 +71,7 @@ public partial class ConnectionDialog : Window
         IProviderRegistry? providers = null)
     {
         InitializeComponent();
+        Opened += (_, _) => FitToScreen();
         _test = test;
         _existing = existing;
         _id = existing?.Id ?? Guid.NewGuid();
@@ -124,6 +125,16 @@ public partial class ConnectionDialog : Window
         // stored password it would silently fail to store. An edited one keeps whatever it was saved as.
         RebuildCredentialKinds(existing?.CredentialKind
             ?? (_storage.CanStore ? CredentialKind.StoredPassword : CredentialKind.Prompt));
+    }
+
+    /// <summary>The window opens at its XAML height, which a small or heavily scaled screen may not have room
+    /// for — and then Save sits below the bottom edge. Shrink to the working area instead; each tab scrolls,
+    /// and the window stays resizable for whoever wants it taller.</summary>
+    private void FitToScreen()
+    {
+        if (Screens.ScreenFromWindow(this) is not { } screen) return;
+        var room = screen.WorkingArea.Height / screen.Scaling - 32;
+        if (Height > room) Height = Math.Max(MinHeight, room);
     }
 
     /// <summary>The provider for a persisted id, or the first registered one when this build no longer ships

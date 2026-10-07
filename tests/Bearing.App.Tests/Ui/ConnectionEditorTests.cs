@@ -317,6 +317,22 @@ internal static class ConnectionEditorProbe
         return dialog;
     }
 
+    /// <summary>
+    /// Bring one of the dialog's tabs forward and lay it out. Only the selected tab is in the visual tree, so
+    /// anything asserted about a realized control — its bounds, its template, a binding that resolves on
+    /// attach — needs its tab open first; the logical tree holds every tab regardless.
+    /// </summary>
+    public static void Open(Window dialog, string tab)
+    {
+        var sections = dialog.GetLogicalDescendants().OfType<TabControl>().Single(t => t.Name == "Sections");
+        sections.SelectedItem = sections.Items.OfType<TabItem>().Single(i => i.Header as string == tab);
+        for (var i = 0; i < 2; i++)
+        {
+            dialog.UpdateLayout();
+            Dispatcher.UIThread.RunJobs(DispatcherPriority.Loaded);
+        }
+    }
+
     public static void Close(ConnectionDialog dialog)
     {
         try { dialog.Close(); } catch { /* already closing */ }
@@ -384,6 +400,7 @@ internal static class ConnectionEditorProbe
             .OfType<Control>()
             .Where(c => c.Name is { } n && n.EndsWith("Box", StringComparison.Ordinal)
                         && c is TextBox or CheckBox or ComboBox)
+            .Distinct()
             .Select(c => c.Name![..^3])
             .ToList();
 
@@ -400,6 +417,9 @@ internal static class ConnectionEditorProbe
             _ => i?.ToString() ?? "",
         }).ToList();
 
-    private static IReadOnlyList<Control> Named(ConnectionDialog dialog, string name)
-        => dialog.GetLogicalDescendants().OfType<Control>().Where(c => c.Name == name).ToList();
+    /// <summary>Distinct: the open tab's content is reachable twice in the logical tree once the dialog is
+    /// shown — from its <c>TabItem</c> and from the <c>TabControl</c>'s presenter — and that is one control,
+    /// not the stale duplicate <see cref="Editor{T}"/>'s <c>Single</c> is there to catch.</summary>
+    internal static IReadOnlyList<Control> Named(ConnectionDialog dialog, string name)
+        => dialog.GetLogicalDescendants().OfType<Control>().Where(c => c.Name == name).Distinct().ToList();
 }

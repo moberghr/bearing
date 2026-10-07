@@ -42,12 +42,10 @@ public class ManualCommitDialogTests
     };
 
     private static CheckBox Box(ConnectionDialog dialog, string name)
-        => Assert.IsType<CheckBox>(Assert.Single(
-            dialog.GetLogicalDescendants().OfType<Control>(), c => c.Name == name));
+        => Assert.IsType<CheckBox>(Assert.Single(ConnectionEditorProbe.Named(dialog, name)));
 
     private static string Note(ConnectionDialog dialog)
-        => dialog.GetLogicalDescendants().OfType<TextBlock>()
-            .Single(t => t.Name == "SafetyNoteText").Text ?? "";
+        => Assert.IsType<TextBlock>(Assert.Single(ConnectionEditorProbe.Named(dialog, "SafetyNoteText"))).Text ?? "";
 
     [Fact]
     public Task The_box_loads_from_the_connection() => _ui.Run(() =>
@@ -114,7 +112,7 @@ public class ManualCommitDialogTests
         using var d = new Disposer(ConnectionEditorProbe.Show(Saved(manualCommit: true)));
         Box(d.Dialog, "ConfirmWritesBox").IsChecked = true;
         Box(d.Dialog, "ReadOnlyBox").IsChecked = false;   // else the note describes a transaction that never opens
-        d.Dialog.UpdateLayout();
+        ConnectionEditorProbe.Open(d.Dialog, "Safety");
 
         Assert.True(Box(d.Dialog, "ManualCommitBox").IsVisible);
         Assert.True(Box(d.Dialog, "ManualCommitBox").Bounds.Height > 0);   // laid out, not merely present
