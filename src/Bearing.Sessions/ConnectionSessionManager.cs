@@ -457,7 +457,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
                 info, factory, provider.CreateQueryExecutor(factory), provider.CreateMetadataReader(factory),
                 provider.CreateServerActivity(factory), credential.ExpiresAt,
                 provider.SupportsServerActivity)
-            { LastUsedUtc = _clock() };
+            { LastUsedUtc = _clock(), LoginUser = credential.ApplyTo(info).User };
             bool disposedDuringConnect;
             bool newLink;
             lock (_gate)

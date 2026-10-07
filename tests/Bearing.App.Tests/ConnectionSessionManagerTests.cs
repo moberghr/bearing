@@ -463,28 +463,62 @@ public class ConnectionSessionManagerTests
             UserFromEntraLogin = true,
         };
 
-        await mgr.GetOrConnectAsync(info, CancellationToken.None);
+        var session = await mgr.GetOrConnectAsync(info, CancellationToken.None);
 
         Assert.Equal("ana@contoso.com", provider.LastInfo!.User);
+        Assert.Equal("ana@contoso.com", session.LoginUser);   // what the activity panel names
         Assert.Equal("tok", provider.LastPassword);
         Assert.Equal("", info.User);   // resolved for the connect, never written back to the record
     }
 
     [Fact]
-    public async Task Switching_to_the_az_login_user_rebuilds_the_pool()
+    public async Task Switching_to_the_az_login_user_rebuilds_the_pool_with_a_fresh_credential()
     {
-        // A different role, so a pool built as the typed user must not go on serving the az one.
+        // A different role, so a pool built as the typed user must not go on serving the az one. The token
+        // cached for the typed connection carries no user — as the real provider mints it when none was asked
+        // for — and serving it from the cache would connect with an empty user name.
         var provider = new FakeProvider();
-        var tokens = new FakeEntraTokens(_ => new Credential("tok", null, "ana@contoso.com"));
+        var tokens = new FakeEntraTokens(call => call == 0
+            ? new Credential("tok0", null)
+            : new Credential("tok1", null, "ana@contoso.com"));
         var resolver = new CredentialResolver(() => null, null, tokens);
         await using var mgr = new ConnectionSessionManager(provider, () => resolver, runSweepTimer: false);
         var typed = Conn(Guid.NewGuid()) with { CredentialKind = CredentialKind.EntraToken };
 
         var before = await mgr.GetOrConnectAsync(typed, CancellationToken.None);
-        var after = await mgr.GetOrConnectAsync(typed with { UserFromEntraLogin = true }, CancellationToken.None);
+        Assert.Equal("u", provider.LastInfo!.User);
+        var after = await mgr.GetOrConnectAsync(typed with { User = "", UserFromEntraLogin = true }, CancellationToken.None);
 
         Assert.NotSame(before, after);
         Assert.Equal(2, provider.FactoriesCreated);
+        Assert.Equal(2, tokens.Calls);
+        Assert.Equal("ana@contoso.com", provider.LastInfo!.User);
+    }
+
+    [Fact]
+    public async Task Switching_back_to_a_typed_user_logs_in_as_it_even_with_the_az_user_still_cached()
+    {
+        // The dangerous direction: the cached token still names the az account and is nowhere near expiry. If
+        // it decided the user, this pool would quietly log in as the wrong role — and, the role existing,
+        // succeed, so no auth-failure retry would ever correct it.
+        var provider = new FakeProvider();
+        var tokens = new FakeEntraTokens(_ => new Credential("tok", null, "ana@contoso.com"));
+        var resolver = new CredentialResolver(() => null, null, tokens);
+        await using var mgr = new ConnectionSessionManager(provider, () => resolver, runSweepTimer: false);
+        var fromAz = Conn(Guid.NewGuid()) with
+        {
+            User = "",
+            CredentialKind = CredentialKind.EntraToken,
+            UserFromEntraLogin = true,
+        };
+
+        await mgr.GetOrConnectAsync(fromAz, CancellationToken.None);
+        Assert.Equal("ana@contoso.com", provider.LastInfo!.User);
+        var typed = await mgr.GetOrConnectAsync(
+            fromAz with { User = "reporting_ro", UserFromEntraLogin = false }, CancellationToken.None);
+
+        Assert.Equal("reporting_ro", provider.LastInfo!.User);
+        Assert.Equal("reporting_ro", typed.LoginUser);
     }
 
     [Fact]

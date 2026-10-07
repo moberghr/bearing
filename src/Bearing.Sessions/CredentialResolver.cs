@@ -108,8 +108,11 @@ public sealed class CredentialResolver
 
             case CredentialKind.EntraToken:
                 {
+                    // A token cached before the az-login user box was ticked carries no user, and serving it
+                    // would connect with an empty one — the edit that ticked it doesn't reach this cache.
                     if (!forceRefresh && _cache.TryGetValue(info.Id, out var cached)
-                        && !IsExpiring(cached.ExpiresAt, _now(), RefreshSkew))
+                        && !IsExpiring(cached.ExpiresAt, _now(), RefreshSkew)
+                        && (cached.User is not null || !EntraTokenProvider.WantsUser(info)))
                         return cached;
                     var cred = await _tokens.GetTokenAsync(info, ct);
                     _cache[info.Id] = cred;

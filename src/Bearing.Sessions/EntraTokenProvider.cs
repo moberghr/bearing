@@ -15,7 +15,7 @@ namespace Bearing.Sessions;
 /// it reuses the user's existing <c>az login</c>. The token becomes the connection's password; its expiry is
 /// carried on the <see cref="Credential"/> so the session manager can disconnect before it goes stale. A
 /// connection with <see cref="ConnectionInfo.UserFromEntraLogin"/> also gets the signed-in account's name on
-/// the same credential (<see cref="WantsUser"/>).
+/// the same credential, read off the token (<see cref="WantsUser"/>, <see cref="UserFromToken"/>).
 /// <para>
 /// The <em>resource</em> the token is minted for is per engine: Azure Database for PostgreSQL and Azure SQL
 /// are separate audiences, and a token for one is rejected by the other. It therefore comes from
@@ -57,11 +57,7 @@ public sealed class EntraTokenProvider : IEntraTokenProvider
 
     public async Task<Credential> GetTokenAsync(ConnectionInfo info, CancellationToken ct)
     {
-        // Both questions go to az at once when the user is asked for: they are independent calls, and each is
-        // a process start plus a round trip to Entra, which is most of the connect time on this path.
-        var userTask = WantsUser(info) ? GetUserAsync(ct) : Task.FromResult<string?>(null);
-        var (exit, stdout, stderr) = await RunAzAsync(
-            ["account", "get-access-token", "--resource", ResourceFor(info), "--output", "json"], ct);
+        var (exit, stdout, stderr) = await RunAzAsync(ResourceFor(info), ct);
         if (exit != 0)
             throw new InvalidOperationException(FormatAzError(exit, stderr));
 
@@ -71,39 +67,65 @@ public sealed class EntraTokenProvider : IEntraTokenProvider
         {
             throw new InvalidOperationException($"Could not read the Entra token returned by az: {ex.Message}", ex);
         }
-        return credential with { User = await userTask };
+        // Read off the token itself rather than asked of az separately: the name then belongs to the identity
+        // the token was minted for by construction, and no Graph call is needed that a tenant may block.
+        return WantsUser(info) ? credential with { User = UserFromToken(credential.Secret!) } : credential;
     }
 
     /// <summary>True when this connection's login name comes from az rather than from its User field: it asked
     /// for that, and its engine's Entra login takes a user name at all (SQL Server's does not — there the
-    /// token is the identity, and a lookup would be a wasted az call whose answer is thrown away).</summary>
+    /// token is the identity, and reading a name off it would be work whose answer is thrown away).</summary>
     public static bool WantsUser(ConnectionInfo info)
         => info.CredentialKind == CredentialKind.EntraToken
            && info.UserFromEntraLogin
            && ProviderTraits.For(info).EntraTakesUser;
 
-    /// <summary>The signed-in account's user principal name, as Entra-authenticated Postgres expects the role
-    /// to be named: <c>az ad signed-in-user show --query userPrincipalName -o tsv</c>.</summary>
-    private static async Task<string?> GetUserAsync(CancellationToken ct)
+    /// <summary>
+    /// The signed-in account's user principal name, as Entra-authenticated Postgres expects the role to be
+    /// named, out of the access token's claims: <c>upn</c> (v1 tokens), else <c>preferred_username</c> (v2).
+    /// Pure, for the same reason as <see cref="ParseTokenResponse"/>.
+    /// <para>
+    /// The signature is not checked, and need not be: this only names the role, and the server verifies the
+    /// token it is sent. <c>unique_name</c> is deliberately not a fallback — for a guest it is
+    /// <c>live.com#…</c>, which is no role's name.
+    /// </para>
+    /// <para>
+    /// No name is refused rather than passed on: a connect with an empty user name fails at the server with a
+    /// message about the role, not about az, and the cause is several steps away from there.
+    /// </para>
+    /// </summary>
+    public static string UserFromToken(string jwt)
     {
-        var (exit, stdout, stderr) = await RunAzAsync(
-            ["ad", "signed-in-user", "show", "--query", "userPrincipalName", "--output", "tsv"], ct);
-        if (exit != 0)
-            throw new InvalidOperationException(FormatUserError(exit, stderr));
-        return ParseUserResponse(stdout);
+        string? upn = null;
+        try
+        {
+            var parts = jwt.Split('.');
+            if (parts.Length >= 2)
+            {
+                using var claims = JsonDocument.Parse(Base64UrlDecode(parts[1]));
+                upn = Claim(claims.RootElement, "upn") ?? Claim(claims.RootElement, "preferred_username");
+            }
+        }
+        catch (Exception ex) when (ex is FormatException or JsonException)
+        {
+            throw new InvalidOperationException($"Could not read the signed-in user from the Entra token: {ex.Message}", ex);
+        }
+        return upn ?? throw new InvalidOperationException(
+            "The Entra token names no signed-in user. A service principal or managed identity has no user "
+            + "principal name — untick \"User is whoever az is signed in as\" and type the role name instead.");
     }
 
-    /// <summary>The UPN out of az's tsv output. Pure, for the same reason as <see cref="ParseTokenResponse"/>.
-    /// Blank output is refused rather than passed on: a connect with an empty user name fails at the server
-    /// with a message about the role, not about az, and the cause is several steps away from there.</summary>
-    public static string ParseUserResponse(string tsv)
+    private static string? Claim(JsonElement claims, string name)
+        => claims.ValueKind == JsonValueKind.Object
+           && claims.TryGetProperty(name, out var value)
+           && value.ValueKind == JsonValueKind.String
+           && value.GetString() is { } text && !string.IsNullOrWhiteSpace(text)
+            ? text.Trim() : null;
+
+    private static byte[] Base64UrlDecode(string segment)
     {
-        var upn = tsv.Trim();
-        if (upn.Length == 0)
-            throw new InvalidOperationException(
-                "az did not name a signed-in user. A service principal or managed identity has no user "
-                + "principal name — untick \"User from az login\" and type the role name instead.");
-        return upn;
+        var s = segment.Replace('-', '+').Replace('_', '/');
+        return Convert.FromBase64String(s.PadRight(s.Length + (4 - s.Length % 4) % 4, '='));
     }
 
     /// <summary>Parse the JSON emitted by <c>az account get-access-token</c>. Pure and side-effect-free so it
@@ -138,7 +160,7 @@ public sealed class EntraTokenProvider : IEntraTokenProvider
         return new Credential(token, expires);
     }
 
-    private static async Task<(int Exit, string Out, string Err)> RunAzAsync(string[] args, CancellationToken ct)
+    private static async Task<(int Exit, string Out, string Err)> RunAzAsync(string resource, CancellationToken ct)
     {
         var psi = new ProcessStartInfo("az")
         {
@@ -147,7 +169,12 @@ public sealed class EntraTokenProvider : IEntraTokenProvider
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        foreach (var arg in args) psi.ArgumentList.Add(arg);
+        psi.ArgumentList.Add("account");
+        psi.ArgumentList.Add("get-access-token");
+        psi.ArgumentList.Add("--resource");
+        psi.ArgumentList.Add(resource);
+        psi.ArgumentList.Add("--output");
+        psi.ArgumentList.Add("json");
 
         Process proc;
         try { proc = Process.Start(psi) ?? throw new InvalidOperationException("az could not be started."); }
@@ -170,7 +197,7 @@ public sealed class EntraTokenProvider : IEntraTokenProvider
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 try { proc.Kill(entireProcessTree: true); } catch { /* best-effort */ }
-                throw new InvalidOperationException($"Timed out waiting for `az {args[0]} {args[1]}`.");
+                throw new InvalidOperationException("Timed out waiting for az to return an Entra token.");
             }
             return (proc.ExitCode, await outTask, await errTask);
         }
@@ -185,11 +212,5 @@ public sealed class EntraTokenProvider : IEntraTokenProvider
             || msg.Contains("refresh token", StringComparison.OrdinalIgnoreCase))
             return "Entra sign-in required — run `az login`. (" + msg + ")";
         return "Could not obtain an Entra token from az: " + msg;
-    }
-
-    private static string FormatUserError(int exit, string stderr)
-    {
-        var msg = string.IsNullOrWhiteSpace(stderr) ? $"az exited with code {exit}." : stderr.Trim();
-        return "Could not read the signed-in user from az (`az ad signed-in-user show`): " + msg;
     }
 }

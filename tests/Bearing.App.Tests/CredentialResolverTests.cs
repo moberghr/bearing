@@ -151,6 +151,27 @@ public class CredentialResolverTests
         Assert.Equal(2, tokens.Calls);
     }
 
+    [Fact]
+    public async Task Entra_token_cached_without_a_user_is_re_minted_once_the_connection_asks_for_one()
+    {
+        // The edit that ticks "User is whoever az is signed in as" doesn't reach this cache, and a valid token
+        // with no user on it would connect with an empty user name.
+        var now = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var tokens = new FakeEntraTokens(call => call == 0
+            ? new Credential("tok0", now.AddHours(1))
+            : new Credential("tok1", now.AddHours(1), "ana@contoso.com"));
+        var info = Conn(CredentialKind.EntraToken);
+        var resolver = new CredentialResolver(() => null, null, tokens, () => now);
+
+        await resolver.ResolveAsync(info, false, CancellationToken.None);
+        var asked = await resolver.ResolveAsync(info with { User = "", UserFromEntraLogin = true }, false, CancellationToken.None);
+        var again = await resolver.ResolveAsync(info with { User = "", UserFromEntraLogin = true }, false, CancellationToken.None);
+
+        Assert.Equal("ana@contoso.com", asked.User);
+        Assert.Same(asked, again);   // and served from the cache from then on
+        Assert.Equal(2, tokens.Calls);
+    }
+
     [Theory]
     [InlineData(0, false)]   // no expiry → never expiring
     [InlineData(300, false)] // 5 min out, 90 s skew → not yet

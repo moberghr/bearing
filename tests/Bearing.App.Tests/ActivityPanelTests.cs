@@ -10,6 +10,7 @@ using Bearing.App.Workspace;
 using Bearing.Core.Data;
 using Bearing.Core.Workspace;
 using Bearing.Persistence;
+using Bearing.Sessions;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -50,9 +51,10 @@ public class ActivityPanelTests : IDisposable
         IsOurs: ours);
 
     /// <summary>A context with one connection and one tab on it. <paramref name="live"/> false leaves the
-    /// connection with no session, which is the "nothing to read" path.</summary>
+    /// connection with no session, which is the "nothing to read" path. <paramref name="azUser"/> makes it an
+    /// Entra connection that stores no user and takes that one from the token.</summary>
     private (WorkspaceContext Ctx, FakeActivity Activity, FakeDialogs Dialogs, ConnectionInfo Conn) NewPanel(
-        bool live = true, bool readOnly = false)
+        bool live = true, bool readOnly = false, string? azUser = null)
     {
         Directory.CreateDirectory(_root);
         var activity = new FakeActivity();
@@ -63,7 +65,8 @@ public class ActivityPanelTests : IDisposable
             new JsonSessionStore(),
             new SqliteQueryLog(Path.Combine(_root, "log.sqlite")),
             new FileRecentProjects(Path.Combine(_root, "recent.json")),
-            new FakeSecretStore());
+            new FakeSecretStore(),
+            entraTokens: new FakeEntraTokens(_ => new Credential("tok", null, azUser)));
 
         var conn = new ConnectionInfo
         {
@@ -71,7 +74,9 @@ public class ActivityPanelTests : IDisposable
             Name = "prod-eu",
             ProviderId = "postgres",
             Database = "app",
-            User = "reporting",
+            User = azUser is null ? "reporting" : "",
+            CredentialKind = azUser is null ? CredentialKind.StoredPassword : CredentialKind.EntraToken,
+            UserFromEntraLogin = azUser is not null,
             ReadOnly = readOnly,
         };
         ctx.Project = new Project { Directory = _root, Manifest = new ProjectManifest { Connections = { conn } } };
@@ -117,6 +122,21 @@ public class ActivityPanelTests : IDisposable
         Assert.Contains("of your own", panel.Status);
         Assert.Contains("reporting", panel.Status);       // names the role that cannot see them
         Assert.DoesNotContain("No running sessions", panel.Status);
+    }
+
+    [Fact]
+    public async Task A_blind_role_named_by_az_login_is_named_by_the_user_it_logged_in_as()
+    {
+        // The connection stores no user — the name only exists on the session that az resolved it for.
+        var (ctx, activity, dialogs, conn) = NewPanel(azUser: "ana@contoso.com");
+        activity.Backends = [Backend(101, ours: true)];
+        activity.SeesAllSessions = false;
+        var panel = new ActivityPanelViewModel(ctx, dialogs);
+
+        await panel.RefreshAsync();
+
+        Assert.Equal("", conn.User);
+        Assert.Contains("ana@contoso.com can't see other roles' sessions", panel.Status);
     }
 
     [Fact]
