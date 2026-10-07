@@ -45,7 +45,9 @@ public static class ConnectionEndpoint
         => string.IsNullOrWhiteSpace(info.Database) ? HostPort(info) : $"{HostPort(info)}/{info.Database}";
 
     /// <summary>The fullest form, <c>user@host:port/database</c> — what someone would paste into a bug
-    /// report. A blank user drops the <c>@</c>; connections that prompt for their user leave it empty.</summary>
+    /// report. A blank user drops the <c>@</c>; connections that prompt for their user leave it empty. One that
+    /// asks az for its user says so in the user's place, since the name is not known until it connects.</summary>
     public static string Full(ConnectionInfo info)
-        => string.IsNullOrWhiteSpace(info.User) ? Address(info) : $"{info.User}@{Address(info)}";
+        => EntraTokenProvider.WantsUser(info) ? $"(az login)@{Address(info)}"
+           : string.IsNullOrWhiteSpace(info.User) ? Address(info) : $"{info.User}@{Address(info)}";
 }

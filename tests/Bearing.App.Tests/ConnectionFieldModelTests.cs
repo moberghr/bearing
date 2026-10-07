@@ -331,6 +331,16 @@ public class ConnectionFieldModelTests
     }
 
     [Fact]
+    public void A_user_named_by_az_login_is_not_demanded()
+    {
+        var model = ConnectionFieldModel.For(Pg);
+        model.Set("Database", "sales");
+
+        Assert.Empty(model.Validate(CredentialKind.EntraToken, userFromLogin: true));
+        Assert.Contains("User is required.", model.Validate(CredentialKind.EntraToken));
+    }
+
+    [Fact]
     public void A_number_field_holding_something_else_is_reported()
     {
         var model = ConnectionFieldModel.For(Pg);

@@ -450,6 +450,44 @@ public class ConnectionSessionManagerTests
     }
 
     [Fact]
+    public async Task A_user_named_by_az_login_is_the_user_the_pool_logs_in_as()
+    {
+        var provider = new FakeProvider();
+        var tokens = new FakeEntraTokens(_ => new Credential("tok", null, "ana@contoso.com"));
+        var resolver = new CredentialResolver(() => null, null, tokens);
+        await using var mgr = new ConnectionSessionManager(provider, () => resolver, runSweepTimer: false);
+        var info = Conn(Guid.NewGuid()) with
+        {
+            User = "",
+            CredentialKind = CredentialKind.EntraToken,
+            UserFromEntraLogin = true,
+        };
+
+        await mgr.GetOrConnectAsync(info, CancellationToken.None);
+
+        Assert.Equal("ana@contoso.com", provider.LastInfo!.User);
+        Assert.Equal("tok", provider.LastPassword);
+        Assert.Equal("", info.User);   // resolved for the connect, never written back to the record
+    }
+
+    [Fact]
+    public async Task Switching_to_the_az_login_user_rebuilds_the_pool()
+    {
+        // A different role, so a pool built as the typed user must not go on serving the az one.
+        var provider = new FakeProvider();
+        var tokens = new FakeEntraTokens(_ => new Credential("tok", null, "ana@contoso.com"));
+        var resolver = new CredentialResolver(() => null, null, tokens);
+        await using var mgr = new ConnectionSessionManager(provider, () => resolver, runSweepTimer: false);
+        var typed = Conn(Guid.NewGuid()) with { CredentialKind = CredentialKind.EntraToken };
+
+        var before = await mgr.GetOrConnectAsync(typed, CancellationToken.None);
+        var after = await mgr.GetOrConnectAsync(typed with { UserFromEntraLogin = true }, CancellationToken.None);
+
+        Assert.NotSame(before, after);
+        Assert.Equal(2, provider.FactoriesCreated);
+    }
+
+    [Fact]
     public async Task Sweep_disconnects_a_session_whose_credential_nears_expiry()
     {
         var now = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);

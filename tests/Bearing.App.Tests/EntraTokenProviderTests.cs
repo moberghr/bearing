@@ -93,6 +93,43 @@ public class EntraTokenProviderTests
                 EntraTokenProvider.ResourceOptionKey, " https://ossrdbms-aad.database.chinacloudapi.cn ")));
     }
 
+    // ---- The az-login user -----------------------------------------------------------------------------
+
+    [Fact]
+    public void The_user_is_the_trimmed_tsv_line()
+        => Assert.Equal("ana@contoso.com", EntraTokenProvider.ParseUserResponse("ana@contoso.com\r\n"));
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("  \n")]
+    public void No_user_principal_name_is_refused_with_what_to_do_instead(string tsv)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => EntraTokenProvider.ParseUserResponse(tsv));
+        Assert.Contains("type the role name", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("postgres", CredentialKind.EntraToken, true, true)]
+    [InlineData("postgres", CredentialKind.EntraToken, false, false)]
+    [InlineData("postgres", CredentialKind.StoredPassword, true, false)]   // a tick left on another kind
+    [InlineData("sqlserver", CredentialKind.EntraToken, true, false)]      // the token is the identity there
+    public void Az_is_asked_for_the_user_only_where_it_is_used(
+        string providerId, CredentialKind kind, bool flag, bool wanted)
+        => Assert.Equal(wanted, EntraTokenProvider.WantsUser(Target(providerId) with
+        {
+            CredentialKind = kind,
+            UserFromEntraLogin = flag,
+        }));
+
+    [Fact]
+    public void A_resolved_user_replaces_the_stored_one_and_no_user_leaves_the_connection_alone()
+    {
+        var info = Target("postgres") with { User = "" };
+
+        Assert.Equal("ana@contoso.com", new Credential("tok", null, "ana@contoso.com").ApplyTo(info).User);
+        Assert.Same(info, new Credential("tok", null).ApplyTo(info));
+    }
+
     [Fact]
     public void A_blank_override_falls_back_rather_than_minting_for_nothing()
         => Assert.Equal("https://database.windows.net/",

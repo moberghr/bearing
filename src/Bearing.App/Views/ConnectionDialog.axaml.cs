@@ -56,6 +56,9 @@ public partial class ConnectionDialog : Window
 
     private IReadOnlyList<CredentialKindOption> _credentialKinds = Array.Empty<CredentialKindOption>();
 
+    /// <summary>The provider's User box, when it declares one — rebuilt with the rows.</summary>
+    private TextBox? _userBox;
+
     /// <summary>Set while the code is writing the combo boxes, so the handlers those writes raise don't
     /// re-enter the rebuild they are part of.</summary>
     private bool _loading;
@@ -101,6 +104,7 @@ public partial class ConnectionDialog : Window
             ReadOnlyBox.IsChecked = existing.ReadOnly;
             ManualCommitBox.IsChecked = existing.ManualCommit;
             ExternalAccessBox.IsChecked = ExternalAccessPolicy.IsExposed(existing);
+            UserFromLoginBox.IsChecked = existing.UserFromEntraLogin;
             // 0 is "no limit" and shows as an empty box, whose placeholder says 0 — a bare "0" in a field
             // reads as a limit of zero seconds, which is the one thing it does not mean (§1.7).
             StatementTimeoutBox.Text = existing.StatementTimeoutSeconds > SessionPolicy.NoTimeout
@@ -167,6 +171,7 @@ public partial class ConnectionDialog : Window
     private void RenderFields()
     {
         FieldsHost.Children.Clear();
+        _userBox = null;
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("90,*") };
         for (var i = 0; i < _model.Fields.Count; i++)
@@ -274,6 +279,8 @@ public partial class ConnectionDialog : Window
             Margin = new Thickness(0, 6, 0, 0),
             PlaceholderText = field.Field.Default ?? "",
         };
+        // Held so the az-login checkbox can disable it; reassigned on every rebuild.
+        if (string.Equals(field.Key, "User", StringComparison.OrdinalIgnoreCase)) _userBox = box;
         var isHost = string.Equals(field.Key, "Host", StringComparison.OrdinalIgnoreCase);
         box.TextChanged += (_, _) =>
         {
@@ -317,7 +324,7 @@ public partial class ConnectionDialog : Window
     /// </summary>
     private void RefreshValidation()
     {
-        var problems = _model.Validate(SelectedCredentialKind());
+        var problems = _model.Validate(SelectedCredentialKind(), UserFromLogin());
         ValidationHint.Text = problems.Count > 0 ? "⚠ " + string.Join(" ", problems) : "";
         ValidationHint.IsVisible = problems.Count > 0;
     }
@@ -369,9 +376,29 @@ public partial class ConnectionDialog : Window
             NoStorageWarningText.Text = SecretStorageAdvice.NoStorageWarning(_storage.Reason);
         EntraHint.IsVisible = kind == CredentialKind.EntraToken;
         IntegratedHint.IsVisible = kind == CredentialKind.Integrated;
+        UserFromLoginBox.IsVisible = UserFromLoginOffered();
+        if (_userBox is not null)
+        {
+            _userBox.IsEnabled = !UserFromLogin();
+            _userBox.PlaceholderText = UserFromLogin() ? "from az login" : "";
+        }
         // The credential kind changes what counts as missing — integrated auth needs no user name — so the
         // advisory hint is recomputed here too, not only when a field is typed into.
         RefreshValidation();
+    }
+
+    /// <summary>Whether the az-login user checkbox means anything for the selected engine and kind.</summary>
+    private bool UserFromLoginOffered()
+        => SelectedCredentialKind() == CredentialKind.EntraToken
+           && ProviderTraits.For(_model.ProviderId).EntraTakesUser;
+
+    /// <summary>The box, but only where it applies — what is saved and what validation is told. A tick left
+    /// behind on a kind or engine that ignores it is not written, so the record never claims it.</summary>
+    private bool UserFromLogin() => UserFromLoginOffered() && UserFromLoginBox.IsChecked == true;
+
+    private void OnUserFromLoginToggled(object? sender, RoutedEventArgs e)
+    {
+        if (!_loading) UpdateCredentialVisibility();
     }
 
     // ---- Transport security (#23) ----------------------------------------------------------------
@@ -632,7 +659,15 @@ public partial class ConnectionDialog : Window
     /// asserting the control against itself (§4.5).
     /// </para>
     /// </summary>
-    internal ConnectionInfo BuildConnection() => _model.Apply(new ConnectionInfo
+    internal ConnectionInfo BuildConnection()
+    {
+        var built = _model.Apply(DialogFields());
+        // No user is stored while az names it: a typed one left in the box would be a name the connection
+        // never logs in as, and a shared project would carry it to people it is not.
+        return UserFromLogin() ? built with { User = "", UserFromEntraLogin = true } : built;
+    }
+
+    private ConnectionInfo DialogFields() => new()
     {
         Id = _id,
         Name = string.IsNullOrWhiteSpace(NameBox.Text) ? BuildFallbackName() : NameBox.Text!.Trim(),
@@ -653,7 +688,7 @@ public partial class ConnectionDialog : Window
         // Not editable here, so carried rather than rebuilt: filing lives in the tree. Omitting it would
         // quietly discard it on every save.
         Folder = _existing?.Folder,
-    });
+    };
 
     /// <summary>The password to persist: the typed value for a stored-password connection, or empty for
     /// prompt / Entra / integrated (nothing is stored — an empty value deletes any existing secret on

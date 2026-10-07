@@ -79,6 +79,8 @@ public static class ConnectionClipboard
         // connection list with it; a paste mints a fresh id and a fresh connection in the recipient's own
         // project, which is them authoring one rather than accepting one. Re-exposing it is one checkbox.
         public CredentialKind CredentialKind { get; init; } = CredentialKind.StoredPassword;
+        // Carried: without it the paste arrives with an empty User and no way to fill it, and fails to log in.
+        public bool UserFromEntraLogin { get; init; }
         public Dictionary<string, string> Options { get; init; } = new();
     }
 
@@ -133,6 +135,7 @@ public static class ConnectionClipboard
         StatementTimeoutSeconds = c.StatementTimeoutSeconds,
         SessionTimeZone = c.SessionTimeZone,
         CredentialKind = c.CredentialKind,
+        UserFromEntraLogin = c.UserFromEntraLogin,
         Options = c.Options.ToDictionary(kv => kv.Key, kv => kv.Value),
     };
 
@@ -155,6 +158,7 @@ public static class ConnectionClipboard
         StatementTimeoutSeconds = e.StatementTimeoutSeconds,
         SessionTimeZone = e.SessionTimeZone,
         CredentialKind = e.CredentialKind,
+        UserFromEntraLogin = e.UserFromEntraLogin,
         Options = e.Options,
     };
 }

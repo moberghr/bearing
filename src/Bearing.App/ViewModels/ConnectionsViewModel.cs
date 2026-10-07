@@ -1246,6 +1246,8 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     private static bool SameNetwork(ConnectionInfo a, ConnectionInfo b)
         => a.ProviderId == b.ProviderId && a.Host == b.Host && a.Port == b.Port
            && a.Database == b.Database && a.User == b.User
+           // Who logs in, like User: switching to the az account is a different role, so a different tree.
+           && a.UserFromEntraLogin == b.UserFromEntraLogin
            && TlsPolicy.Resolve(a) == TlsPolicy.Resolve(b);
 
     /// <summary>
@@ -1274,7 +1276,11 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     {
         var secret = password;
         if (info.CredentialKind == CredentialKind.EntraToken)
-            secret = (await _ctx.Credentials.ResolveAsync(info, forceRefresh: true, ct)).Secret;
+        {
+            var credential = await _ctx.Credentials.ResolveAsync(info, forceRefresh: true, ct);
+            secret = credential.Secret;
+            info = credential.ApplyTo(info);   // the az-resolved user, when the connection asks for one
+        }
 
         var provider = _ctx.Providers.Get(info.ProviderId);
         var factory = provider.CreateConnectionFactory(info, secret);

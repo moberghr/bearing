@@ -59,6 +59,14 @@ public class ConnectionEndpointTests
     public void Full_drops_the_at_sign_when_there_is_no_user(string user)
         => Assert.Equal("localhost:5432/app", ConnectionEndpoint.Full(Conn(user: user)));
 
+    [Fact]
+    public void Full_names_az_login_in_place_of_a_user_it_does_not_know_yet()
+        => Assert.Equal("(az login)@localhost:5432/app", ConnectionEndpoint.Full(Conn(user: "") with
+        {
+            CredentialKind = CredentialKind.EntraToken,
+            UserFromEntraLogin = true,
+        }));
+
     /// <summary>The failure message builds its endpoint from the same parts; this pins the two together so a
     /// change to one spelling is a visible change to the other.</summary>
     [Fact]

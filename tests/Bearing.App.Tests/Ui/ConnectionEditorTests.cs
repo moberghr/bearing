@@ -147,6 +147,45 @@ public class ConnectionEditorTests
         Assert.True(dialog.FindControl<TextBox>("PasswordBox")!.IsVisible);
     });
 
+    [Fact]
+    public Task The_az_login_user_is_offered_only_where_the_entra_login_takes_a_user() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Dialog();
+        var credentials = ConnectionEditorProbe.Combo(dialog, "CredentialKindBox");
+        var fromLogin = Assert.IsType<CheckBox>(dialog.FindControl<CheckBox>("UserFromLoginBox"));
+        const string entra = "Microsoft Entra token (az login)";
+
+        Assert.False(fromLogin.IsVisible);   // stored password: the user is typed
+
+        credentials.SelectedIndex = ConnectionEditorProbe.Items(dialog, "CredentialKindBox").ToList().IndexOf(entra);
+        Assert.True(fromLogin.IsVisible);
+
+        // SQL Server's Entra login is the token's own identity — there is no user for az to supply.
+        ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = 1;
+        credentials.SelectedIndex = ConnectionEditorProbe.Items(dialog, "CredentialKindBox").ToList().IndexOf(entra);
+        Assert.Equal(CredentialKind.EntraToken, dialog.BuildConnection().CredentialKind);
+        Assert.False(fromLogin.IsVisible);
+    });
+
+    [Fact]
+    public Task Saving_with_the_az_login_user_stores_no_user() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Dialog(Saved("postgres", 5432) with
+        {
+            CredentialKind = CredentialKind.EntraToken,
+        });
+        var user = ConnectionEditorProbe.Editor<TextBox>(dialog, "User");
+        Assert.Equal("app", user.Text);
+        Assert.True(user.IsEnabled);
+
+        dialog.FindControl<CheckBox>("UserFromLoginBox")!.IsChecked = true;
+
+        Assert.False(user.IsEnabled);
+        var saved = dialog.BuildConnection();
+        Assert.True(saved.UserFromEntraLogin);
+        Assert.Equal("", saved.User);   // a typed name it never logs in as is not kept
+    });
+
     // ---- The advisory hint -----------------------------------------------------------------------
 
     /// <summary>

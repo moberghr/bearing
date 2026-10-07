@@ -277,8 +277,12 @@ public sealed class ConnectionFieldModel
     /// merely optional but meaningless, and demanding it would make Windows authentication impossible to
     /// save.
     /// </para>
+    /// <para>
+    /// <paramref name="userFromLogin"/> is the same exemption for a different reason: the user name is asked
+    /// of az at connect time (<see cref="ConnectionInfo.UserFromEntraLogin"/>), so there is nothing to type.
+    /// </para>
     /// </summary>
-    public IReadOnlyList<string> Validate(CredentialKind credentialKind)
+    public IReadOnlyList<string> Validate(CredentialKind credentialKind, bool userFromLogin = false)
     {
         var problems = new List<string>();
         foreach (var field in Fields)
@@ -287,7 +291,7 @@ public sealed class ConnectionFieldModel
 
             if (field.Required && value.Length == 0)
             {
-                if (credentialKind == CredentialKind.Integrated
+                if ((credentialKind == CredentialKind.Integrated || userFromLogin)
                     && string.Equals(field.Key, "User", StringComparison.OrdinalIgnoreCase))
                     continue;
                 problems.Add($"{field.Label} is required.");

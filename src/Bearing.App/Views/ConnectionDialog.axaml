@@ -123,6 +123,12 @@
               <TextBox   Grid.Row="1" Grid.Column="1" x:Name="PasswordBox" PasswordChar="•" Margin="0,6,0,0"/>
             </Grid>
 
+            <!-- Only where the engine's Entra login takes a user name at all (ProviderTraits.EntraTakesUser): on
+                 Postgres the role is named after the account, on SQL Server the token alone is the identity. -->
+            <CheckBox x:Name="UserFromLoginBox" IsVisible="False" Margin="90,0,0,0"
+                      IsCheckedChanged="OnUserFromLoginToggled"
+                      Content="User is whoever az is signed in as"/>
+
             <TextBlock x:Name="EntraHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,4,0,0"
                        Text="Signs in via the Azure CLI (`az account get-access-token`). Run `az login` first. The token is refreshed automatically and never touches the secret store."/>
 

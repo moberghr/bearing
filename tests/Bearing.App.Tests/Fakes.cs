@@ -65,6 +65,7 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
     {
         Interlocked.Increment(ref FactoriesCreated);
         LastPassword = password;
+        LastInfo = info;
         return new FakeFactory { TestResult = TestResult, TestThrows = TestThrows, Gate = ConnectGate };
     }
 
@@ -73,6 +74,9 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
     public TaskCompletionSource<bool>? ConnectGate;
 
     public string? LastPassword;
+
+    /// <summary>The connection the last factory was built from — after any credential-resolved user.</summary>
+    public ConnectionInfo? LastInfo;
 
     /// <summary>When set, every metadata reader's snapshot load blocks on this gate — lets a test hold a
     /// schema load in flight while the session underneath it is replaced (DB switch).</summary>

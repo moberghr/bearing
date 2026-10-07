@@ -286,10 +286,12 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
         // user should not have to remember which switch is on to read it.
         var kind = IncludeIdle ? "" : " running";
 
+        // A connection that takes its user from az login stores none, so there is no name to put here.
+        var who = string.IsNullOrWhiteSpace(info.User) ? "This role" : info.User;
         if (!activity.SeesAllSessions)
             return count == 0
-                ? $"No{kind} sessions of your own {where}. {info.User} can't see other roles' sessions."
-                : $"{sessions} of your own {where}. {info.User} can't see other roles' sessions.";
+                ? $"No{kind} sessions of your own {where}. {who} can't see other roles' sessions."
+                : $"{sessions} of your own {where}. {who} can't see other roles' sessions.";
 
         return count == 0 ? $"No{kind} sessions {where}." : $"{sessions}{kind} {where}.";
     }

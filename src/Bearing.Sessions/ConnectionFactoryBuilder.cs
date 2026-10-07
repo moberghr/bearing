@@ -22,7 +22,7 @@ internal static class ConnectionFactoryBuilder
             ? new Credential(null, null)
             : await credentials.ResolveAsync(info, forceRefresh, ct);
         var provider = providers.Get(info.ProviderId);
-        var factory = provider.CreateConnectionFactory(info, credential.Secret);
+        var factory = provider.CreateConnectionFactory(credential.ApplyTo(info), credential.Secret);
         return (provider, factory, credential);
     }
 }
