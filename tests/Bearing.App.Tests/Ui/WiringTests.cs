@@ -6,6 +6,7 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Avalonia.Input;
@@ -541,8 +542,8 @@ public class WiringTests : IDisposable
         // The default has to be computed from the host that ends up in the record, not from the "localhost"
         // the box is pre-filled with.
         var dialog = NewConnectionDialog();
-        var host = dialog.GetVisualDescendants().OfType<TextBox>().First(t => t.Name == "HostBox");
-        var picker = dialog.GetVisualDescendants().OfType<ComboBox>().First(c => c.Name == "TlsBox");
+        var host = dialog.GetLogicalDescendants().OfType<TextBox>().First(t => t.Name == "HostBox");
+        var picker = dialog.GetLogicalDescendants().OfType<ComboBox>().First(c => c.Name == "TlsBox");
 
         Assert.Equal(TlsPolicy.Label(TlsMode.Prefer), picker.SelectedItem);   // localhost
 
@@ -558,8 +559,8 @@ public class WiringTests : IDisposable
     {
         // Otherwise typing the rest of a hostname would silently undo a deliberate choice.
         var dialog = NewConnectionDialog();
-        var host = dialog.GetVisualDescendants().OfType<TextBox>().First(t => t.Name == "HostBox");
-        var picker = dialog.GetVisualDescendants().OfType<ComboBox>().First(c => c.Name == "TlsBox");
+        var host = dialog.GetLogicalDescendants().OfType<TextBox>().First(t => t.Name == "HostBox");
+        var picker = dialog.GetLogicalDescendants().OfType<ComboBox>().First(c => c.Name == "TlsBox");
 
         picker.SelectedItem = TlsPolicy.Label(TlsMode.Disable);
         Pump(dialog);
@@ -574,18 +575,18 @@ public class WiringTests : IDisposable
     public Task The_warning_says_what_the_chosen_mode_leaves_open() => _ui.Run(() =>
     {
         var dialog = NewConnectionDialog();
-        var picker = dialog.GetVisualDescendants().OfType<ComboBox>().First(c => c.Name == "TlsBox");
+        var picker = dialog.GetLogicalDescendants().OfType<ComboBox>().First(c => c.Name == "TlsBox");
 
         picker.SelectedItem = TlsPolicy.Label(TlsMode.Require);
         Pump(dialog);
-        var warning = dialog.GetVisualDescendants().OfType<TextBlock>()
+        var warning = dialog.GetLogicalDescendants().OfType<TextBlock>()
             .First(t => t.Name == "TlsWarningText");
         Assert.Equal(TlsPolicy.Advice(TlsMode.Require), warning.Text);
 
         // …and the strongest mode has nothing to warn about, so the block goes away entirely.
         picker.SelectedItem = TlsPolicy.Label(TlsMode.VerifyFull);
         Pump(dialog);
-        var block = dialog.GetVisualDescendants().OfType<Border>().First(b => b.Name == "TlsWarning");
+        var block = dialog.GetLogicalDescendants().OfType<Border>().First(b => b.Name == "TlsWarning");
         Assert.False(block.IsVisible);
         dialog.Close();
     });
@@ -755,9 +756,9 @@ public class WiringTests : IDisposable
         // The colour always follows the click; the label only does when it is still one of ours. Clicking
         // Local and then Production used to leave the connection reading "local" in red.
         var dialog = NewConnectionDialog();
-        var env = dialog.GetVisualDescendants().OfType<TextBox>().First(t => t.Name == "EnvBox");
-        var hex = dialog.GetVisualDescendants().OfType<TextBox>().First(t => t.Name == "EnvColorBox");
-        var confirmWrites = dialog.GetVisualDescendants().OfType<CheckBox>().First(c => c.Name == "ConfirmWritesBox");
+        var env = dialog.GetLogicalDescendants().OfType<TextBox>().First(t => t.Name == "EnvBox");
+        var hex = dialog.GetLogicalDescendants().OfType<TextBox>().First(t => t.Name == "EnvColorBox");
+        var confirmWrites = dialog.GetLogicalDescendants().OfType<CheckBox>().First(c => c.Name == "ConfirmWritesBox");
 
         Preset(dialog, "Local");
         Assert.Equal("local", env.Text);
@@ -779,8 +780,9 @@ public class WiringTests : IDisposable
     public Task The_colour_picker_and_the_hex_box_track_each_other() => _ui.Run(() =>
     {
         var dialog = NewConnectionDialog();
-        var hex = dialog.GetVisualDescendants().OfType<TextBox>().First(t => t.Name == "EnvColorBox");
-        var picker = dialog.GetVisualDescendants().OfType<ColorPicker>().First(p => p.Name == "EnvColorPicker");
+        ConnectionEditorProbe.Open(dialog, "Environment");   // the swatch binding and picker need realizing
+        var hex = dialog.GetLogicalDescendants().OfType<TextBox>().First(t => t.Name == "EnvColorBox");
+        var picker = dialog.GetLogicalDescendants().OfType<ColorPicker>().First(p => p.Name == "EnvColorPicker");
 
         // Typed (or preset) hex reaches the picker...
         hex.Text = "#3FB950";
@@ -806,7 +808,8 @@ public class WiringTests : IDisposable
         // What a new package's theme include can break, and it breaks at open time: the flyout body and its
         // primitives all resolve out of ColorPicker's own Fluent dictionary, merged in App.axaml.
         var dialog = NewConnectionDialog();
-        var picker = dialog.GetVisualDescendants().OfType<ColorPicker>().First(p => p.Name == "EnvColorPicker");
+        ConnectionEditorProbe.Open(dialog, "Environment");
+        var picker = dialog.GetLogicalDescendants().OfType<ColorPicker>().First(p => p.Name == "EnvColorPicker");
         var button = picker.GetVisualDescendants().OfType<DropDownButton>().First();
 
         var flyout = Assert.IsType<Flyout>(button.Flyout);
@@ -831,8 +834,8 @@ public class WiringTests : IDisposable
         // who needs to write to production unticks it deliberately. Asserted through the preset because that
         // is the only route that turns these on without the user finding them.
         var dialog = NewConnectionDialog();
-        var readOnly = dialog.GetVisualDescendants().OfType<CheckBox>().First(c => c.Name == "ReadOnlyBox");
-        var timeout = dialog.GetVisualDescendants().OfType<TextBox>().First(t => t.Name == "StatementTimeoutBox");
+        var readOnly = dialog.GetLogicalDescendants().OfType<CheckBox>().First(c => c.Name == "ReadOnlyBox");
+        var timeout = dialog.GetLogicalDescendants().OfType<TextBox>().First(t => t.Name == "StatementTimeoutBox");
 
         Assert.False(readOnly.IsChecked);
         Assert.True(string.IsNullOrEmpty(timeout.Text));
@@ -855,9 +858,9 @@ public class WiringTests : IDisposable
         // Asserted against SessionPolicy.Advice rather than against a literal, so the dialog cannot end up
         // describing the connection differently from the policy the record is built with.
         var dialog = NewConnectionDialog();
-        var note = dialog.GetVisualDescendants().OfType<Border>().First(b => b.Name == "SafetyNote");
-        var noteText = dialog.GetVisualDescendants().OfType<TextBlock>().First(t => t.Name == "SafetyNoteText");
-        var readOnly = dialog.GetVisualDescendants().OfType<CheckBox>().First(c => c.Name == "ReadOnlyBox");
+        var note = dialog.GetLogicalDescendants().OfType<Border>().First(b => b.Name == "SafetyNote");
+        var noteText = dialog.GetLogicalDescendants().OfType<TextBlock>().First(t => t.Name == "SafetyNoteText");
+        var readOnly = dialog.GetLogicalDescendants().OfType<CheckBox>().First(c => c.Name == "ReadOnlyBox");
 
         // Absent on a connection with no safety settings, rather than saying something reassuring about one.
         Assert.False(note.IsVisible);
@@ -876,7 +879,7 @@ public class WiringTests : IDisposable
 
     private static void Preset(Window dialog, string label)
     {
-        var button = dialog.GetVisualDescendants().OfType<Button>()
+        var button = dialog.GetLogicalDescendants().OfType<Button>()
             .First(b => b.Content as string == label);
         button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Pump(dialog);

@@ -379,6 +379,8 @@ public class ConnectionClipboardTests
         // value that was already the default. See A_pasted_connection_is_never_exposed_to_external_tools.
         ExternalAccess = ExternalAccess.ReadOnly,
         CredentialKind = CredentialKind.EntraToken,
+        // Set, so a payload that dropped it fails the round trip rather than comparing false with false.
+        UserFromEntraLogin = true,
         Options = new Dictionary<string, string> { ["sslmode"] = "require" },
     };
 

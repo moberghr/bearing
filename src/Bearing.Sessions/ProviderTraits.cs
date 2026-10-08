@@ -30,7 +30,8 @@ public sealed record ProviderTraits(
     ISqlDialect Dialect,
     SqlLiteralStyle Literals,
     string EntraResource,
-    string? EndpointHint)
+    string? EndpointHint,
+    bool EntraTakesUser)
 {
     /// <summary>PostgreSQL — the behaviour every caller had when there was one engine, so it is also the
     /// fallback below.</summary>
@@ -41,7 +42,9 @@ public sealed record ProviderTraits(
         // Azure Database for PostgreSQL's own resource. Unchanged: an existing Entra connection must keep
         // minting exactly the token it minted before a second engine arrived.
         EntraResource: "https://ossrdbms-aad.database.windows.net",
-        EndpointHint: null);
+        EndpointHint: null,
+        // Azure Database for PostgreSQL wants the role name as the user, alongside the token as password.
+        EntraTakesUser: true);
 
     /// <summary>Microsoft SQL Server.</summary>
     public static ProviderTraits SqlServer { get; } = new(
@@ -52,7 +55,9 @@ public sealed record ProviderTraits(
         // the whole reason this is per-provider rather than a constant.
         EntraResource: "https://database.windows.net/",
         EndpointHint: "A named instance (HOST\\INSTANCE) is resolved by the SQL Browser service, "
-                    + "which ignores the port.");
+                    + "which ignores the port.",
+        // SqlClient refuses a User ID next to an access token; the token is the identity.
+        EntraTakesUser: false);
 
     /// <summary>
     /// The traits for a provider id, matched the way the registry matches it (case-insensitively).

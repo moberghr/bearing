@@ -457,7 +457,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
                 info, factory, provider.CreateQueryExecutor(factory), provider.CreateMetadataReader(factory),
                 provider.CreateServerActivity(factory), credential.ExpiresAt,
                 provider.SupportsServerActivity)
-            { LastUsedUtc = _clock() };
+            { LastUsedUtc = _clock(), LoginUser = credential.ApplyTo(info).User };
             bool disposedDuringConnect;
             bool newLink;
             lock (_gate)
@@ -547,6 +547,8 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         => a.ProviderId == b.ProviderId && a.Host == b.Host && a.Port == b.Port
            && a.Database == b.Database && a.User == b.User
            && a.CredentialKind == b.CredentialKind
+           // The user az names stands in for User above, so it decides who the pool is too.
+           && a.UserFromEntraLogin == b.UserFromEntraLogin
            && TlsPolicy.Resolve(a) == TlsPolicy.Resolve(b)
            && SessionPolicy.IsReadOnly(a) == SessionPolicy.IsReadOnly(b)
            && SessionPolicy.TimeoutSeconds(a) == SessionPolicy.TimeoutSeconds(b)

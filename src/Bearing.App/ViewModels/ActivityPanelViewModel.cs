@@ -171,7 +171,7 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
             using var lease = _ctx.Sessions.Lease(session);
             var activity = await lease.Session.Activity.GetActivityAsync(
                 new ActivityFilter(WholeServer ? null : info.Database, IncludeIdle), cts.Token);
-            Apply(activity, info);
+            Apply(activity, info, lease.Session.LoginUser);
         }
         catch (OperationCanceledException)
         {
@@ -208,7 +208,7 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
     /// keeps the same objects in place, so nothing downstream is told anything changed unless it did.
     /// </para>
     /// </summary>
-    private void Apply(ServerActivity activity, ConnectionInfo info)
+    private void Apply(ServerActivity activity, ConnectionInfo info, string? loginUser)
     {
         var keep = Selected?.Identity;
 
@@ -238,7 +238,7 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
         // Normally a no-op now: the selected row is the same object it was, so this assignment changes
         // nothing and notifies nobody. It still has to be here for the backend that has gone.
         Selected = keep is null ? null : Backends.FirstOrDefault(b => b.Identity == keep);
-        Status = DescribeText(activity, info);
+        Status = DescribeText(activity, info, loginUser);
     }
 
     /// <summary>The selected tab's connection and its <em>already live</em> session, or null.</summary>
@@ -276,7 +276,7 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
     /// <c>pg_read_all_stats</c> does not receive other sessions' rows at all, so an unqualified "1 session"
     /// would be a claim about the server that nobody checked (§1.7's rule, one panel later).
     /// </summary>
-    private string DescribeText(ServerActivity activity, ConnectionInfo info)
+    private string DescribeText(ServerActivity activity, ConnectionInfo info, string? loginUser)
     {
         var count = activity.Backends.Count;
         var sessions = count == 1 ? "1 session" : $"{count} sessions";
@@ -286,10 +286,13 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
         // user should not have to remember which switch is on to read it.
         var kind = IncludeIdle ? "" : " running";
 
+        // The session's login user, not info.User: a connection that takes its user from az login stores none,
+        // and the name az gave is the role this read ran as.
+        var who = string.IsNullOrWhiteSpace(loginUser) ? "This role" : loginUser;
         if (!activity.SeesAllSessions)
             return count == 0
-                ? $"No{kind} sessions of your own {where}. {info.User} can't see other roles' sessions."
-                : $"{sessions} of your own {where}. {info.User} can't see other roles' sessions.";
+                ? $"No{kind} sessions of your own {where}. {who} can't see other roles' sessions."
+                : $"{sessions} of your own {where}. {who} can't see other roles' sessions.";
 
         return count == 0 ? $"No{kind} sessions {where}." : $"{sessions}{kind} {where}.";
     }

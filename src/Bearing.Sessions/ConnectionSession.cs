@@ -38,6 +38,11 @@ public sealed class ConnectionSession : IAsyncDisposable
     /// for a fixed password. Drives disconnect-before-expiry in <see cref="ConnectionSessionManager"/>.</summary>
     public DateTimeOffset? CredentialExpiresAt { get; }
 
+    /// <summary>The user name this pool actually logs in as: <see cref="Info"/>'s own, or the one az named for
+    /// a connection that stores none (<see cref="Credential.ApplyTo"/>). Null or empty when neither names one
+    /// (integrated authentication).</summary>
+    public string? LoginUser { get; init; }
+
     public IDbConnectionFactory Factory { get; }
     public IQueryExecutor Executor { get; }
     public IMetadataReader Metadata { get; }

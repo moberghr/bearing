@@ -25,6 +25,18 @@ public sealed record ConnectionInfo
     public CredentialKind CredentialKind { get; init; } = CredentialKind.StoredPassword;
 
     /// <summary>
+    /// With <see cref="CredentialKind.EntraToken"/>: log in as whoever <c>az</c> is signed in as, asked at
+    /// connect time, rather than as <see cref="User"/>. <see cref="User"/> is saved empty while this is set,
+    /// so a project shared by a team connects as each member — the token is theirs already, and the role
+    /// name has to match it.
+    /// <para>
+    /// Ignored for every other credential kind, and on an engine whose Entra login takes its identity from
+    /// the token alone (SQL Server — see <c>ProviderTraits.EntraTakesUser</c>).
+    /// </para>
+    /// </summary>
+    public bool UserFromEntraLogin { get; init; }
+
+    /// <summary>
     /// Where this connection is filed in the connections panel: a "/"-separated folder path
     /// ("Aur/Production"), or null for the panel's root. Purely organisational — it never reaches a
     /// connection string, and it is deliberately orthogonal to <see cref="Environment"/>: a folder is where
