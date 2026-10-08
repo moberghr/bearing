@@ -5,12 +5,17 @@
 End users:
 
 ```bash
-brew install --cask --no-quarantine moberghr/bearing/bearing
+brew install --cask moberghr/bearing/bearing
+xattr -dr com.apple.quarantine /Applications/Bearing.app
 ```
 
-`--no-quarantine` is required: the app is unsigned (see *Signing* below). Without it macOS reports
-"Bearing is damaged and can't be opened", which is Gatekeeper refusing a quarantined ad-hoc-signed
-bundle rather than anything being wrong with the download.
+The second line is required: the app is unsigned (see *Signing* below) and Homebrew quarantines every cask
+download. Without it macOS reports "Bearing is damaged and can't be opened", which is Gatekeeper refusing
+a quarantined ad-hoc-signed bundle rather than anything being wrong with the download.
+
+**Do not use `--no-quarantine`.** It used to make the second line unnecessary, but Homebrew removed the switch
+(and its `HOMEBREW_CASK_OPTS` form) in 6.0.14 and now rejects it as `invalid option`. The cask's caveat
+prints the `xattr` line after every install.
 
 ## Why a cask and not a formula
 
@@ -46,7 +51,7 @@ NOTARY_PROFILE=moberg \
 ```
 
 WHEN a certificate exists, set those three in the `Publish osx-arm64` step of `.github/workflows/release.yml`,
-drop `--no-quarantine` from the install line above, and delete the `caveats` block from the cask. Nothing
+drop the `xattr` line from the install steps above, and delete the `caveats` block from the cask. Nothing
 else changes.
 
 ## One-time: create the tap repo
@@ -103,7 +108,7 @@ echo "sha256  $SHA"
 # 3. edit version + sha256 in packaging/homebrew/bearing.rb, then copy it to the tap's
 #    Casks/bearing.rb, commit, push.
 # 4. verify:
-brew install --cask --no-quarantine moberghr/bearing/bearing
+brew install --cask moberghr/bearing/bearing
 brew audit --cask --strict --online moberghr/bearing/bearing
 ```
 

@@ -43,22 +43,19 @@ cask "bearing" do
   ]
 
   # The app is unsigned and un-notarized (no Moberg Developer ID). The .NET SDK ad-hoc signs the apphost,
-  # which is enough to execute on Apple Silicon, but Gatekeeper refuses a *quarantined* ad-hoc bundle — so
-  # this cask must be installed with --no-quarantine until a certificate exists. The caveat says so rather
-  # than leaving the user with "Bearing is damaged and can't be opened", which is what it looks like.
+  # which is enough to execute on Apple Silicon, but Gatekeeper refuses a *quarantined* ad-hoc bundle, and
+  # Homebrew quarantines every cask download. Until a certificate exists the user clears the flag
+  # after installing. `--no-quarantine` used to do it at install time; Homebrew removed that switch (and
+  # its HOMEBREW_CASK_OPTS form) in 6.0.14, so it is now refused as an invalid option and must not be
+  # recommended. The caveat says what to run rather than leaving the user with "Bearing is damaged and
+  # can't be opened", which is what it looks like.
   caveats do
     <<~EOS
-      IF MACOS SAYS "Bearing is damaged and can't be opened" — it is not damaged. That is
-      Gatekeeper refusing an unsigned app that carries the quarantine flag. Clear it:
+      Bearing is not signed with an Apple Developer ID yet, so macOS will refuse to open it
+      ("Bearing is damaged and can't be opened") until the quarantine flag is cleared. It is
+      not damaged. Run this after installing:
 
         xattr -dr com.apple.quarantine "#{appdir}/Bearing.app"
-
-      To avoid it next time, install with --no-quarantine, which Homebrew accepts only on the
-      command line and a cask cannot set for you:
-
-        brew install --cask --no-quarantine moberghr/bearing/bearing
-
-      Bearing has no Apple Developer ID yet, which is why either step is needed at all.
 
       Bearing updates itself from its GitHub Releases feed — `brew upgrade` is not needed.
     EOS

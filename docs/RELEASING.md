@@ -16,7 +16,7 @@ producing a bundle nothing can open. `build/release.sh` still has no macOS path 
 |---|---|---|---|
 | `win-x64` | `BearingSql-win-Setup.exe`, full/delta `.nupkg`, `BearingSql-win-Portable.zip` | `win` | per-user, `%LOCALAPPDATA%\BearingSql` |
 | `linux-x64` | `BearingSql.AppImage`, full/delta `.nupkg` | `linux` | none — the AppImage runs where it sits |
-| `osx-arm64` | `BearingSql-osx-Portable.zip` (`Bearing.app`), `BearingSql-osx-Setup.pkg`, full/delta `.nupkg` | `osx` | `brew install --cask --no-quarantine moberghr/bearing/bearing`, or the `.pkg` |
+| `osx-arm64` | `BearingSql-osx-Portable.zip` (`Bearing.app`), `BearingSql-osx-Setup.pkg`, full/delta `.nupkg` | `osx` | `brew install --cask moberghr/bearing/bearing` + `xattr -dr com.apple.quarantine /Applications/Bearing.app`, or the `.pkg` |
 
 macOS is **Apple Silicon only, and unsigned**. Both follow from choices worth knowing before changing
 either: a Velopack channel holds one package per version and the app reads the plain `osx` channel, so an

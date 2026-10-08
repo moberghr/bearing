@@ -241,7 +241,8 @@ minute and the wrong one inside a loop — prefer one well-aimed `query` with an
 `bearing` ships inside Bearing's own package, so it installs, updates and uninstalls with the app and can
 never drift from the project format it reads.
 
-- **macOS** — the Homebrew cask puts it on `PATH`; `brew install --no-quarantine moberghr/bearing/bearing`.
+- **macOS** — the Homebrew cask puts it on `PATH`; `brew install --cask moberghr/bearing/bearing`, then
+  `xattr -dr com.apple.quarantine /Applications/Bearing.app` (the app is unsigned).
 - **Windows** — the installer puts the install directory on your user `PATH`, and takes it off again when
   you uninstall. Every update re-asserts the entry and adding is idempotent, so a reinstall does not leave
   two. It is read and written unexpanded, so a `%SystemRoot%` already in your `PATH` stays a variable

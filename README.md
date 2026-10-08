@@ -46,12 +46,12 @@ background, and offers a restart. Nothing is installed while you work.
 |---|---|---|
 | Windows | `BearingSql-win-Setup.exe` | Per-user install to `%LOCALAPPDATA%\BearingSql`, Start Menu entry. No admin needed. |
 | Linux | `BearingSql.AppImage` | `chmod +x` and run it. Updates itself in place. |
-| macOS | `brew install --cask --no-quarantine moberghr/bearing/bearing` | Apple Silicon. Or `BearingSql-osx-Setup.pkg` by hand. Updates itself in place, so `brew upgrade` is not needed. |
+| macOS | `brew install --cask moberghr/bearing/bearing`, then `xattr -dr com.apple.quarantine /Applications/Bearing.app` | Apple Silicon. Or `BearingSql-osx-Setup.pkg` by hand. Updates itself in place, so `brew upgrade` is not needed. |
 
 Releases are on the repository's [Releases page](https://github.com/moberghr/bearing/releases). Nothing
 needs configuring for updates to work; the installers are unsigned, so Windows SmartScreen warns on first
-run and macOS needs the quarantine flag cleared — which is what `--no-quarantine` does, and why it is on
-the install line ([packaging/homebrew](packaging/homebrew/README.md)).
+run and macOS needs the quarantine flag cleared — which is what the `xattr` step does, and why it follows
+the install ([packaging/homebrew](packaging/homebrew/README.md)).
 
 `build/release.sh` remains as the no-updater alternative: a single-file `.tar.gz` (Linux, with a per-user
 installer and `.desktop` entry) or `.zip` (Windows, with PowerShell install/uninstall scripts). Updating one
