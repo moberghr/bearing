@@ -160,9 +160,25 @@ public sealed class EntraTokenProvider : IEntraTokenProvider
         return new Credential(token, expires);
     }
 
+    /// <summary>Where az's usual installers put it on macOS / Linux. An app started from Finder, Spotlight or the
+    /// dock inherits launchd's minimal PATH (<c>/usr/bin:/bin:/usr/sbin:/sbin</c>), which misses Homebrew (#167).</summary>
+    private static readonly string[] WellKnownAzDirs = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
+
+    /// <summary>The az to start: the first <c>az</c> on <paramref name="path"/>, else in a well-known install
+    /// directory, else bare <c>az</c> so a miss still reports "not found". Windows is left to its own lookup
+    /// (az is <c>az.cmd</c> there). Pure over <paramref name="exists"/> so it is testable without az.</summary>
+    public static string ResolveAz(string? path, Func<string, bool> exists, bool isWindows)
+    {
+        if (isWindows) return "az";
+        // Literal ':' and '/', not Path.PathSeparator / Path.Combine: those follow the host, not isWindows.
+        var dirs = (path ?? "").Split(':', StringSplitOptions.RemoveEmptyEntries).Concat(WellKnownAzDirs);
+        return dirs.Select(dir => $"{dir.TrimEnd('/')}/az").FirstOrDefault(exists) ?? "az";
+    }
+
     private static async Task<(int Exit, string Out, string Err)> RunAzAsync(string resource, CancellationToken ct)
     {
-        var psi = new ProcessStartInfo("az")
+        var az = ResolveAz(Environment.GetEnvironmentVariable("PATH"), File.Exists, OperatingSystem.IsWindows());
+        var psi = new ProcessStartInfo(az)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -181,7 +197,7 @@ public sealed class EntraTokenProvider : IEntraTokenProvider
         catch (Win32Exception ex)
         {
             throw new InvalidOperationException(
-                "Azure CLI (az) was not found on PATH. Install it and run `az login`.", ex);
+                "Azure CLI (az) was not found. Install it and run `az login`.", ex);
         }
 
         using (proc)
