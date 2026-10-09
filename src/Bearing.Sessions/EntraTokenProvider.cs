@@ -170,8 +170,9 @@ public sealed class EntraTokenProvider : IEntraTokenProvider
     public static string ResolveAz(string? path, Func<string, bool> exists, bool isWindows)
     {
         if (isWindows) return "az";
-        var dirs = (path ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries).Concat(WellKnownAzDirs);
-        return dirs.Select(dir => Path.Combine(dir, "az")).FirstOrDefault(exists) ?? "az";
+        // Literal ':' and '/', not Path.PathSeparator / Path.Combine: those follow the host, not isWindows.
+        var dirs = (path ?? "").Split(':', StringSplitOptions.RemoveEmptyEntries).Concat(WellKnownAzDirs);
+        return dirs.Select(dir => $"{dir.TrimEnd('/')}/az").FirstOrDefault(exists) ?? "az";
     }
 
     private static async Task<(int Exit, string Out, string Err)> RunAzAsync(string resource, CancellationToken ct)
