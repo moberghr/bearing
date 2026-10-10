@@ -161,6 +161,14 @@ public interface IDialogService
     /// <summary>Prompt for a single line of text (rename, new folder/script, project name). Null if cancelled.</summary>
     Task<string?> ShowTextPromptAsync(string prompt, string initial = "");
 
+    /// <summary>
+    /// Ask for the value of each <c>:name</c> variable in a script about to run, seeded from
+    /// <paramref name="remembered"/>. Null if cancelled — the run does not happen. Values are returned as
+    /// typed, empty ones included; what they mean is <c>SqlVariables</c>' business.
+    /// </summary>
+    Task<IReadOnlyDictionary<string, string>?> PromptVariablesAsync(
+        IReadOnlyList<string> names, IReadOnlyDictionary<string, string> remembered);
+
     /// <summary>Pick an existing folder (project open/new). Returns its local path, or null if cancelled.
     /// <paramref name="startDir"/> seeds the initial location — projects live next to each other, so the
     /// browser should open where they already are rather than at the picker's idea of home.</summary>

@@ -474,6 +474,12 @@ public sealed partial class ExecutionViewModel : ObservableObject
         // Postgres' `limit/offset` is the bug this resolution exists to make impossible.
         var traits = ProviderTraits.For(info);
 
+        // :name script variables are filled in first, so everything below — the guard, the refusal, the
+        // confirmation, the log, the result's SourceSql that paging re-runs — reads the SQL that will
+        // actually reach the server, values included. A value of `1; delete from t` is a write like any other.
+        if (await FillVariablesAsync(tab, traits.Dialect, sql) is not { } filled) return;
+        sql = filled;
+
         // Describe (not FindRiskyStatements) so the prompt below can list the statements it is about to run —
         // the verbs alone can't answer "what exactly lands on prod". Computed once and shared with both the
         // refusal and the confirmation, which ask different questions of the same verdict — but only when one
@@ -563,6 +569,32 @@ public sealed partial class ExecutionViewModel : ObservableObject
                 await RunFetchAsync(info, tab, sql, fetchSql, opensTransaction, final: true, ct);
             }
         }, "Query cancelled by user.", "Execution error");
+    }
+
+    /// <summary>
+    /// <paramref name="sql"/> with its <c>:name</c> variables replaced by what the user types for them, or
+    /// null when the run should not happen (the prompt was cancelled, or there is no window to ask in).
+    /// Unchanged when the script has none or the setting is off. The answers are remembered on the tab so
+    /// the next run offers them again.
+    /// </summary>
+    private async Task<string?> FillVariablesAsync(EditorTabViewModel tab, ISqlDialect dialect, string sql)
+    {
+        if (!_ctx.Settings.ScriptVariables) return sql;
+        var names = SqlVariables.Names(dialect, sql);
+        if (names.Count == 0) return sql;
+
+        if (_dialogs is not { } dialogs)
+        {
+            _ctx.SetStatus($"This SQL has variables ({string.Join(", ", names.Select(n => ":" + n))}) "
+                           + "and there is no window to ask for their values in.");
+            return null;
+        }
+
+        var values = await dialogs.PromptVariablesAsync(names, tab.VariableValues);
+        if (values is null) { _ctx.SetStatus("Cancelled — variables not filled in."); return null; }
+
+        foreach (var (name, value) in values) tab.VariableValues[name] = value;
+        return SqlVariables.Substitute(dialect, sql, values);
     }
 
     private enum RunOutcome { Success, AuthFailed, Failed }
@@ -896,6 +928,10 @@ public sealed partial class ExecutionViewModel : ObservableObject
             _ctx.SetStatus("Query plans are not available for this engine yet.");
             return null;
         }
+
+        // Before the wrap and the guard, for the reason ExecuteAsync gives.
+        if (await FillVariablesAsync(tab, ProviderTraits.For(info).Dialect, sql) is not { } filled) return null;
+        sql = filled;
 
         var request = analyze ? ExplainSql.Measured(sql) : ExplainSql.Plan(sql);
 

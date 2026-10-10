@@ -146,6 +146,12 @@ public sealed class SqlServerDialect : ISqlDialect
     /// <inheritdoc cref="InStringLiteral"/>
     public string RedactLiterals(string? sql) => TSqlLiterals.RedactLiterals(sql);
 
+    /// <inheritdoc/>
+    public IReadOnlyList<SqlVariableRef> FindVariables(string sql) => SqlVariables.FindTSql(sql);
+
+    /// <inheritdoc/>
+    public string TextLiteral(string value) => "N'" + value.Replace("'", "''") + "'";
+
     /// <summary>Split and classify a batch with <see cref="TSqlWriteGuard"/> — T-SQL's own lexical
     /// rules, so a delimited name, a keyword inside a string literal and an @-prefixed variable
     /// cannot trip the guard, while a GO-separated batch splits correctly.</summary>

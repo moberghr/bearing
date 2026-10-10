@@ -56,6 +56,13 @@ public sealed record AppSettings
     public bool AutoCloseBrackets { get; init; } = true;
 
     /// <summary>
+    /// Whether <c>:name</c> in a script is a variable the user is asked to fill in before it runs, DBeaver
+    /// style (<c>Bearing.Sql.SqlVariables</c>). On by default; the switch exists because a colon the
+    /// lexer reads as a variable but the user meant as SQL would otherwise make that query unrunnable.
+    /// </summary>
+    public bool ScriptVariables { get; init; } = true;
+
+    /// <summary>
     /// What Format SQL (Ctrl+Shift+F) does to keyword case (#102). Cosmetic only — Postgres folds unquoted
     /// identifiers, and quoted ones are never touched.
     /// </summary>

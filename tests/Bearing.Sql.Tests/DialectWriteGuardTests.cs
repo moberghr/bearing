@@ -141,6 +141,8 @@ public class DialectWriteGuardTests
         public string? TransactionControl(IReadOnlyList<string> words) => Ss.TransactionControl(words);
         public ISqlParseRules ParseRules => Ss.ParseRules;
         public bool InStringLiteral(string sql, int offset) => Ss.InStringLiteral(sql, offset);
+        public IReadOnlyList<SqlVariableRef> FindVariables(string sql) => Ss.FindVariables(sql);
+        public string TextLiteral(string value) => Ss.TextLiteral(value);
         public string RedactLiterals(string? sql) => Ss.RedactLiterals(sql);
 
         public string Quote(string i) => Ss.Quote(i);

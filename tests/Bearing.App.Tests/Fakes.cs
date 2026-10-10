@@ -233,13 +233,19 @@ internal sealed class FakeExecutor : IQueryExecutor
     /// notice to mark itself aborted (#131).</summary>
     public string? FailWith { get; set; }
 
+    /// <summary>The SQL each <see cref="ExecuteAsync"/> was handed, in order.</summary>
+    public List<string> Executed { get; } = new();
+
     public Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
-        => Task.FromResult<IReadOnlyList<QueryResult>>(new[]
+    {
+        Executed.Add(sql);
+        return Task.FromResult<IReadOnlyList<QueryResult>>(new[]
         {
             FailWith is { } message
                 ? Empty with { Error = new QueryError(message, "42601", null) }
                 : Empty,
         });
+    }
 
     public Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
         => Task.FromResult(Empty);
@@ -659,6 +665,20 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
     {
         RemoveProjectPrompts.Add((name, directory));
         return Task.FromResult(RemoveProjectAnswer);
+    }
+
+    /// <summary>What the variables prompt answers: a value per name, or null to cancel. Null by default, so a
+    /// test that runs SQL with a :name in it has to say what was typed.</summary>
+    public IReadOnlyDictionary<string, string>? VariablesAnswer { get; set; }
+
+    /// <summary>Each variables prompt raised: the names asked for, and what was offered as remembered.</summary>
+    public List<(IReadOnlyList<string> Names, IReadOnlyDictionary<string, string> Remembered)> VariablePrompts { get; } = new();
+
+    public Task<IReadOnlyDictionary<string, string>?> PromptVariablesAsync(
+        IReadOnlyList<string> names, IReadOnlyDictionary<string, string> remembered)
+    {
+        VariablePrompts.Add((names, new Dictionary<string, string>(remembered)));
+        return Task.FromResult(VariablesAnswer);
     }
 
     public Task<string?> PickSaveScriptAsync(string suggestedName, string? startDir)

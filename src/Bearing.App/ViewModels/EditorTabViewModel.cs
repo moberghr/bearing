@@ -47,6 +47,14 @@ public sealed partial class EditorTabViewModel : ObservableObject, IResultFrames
     /// </summary>
     [ObservableProperty] private int _fontZoomSteps;
 
+    /// <summary>
+    /// The last value typed for each <c>:name</c> script variable run from this tab, so a re-run offers
+    /// the same values again. Session-only, like <see cref="FontZoomSteps"/>: values are often ids from
+    /// production data, and nothing asked for them to be written to disk. Names compare
+    /// case-insensitively, as <c>SqlVariables</c> does.
+    /// </summary>
+    public Dictionary<string, string> VariableValues { get; } = new(StringComparer.OrdinalIgnoreCase);
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsDirty))]
     [NotifyPropertyChangedFor(nameof(HeaderTooltip))]

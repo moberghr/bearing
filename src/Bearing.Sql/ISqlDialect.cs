@@ -352,6 +352,17 @@ public interface ISqlDialect
     /// </summary>
     string RedactLiterals(string? sql);
 
+    /// <summary>
+    /// Every <c>:name</c> script variable in <paramref name="sql"/>, read with this engine's lexer so a
+    /// colon in a string, a comment or a delimited name — or either half of <c>::</c> — is not taken for
+    /// one. See <see cref="SqlVariables"/>; callers go through it rather than here.
+    /// </summary>
+    IReadOnlyList<SqlVariableRef> FindVariables(string sql);
+
+    /// <summary><paramref name="value"/> as this engine's string literal — what a <c>:'name'</c>
+    /// variable is replaced with. T-SQL's carries the <c>N</c> prefix so non-Latin text survives.</summary>
+    string TextLiteral(string value);
+
     // ---- Completion ----
 
     /// <summary>

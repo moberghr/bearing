@@ -151,6 +151,18 @@ public static class SettingsCatalog
             Get = s => s.AutoCloseBrackets,
             Set = (s, v) => s with { AutoCloseBrackets = v },
         },
+        new BoolSetting
+        {
+            Key = "editor.scriptVariables",
+            CategoryId = Editor,
+            Title = "Ask for :variables before running",
+            Description = "A :name in the SQL you run is a variable: Bearing asks for its value and splices it "
+                        + "in as typed, so quote text yourself ('abc') or write :'name' to have it quoted. "
+                        + "Colons in strings, comments and :: casts are left alone.",
+            Keywords = "variable parameter bind placeholder prompt colon dbeaver substitute",
+            Get = s => s.ScriptVariables,
+            Set = (s, v) => s with { ScriptVariables = v },
+        },
         new EnumSetting
         {
             Key = "editor.sqlFormatKeywordCase",

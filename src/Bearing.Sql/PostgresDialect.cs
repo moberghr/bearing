@@ -66,6 +66,12 @@ public sealed class PostgresDialect : ISqlDialect
     /// <inheritdoc cref="InStringLiteral"/>
     public string RedactLiterals(string? sql) => SqlRedactor.Redact(sql);
 
+    /// <inheritdoc/>
+    public IReadOnlyList<SqlVariableRef> FindVariables(string sql) => SqlVariables.FindPostgres(sql);
+
+    /// <inheritdoc/>
+    public string TextLiteral(string value) => "'" + value.Replace("'", "''") + "'";
+
     /// <summary>The vendored PostgreSQL lexer, which reads this engine for real — unchanged from
     /// before a second dialect existed.</summary>
     public IReadOnlyList<StatementRisk> DescribeStatements(string sql)
