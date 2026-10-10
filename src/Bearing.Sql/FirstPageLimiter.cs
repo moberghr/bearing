@@ -92,9 +92,5 @@ public static class FirstPageLimiter
         return firstKeyword is not null && RowReturningStarts.Contains(firstKeyword);
     }
 
-    private static string StripTrailingSemicolon(string sql)
-    {
-        var s = sql.TrimEnd();
-        return s.EndsWith(';') ? s[..^1] : s;
-    }
+    private static string StripTrailingSemicolon(string sql) => StatementEnd.TrimPostgres(sql);
 }

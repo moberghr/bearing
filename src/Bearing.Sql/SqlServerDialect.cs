@@ -368,11 +368,7 @@ public sealed class SqlServerDialect : ISqlDialect
         "EXEC", "EXECUTE", "BULK", "BACKUP", "RESTORE",
     };
 
-    private static string StripTrailingSemicolon(string sql)
-    {
-        var s = sql.TrimEnd();
-        return s.EndsWith(';') ? s[..^1] : s;
-    }
+    private static string StripTrailingSemicolon(string sql) => StatementEnd.TrimTSql(sql);
 
     /// <summary>The reads a host outside Bearing may send. Smaller than Postgres': T-SQL has no
     /// <c>SHOW</c> and no <c>TABLE</c> shorthand, and <c>DECLARE</c> is deliberately absent even though it

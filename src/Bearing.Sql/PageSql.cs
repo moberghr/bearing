@@ -41,9 +41,5 @@ public static class PageSql
     public static string CountWrap(string sql)
         => $"select count(*) from (\n{StripTrailingSemicolon(sql)}\n) as _sq";
 
-    private static string StripTrailingSemicolon(string sql)
-    {
-        var s = sql.TrimEnd();
-        return s.EndsWith(';') ? s[..^1] : s;
-    }
+    private static string StripTrailingSemicolon(string sql) => StatementEnd.TrimPostgres(sql);
 }

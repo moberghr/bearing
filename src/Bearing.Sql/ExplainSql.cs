@@ -47,7 +47,7 @@ public static class ExplainSql
             RolledBack: true);
 
     /// <summary>
-    /// The statement itself, without a trailing semicolon.
+    /// The statement itself, without a trailing semicolon or trailing comments (<see cref="StatementEnd"/>).
     /// <para>
     /// Removed because it would otherwise land in the middle of the ANALYZE batch and end the EXPLAIN early,
     /// leaving <c>ROLLBACK</c> as a statement of its own — which parses, runs, and silently produces a plan
@@ -56,8 +56,7 @@ public static class ExplainSql
     /// </summary>
     private static string Body(string statement)
     {
-        var trimmed = (statement ?? "").Trim();
-        while (trimmed.EndsWith(';')) trimmed = trimmed[..^1].TrimEnd();
-        return trimmed;
+        // Trailing comments go too: a `-- note` left on the end would comment out the `;` this appends.
+        return StatementEnd.TrimPostgres(statement ?? "").Trim();
     }
 }
