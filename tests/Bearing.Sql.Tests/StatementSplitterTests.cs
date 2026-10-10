@@ -251,4 +251,63 @@ public class StatementSplitterTests
         Assert.Equal('s', sql[stmt.TrimmedStart]);
         Assert.Equal(';', sql[stmt.TrimmedEnd - 1]);
     }
+
+    /// <summary>The script that surfaced this: a terminated SELECT, a blank line, a commented-out COMMIT.
+    /// The comment used to be highlighted, folded and run as part of the SELECT, because the last
+    /// statement owned everything to the end of the buffer.</summary>
+    private const string CommentedCommit =
+        "-- Eyeball, then COMMIT.\nselect l.id\nfrom line l\norder by l.id;\n\n-- COMMIT;\n";
+
+    [Fact]
+    public void An_own_line_comment_after_the_last_statement_is_not_part_of_it()
+    {
+        var span = Assert.Single(StatementSplitter.Split(CommentedCommit));
+
+        Assert.DoesNotContain("-- COMMIT;", span.Text);
+        Assert.Equal(
+            "-- Eyeball, then COMMIT.\nselect l.id\nfrom line l\norder by l.id;",
+            CommentedCommit[span.TrimmedStart..span.TrimmedEnd]);
+    }
+
+    /// <summary>The comment belongs to no statement, and a caret on it falls back to the one above —
+    /// the answer a blank line between statements already gives — which now runs without it.</summary>
+    [Fact]
+    public void A_caret_on_that_comment_runs_the_statement_above_without_it()
+    {
+        var stmt = StatementSplitter.StatementAt(CommentedCommit, CommentedCommit.IndexOf("-- COMMIT", StringComparison.Ordinal))!;
+
+        Assert.Contains("order by l.id;", stmt.Text);
+        Assert.DoesNotContain("-- COMMIT;", stmt.Text);
+    }
+
+    [Fact]
+    public void A_comment_between_blank_lines_belongs_to_neither_neighbour()
+    {
+        const string sql = "select 1;\n\n-- note\n\nselect 2;";
+
+        var spans = StatementSplitter.Split(sql);
+
+        Assert.Equal(2, spans.Count);
+        Assert.DoesNotContain("-- note", spans[0].Text);
+        Assert.DoesNotContain("-- note", spans[1].Text);
+        Assert.Equal("select 2;", spans[1].Text);
+    }
+
+    [Fact]
+    public void A_comment_on_its_own_line_inside_a_statement_stays_in_it()
+    {
+        const string sql = "select a,\n  -- the b column\n  b\nfrom t;\n";
+
+        var span = Assert.Single(StatementSplitter.Split(sql));
+
+        Assert.Equal("select a,\n  -- the b column\n  b\nfrom t;", sql[span.TrimmedStart..span.TrimmedEnd]);
+    }
+
+    [Fact]
+    public void T_sql_already_leaves_a_trailing_comment_out()
+    {
+        var span = Assert.Single(StatementSplitter.Split(SqlServerDialect.Instance, CommentedCommit));
+
+        Assert.DoesNotContain("-- COMMIT;", span.Text);
+    }
 }

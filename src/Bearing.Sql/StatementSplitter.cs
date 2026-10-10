@@ -63,7 +63,8 @@ public static class StatementSplitter
         int? commentBlockStart = null;       // start of the current contiguous comment block
         var lastCommentEnd = -1;
         var depth = 0;
-        foreach (var t in PgParsing.LexAll(sql))
+        var tokens = PgParsing.LexAll(sql);
+        foreach (var t in tokens)
         {
             if (t.Type == TokenConstants.EOF) continue;
 
@@ -112,16 +113,53 @@ public static class StatementSplitter
         if (firstStart is not null) starts.Add(firstStart.Value); // trailing statement, no ';'
         if (starts.Count == 0) return spans;                       // only whitespace/comments
 
-        // Tile the buffer: statement i owns from its own start (0 for the first, so leading
-        // whitespace stays with it) up to the next statement's first token. The ';' and any blank
-        // lines after it therefore belong to the statement they follow, not the next one.
+        // Statement i owns from its own start (0 for the first, so leading whitespace stays with it) up
+        // to the next statement's first token. The ';' and any blank lines after it therefore belong to
+        // the statement they follow, not the next one — but an own-line comment that does not lead into
+        // the next statement belongs to neither, so the span stops in front of it (OwnedEnd).
         for (var i = 0; i < starts.Count; i++)
         {
             var start = i == 0 ? 0 : starts[i];
-            var end = i == starts.Count - 1 ? sql.Length : starts[i + 1];
+            var limit = i == starts.Count - 1 ? sql.Length : starts[i + 1];
+            var end = OwnedEnd(sql, tokens, start, limit);
             spans.Add(new StatementSpan(start, end, sql[start..end]));
         }
         return spans;
+    }
+
+    /// <summary>
+    /// Where the statement that starts at <paramref name="start"/> stops owning text, at most
+    /// <paramref name="limit"/>: past its last token, any comment sharing that token's line
+    /// (<c>select 1; -- note</c>), and the whitespace after them — but in front of the first comment on
+    /// a line of its own.
+    /// <para>
+    /// The case that made this matter, from a real script: <c>… order by l.id;</c>, a blank line, then
+    /// <c>-- COMMIT;</c>. Tiled up to the end of the buffer, the commented-out COMMIT was highlighted,
+    /// folded and <em>run</em> as part of the SELECT. A comment that leads the next statement is not in
+    /// this range at all — that statement's start already includes it.
+    /// </para>
+    /// </summary>
+    private static int OwnedEnd(string sql, IList<IToken> tokens, int start, int limit)
+    {
+        // The statement's last token first: a comment on a line of its own *inside* the statement
+        // (`select a,` / `-- note` / `b`) is part of it, and only what follows the last token can be cut.
+        var contentEnd = -1;
+        foreach (var t in tokens)
+        {
+            if (t.Type == TokenConstants.EOF || t.StartIndex >= limit) break;
+            if (t.StartIndex >= start && t.Channel == TokenConstants.DefaultChannel) contentEnd = t.StopIndex + 1;
+        }
+        if (contentEnd < 0) return limit;
+
+        foreach (var t in tokens)
+        {
+            if (t.Type == TokenConstants.EOF || t.StartIndex >= limit) break;
+            if (t.StartIndex < contentEnd || !IsComment(t)) continue;
+
+            if (ContainsNewline(sql, contentEnd, t.StartIndex)) return t.StartIndex;
+            contentEnd = t.StopIndex + 1;    // trails the statement on its own last line
+        }
+        return limit;
     }
 
     /// <summary>
