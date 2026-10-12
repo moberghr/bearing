@@ -180,4 +180,23 @@ public class EntraTokenProviderTests
     public void A_blank_override_falls_back_rather_than_minting_for_nothing()
         => Assert.Equal("https://database.windows.net/",
             EntraTokenProvider.ResourceFor(Target("sqlserver", EntraTokenProvider.ResourceOptionKey, "   ")));
+
+    // #167: launched from Finder/Spotlight/dock, PATH is launchd's minimal one and misses Homebrew.
+    [Fact]
+    public void Finds_homebrew_az_when_launchd_path_misses_it()
+        => Assert.Equal("/opt/homebrew/bin/az",
+            EntraTokenProvider.ResolveAz("/usr/bin:/bin:/usr/sbin:/sbin", p => p == "/opt/homebrew/bin/az", isWindows: false));
+
+    [Fact]
+    public void Prefers_az_on_path_over_the_well_known_dirs()
+        => Assert.Equal("/home/me/bin/az",
+            EntraTokenProvider.ResolveAz("/home/me/bin:/usr/bin", p => p is "/home/me/bin/az" or "/opt/homebrew/bin/az", isWindows: false));
+
+    [Fact]
+    public void Falls_back_to_bare_az_when_nothing_is_found()
+        => Assert.Equal("az", EntraTokenProvider.ResolveAz(null, _ => false, isWindows: false));
+
+    [Fact]
+    public void Windows_keeps_its_own_lookup()
+        => Assert.Equal("az", EntraTokenProvider.ResolveAz("/opt/homebrew/bin", _ => true, isWindows: true));
 }
