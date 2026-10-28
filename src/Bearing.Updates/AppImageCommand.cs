@@ -44,12 +44,17 @@ public static class AppImageCommand
     /// them with anything else goes to the command, which says what it does not understand — a window that
     /// silently ignored the rest is the bug this fixes.
     /// </para>
+    /// <para>
+    /// Scripts (<c>*.sql</c>) stay with the window too: <c>bearing file.sql</c> means "open this", and the
+    /// command could only answer it by starting the window from inside an image this process is about to
+    /// unmount. The window hands them to an already-open one itself.
+    /// </para>
     /// </summary>
     public static bool ShouldForward(
         IReadOnlyList<string> args, string? appImage, IReadOnlyCollection<string> appArguments)
     {
         if (string.IsNullOrEmpty(appImage) || args.Count == 0) return false;
-        return !args.All(a => appArguments.Contains(a, StringComparer.OrdinalIgnoreCase));
+        return !args.All(a => appArguments.Contains(a, StringComparer.OrdinalIgnoreCase) || IsScriptPath(a));
     }
 
     /// <summary>
@@ -99,4 +104,9 @@ public static class AppImageCommand
             return 1;
         }
     }
+
+    /// <summary>The command's rule for a script to open (<c>CliParser.IsScriptPath</c>), which this project
+    /// cannot reference.</summary>
+    private static bool IsScriptPath(string arg)
+        => !arg.StartsWith('-') && arg.EndsWith(".sql", StringComparison.OrdinalIgnoreCase);
 }

@@ -69,7 +69,7 @@ public sealed partial class ShellViewModel
     {
         var editors = tabs.Select(t => new OpenEditor
         {
-            ScriptPath = t.ScriptPath is not null ? Path.GetRelativePath(project.Directory, t.ScriptPath) : null,
+            ScriptPath = t.ScriptPath is not null ? SessionPath(project.Directory, t.ScriptPath) : null,
             ScratchText = t.Text,
             // Only a label the user typed on a tab with no file is worth carrying: a tab with a file is
             // named after that file (#1), and the "Scratch N" placeholder is regenerated on restore.
@@ -92,6 +92,19 @@ public sealed partial class ShellViewModel
             ResultsViewMode = resultsViewMode,
             CollapsedConnectionFolders = collapsedConnectionFolders?.ToList() ?? new List<string>(),
         };
+    }
+
+    /// <summary>
+    /// Pure — how a tab's file is written to <c>session.json</c>: relative inside the project, so the folder
+    /// can move and still resume, and absolute outside it (<c>bearing file.sql</c>). A <c>../../..</c> walk
+    /// would tie a file that has nothing to do with the project to where the project happens to sit.
+    /// </summary>
+    internal static string SessionPath(string projectDirectory, string scriptPath)
+    {
+        var relative = Path.GetRelativePath(projectDirectory, scriptPath);
+        return relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative)
+            ? Path.GetFullPath(scriptPath)
+            : relative;
     }
 
     private void UpdateTitle()

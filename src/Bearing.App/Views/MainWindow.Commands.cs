@@ -44,6 +44,12 @@ public partial class MainWindow
             async () => { if (Vm?.Workspace.SelectedTab is { } tab) await CloseTabAsync(tab); }, canRun: () => Vm?.Workspace.SelectedTab is not null));
         r.Register(KeyCommand.Sync(CommandIds.TabRename, "Rename tab", KeyScope.Global, "File",
             () => { if (Vm?.Workspace.SelectedTab is { } tab) BeginTabRename(tab); }, canRun: () => Vm?.Workspace.SelectedTab is not null));
+        r.Register(new KeyCommand(CommandIds.TabCopyToProject, "Copy script into project scripts", KeyScope.Global, "File",
+            async () => { if (Vm?.Workspace.SelectedTab is { } tab) await CopyTabIntoProjectAsync(tab); },
+            canRun: () => Vm is { Workspace.SelectedTab: { } tab } vm && vm.IsOutsideProject(tab)));
+        r.Register(KeyCommand.Sync(CommandIds.TabMoveToProject, "Move tab to project…", KeyScope.Global, "File",
+            OpenMoveToProjectPicker,
+            canRun: () => Vm is { Workspace.SelectedTab: { } tab } vm && vm.ProjectsToMoveTo(tab).Count > 0));
         r.Register(KeyCommand.Sync(CommandIds.ViewToggleSidePane, "Toggle side pane", KeyScope.Global, "View",
             () => { if (Vm is not null) Vm.SidePaneOpen = !Vm.SidePaneOpen; }));
         r.Register(KeyCommand.Sync(CommandIds.ViewToggleResults, "Toggle results", KeyScope.Global, "View", ToggleResultsVisible));
@@ -321,6 +327,15 @@ public partial class MainWindow
         if (Vm is null) return;
         _palette.ShowQuickPick("Select project…", Vm.RecentProjects.Select(p =>
             (p.Name, (Action)(() => ProjectCombo.SelectedItem = p))).ToList());
+    }
+
+    /// <summary>tab.moveToProject: pick where the selected tab goes, from the recent projects but its own.</summary>
+    private void OpenMoveToProjectPicker()
+    {
+        if (Vm is not { Workspace.SelectedTab: { } tab } vm) return;
+        _palette.ShowQuickPick("Move tab to project…", vm.ProjectsToMoveTo(tab).Select(p =>
+            (p.Name, (Action)(() => CrashReporter.Observe(MoveTabToProjectAsync(tab, p.Directory), "tab.moveToProject"))))
+            .ToList());
     }
 
     /// <summary>

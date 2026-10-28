@@ -145,6 +145,32 @@ public sealed partial class ShellViewModel
     }
 
 
+    // ---- Scripts from outside the project (`bearing file.sql`) — see ExternalScripts -----------------
+
+    /// <summary>Open files in the project on screen, where they stay on disk and run against its connections.</summary>
+    public Task OpenScriptFilesAsync(IReadOnlyList<string> paths) => _externalScripts.OpenAsync(paths);
+
+    /// <summary>Whether the tab's file lives outside its project's scripts folder.</summary>
+    public bool IsOutsideProject(EditorTabViewModel tab) => _externalScripts.IsOutsideProject(tab);
+
+    /// <summary>Copy the tab's script into its project's scripts folder; the tab edits the copy from then on.</summary>
+    public Task<string?> CopyTabIntoProjectAsync(EditorTabViewModel tab) => _externalScripts.CopyIntoProjectAsync(tab);
+
+    /// <summary>The recent projects <paramref name="tab"/> can move to: every one but its own, and none for a
+    /// tab with no named file (scratch belongs to the project whose scratch folder holds it).</summary>
+    public IReadOnlyList<RecentProjectItem> ProjectsToMoveTo(EditorTabViewModel tab)
+    {
+        if (tab.ScriptPath is null || tab.IsScratch) return Array.Empty<RecentProjectItem>();
+        var own = tab.ProjectDirectory is { } dir ? Path.GetFullPath(dir) : null;
+        return RecentProjects
+            .Where(p => !string.Equals(Path.GetFullPath(p.Directory), own, StringComparison.Ordinal))
+            .ToList();
+    }
+
+    /// <summary>Move the tab to another project, which comes on screen with it.</summary>
+    public Task<bool> MoveTabToProjectAsync(EditorTabViewModel tab, string projectDirectory)
+        => _externalScripts.MoveToProjectAsync(tab, projectDirectory);
+
     /// <summary>Bring an already-open project back on screen from its parked state. Deliberately does not
     /// touch <c>session.json</c>: the in-memory tabs are newer than anything on disk (unsaved buffer edits
     /// included), and rebuilding them is exactly what would throw the results away.</summary>

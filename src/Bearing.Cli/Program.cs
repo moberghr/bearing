@@ -47,7 +47,7 @@ internal static class Program
         // Opening the window, printing the help and reporting a usage error all need no project, no keychain
         // and no connection — and must not pay for one. Launching in particular must not: a person typing
         // `bearing` to open the app would otherwise be told their project file is unreadable.
-        if (options.LaunchApp || options.Help || options.Error is not null)
+        if (options.LaunchApp || options.OpenFiles.Count > 0 || options.Help || options.Error is not null)
             return await CliRunner
                 .RunAsync(options, NoHost.Instance, app, Console.Out, Console.Error, stopping.Token)
                 .ConfigureAwait(false);

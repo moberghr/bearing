@@ -34,6 +34,10 @@ public static class Commands
         bearing: query the Bearing connections whose owner exposed them, read-only.
 
           bearing                                  Open the Bearing window.
+          bearing <file.sql> [...]                 Open scripts in Bearing: in the project on screen if
+                                                   it is open, else in the last project used. The file
+                                                   stays where it is; copy it into the project or move
+                                                   it to another one from its tab's menu.
           bearing [options] <command> [arguments]
 
         Commands

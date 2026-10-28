@@ -227,6 +227,18 @@ public sealed partial class WorkspaceViewModel : ObservableObject
             SelectedTab = Tabs[Math.Max(0, index - 1)];
     }
 
+    /// <summary>Take a tab off this project's strip without closing it — nothing is asked, flushed or rolled
+    /// back, because the tab is not ending: it is on its way to another project (<see cref="Adopt"/>).</summary>
+    public void Detach(EditorTabViewModel tab) => Remove(tab);
+
+    /// <summary>Put an existing tab on the active project's strip and select it — the other half of
+    /// <see cref="Detach"/>. The caller has already re-pointed its project and connection.</summary>
+    public void Adopt(EditorTabViewModel tab)
+    {
+        if (!Tabs.Contains(tab)) Tabs.Add(tab);
+        SelectedTab = tab;
+    }
+
     /// <summary>
     /// The pinned tabs and the rest, in <see cref="Tabs"/> order — two live views over the one source, so the
     /// strip can render pinned tabs in their own row (#67) while every index-based rule keeps reading
@@ -314,7 +326,12 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         var editors = session?.OpenEditors ?? new List<OpenEditor>();
         foreach (var e in editors)
         {
-            var abs = e.ScriptPath is { } rel && _ctx.Project is not null ? Path.Combine(_ctx.Project.Directory, rel) : null;
+            // Combine keeps an absolute path as it is — a file opened from outside the project (`bearing
+            // file.sql`) — and GetFullPath folds an older session's `../..` walk to the same path, so the
+            // tab compares equal to a later request to open that file.
+            var abs = e.ScriptPath is { } rel && _ctx.Project is not null
+                ? Path.GetFullPath(Path.Combine(_ctx.Project.Directory, rel))
+                : null;
             EditorTabViewModel tab;
             if (abs is not null && _ctx.ScriptStore.FileExists(abs))
             {

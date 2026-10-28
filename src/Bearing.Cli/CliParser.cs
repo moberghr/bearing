@@ -67,6 +67,16 @@ public sealed record CliOptions
     /// </summary>
     public bool LaunchApp { get; init; }
 
+    /// <summary>
+    /// `bearing file.sql [more.sql …]`: open these scripts in the Bearing window, as typed — resolving them
+    /// against the working directory is the caller's job, because this parser touches no environment.
+    /// <para>
+    /// Recognised by the <c>.sql</c> extension, not by asking the disk: a name that collides with a command
+    /// is still the command, and <c>./query.sql</c> is how you open a file called that.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> OpenFiles { get; init; } = [];
+
     /// <summary>Set when the arguments could not be understood; nothing else is meaningful then.</summary>
     public string? Error { get; init; }
 }
@@ -195,8 +205,16 @@ public static class CliParser
         if (positional.Count == 0) return options with { Help = true };
 
         var command = positional[0];
-        if (command is not (Commands.Connections or Commands.Tables or Commands.Describe
-                            or Commands.Query or Commands.Explain))
+        if (!IsCommand(command) && positional.All(IsScriptPath))
+        {
+            // Opening a file is the window's business, and none of the query options mean anything to it.
+            // Named rather than ignored, as a command's stray option is.
+            if (HasAnyOption(options))
+                return Error("Opening a script takes no options — just `bearing <file.sql>`.");
+            return new CliOptions { OpenFiles = positional };
+        }
+
+        if (!IsCommand(command))
             return new CliOptions { Error = $"Unknown command '{command}'." };
 
         options = options with { Command = command, Arguments = positional.Skip(1).ToList() };
@@ -264,6 +282,17 @@ public static class CliParser
     }
 
     private static CliOptions Error(string message) => new() { Error = message };
+
+    private static bool HasAnyOption(CliOptions o)
+        => o.ProjectDirectory is not null || o.Format != OutputFormat.Json || o.Schema is not null
+           || o.MaxRows is not null || o.UnlimitedRows || o.File is not null || o.Out is not null
+           || o.TimeoutSeconds is not null || o.Analyze;
+
+    private static bool IsCommand(string word)
+        => word is Commands.Connections or Commands.Tables or Commands.Describe or Commands.Query or Commands.Explain;
+
+    /// <summary>What `bearing &lt;arg&gt;` treats as a script to open rather than a command.</summary>
+    public static bool IsScriptPath(string arg) => arg.EndsWith(".sql", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The value after an option, or null when there is none — which every caller turns into

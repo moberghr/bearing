@@ -45,6 +45,18 @@ public static class CliRunner
         CliOptions options, IBearingHost host, IAppLauncher app,
         TextWriter stdout, TextWriter stderr, CancellationToken ct)
     {
+        if (options.OpenFiles.Count > 0)
+        {
+            // Like launching: no project, no connection. Which project the scripts land in is the window's
+            // call — the one on screen, or the last one used.
+            if (await app.OpenAsync(options.OpenFiles).ConfigureAwait(false) is { } failure)
+            {
+                await stderr.WriteLineAsync(failure);
+                return Failed;
+            }
+            return Ok;
+        }
+
         if (options.LaunchApp)
         {
             // Before the project is resolved and before any connection is touched: opening the window has

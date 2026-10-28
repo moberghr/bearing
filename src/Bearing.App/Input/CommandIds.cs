@@ -38,6 +38,14 @@ public static class CommandIds
     /// the palette can reach it and <c>keybindings.json</c> can bind it.
     /// </summary>
     public const string TabExpandStrip = "tab.expandStrip";
+
+    /// <summary>Copy the selected tab's script — one opened from outside the project (<c>bearing file.sql</c>)
+    /// — into the project's scripts folder. Unbound, like the move below: an occasional, deliberate act that
+    /// the tab's menu and the palette reach.</summary>
+    public const string TabCopyToProject = "tab.copyToProject";
+
+    /// <summary>Move the selected tab to another project, picked from the recent list.</summary>
+    public const string TabMoveToProject = "tab.moveToProject";
     public const string FocusCycle = "focus.cycle";
     public const string FocusEditor = "focus.editor";
     public const string FocusResults = "focus.results";
