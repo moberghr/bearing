@@ -303,6 +303,82 @@ public class CliTests
         Assert.Equal(0, app.Launches);
     }
 
+    // ---- opening a script -----------------------------------------------------------------------
+
+    [Fact]
+    public void A_sql_file_is_a_script_to_open_not_an_unknown_command()
+    {
+        var options = CliParser.Parse(["report.sql"]);
+
+        Assert.Null(options.Error);
+        Assert.Null(options.Command);
+        Assert.False(options.LaunchApp);
+        Assert.Equal(["report.sql"], options.OpenFiles);
+    }
+
+    [Fact]
+    public void Several_scripts_open_together_in_the_order_given()
+    {
+        Assert.Equal(["b.sql", "dir/a.SQL"], CliParser.Parse(["b.sql", "dir/a.SQL"]).OpenFiles);
+        // `--` is how a file whose name starts with a dash is opened.
+        Assert.Equal(["-x.sql"], CliParser.Parse(["--", "-x.sql"]).OpenFiles);
+    }
+
+    /// <summary>A command name is still the command; `./query.sql` names the file.</summary>
+    [Fact]
+    public void A_command_wins_over_a_file_and_a_non_script_is_still_unknown()
+    {
+        Assert.Equal(Commands.Query, CliParser.Parse(["query", "prod", "select 1"]).Command);
+        Assert.Empty(CliParser.Parse(["query", "prod", "--file", "x.sql"]).OpenFiles);
+        Assert.Contains("Unknown command", CliParser.Parse(["notes.txt"]).Error);
+        Assert.Contains("Unknown command", CliParser.Parse(["a.sql", "notes.txt"]).Error);
+    }
+
+    [Fact]
+    public void Opening_a_script_names_an_option_it_was_given_rather_than_ignoring_it()
+    {
+        Assert.Contains("no options", CliParser.Parse(["--project", "/p", "a.sql"]).Error);
+        Assert.Contains("no options", CliParser.Parse(["--table", "a.sql"]).Error);
+        Assert.Empty(CliParser.Parse(["--project", "/p", "a.sql"]).OpenFiles);
+    }
+
+    [Fact]
+    public async Task Opening_a_script_hands_it_to_the_app_and_touches_nothing_else()
+    {
+        var host = new RecordingHost();
+        var app = new FakeAppLauncher();
+
+        var run = await Cli.RunAsync(host, app, "a.sql", "b.sql");
+
+        Assert.Equal(CliRunner.Ok, run.ExitCode);
+        Assert.Equal(["a.sql", "b.sql"], Assert.Single(app.Opened));
+        Assert.Equal(0, app.Launches);
+        Assert.Empty(host.Calls);
+        Assert.Empty(run.Out);
+    }
+
+    [Fact]
+    public async Task A_script_that_cannot_be_opened_says_why_and_fails()
+    {
+        var app = new FakeAppLauncher { FailWith = "No such file: /tmp/missing.sql" };
+
+        var run = await Cli.RunAsync(new RecordingHost(), app, "missing.sql");
+
+        Assert.Equal(CliRunner.Failed, run.ExitCode);
+        Assert.Contains("No such file", run.Error);
+    }
+
+    /// <summary>The real launcher's checks that run before anything is sent or started.</summary>
+    [Fact]
+    public async Task The_launcher_refuses_a_missing_file_before_reaching_for_a_window()
+    {
+        var missing = Path.Combine(Path.GetTempPath(), $"bearing-{Guid.NewGuid():N}.sql");
+
+        var failure = await new AppLauncher().OpenAsync([missing]);
+
+        Assert.Equal($"No such file: {missing}", failure);
+    }
+
     // ---- output -------------------------------------------------------------------------------
 
     [Fact]

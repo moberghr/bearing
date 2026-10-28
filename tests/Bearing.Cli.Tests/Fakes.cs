@@ -89,6 +89,15 @@ internal sealed class FakeAppLauncher : IAppLauncher
         Launches++;
         return FailWith;
     }
+
+    /// <summary>Every script list it was asked to open, in order.</summary>
+    public List<IReadOnlyList<string>> Opened { get; } = [];
+
+    public Task<string?> OpenAsync(IReadOnlyList<string> files)
+    {
+        Opened.Add(files);
+        return Task.FromResult(FailWith);
+    }
 }
 
 /// <summary>One whole invocation: parse, run, and hand back what the user would have seen.</summary>

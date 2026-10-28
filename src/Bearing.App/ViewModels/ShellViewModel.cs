@@ -52,6 +52,9 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The execution concern (run/page/count/FK-nav/inline-edit), exposed as <see cref="Execution"/>.</summary>
     private readonly ExecutionViewModel _execution;
 
+    /// <summary>Scripts opened from outside a project (<c>bearing file.sql</c>), and copying or moving them.</summary>
+    private readonly ExternalScripts _externalScripts;
+
     /// <summary>The dialog surface, kept because the history export has to ask two questions (#113).</summary>
     private readonly IDialogService? _dialogs;
 
@@ -101,6 +104,7 @@ public sealed partial class ShellViewModel : ObservableObject
         // and don't reference it back).
         _workspace = new WorkspaceViewModel(_ctx, _scripts, _connections, dialogs);
         _execution = new ExecutionViewModel(_ctx, dialogs);
+        _externalScripts = new ExternalScripts(_ctx, _workspace, _scripts, _connections, OpenProjectAsync);
         History = new HistoryPanelViewModel(SearchHistoryAsync, ColorForConnection);
         Activity = new ActivityPanelViewModel(_ctx, dialogs);
         // Refresh from the log's own "the row is in" signal rather than from the execution path: Append

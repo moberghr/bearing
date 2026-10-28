@@ -52,6 +52,17 @@ internal static class Program
             Environment.Exit(AppImageCommand.Forward(args, Console.Error));
         }
 
+        // `bearing-app file.sql` while a window is already open: hand the files to it and leave. A second
+        // window would hold the same project and write its session.json over the first one's (see
+        // ScriptOpenChannel). Not for a demo, which never takes real files (§9.7). Nothing answering is the
+        // ordinary case — the app is not open — and then this process becomes the window.
+        if (!Bearing.Demo.DemoMode.Requested(args)
+            && Bearing.App.Workspace.StartupScripts.From(args) is { Count: > 0 } scripts
+            && ScriptOpenChannel.TrySendAsync(scripts).GetAwaiter().GetResult())
+        {
+            return;
+        }
+
         // Last-resort backstops so an escaped exception is recorded rather than lost. UI-thread faults
         // are handled (and surfaced) inside the app via Dispatcher.UnhandledException; these catch the
         // rest: background-thread crashes, unobserved task faults, and anything escaping startup.

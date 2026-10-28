@@ -25,10 +25,11 @@ public sealed partial class EditorTabViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Directory of the project this tab belongs to, fixed for the tab's whole life. Switching projects
-    /// parks tabs rather than closing them, so "the active project" is not the right answer for a tab's
-    /// scratch folder, session entry or connection lookup — this is. Null only for a tab created before a
-    /// project was loaded. Not bound; nothing displays it.
+    /// Directory of the project this tab belongs to. Switching projects parks tabs rather than closing them,
+    /// so "the active project" is not the right answer for a tab's scratch folder, session entry or
+    /// connection lookup — this is. Changes only when the user moves the tab to another project
+    /// (<c>ExternalScripts.MoveToProjectAsync</c>). Null only for a tab created before a project was loaded.
+    /// Not bound; nothing displays it.
     /// </summary>
     public string? ProjectDirectory { get; set; }
 

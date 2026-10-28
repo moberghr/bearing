@@ -282,6 +282,9 @@ public partial class MainWindow
             openFolder: path is null ? null : () => OpenContainingFolderAsync(path),
             delete: path is null ? null : () => DeleteTabFileAsync(tab),
             togglePin: () => vm.Workspace.SetPinned(tab, !tab.IsPinned),
+            copyIntoProject: vm.IsOutsideProject(tab) ? () => CopyTabIntoProjectAsync(tab) : null,
+            moveTargets: vm.ProjectsToMoveTo(tab)
+                .Select(p => (p.Name, (Func<Task>)(() => MoveTabToProjectAsync(tab, p.Directory)))).ToList(),
             renameGesture: MenuGesture(CommandIds.TabRename),
             saveGesture: MenuGesture(CommandIds.FileSave),
             closeGesture: MenuGesture(CommandIds.TabClose),
@@ -304,6 +307,23 @@ public partial class MainWindow
         }
         if (await _dialogs.PickSaveScriptAsync($"{tab.DisplayName}.sql", Vm.ScriptsDirectory) is { } chosen)
             await Vm.Workspace.SaveScriptAsync(tab, chosen, tab.Text);
+    }
+
+    /// <summary>Copy a script from outside the project into its scripts folder. The buffer goes, unsaved edits
+    /// and all, so the editor's live text is flushed first.</summary>
+    private async Task CopyTabIntoProjectAsync(EditorTabViewModel tab)
+    {
+        if (Vm is null) return;
+        FlushActiveEditor();
+        await Vm.CopyTabIntoProjectAsync(tab);
+    }
+
+    /// <summary>Move a tab to another project; that project comes on screen with it.</summary>
+    private async Task MoveTabToProjectAsync(EditorTabViewModel tab, string projectDirectory)
+    {
+        if (Vm is null) return;
+        FlushActiveEditor();   // the buffer travels with the tab, and the outgoing session is saved on the way
+        if (await Vm.MoveTabToProjectAsync(tab, projectDirectory)) LoadEditorFromSelectedTab();
     }
 
     /// <summary>Delete a tab's backing file, behind a confirm, closing the tab with it.</summary>

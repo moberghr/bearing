@@ -45,6 +45,26 @@ public class AppImageCommandTests
         Assert.True(Forward(Image, "--demo", "connections"));
     }
 
+    /// <summary>
+    /// `bearing file.sql` through the image is the window's to answer: forwarded, the command would start a
+    /// window from inside an image that is unmounted as soon as this process exits.
+    /// </summary>
+    [Fact]
+    public void Scripts_to_open_stay_with_the_window()
+    {
+        Assert.False(Forward(Image, "report.sql"));
+        Assert.False(Forward(Image, "/tmp/a.SQL", "b.sql"));
+        Assert.False(Forward(Image, "--demo", "a.sql"));
+    }
+
+    /// <summary>A script inside a command is that command's argument, not a file to open.</summary>
+    [Fact]
+    public void A_script_beside_a_command_still_goes_to_the_cli()
+    {
+        Assert.True(Forward(Image, "query", "prod", "--file", "report.sql"));
+        Assert.True(Forward(Image, "--file", "report.sql"));
+    }
+
     /// <summary>Outside an image the command is beside the app under its own name, and is called by it.</summary>
     [Fact]
     public void Nothing_is_forwarded_outside_an_appimage()

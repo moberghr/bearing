@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -12,6 +13,7 @@ using Avalonia.Threading;
 using Bearing.App.Services;
 using Bearing.App.ViewModels;
 using Bearing.App.Views;
+using Bearing.App.Workspace;
 using Bearing.Core.Logging;
 using Bearing.Core.Workspace;
 using Bearing.Data;
@@ -233,15 +235,22 @@ public partial class App : Application
             if (Environment.GetEnvironmentVariable("BEARING_STARTUP_TIMING") is { Length: > 0 })
                 window.Opened += (_, _) => LogStartup("window shown");
 
+            // Scripts named on the command line (`bearing file.sql` with no window open). Not in a demo: a demo
+            // opens its own throwaway project, and a real file has no business in it (§9.7).
+            var scripts = _demo is null ? StartupScripts.From(desktop.Args) : Array.Empty<string>();
+            // The listener goes with the window: a request arriving during shutdown has nowhere to land.
+            window.Closed += (_, _) => StopScriptChannel();
+
             // Resolve the keychain and restore the project OFF the UI thread — never block startup.
             // Observed so a failure to restore is logged + surfaced rather than lost.
-            CrashReporter.Observe(InitializeAsync(vm, settings), "startup initialize");
+            CrashReporter.Observe(InitializeAsync(vm, settings, window, scripts), "startup initialize");
         }
 
         base.OnFrameworkInitializationCompleted();
     }
 
-    private static async Task InitializeAsync(ShellViewModel vm, Settings.SettingsService settings)
+    private static async Task InitializeAsync(
+        ShellViewModel vm, Settings.SettingsService settings, Window window, IReadOnlyList<string> scripts)
     {
         // One-time cleanup of the removed on-disk secret fallback. Off the UI thread with the rest of startup;
         // it is best-effort and never blocks the app (§5.2).
@@ -276,6 +285,35 @@ public partial class App : Application
             // where a developer machine can have something else entirely listening (§4.2).
             await vm.Connections.SeedDemoConnectionAsync("localhost", 55434, "pagila", "postgres", "squirrel");
         LogStartup("project ready");
+
+        // After the project, so they land in it: the last one used, which is what a cold `bearing file.sql`
+        // promises.
+        if (scripts.Count > 0) await vm.OpenScriptFilesAsync(scripts);
+
+        // Only now, for the same reason — a request that arrived before a project was open would have no
+        // project to open into. A later `bearing file.sql` comes here instead of starting a second window,
+        // whose session.json would race this one's (see ScriptOpenChannel).
+        _scriptChannel = ScriptOpenChannel.Listen(paths => Dispatcher.UIThread.Post(() =>
+            CrashReporter.Observe(OpenFromCommandAsync(vm, window, paths), "open script from command")));
+    }
+
+    /// <summary>The window's half of <c>bearing file.sql</c>: open the files, then come forward — the person
+    /// who typed the command is looking at a terminal, not at us.</summary>
+    private static async Task OpenFromCommandAsync(ShellViewModel vm, Window window, IReadOnlyList<string> paths)
+    {
+        await vm.OpenScriptFilesAsync(paths);
+        if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
+        window.Activate();
+    }
+
+    /// <summary>Listening for <c>bearing file.sql</c>; null in a demo, in tests, and when the pipe could not
+    /// be created.</summary>
+    private static ScriptOpenChannel.Listener? _scriptChannel;
+
+    private static void StopScriptChannel()
+    {
+        if (Interlocked.Exchange(ref _scriptChannel, null) is { } channel)
+            CrashReporter.Observe(channel.DisposeAsync().AsTask(), "script channel stop");
     }
 
     /// <summary>The demo session's throwaway workspace, or null in an ordinary session (#64).</summary>
