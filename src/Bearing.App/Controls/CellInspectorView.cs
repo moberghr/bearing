@@ -2,12 +2,12 @@ using System;
 using System.Collections.Generic;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using static Bearing.App.Controls.Tokens;
@@ -33,8 +33,8 @@ namespace Bearing.App.Controls;
 /// </summary>
 public sealed class CellInspectorView : UserControl
 {
-    /// <summary>Above this many lines the value renders as uncoloured, unfoldable text: one
-    /// <see cref="Run"/> per span is fine for a document, ruinous for a 50k-line one.</summary>
+    /// <summary>Above this many lines the value renders as uncoloured, unfoldable text: the coloured view
+    /// lays out every line on each open and fold (~0.3 s at 4,000 lines), ruinous for a 50k-line one.</summary>
     private const int MaxColouredLines = 4000;
 
     /// <summary>Zoom range, kept in step with the <c>results.inspectorFontSize</c> setting's own limits so
@@ -66,20 +66,32 @@ public sealed class CellInspectorView : UserControl
         HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
     };
 
-    private readonly SelectableTextBlock _jsonText = new()
+    private readonly JsonTextBlock _jsonText = new(kind => Res(ColorKeyForSpan(kind)))
     {
         FontFamily = MonoFont,
         TextWrapping = TextWrapping.NoWrap,   // structure over reflow; Raw wraps if that's what you want
         VerticalAlignment = VerticalAlignment.Top,
+        Foreground = Res(ColorKeyForSpan(JsonSpanKind.Punctuation)),
     };
+
+    private readonly Cursor _handCursor = new(StandardCursorType.Hand);
 
     /// <summary>Top, not the default Stretch: a Canvas with an explicit Height gets *centred* in the
     /// leftover space, which parked the chevrons halfway down the pane whenever the document was short.</summary>
     private readonly Canvas _jsonGutter = new() { VerticalAlignment = VerticalAlignment.Top };
 
+    private readonly FindHighlightLayer _findLayer;
+
+    /// <summary>What the formatted view drew last — find marks positions on these without redrawing.</summary>
+    private IReadOnlyList<JsonRow> _rows = Array.Empty<JsonRow>();
+
     private TextBlock? _matchCount;
     private bool _formatted = true;
     private string _find = "";
+
+    /// <summary>The hits on <see cref="_rows"/>, and which one Enter / the arrows are on.</summary>
+    private IReadOnlyList<JsonMatch> _matches = Array.Empty<JsonMatch>();
+    private int _current;
 
     /// <summary>Build an inspector for a result's cell.</summary>
     public static CellInspectorView For(
@@ -104,6 +116,11 @@ public sealed class CellInspectorView : UserControl
         // A declared json/jsonb column, or any value whose text opens like a document.
         _isJson = parsed is not null && (ColumnKinds.IsJson(typeName) || ColumnKinds.LooksJson(raw));
         _lines = _isJson ? JsonText.Render(parsed!) : Array.Empty<JsonLine>();
+        _findLayer = new FindHighlightLayer(_jsonText)
+        {
+            Brush = Tint("Accent.Brand", 0x40),
+            CurrentBrush = Tint("Accent.Brand", 0xA0),
+        };
 
         var panel = new DockPanel { LastChildFill = true };
         panel.Children.Add(BuildHeader(title, typeName, onClose));
@@ -227,9 +244,27 @@ public sealed class CellInspectorView : UserControl
         findBox.TextChanged += (_, _) =>
         {
             _find = findBox.Text ?? "";
+            var before = _folded.Count;
             _folded.ExceptWith(JsonText.PathsToReveal(_lines, _find));   // a match can't hide inside a fold
-            if (_formatted) RenderBody();
+            if (!_formatted) return;
+            _current = 0;   // a new query starts at its first hit
+            // Only an opened fold changes the document; otherwise the query only moves highlights.
+            if (_folded.Count != before) RenderBody();
+            else ShowMatches();
+            RevealCurrent();
         };
+        // Field-local, like the sidebar's search boxes: Enter steps through the hits, Shift+Enter back.
+        findBox.KeyDown += (_, e) =>
+        {
+            if (e.Key != Key.Enter) return;
+            e.Handled = true;
+            Step(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1);
+        };
+
+        var previous = ResultChrome.IconTextButton("↑", "Previous match (Shift+Enter)");
+        previous.Click += (_, _) => Step(-1);
+        var next = ResultChrome.IconTextButton("↓", "Next match (Enter)");
+        next.Click += (_, _) => Step(1);
 
         _matchCount = new TextBlock
         {
@@ -244,6 +279,8 @@ public sealed class CellInspectorView : UserControl
         tb.Children.Add(collapseAll);
         tb.Children.Add(expandAll);
         tb.Children.Add(findBox);
+        tb.Children.Add(previous);
+        tb.Children.Add(next);
         tb.Children.Add(_matchCount);
 
         var toolbar = new Border
@@ -275,15 +312,14 @@ public sealed class CellInspectorView : UserControl
     }
 
     /// <summary>
-    /// The value as indented JSON: one coloured <see cref="Run"/> per span in a single selectable block,
+    /// The value as indented JSON: one coloured string in a single selectable block,
     /// with a fold chevron beside every line that opens a container. Refills the standing controls, which
     /// is what keeps the scroll position across a fold or a keystroke in find.
     /// </summary>
     private Control BuildJsonView()
     {
-        var rows = JsonText.Highlight(JsonText.Flatten(_lines, _folded), _find, out var matches);
-        if (_matchCount is not null)
-            _matchCount.Text = _find.Trim().Length == 0 ? "" : matches == 0 ? "no matches" : $"{matches} found";
+        _rows = JsonText.Flatten(_lines, _folded);
+        ShowMatches();
 
         if (_lines.Count > MaxColouredLines)
             return new ScrollViewer
@@ -296,39 +332,62 @@ public sealed class CellInspectorView : UserControl
         {
             var body = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
             Grid.SetColumn(_jsonGutter, 0);
+            Grid.SetColumn(_findLayer, 1);
             Grid.SetColumn(_jsonText, 1);
             body.Children.Add(_jsonGutter);
+            body.Children.Add(_findLayer);   // before the text, so it draws behind it
             body.Children.Add(_jsonText);
             _jsonScroller.Content = body;
         }
 
-        FillText(rows);
-        FillGutter(rows);
+        FillText(_rows);
+        FillGutter(_rows);
         return _jsonScroller;
     }
 
-    /// <summary>Rebuild the document's runs. The whole refill is one synchronous pass, so no layout runs
-    /// against a half-empty block and the scroll offset only ever gets clamped, never zeroed.</summary>
+    /// <summary>Count the hits on the drawn rows and hand them to the highlight layer. The huge-value
+    /// fallback has no layer, so it still counts but marks nothing — as before.</summary>
+    private void ShowMatches()
+    {
+        _matches = JsonText.Find(_rows, _find);
+        _current = _matches.Count == 0 ? 0 : Math.Clamp(_current, 0, _matches.Count - 1);
+        if (_matchCount is not null)
+            _matchCount.Text = _find.Trim().Length == 0 ? ""
+                : _matches.Count == 0 ? "no matches"
+                : $"{_current + 1} of {_matches.Count}";
+        _findLayer.SetMatches(_matches, _current);
+    }
+
+    /// <summary>Move to the next (+1) or previous (-1) hit, wrapping at either end, and scroll to it.</summary>
+    private void Step(int direction)
+    {
+        if (!_formatted || _matches.Count == 0) return;
+        _current = (_current + direction + _matches.Count) % _matches.Count;
+        ShowMatches();
+        RevealCurrent();
+    }
+
+    /// <summary>
+    /// Scroll the current hit into view with a few lines of context. Posted below layout priority: after a
+    /// fold opens, the hit's position only exists once the new text has been measured.
+    /// </summary>
+    private void RevealCurrent()
+    {
+        if (_matches.Count == 0 || _lines.Count > MaxColouredLines) return;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_findLayer.CurrentRectangle() is { } hit)
+                _findLayer.BringIntoView(hit.Inflate(new Thickness(GutterWidth * 2, LineHeight * 3)));
+        }, DispatcherPriority.Background);
+    }
+
+    /// <summary>Replace the document's text. One string and one layout, so the scroll offset only ever gets
+    /// clamped, never zeroed.</summary>
     private void FillText(IReadOnlyList<JsonRow> rows)
     {
-        // Its own collection, not a fresh one: the control wires the InlineCollection it creates to itself.
         _jsonText.FontSize = _fontSize;
         _jsonText.LineHeight = LineHeight;
-
-        var inlines = _jsonText.Inlines!;
-        inlines.Clear();
-
-        var highlight = Tint("Accent.Brand", 0x55);
-        for (var i = 0; i < rows.Count; i++)
-        {
-            if (i > 0) inlines.Add(new LineBreak());
-            foreach (var span in rows[i].Spans)
-                inlines.Add(new Run(span.Text)
-                {
-                    Foreground = Res(ColorKeyForSpan(span.Kind)),
-                    Background = span.IsMatch ? highlight : null,
-                });
-        }
+        _jsonText.SetDocument(JsonText.Join(rows));
     }
 
     /// <summary>
@@ -355,7 +414,7 @@ public sealed class CellInspectorView : UserControl
                 LineHeight = LineHeight,              // centres the glyph in its row
                 TextAlignment = TextAlignment.Center,
                 Foreground = Res("Text.Faint"),
-                Cursor = new Cursor(StandardCursorType.Hand),
+                Cursor = _handCursor,
             };
             chevron.PointerEntered += (_, _) => chevron.Foreground = Res("Text.Primary");
             chevron.PointerExited += (_, _) => chevron.Foreground = Res("Text.Faint");

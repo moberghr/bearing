@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.Encodings.Web;
 
@@ -20,9 +21,21 @@ public enum JsonSpanKind
     Keyword,
 }
 
-/// <summary>One coloured run of text on a rendered JSON line. <see cref="IsMatch"/> is set by
-/// <see cref="JsonText.Highlight"/> on the exact substring the find query hit.</summary>
-public sealed record JsonSpan(string Text, JsonSpanKind Kind, bool IsMatch = false);
+/// <summary>One coloured run of text on a rendered JSON line.</summary>
+public sealed record JsonSpan(string Text, JsonSpanKind Kind);
+
+/// <summary>One find hit: <see cref="Length"/> characters from <see cref="Column"/> on visible row
+/// <see cref="Row"/> (an index into <see cref="JsonText.Flatten"/>'s rows).</summary>
+public readonly record struct JsonMatch(int Row, int Column, int Length);
+
+/// <summary>A coloured stretch of <see cref="JsonTextDocument.Text"/>, by character offset.</summary>
+public readonly record struct JsonColourSpan(int Start, int Length, JsonSpanKind Kind);
+
+/// <summary>
+/// Visible rows joined into one string (rows separated by <c>\n</c>) plus where its colours go. Anything
+/// not covered by <see cref="Colours"/> is punctuation and takes the default foreground.
+/// </summary>
+public sealed record JsonTextDocument(string Text, IReadOnlyList<JsonColourSpan> Colours);
 
 /// <summary>
 /// One line of the fully expanded document. A line that opens a non-empty container also carries what it
@@ -170,6 +183,27 @@ public static class JsonText
         => lines.Where(l => l.CanFold && (includeRoot || l.Path != RootPath)).Select(l => l.Path).ToList();
 
     /// <summary>
+    /// The rows as one string with colour ranges — what the view draws. One text plus offsets rather than a
+    /// run per span: thousands of inline elements cost over a second to build and lay out on a 20 KB value.
+    /// </summary>
+    public static JsonTextDocument Join(IReadOnlyList<JsonRow> rows)
+    {
+        var text = new StringBuilder();
+        var colours = new List<JsonColourSpan>();
+        for (var i = 0; i < rows.Count; i++)
+        {
+            if (i > 0) text.Append('\n');
+            foreach (var span in rows[i].Spans)
+            {
+                if (span.Kind != JsonSpanKind.Punctuation && span.Text.Length > 0)
+                    colours.Add(new JsonColourSpan(text.Length, span.Text.Length, span.Kind));
+                text.Append(span.Text);
+            }
+        }
+        return new JsonTextDocument(text.ToString(), colours);
+    }
+
+    /// <summary>
     /// The containers that have to open for every match on <paramref name="query"/> to be visible — the
     /// ancestors of each matching line. A container whose own key matches doesn't need to open: that key is
     /// legible on the folded line.
@@ -187,41 +221,31 @@ public static class JsonText
     }
 
     /// <summary>
-    /// Split every searchable span on occurrences of <paramref name="query"/> (case-insensitive) so the
-    /// matched substrings alone carry <see cref="JsonSpan.IsMatch"/>, and report how many were found.
-    /// Punctuation and indentation are never searched; an empty query returns the rows untouched.
+    /// Every occurrence of <paramref name="query"/> (case-insensitive) in the searchable spans of
+    /// <paramref name="rows"/>, as a row and a character column — positions, not re-split spans, so the view
+    /// can mark them without rebuilding the document it already drew. Punctuation and indentation are never
+    /// searched; an empty query finds nothing.
     /// </summary>
-    public static IReadOnlyList<JsonRow> Highlight(IReadOnlyList<JsonRow> rows, string? query, out int matches)
+    public static IReadOnlyList<JsonMatch> Find(IReadOnlyList<JsonRow> rows, string? query)
     {
-        matches = 0;
         var q = query?.Trim() ?? "";
-        if (q.Length == 0) return rows;
+        if (q.Length == 0) return Array.Empty<JsonMatch>();
 
-        var count = 0;
-        var result = new List<JsonRow>(rows.Count);
-        foreach (var row in rows)
+        var found = new List<JsonMatch>();
+        for (var row = 0; row < rows.Count; row++)
         {
-            var spans = new List<JsonSpan>(row.Spans.Count);
-            foreach (var span in row.Spans)
+            var column = 0;
+            foreach (var span in rows[row].Spans)
             {
-                if (span.Kind == JsonSpanKind.Punctuation) { spans.Add(span); continue; }
-
-                var cursor = 0;
-                while (span.Text.IndexOf(q, cursor, StringComparison.OrdinalIgnoreCase) is var hit && hit >= 0)
-                {
-                    if (hit > cursor) spans.Add(span with { Text = span.Text[cursor..hit] });
-                    spans.Add(span with { Text = span.Text.Substring(hit, q.Length), IsMatch = true });
-                    cursor = hit + q.Length;
-                    count++;
-                }
-                if (cursor == 0) spans.Add(span);
-                else if (cursor < span.Text.Length) spans.Add(span with { Text = span.Text[cursor..] });
+                if (span.Kind != JsonSpanKind.Punctuation)
+                    for (var hit = span.Text.IndexOf(q, StringComparison.OrdinalIgnoreCase);
+                         hit >= 0;
+                         hit = span.Text.IndexOf(q, hit + q.Length, StringComparison.OrdinalIgnoreCase))
+                        found.Add(new JsonMatch(row, column + hit, q.Length));
+                column += span.Text.Length;
             }
-            result.Add(row with { Spans = spans });
         }
-
-        matches = count;
-        return result;
+        return found;
     }
 
     private static bool Matches(IReadOnlyList<JsonSpan> spans, string query)
