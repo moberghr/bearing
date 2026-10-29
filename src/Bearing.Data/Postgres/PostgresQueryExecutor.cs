@@ -223,6 +223,18 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
     private static bool IsUncountableShape(PostgresException pg)
         => pg.SqlState is PostgresErrorCodes.SyntaxError or PostgresErrorCodes.FeatureNotSupported;
 
+    /// <summary>
+    /// Bind one generated-DML parameter. A string goes as Postgres <c>unknown</c>, not <c>text</c>, so the
+    /// server types it from the column it is assigned to or compared with — exactly as it would a quoted
+    /// literal. The grid hands back a string for every column Npgsql reads as one (<c>jsonb</c>, <c>json</c>,
+    /// <c>xml</c>, enums, <c>citext</c>, …), and there is no implicit <c>text → jsonb</c> cast: bound as
+    /// <c>text</c>, every edit of such a column failed with "is of type jsonb but expression is of type text".
+    /// A text column is unaffected — <c>unknown</c> resolves to <c>text</c> there.
+    /// </summary>
+    private static NpgsqlParameter WriteParameter(SqlParameter p) => p.Value is string s
+        ? new NpgsqlParameter(p.Name, NpgsqlTypes.NpgsqlDbType.Unknown) { Value = s }
+        : new NpgsqlParameter(p.Name, p.Value ?? DBNull.Value);
+
     public async Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(
         IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct)
     {
@@ -244,7 +256,7 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
             {
                 await using var cmd = new NpgsqlCommand(c.Sql, rent.Connection, tx);
                 foreach (var p in c.Parameters)
-                    cmd.Parameters.Add(new NpgsqlParameter(p.Name, p.Value ?? DBNull.Value));
+                    cmd.Parameters.Add(WriteParameter(p));
                 await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
                 results.Add(await ReadResultSetAsync(reader, new QueryOptions { MaxRows = null }, sw, ct).ConfigureAwait(false));
             }

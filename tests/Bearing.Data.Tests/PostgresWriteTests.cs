@@ -131,6 +131,74 @@ public class PostgresWriteTests
         }
     }
 
+    /// <summary>
+    /// The grid hands back a string for every column Npgsql reads as one, not just <c>text</c>. Bound as
+    /// <c>text</c>, a jsonb edit failed with "column is of type jsonb but expression is of type text" (no
+    /// implicit cast); bound as <c>unknown</c>, the server types each value from its column like a literal.
+    /// Covers the assignment, insert and key-predicate positions, and that a text column still gets text.
+    /// </summary>
+    [SkippableFact]
+    public async Task String_values_take_their_column_type_jsonb_enum_and_text()
+    {
+        var provider = new ProviderRegistry().Get(PostgresProvider.ProviderId);
+        await using var factory = provider.CreateConnectionFactory(Info(), Password);
+        await PgTestServer.RequireWritableAsync(factory);
+
+        var exec = provider.CreateQueryExecutor(factory);
+        const string schema = "bearing_string_params";
+        await exec.ExecuteAsync(
+            $"drop schema if exists {schema} cascade; create schema {schema}; " +
+            $"create type {schema}.mood as enum ('calm', 'busy'); " +
+            $"create table {schema}.t (id int primary key, doc jsonb, mood {schema}.mood, code text);",
+            new QueryOptions(), CancellationToken.None);
+        try
+        {
+            // A pool loads the server's types when it opens, so one opened before the enum existed can't
+            // read it back. The writes use a pool opened after setup, as the app's would be.
+            await using var fresh = provider.CreateConnectionFactory(Info(), Password);
+            exec = provider.CreateQueryExecutor(fresh);
+
+            var ins = await exec.ExecuteWriteAsync(
+                new[] { DmlGenerator.Insert(schema, "t", new[]
+                {
+                    new ColumnValue("id", 1), new ColumnValue("doc", """{"a": 1}"""),
+                    new ColumnValue("mood", "calm"), new ColumnValue("code", "007"),
+                }) },
+                CancellationToken.None);
+            Assert.True(Assert.Single(ins).Success, ins[0].Error?.Message);
+
+            var upd = await exec.ExecuteWriteAsync(
+                new[] { DmlGenerator.Update(schema, "t",
+                    assignments: new[] { new ColumnValue("doc", """{"b": [true]}"""), new ColumnValue("mood", "busy") },
+                    keys: new[] { new ColumnValue("id", 1), new ColumnValue("code", "007") }) },
+                CancellationToken.None);
+            Assert.True(Assert.Single(upd).Success, upd[0].Error?.Message);
+            Assert.Equal(1, upd[0].RowCount);
+
+            // A jsonb key: the predicate is jsonb = unknown, resolved to jsonb equality.
+            var byDoc = await exec.ExecuteWriteAsync(
+                new[] { DmlGenerator.Update(schema, "t",
+                    assignments: new[] { new ColumnValue("code", "008") },
+                    keys: new[] { new ColumnValue("doc", """{"b":[true]}""") }) },
+                CancellationToken.None);
+            Assert.True(Assert.Single(byDoc).Success, byDoc[0].Error?.Message);
+            Assert.Equal(1, byDoc[0].RowCount);
+
+            var after = await exec.ExecuteAsync(
+                $"select doc::text, mood::text, code, pg_typeof(code)::text from {schema}.t",
+                new QueryOptions(), CancellationToken.None);
+            var row = Assert.Single(after[0].Rows);
+            Assert.Equal("""{"b": [true]}""", row[0]);
+            Assert.Equal("busy", row[1]);
+            Assert.Equal("008", row[2]);                     // text stays text: no leading zero lost
+            Assert.Equal("text", row[3]);
+        }
+        finally
+        {
+            await exec.ExecuteAsync($"drop schema if exists {schema} cascade;", new QueryOptions(), CancellationToken.None);
+        }
+    }
+
     [SkippableFact]
     public async Task Failing_command_rolls_back_the_whole_batch()
     {

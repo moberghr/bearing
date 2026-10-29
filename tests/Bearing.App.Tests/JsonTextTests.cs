@@ -184,57 +184,69 @@ public class JsonTextTests
     // ---- find -------------------------------------------------------------------------------------
 
     [Fact]
-    public void Highlight_marks_only_the_matched_substring()
+    public void Find_points_at_the_matched_substring_on_its_row()
     {
         var rows = Rows("""{"needle":"haystack"}""");
 
-        var marked = JsonText.Highlight(rows, "stack", out var matches);
+        var hit = Assert.Single(JsonText.Find(rows, "stack"));
 
-        Assert.Equal(1, matches);
-        var matched = marked.SelectMany(r => r.Spans).Where(s => s.IsMatch).ToList();
-        Assert.Equal("stack", Assert.Single(matched).Text);
-        // Splitting a span never changes the text it draws.
-        Assert.Equal(rows.Select(r => r.Text), marked.Select(r => r.Text));
+        Assert.Equal(1, hit.Row);
+        Assert.Equal("stack", rows[hit.Row].Text.Substring(hit.Column, hit.Length));
     }
 
     [Fact]
-    public void Highlight_matches_keys_and_values_case_insensitively_and_counts_every_hit()
+    public void Find_matches_keys_and_values_case_insensitively_and_counts_every_hit()
     {
-        JsonText.Highlight(Rows("""{"ship":"Ship of ships"}"""), "SHIP", out var matches);
+        var hits = JsonText.Find(Rows("""{"ship":"Ship of ships"}"""), "SHIP");
 
-        Assert.Equal(3, matches); // the key, and twice in the value
+        Assert.Equal(3, hits.Count); // the key, and twice in the value
     }
 
     [Fact]
-    public void Highlight_never_matches_punctuation_or_indentation()
+    public void Find_columns_count_the_indentation_and_punctuation_before_the_hit()
+    {
+        var rows = Rows("""{"a":{"b":"x-needle"}}""");
+
+        var hit = Assert.Single(JsonText.Find(rows, "needle"));
+
+        Assert.Equal("    \"b\": \"x-needle\"", rows[hit.Row].Text);
+        Assert.Equal(rows[hit.Row].Text.IndexOf("needle"), hit.Column);
+    }
+
+    [Fact]
+    public void Find_never_matches_punctuation_or_indentation()
     {
         var rows = Rows("""{"a":{"b":1}}""");
 
-        JsonText.Highlight(rows, "{", out var braces);
-        JsonText.Highlight(rows, " ", out var spaces);
-
-        Assert.Equal(0, braces);
-        Assert.Equal(0, spaces);
+        Assert.Empty(JsonText.Find(rows, "{"));
+        Assert.Empty(JsonText.Find(rows, " "));
     }
 
     [Fact]
     public void A_folded_placeholder_is_not_searchable()
     {
-        JsonText.Highlight(Rows("""{"tags":["needle"]}""", "$.0"), "needle", out var matches);
+        var hits = JsonText.Find(Rows("""{"tags":["needle"]}""", "$.0"), "needle");
 
-        Assert.Equal(0, matches); // it's hidden — PathsToReveal is what opens it
+        Assert.Empty(hits); // it's hidden — PathsToReveal is what opens it
     }
 
     [Fact]
-    public void Empty_find_leaves_the_rows_untouched()
+    public void Empty_find_finds_nothing()
+        => Assert.Empty(JsonText.Find(Rows("""{"k":"v"}"""), "  "));
+
+    // ---- drawing ----------------------------------------------------------------------------------
+
+    [Fact]
+    public void Join_is_the_rows_text_with_colours_on_everything_but_punctuation()
     {
-        var rows = Rows("""{"k":"v"}""");
+        var rows = Rows("""{"k":[1,true]}""");
 
-        var same = JsonText.Highlight(rows, "  ", out var matches);
+        var doc = JsonText.Join(rows);
 
-        Assert.Equal(0, matches);
-        Assert.Same(rows, same);
-        Assert.DoesNotContain(same.SelectMany(r => r.Spans), s => s.IsMatch);
+        Assert.Equal(string.Join("\n", rows.Select(r => r.Text)), doc.Text);
+        Assert.Equal(
+            new[] { ("\"k\"", JsonSpanKind.Key), ("1", JsonSpanKind.Number), ("true", JsonSpanKind.Keyword) },
+            doc.Colours.Select(c => (doc.Text.Substring(c.Start, c.Length), c.Kind)));
     }
 
     [Fact]
