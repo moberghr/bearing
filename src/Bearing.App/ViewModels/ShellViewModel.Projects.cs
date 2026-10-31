@@ -150,6 +150,13 @@ public sealed partial class ShellViewModel
     /// <summary>Open files in the project on screen, where they stay on disk and run against its connections.</summary>
     public Task OpenScriptFilesAsync(IReadOnlyList<string> paths) => _externalScripts.OpenAsync(paths);
 
+    /// <summary>Compare every open script with its file and reload, or ask, where something else changed it —
+    /// see <see cref="Workspace.ScriptFileSync"/>. The window calls this when it comes to the front.</summary>
+    public void CheckScriptsOnDisk()
+    {
+        if (_ctx.FileSync is { } sync) CrashReporter.Observe(sync.CheckAllAsync(), "script disk check");
+    }
+
     /// <summary>Whether the tab's file lives outside its project's scripts folder.</summary>
     public bool IsOutsideProject(EditorTabViewModel tab) => _externalScripts.IsOutsideProject(tab);
 

@@ -596,6 +596,18 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
         return Task.FromResult(CancelRunningAnswer);
     }
 
+    /// <summary>What the disk-conflict prompt answers. Decide (keep both, write nothing) by default.</summary>
+    public Bearing.App.Services.DiskConflictChoice DiskConflictAnswer { get; set; }
+
+    /// <summary>The file names the disk-conflict prompt was raised for, in order.</summary>
+    public List<string> DiskConflictPrompts { get; } = new();
+
+    public Task<Bearing.App.Services.DiskConflictChoice> ConfirmDiskConflictAsync(string fileName)
+    {
+        DiskConflictPrompts.Add(fileName);
+        return Task.FromResult(DiskConflictAnswer);
+    }
+
     public Task<Bearing.App.Services.CloseChoice> ConfirmCloseTabAsync(string tabName)
     {
         ClosePrompts.Add(tabName);

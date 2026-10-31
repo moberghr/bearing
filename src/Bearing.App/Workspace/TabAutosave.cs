@@ -184,6 +184,7 @@ public sealed class TabAutosave : IDisposable
         {
             if (!tab.IsScratch && Mode == AutosaveMode.Off) continue;
             if (tab.ScriptPath is not { } path || tab.Text.Trim().Length == 0) continue;
+            if (_ctx.FileSync is { } sync && !sync.MayWriteOnShutdown(tab)) continue;   // changed under it
             var text = tab.Text;
             try { Task.Run(() => _ctx.ScriptStore.WriteTextAsync(path, text, CancellationToken.None)).GetAwaiter().GetResult(); }
             catch { /* best-effort on shutdown (§5.2) */ }
@@ -213,6 +214,10 @@ public sealed class TabAutosave : IDisposable
         // autosaves while another project is on screen, and its text must not land in that project's folder.
         var owner = _ctx.ProjectOf(tab) ?? _ctx.Project;
         if (tab.IsScratch && owner is null) return;                          // nowhere to put a scratch file
+
+        // The file may have changed under the tab since it was read; a blind write would put this buffer over
+        // somebody else's work (ScriptFileSync decides, and reloads or flags the tab instead).
+        if (_ctx.FileSync is { } sync && !await sync.MayAutosaveAsync(tab)) return;
 
         var path = tab.ScriptPath ?? CreatePath(tab, owner!);
         var isNew = tab.ScriptPath is null;

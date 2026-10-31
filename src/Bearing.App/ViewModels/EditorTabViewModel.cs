@@ -72,6 +72,19 @@ public sealed partial class EditorTabViewModel : ObservableObject
         _savedText = savedText;
         IsModified = Text != _savedText;
     }
+
+    /// <summary>What the file held when this tab last read or wrote it. A disk that no longer says this was
+    /// changed by someone else (<c>ScriptFileSync</c>).</summary>
+    public string SavedText => _savedText;
+
+    /// <summary>
+    /// The file changed on disk while this tab held edits of its own, and nobody has chosen which copy wins.
+    /// Nothing writes the file while this is set — not autosave, not the shutdown flush — and Save asks
+    /// first. Cleared by reloading from disk or by choosing to overwrite.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HeaderTooltip))]
+    private bool _hasDiskConflict;
     /// <summary>Result sets currently displayed — one per statement in a multi-statement run.
     /// Each holds its own mutable row buffer so paging can append without a rebuild. FK navigation
     /// swaps this for the referenced result (previous frame stashed on <see cref="_resultHistory"/>).</summary>
@@ -277,7 +290,9 @@ public sealed partial class EditorTabViewModel : ObservableObject
     /// </para>
     /// </summary>
     public string HeaderTooltip
-        => ScriptPath is { } path ? DisplayPath(ProjectDirectory, path) : "Not saved to a file yet";
+        => ScriptPath is not { } path ? "Not saved to a file yet"
+            : HasDiskConflict ? DisplayPath(ProjectDirectory, path) + " — changed on disk; not saved until you choose"
+            : DisplayPath(ProjectDirectory, path);
 
     /// <summary>Pure — path shown in <see cref="HeaderTooltip"/>. A file outside the project keeps its
     /// absolute path: <c>GetRelativePath</c> would answer with a <c>../..</c> walk, which reads worse.</summary>

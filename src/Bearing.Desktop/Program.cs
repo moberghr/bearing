@@ -63,6 +63,18 @@ internal static class Program
             return;
         }
 
+        // This process is about to become the window. Inside the AppImage, started from a shell, that would
+        // hold the prompt until the window closes — start the image again in the background and give the
+        // terminal back (see AppImageDetach). Scripts go across as absolute paths, so where the second image
+        // happens to start does not change which file a relative name means.
+        var appImage = Environment.GetEnvironmentVariable("APPIMAGE");
+        if (AppImageDetach.ShouldDetach(appImage, AppImageDetach.TerminalAttached(),
+                Environment.GetEnvironmentVariable(AppImageDetach.Marker))
+            && AppImageDetach.Relaunch(appImage!, AbsoluteScripts(args), Console.Error))
+        {
+            return;
+        }
+
         // Last-resort backstops so an escaped exception is recorded rather than lost. UI-thread faults
         // are handled (and surfaced) inside the app via Dispatcher.UnhandledException; these catch the
         // rest: background-thread crashes, unobserved task faults, and anything escaping startup.
@@ -86,6 +98,11 @@ internal static class Program
             throw;
         }
     }
+
+    /// <summary>The arguments with each script made absolute against this process's directory; everything
+    /// else (<c>--demo</c>) as it was.</summary>
+    private static string[] AbsoluteScripts(string[] args)
+        => args.Select(a => Bearing.App.Workspace.StartupScripts.From([a]) is [var path] ? path : a).ToArray();
 
     /// <summary>
     /// What an install or an update has to put right, in order. Both callbacks do the same work: an update

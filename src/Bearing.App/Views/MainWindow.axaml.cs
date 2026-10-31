@@ -173,6 +173,8 @@ public partial class MainWindow : Window
         // a suspend/resume. There is no event for that, so re-assert it whenever the window is activated:
         // by the time it is being looked at, the pill is right again.
         Activated += (_, _) => SyncConnectionPicker();
+        // Coming back from another editor is when its changes to an open script are most likely to be waiting.
+        Activated += (_, _) => Vm?.CheckScriptsOnDisk();
     }
 
     /// <summary>The sidebar (Connections/Scripts/History) is its own control; it owns its dialogs and tree

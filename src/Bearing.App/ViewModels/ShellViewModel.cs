@@ -105,6 +105,7 @@ public sealed partial class ShellViewModel : ObservableObject
         _workspace = new WorkspaceViewModel(_ctx, _scripts, _connections, dialogs);
         _execution = new ExecutionViewModel(_ctx, dialogs);
         _externalScripts = new ExternalScripts(_ctx, _workspace, _scripts, _connections, OpenProjectAsync);
+        _ctx.FileSync = new ScriptFileSync(_ctx, dialogs);
         History = new HistoryPanelViewModel(SearchHistoryAsync, ColorForConnection);
         Activity = new ActivityPanelViewModel(_ctx, dialogs);
         // Refresh from the log's own "the row is in" signal rather than from the execution path: Append
@@ -436,6 +437,7 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>Dispose all live connections (query sessions + schema-browser pools); safe to call fire-and-forget from the close path.</summary>
     public async ValueTask DisposeSessionsAsync()
     {
+        _ctx.FileSync?.Dispose();   // the window is going: nothing left to reload into or ask about
         await _sessions.DisposeAsync();
         await _schemaBrowser.DisposeAsync();
     }
