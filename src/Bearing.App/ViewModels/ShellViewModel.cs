@@ -106,6 +106,7 @@ public sealed partial class ShellViewModel : ObservableObject
         _execution = new ExecutionViewModel(_ctx, dialogs);
         _externalScripts = new ExternalScripts(_ctx, _workspace, _scripts, _connections, OpenProjectAsync);
         _ctx.FileSync = new ScriptFileSync(_ctx, dialogs);
+        _ctx.FileSync.Reloaded += tab => ScriptReloaded?.Invoke(tab);
         History = new HistoryPanelViewModel(SearchHistoryAsync, ColorForConnection);
         Activity = new ActivityPanelViewModel(_ctx, dialogs);
         // Refresh from the log's own "the row is in" signal rather than from the execution path: Append

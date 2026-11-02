@@ -65,4 +65,43 @@ public class AppImageDetachTests : IDisposable
         for (var i = 0; i < 100 && !File.Exists(output); i++) await Task.Delay(50);
         Assert.Equal("1|/tmp/a b.sql|--demo|", File.ReadAllText(output));
     }
+
+    /// <summary>
+    /// <c>&amp;</c> makes the hand-off report success whatever the second image does, and its terminal is
+    /// gone — so what it says on the way down has to land in the log, or a launch that fails leaves nothing.
+    /// </summary>
+    [SkippableFact]
+    public async Task What_the_relaunched_image_prints_to_stderr_lands_in_the_log()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "AppImages are Linux-only");
+
+        Directory.CreateDirectory(_dir);
+        var image = Path.Combine(_dir, "broken.AppImage");
+        var log = Path.Combine(_dir, "detached.log");
+        File.WriteAllText(image, "#!/bin/sh\necho 'cannot mount' >&2\nexit 1\n");
+        File.SetUnixFileMode(image, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        Assert.True(AppImageDetach.Relaunch(image, [], TextWriter.Null, log));
+
+        for (var i = 0; i < 100 && !(File.Exists(log) && File.ReadAllText(log).Length > 0); i++) await Task.Delay(50);
+        Assert.Equal("cannot mount\n", File.ReadAllText(log));
+    }
+
+    /// <summary>A log that can't be written must not stop the image starting: a failed redirect would.</summary>
+    [SkippableFact]
+    public async Task An_unwritable_log_still_starts_the_image()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "AppImages are Linux-only");
+
+        Directory.CreateDirectory(_dir);
+        var image = Path.Combine(_dir, "fake.AppImage");
+        var output = Path.Combine(_dir, "started");
+        File.WriteAllText(image, "#!/bin/sh\ntouch \"" + output + "\"\n");
+        File.SetUnixFileMode(image, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        Assert.True(AppImageDetach.Relaunch(image, [], TextWriter.Null, Path.Combine(_dir, "no-such-dir", "detached.log")));
+
+        for (var i = 0; i < 100 && !File.Exists(output); i++) await Task.Delay(50);
+        Assert.True(File.Exists(output), "the image never started");
+    }
 }

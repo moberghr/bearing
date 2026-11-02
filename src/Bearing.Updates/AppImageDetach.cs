@@ -40,20 +40,28 @@ public static class AppImageDetach
         => !Console.IsInputRedirected || !Console.IsOutputRedirected || !Console.IsErrorRedirected;
 
     /// <summary>
-    /// The shell line that starts <c>"$@"</c> detached. <c>setsid</c> when there is one (util-linux, so
-    /// practically always), so closing the terminal later does not take the window with it; plain
-    /// backgrounding otherwise, which still returns the prompt.
+    /// The shell line that starts <c>"$@"</c> detached, after taking the log path off as <c>$1</c>.
+    /// <c>setsid</c> when there is one (util-linux, so practically always), so closing the terminal later does
+    /// not take the window with it; plain backgrounding otherwise, which still returns the prompt. The child's
+    /// stderr goes to the log, so a second image that dies at once leaves a reason somewhere: <c>&amp;</c>
+    /// makes this shell exit 0 whatever the child does. A log that can't be written falls back to
+    /// <c>/dev/null</c> — a failed redirect would stop the child from starting at all.
     /// </summary>
     internal const string Script =
-        "if command -v setsid >/dev/null 2>&1; then setsid \"$@\" </dev/null >/dev/null 2>&1 & "
-        + "else \"$@\" </dev/null >/dev/null 2>&1 & fi";
+        "log=\"$1\"; shift; "
+        // In a subshell: a failed redirect on a special builtin (`:`) would end this shell, not just fail.
+        + "( : >\"$log\" ) 2>/dev/null || log=/dev/null; "
+        + "if command -v setsid >/dev/null 2>&1; then setsid \"$@\" </dev/null >/dev/null 2>\"$log\" & "
+        + "else \"$@\" </dev/null >/dev/null 2>\"$log\" & fi";
 
     /// <summary>
     /// Start <paramref name="appImage"/> again with <paramref name="args"/>, detached. True when it was
     /// handed off and this process should exit; false (with the reason on <paramref name="error"/>) means
-    /// nothing started, and the caller becomes the window in the foreground as it always did.
+    /// nothing started, and the caller becomes the window in the foreground as it always did. "Handed off"
+    /// means the shell forked, not that the window came up: what the second image would have printed to the
+    /// terminal lands in <paramref name="logPath"/> (replaced each launch; null discards it).
     /// </summary>
-    public static bool Relaunch(string appImage, IReadOnlyList<string> args, TextWriter error)
+    public static bool Relaunch(string appImage, IReadOnlyList<string> args, TextWriter error, string? logPath = null)
     {
         try
         {
@@ -65,6 +73,7 @@ public static class AppImageDetach
             start.ArgumentList.Add("-c");
             start.ArgumentList.Add(Script);
             start.ArgumentList.Add("sh");   // $0
+            start.ArgumentList.Add(string.IsNullOrEmpty(logPath) ? "/dev/null" : logPath);   // $1, shifted off
             start.ArgumentList.Add(appImage);
             foreach (var argument in args) start.ArgumentList.Add(argument);
             start.Environment[Marker] = "1";

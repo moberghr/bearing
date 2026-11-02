@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -37,7 +38,14 @@ namespace Bearing.App.Workspace;
 /// <para>
 /// When it looks: a <see cref="FileSystemWatcher"/> on each directory holding an open tab's file
 /// (debounced), the window coming to the front (watchers miss things — network drives, inotify limits — and
-/// that is when someone who edited elsewhere comes back), and before every write.
+/// that is when someone who edited elsewhere comes back), and before every write. A watcher event checks
+/// only the files it named; the window coming forward checks them all.
+/// </para>
+/// <para>
+/// When it asks: only from a check, never from a write. Autosave runs at checkpoints (tab close, project
+/// switch) that may have a dialog of their own up, so a conflict it finds is flagged and left for the next
+/// check to ask about — and an answer that arrives after the tab has gone, or moved to another file, is
+/// dropped rather than carried out against a buffer nobody is looking at.
 /// </para>
 /// </summary>
 public sealed class ScriptFileSync : IDisposable
@@ -64,10 +72,20 @@ public sealed class ScriptFileSync : IDisposable
     private readonly Dictionary<string, FileSystemWatcher> _watchers = new(StringComparer.Ordinal);
     private readonly HashSet<string> _missing = new(StringComparer.Ordinal);
     private readonly HashSet<EditorTabViewModel> _asking = new();
+    private readonly HashSet<EditorTabViewModel> _unasked = new();   // in conflict, the question not yet put
+    private readonly HashSet<EditorTabViewModel> _tracked = new();   // tabs whose ScriptPath we listen to
     private readonly object _gate = new();
     private HashSet<string> _paths = new(StringComparer.Ordinal);
+    private HashSet<string> _dirty = new(StringComparer.Ordinal);   // full paths a watcher event named
     private Timer? _timer;
-    private bool _checking, _again, _disposed;
+    private bool _checking, _again, _sweepAll, _disposed;
+
+    /// <summary>
+    /// A tab's buffer was replaced from its file (on the UI thread). The editor only reads a tab's text when
+    /// it is bound to it, so the window must rebind when this is the tab on screen — otherwise it keeps showing
+    /// the old text, and its next keystroke writes that back over the file.
+    /// </summary>
+    public event Action<EditorTabViewModel>? Reloaded;
 
     public ScriptFileSync(WorkspaceContext ctx, IDialogService? dialogs,
         Action<Action>? post = null, TimeSpan? debounce = null)
@@ -77,6 +95,7 @@ public sealed class ScriptFileSync : IDisposable
         _post = post ?? (a => Dispatcher.UIThread.Post(a));
         _debounce = debounce ?? TimeSpan.FromMilliseconds(250);
         _ctx.Tabs.CollectionChanged += OnTabsChanged;
+        SyncWatchers();
     }
 
     // ---- pure -----------------------------------------------------------------------------------
@@ -98,7 +117,15 @@ public sealed class ScriptFileSync : IDisposable
 
     /// <summary>Compare every open file-backed tab, parked ones included, with its file and act on it. Called
     /// on the UI thread. A call that arrives while one is running makes that one go round again.</summary>
-    public async Task CheckAllAsync()
+    public Task CheckAllAsync()
+    {
+        _sweepAll = true;
+        return RunAsync();
+    }
+
+    /// <summary>Check the tabs whose files a watcher event named since the last run (or every tab, when a
+    /// full sweep was asked for). Only one runs at a time; a call during a run makes it go round again.</summary>
+    private async Task RunAsync()
     {
         if (_disposed) return;
         if (_checking) { _again = true; return; }
@@ -108,8 +135,13 @@ public sealed class ScriptFileSync : IDisposable
             do
             {
                 _again = false;
+                var all = _sweepAll;
+                _sweepAll = false;
+                HashSet<string> dirty;
+                lock (_gate) { dirty = _dirty; _dirty = new(StringComparer.Ordinal); }
+
                 SyncWatchers();
-                foreach (var tab in _ctx.AllTabs.Where(t => t.ScriptPath is not null).ToList())
+                foreach (var tab in _ctx.AllTabs.Where(t => t.ScriptPath is { } p && (all || dirty.Contains(Full(p)))).ToList())
                     await CheckAsync(tab);
             } while (_again && !_disposed);
         }
@@ -122,13 +154,13 @@ public sealed class ScriptFileSync : IDisposable
     private async Task CheckAsync(EditorTabViewModel tab)
     {
         if (tab.ScriptPath is not { } path) return;
-        if (_ctx.ScriptWrites.IsWriting(path)) { Schedule(); return; }
+        if (_ctx.ScriptWrites.IsWriting(path)) { Recheck(path); return; }
 
         string? disk;
         try { disk = await ReadAsync(path); }
         catch { return; }   // locked or unreadable for a moment: no answer is not a change
         if (tab.ScriptPath != path) return;                       // repointed while we read
-        if (_ctx.ScriptWrites.IsWriting(path)) { Schedule(); return; }
+        if (_ctx.ScriptWrites.IsWriting(path)) { Recheck(path); return; }
 
         var state = Classify(disk, tab.SavedText, tab.Text);
         if (state == DiskState.Missing)
@@ -153,11 +185,13 @@ public sealed class ScriptFileSync : IDisposable
                 Reload(tab, disk!);
                 _ctx.SetStatus($"Reloaded {Path.GetFileName(path)} — it changed on disk.");
                 break;
-            case DiskState.Conflict when !tab.HasDiskConflict:
+            case DiskState.Conflict when !tab.HasDiskConflict || _unasked.Contains(tab):
                 // Once per conflict. "Decide later" must stay decided until something changes again, or
-                // every focus of the window would ask the same question.
+                // every focus of the window would ask the same question. A conflict autosave found was
+                // flagged without asking (_unasked), so that one is still owed its question.
                 tab.HasDiskConflict = true;
-                await AskAsync(tab, writeOnOverwrite: true);
+                if (_ctx.Tabs.Contains(tab)) await AskAsync(tab, writeOnOverwrite: true);
+                else _unasked.Add(tab);   // parked with its project: asked when it is back on screen
                 break;
         }
     }
@@ -192,9 +226,12 @@ public sealed class ScriptFileSync : IDisposable
                 _ctx.SetStatus($"Reloaded {Path.GetFileName(path)} — it changed on disk.");
                 return false;
             default:
+                // Flag, don't ask: this runs at checkpoints (closing the tab, switching project) that may be
+                // about to put up a dialog of their own. The next check asks; Save asks too.
                 tab.HasDiskConflict = true;
-                _ctx.SetStatus($"{Path.GetFileName(path)} changed on disk — autosave stopped for it until you choose.");
-                _post(() => CrashReporter.Observe(AskAsync(tab, writeOnOverwrite: true), "script disk conflict"));
+                _unasked.Add(tab);
+                _ctx.SetStatus($"{Path.GetFileName(path)} changed on disk — autosave stopped for it until you "
+                               + "choose. Save asks which copy to keep.");
                 return false;
         }
     }
@@ -252,12 +289,23 @@ public sealed class ScriptFileSync : IDisposable
     /// <paramref name="writeOnOverwrite"/> is false when the caller is about to write the file itself.</summary>
     private async Task<DiskConflictChoice> AskAsync(EditorTabViewModel tab, bool writeOnOverwrite)
     {
-        if (tab.ScriptPath is not { } path || !_asking.Add(tab)) return DiskConflictChoice.Decide;
+        if (tab.ScriptPath is not { } path) return DiskConflictChoice.Decide;
+        if (!_asking.Add(tab))
+        {
+            _ctx.SetStatus($"{Path.GetFileName(path)} changed on disk — answer the question already open about it first.");
+            return DiskConflictChoice.Decide;
+        }
+        _unasked.Remove(tab);
         try
         {
             var choice = _dialogs is null
                 ? DiskConflictChoice.Decide
                 : await _dialogs.ConfirmDiskConflictAsync(Path.GetFileName(path));
+
+            // The dialog may have been up for a while. An answer about a tab that has since closed, or now
+            // edits another file, has nothing left to act on — carrying out "Overwrite" here would write a
+            // buffer the user already discarded over the change they were asked about.
+            if (!_ctx.AllTabs.Contains(tab) || tab.ScriptPath != path) return DiskConflictChoice.Decide;
 
             switch (choice)
             {
@@ -297,14 +345,16 @@ public sealed class ScriptFileSync : IDisposable
         }
     }
 
-    /// <summary>Take the file's text as the tab's own, keeping the caret where it can.</summary>
-    private static void Reload(EditorTabViewModel tab, string disk)
+    /// <summary>Take the file's text as the tab's own, keeping the caret where it can, and tell the window
+    /// (<see cref="Reloaded"/>) so the editor shows it.</summary>
+    private void Reload(EditorTabViewModel tab, string disk)
     {
         var caret = tab.CaretOffset;
         tab.MarkSaved(disk);   // baseline first, so the Text change below reads as clean
         tab.Text = disk;
         tab.HasDiskConflict = false;
         tab.CaretOffset = Math.Clamp(caret, 0, disk.Length);
+        Reloaded?.Invoke(tab);
     }
 
     private async Task<string?> ReadAsync(string path)
@@ -316,7 +366,24 @@ public sealed class ScriptFileSync : IDisposable
 
     // ---- watching ---------------------------------------------------------------------------------
 
-    private void OnTabsChanged(object? sender, NotifyCollectionChangedEventArgs e) => SyncWatchers();
+    private void OnTabsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        SyncWatchers();
+        // A tab coming back on screen (its project switched back in) may still owe a question.
+        foreach (var tab in e.NewItems?.OfType<EditorTabViewModel>() ?? [])
+            if (_unasked.Contains(tab) && tab.ScriptPath is { } path) Recheck(path);
+    }
+
+    /// <summary>A tab repointed at another file (Save As, rename, copy into the project, a scratch tab's first
+    /// write) needs that file's directory watched — the tab collection itself did not change.</summary>
+    private void OnTabPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(EditorTabViewModel.ScriptPath)) SyncWatchers();
+        // Whoever settled the conflict (reload, overwrite, a Save, the file going back) settled the question.
+        else if (e.PropertyName == nameof(EditorTabViewModel.HasDiskConflict)
+                 && sender is EditorTabViewModel { HasDiskConflict: false } tab)
+            _unasked.Remove(tab);
+    }
 
     /// <summary>One watcher per directory that holds an open tab's file; on the UI thread. Best-effort: a
     /// directory that cannot be watched (inotify limits, a vanished folder) is still checked when the window
@@ -324,7 +391,10 @@ public sealed class ScriptFileSync : IDisposable
     public void SyncWatchers()
     {
         if (_disposed) return;
-        var paths = _ctx.AllTabs.Select(t => t.ScriptPath).OfType<string>().Select(Full).ToHashSet(StringComparer.Ordinal);
+        var tabs = _ctx.AllTabs.ToList();
+        foreach (var tab in tabs)
+            if (_tracked.Add(tab)) tab.PropertyChanged += OnTabPropertyChanged;
+        var paths = tabs.Select(t => t.ScriptPath).OfType<string>().Select(Full).ToHashSet(StringComparer.Ordinal);
         var directories = paths.Select(Path.GetDirectoryName).OfType<string>().ToHashSet(StringComparer.Ordinal);
 
         lock (_gate)
@@ -370,18 +440,21 @@ public sealed class ScriptFileSync : IDisposable
 
     private void OnFileEvent(string path)
     {
+        var full = Full(path);
         bool ours;
-        lock (_gate) ours = _paths.Contains(Full(path));
-        if (ours) Schedule();
+        lock (_gate) ours = _paths.Contains(full);
+        if (ours) Recheck(full);
     }
 
-    /// <summary>Check everything once the burst of events settles — one save is several events.</summary>
-    private void Schedule()
+    /// <summary>Check <paramref name="path"/> once the burst of events settles — one save is several events.
+    /// Only the files named since the last run are read, not every open tab's.</summary>
+    private void Recheck(string path)
     {
         if (_disposed) return;
         lock (_gate)
         {
-            _timer ??= new Timer(_ => _post(() => CrashReporter.Observe(CheckAllAsync(), "script disk check")));
+            _dirty.Add(Full(path));
+            _timer ??= new Timer(_ => _post(() => CrashReporter.Observe(RunAsync(), "script disk check")));
             _timer.Change(_debounce, Timeout.InfiniteTimeSpan);
         }
     }
@@ -397,6 +470,8 @@ public sealed class ScriptFileSync : IDisposable
         if (_disposed) return;
         _disposed = true;
         _ctx.Tabs.CollectionChanged -= OnTabsChanged;
+        foreach (var tab in _tracked) tab.PropertyChanged -= OnTabPropertyChanged;
+        _tracked.Clear();
         lock (_gate)
         {
             foreach (var watcher in _watchers.Values) watcher.Dispose();

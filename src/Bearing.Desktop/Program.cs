@@ -70,7 +70,7 @@ internal static class Program
         var appImage = Environment.GetEnvironmentVariable("APPIMAGE");
         if (AppImageDetach.ShouldDetach(appImage, AppImageDetach.TerminalAttached(),
                 Environment.GetEnvironmentVariable(AppImageDetach.Marker))
-            && AppImageDetach.Relaunch(appImage!, AbsoluteScripts(args), Console.Error))
+            && AppImageDetach.Relaunch(appImage!, AbsoluteScripts(args), Console.Error, DetachLogPath()))
         {
             return;
         }
@@ -97,6 +97,14 @@ internal static class Program
             CrashLog.Write("Startup (fatal)", ex);
             throw;
         }
+    }
+
+    /// <summary>Where the detached image's stderr goes — the terminal it would have printed to is gone. Null
+    /// (discard) if the data directory can't be had; a launch never fails over a log.</summary>
+    private static string? DetachLogPath()
+    {
+        try { return Path.Combine(BearingPaths.DataDir, "detached.log"); }
+        catch { return null; }
     }
 
     /// <summary>The arguments with each script made absolute against this process's directory; everything

@@ -157,6 +157,10 @@ public sealed partial class ShellViewModel
         if (_ctx.FileSync is { } sync) CrashReporter.Observe(sync.CheckAllAsync(), "script disk check");
     }
 
+    /// <summary>A tab's buffer was replaced from its changed file. The editor shows a tab's text only as of
+    /// its last bind, so the window rebinds when this is the tab on screen.</summary>
+    public event Action<EditorTabViewModel>? ScriptReloaded;
+
     /// <summary>Whether the tab's file lives outside its project's scripts folder.</summary>
     public bool IsOutsideProject(EditorTabViewModel tab) => _externalScripts.IsOutsideProject(tab);
 

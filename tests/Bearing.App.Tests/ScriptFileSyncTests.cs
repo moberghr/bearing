@@ -169,6 +169,47 @@ public class ScriptFileSyncTests : IDisposable
         Assert.Contains(Path.GetDirectoryName(path)!, Sync(vm).WatchedDirectories);
     }
 
+    /// <summary>Save As repoints a tab without touching the tab collection; the new file's directory must be
+    /// watched straight away, not at the next window activation.</summary>
+    [Fact]
+    public async Task A_tab_saved_somewhere_new_has_that_directory_watched()
+    {
+        var (vm, tab, _) = await Open(new FakeDialogs());
+        var elsewhere = Path.Combine(_root, "elsewhere");
+        Directory.CreateDirectory(elsewhere);
+
+        Assert.True(await vm.Workspace.SaveScriptAsync(tab, Path.Combine(elsewhere, "copy.sql"), tab.Text));
+
+        Assert.Contains(elsewhere, Sync(vm).WatchedDirectories);
+    }
+
+    /// <summary>
+    /// A watcher event checks the file it named, not every open tab's — Bearing's own autosaves fire the
+    /// watcher too, and re-reading every file after each one is a lot of reading on a network drive. The other
+    /// tab's change (made before anything was watching) waits for the full sweep the window's activation does.
+    /// </summary>
+    [Fact]
+    public async Task A_watcher_event_checks_only_the_file_it_named()
+    {
+        var (vm, first, firstPath) = await Open(new FakeDialogs());
+        var second = vm.Workspace.Tabs[1];
+        var secondPath = Path.Combine(vm.ScriptsDirectory!, "other.sql");
+        Assert.True(await vm.Workspace.SaveScriptAsync(second, secondPath, "select 'b';"));
+        File.WriteAllText(secondPath, "select 'b2';");   // unseen: nothing below is watching yet
+
+        // A sync of its own, so its posts run here instead of on a UI thread these tests don't pump.
+        using var sync = new ScriptFileSync(vm.Context, null, post: a => a(), debounce: TimeSpan.FromMilliseconds(20));
+        File.WriteAllText(firstPath, "select 2;");
+
+        for (var i = 0; i < 100 && first.Text != "select 2;"; i++) await Task.Delay(50);
+        await Task.Delay(200);   // let that run finish
+        Assert.Equal("select 2;", first.Text);
+        Assert.Equal("select 'b';", second.Text);
+
+        await sync.CheckAllAsync();
+        Assert.Equal("select 'b2';", second.Text);
+    }
+
     // ---- writes stand aside -----------------------------------------------------------------------
 
     [Fact]
@@ -185,6 +226,55 @@ public class ScriptFileSyncTests : IDisposable
         Assert.Equal("select 1; -- theirs", File.ReadAllText(path));
         Assert.True(tab.HasDiskConflict);
         Assert.True(tab.IsDirty);   // the close prompt still guards the edits
+    }
+
+    /// <summary>
+    /// Autosave runs at checkpoints — closing the tab, switching project — that may be about to put up a
+    /// dialog of their own, so it never asks. It used to post the question, which then stacked on the close
+    /// prompt and could outlive the tab. The next check puts it, once.
+    /// </summary>
+    [Fact]
+    public async Task A_conflict_autosave_finds_is_asked_by_the_next_check_not_by_autosave()
+    {
+        var dialogs = new FakeDialogs { DiskConflictAnswer = DiskConflictChoice.Decide };
+        var (vm, tab, path) = await Open(dialogs, AutosaveMode.OnEdit);
+        await vm.Workspace.Autosave.FlushAsync(tab);
+        File.WriteAllText(path, "select 1; -- theirs");
+        tab.Text = "select 1; -- mine";
+
+        await vm.Workspace.Autosave.FlushAsync(tab);
+        Assert.True(tab.HasDiskConflict);
+        Assert.Empty(dialogs.DiskConflictPrompts);
+
+        await Sync(vm).CheckAllAsync();
+        Assert.Equal(["report.sql"], dialogs.DiskConflictPrompts);
+
+        await Sync(vm).CheckAllAsync();   // "decide later" holds
+        Assert.Single(dialogs.DiskConflictPrompts);
+    }
+
+    /// <summary>
+    /// The tab is closed (its edits discarded) while the conflict question is still up. Answering "overwrite"
+    /// afterwards used to write the discarded buffer over the change the user was being asked about.
+    /// </summary>
+    [Fact]
+    public async Task An_answer_that_arrives_after_the_tab_closed_writes_nothing()
+    {
+        var answer = new TaskCompletionSource<DiskConflictChoice>();
+        var dialogs = new FakeDialogs(CloseChoice.Discard) { DiskConflictPending = answer.Task };
+        var (vm, tab, path) = await Open(dialogs);
+        tab.Text = "select 1; -- mine";
+        File.WriteAllText(path, "select 1; -- theirs");
+
+        var check = Sync(vm).CheckAllAsync();
+        for (var i = 0; i < 100 && dialogs.DiskConflictPrompts.Count == 0; i++) await Task.Delay(20);
+        Assert.Equal(["report.sql"], dialogs.DiskConflictPrompts);   // the question is up
+        Assert.True(await vm.Workspace.CloseTabAsync(tab));
+
+        answer.SetResult(DiskConflictChoice.Overwrite);
+        await check;
+
+        Assert.Equal("select 1; -- theirs", File.ReadAllText(path));
     }
 
     [Fact]
