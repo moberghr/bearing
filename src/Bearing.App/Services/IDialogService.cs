@@ -17,6 +17,22 @@ namespace Bearing.App.Services;
 /// Implementations with no window (headless/tests) proceed/return sensibly (see <see cref="ConfirmWriteAsync"/>).
 /// </summary>
 /// <summary>
+/// What to do when a script changed on disk while its tab held edits of its own (<c>ScriptFileSync</c>).
+/// <see cref="Decide"/> is the zero value: a dismissed dialog must leave both copies exactly as they are.
+/// </summary>
+public enum DiskConflictChoice
+{
+    /// <summary>Decide later: the tab keeps its edits, the file keeps its contents, nothing writes it.</summary>
+    Decide = 0,
+
+    /// <summary>Take the file: the tab's edits are thrown away.</summary>
+    Reload,
+
+    /// <summary>Take the tab: the file is overwritten with it, and the other change is lost.</summary>
+    Overwrite,
+}
+
+/// <summary>
 /// What the user chose when asked about closing a tab that holds unsaved work.
 /// <see cref="Cancel"/> is deliberately the zero value: a dialog dismissed via the title bar returns
 /// <c>default</c>, and "don't close" is the only safe reading of a dismissal.
@@ -94,6 +110,10 @@ public interface IDialogService
         Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
         SecretStoragePosture storage,
         IProviderRegistry providers);
+
+    /// <summary>A script changed on disk while its tab held unsaved edits: which copy wins? Implementations
+    /// with no window answer <see cref="DiskConflictChoice.Decide"/> — neither copy is thrown away unasked.</summary>
+    Task<DiskConflictChoice> ConfirmDiskConflictAsync(string fileName);
 
     /// <summary>Confirm deleting a script file. True = delete it. Implementations with no window
     /// (headless/tests) return false: as with <see cref="ConfirmRemoveProjectAsync"/>, nothing deletes a file

@@ -40,7 +40,9 @@ public sealed class WorkspaceContext
         QueryLog = queryLog;
         RecentProjects = recentProjects;
         Secrets = secrets;
-        ScriptStore = scriptStore ?? new FileScriptStore();
+        // Wrapped so that a file Bearing is in the middle of writing is never mistaken for one somebody else
+        // changed (ScriptWriteTracker, ScriptFileSync).
+        ScriptStore = ScriptWrites = new ScriptWriteTracker(scriptStore ?? new FileScriptStore());
         // Credential resolution reads the secret store lazily (via () => Secrets) so a late
         // AttachSecretStore still applies; prompted passwords / Entra tokens are cached in-memory here.
         Credentials = new CredentialResolver(() => Secrets, credentialPrompt, entraTokens ?? new EntraTokenProvider());
@@ -71,6 +73,9 @@ public sealed class WorkspaceContext
     public IRecentProjects RecentProjects { get; }
     public ISecretStore? Secrets { get; set; }
     public IScriptStore ScriptStore { get; }
+
+    /// <summary>The same store as <see cref="ScriptStore"/>, asked which files are being written right now.</summary>
+    public ScriptWriteTracker ScriptWrites { get; }
     /// <summary>Resolves the secret each connection authenticates with (stored / prompt / Entra token) and
     /// caches prompted/token credentials in memory. Also used by the execution path's refresh-and-retry.</summary>
     public CredentialResolver Credentials { get; }
@@ -100,6 +105,10 @@ public sealed class WorkspaceContext
     /// <summary>Writes buffers to disk without an explicit Save. Lives here so the execution concern can
     /// signal a run (the <c>OnExecute</c> mode) without depending on the workspace view-model.</summary>
     public TabAutosave? Autosave { get; set; }
+
+    /// <summary>Notices scripts changed on disk by something other than Bearing, and stands between every
+    /// write and a file that changed under it. Null until the shell builds it (and in some tests).</summary>
+    public ScriptFileSync? FileSync { get; set; }
 
     // ---- shared state -------------------------------------------------------------------------
     /// <summary>The <b>active</b> project (manifest + directory), or null before one is loaded. Other

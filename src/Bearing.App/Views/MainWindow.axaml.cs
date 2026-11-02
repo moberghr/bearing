@@ -173,6 +173,8 @@ public partial class MainWindow : Window
         // a suspend/resume. There is no event for that, so re-assert it whenever the window is activated:
         // by the time it is being looked at, the pill is right again.
         Activated += (_, _) => SyncConnectionPicker();
+        // Coming back from another editor is when its changes to an open script are most likely to be waiting.
+        Activated += (_, _) => Vm?.CheckScriptsOnDisk();
     }
 
     /// <summary>The sidebar (Connections/Scripts/History) is its own control; it owns its dialogs and tree
@@ -277,6 +279,8 @@ public partial class MainWindow : Window
         Vm.Workspace.PinnedTabs.CollectionChanged += OnTabRowsChanged;
         Vm.Workspace.UnpinnedTabs.CollectionChanged -= OnTabRowsChanged;
         Vm.Workspace.UnpinnedTabs.CollectionChanged += OnTabRowsChanged;
+        Vm.ScriptReloaded -= OnScriptReloaded;
+        Vm.ScriptReloaded += OnScriptReloaded;
         // A Clear() + N adds rebuild (RefreshConnections, on every connection save/delete) drops the
         // server pill's rendered selection; re-select once it has settled.
         Vm.Connections.Connections.CollectionChanged -= OnConnectionsListChanged;
@@ -477,6 +481,16 @@ public partial class MainWindow : Window
         SyncTabStripSelection();
         BringSelectedTabIntoView();
         var tab = Vm?.Workspace.SelectedTab;
+        LoadEditorBuffer(tab);
+        _zoom.Bind(tab);         // …and that tab's own font zoom
+        RebuildResults(tab);
+    }
+
+    /// <summary>Push <paramref name="tab"/>'s text and caret into the editor, with folds and the statement
+    /// highlight rebuilt for it — the buffer half of <see cref="LoadEditorFromSelectedTab"/>, also used when
+    /// the selected tab is reloaded from its file.</summary>
+    private void LoadEditorBuffer(EditorTabViewModel? tab)
+    {
         // Folds belong to the editor, not to a tab (one editor serves all of them), so they are dropped
         // before the buffer is replaced rather than carried into it — and dropped *first*, while the old
         // document's offsets still line up with the collapsed sections on the text view's height tree. A
@@ -491,8 +505,6 @@ public partial class MainWindow : Window
         if (!ReferenceEquals(tab, _editorText.Tab) || !string.Equals(tab?.Text ?? "", Editor.Text, StringComparison.Ordinal))
             _folding.Reset();
         _editorText.Bind(tab);   // pushes text/caret into the editor under the load guard
-        _zoom.Bind(tab);         // …and that tab's own font zoom
-        RebuildResults(tab);
         _text.UpdateStatementHighlight();
         // Rebuild the folds for the buffer that is now loaded, explicitly — like the highlight above, and
         // unlike the side effect this used to rely on. Refresh is wired to Editor.TextChanged, so after
@@ -501,6 +513,13 @@ public partial class MainWindow : Window
         // on an event, and an event that does not fire leaves the gutter empty with nothing to say so.
         // Refresh is idempotent (UpdateFoldings keeps unchanged regions), so doing it twice costs nothing.
         _folding.Refresh();
+    }
+
+    /// <summary>The selected tab was reloaded from its file: show the new text. Without this the editor keeps
+    /// the old buffer and its next keystroke writes it back over the file.</summary>
+    private void OnScriptReloaded(EditorTabViewModel tab)
+    {
+        if (ReferenceEquals(tab, Vm?.Workspace.SelectedTab)) LoadEditorBuffer(tab);
     }
 
     private void SyncProjectCombo()

@@ -46,8 +46,15 @@ public sealed record OpenEditor
     /// <summary>Path to a saved script, relative to the project directory (null for scratch buffers).</summary>
     public string? ScriptPath { get; init; }
 
-    /// <summary>Inlined text for an unsaved scratch buffer (null when backed by a file).</summary>
+    /// <summary>The tab's buffer — unsaved edits included, and the fallback when its file has gone.</summary>
     public string? ScratchText { get; init; }
+
+    /// <summary>
+    /// SHA-256 (hex) of what the file held when the tab last read or wrote it; null for a tab with no file and
+    /// in older sessions. A file that no longer hashes to this was changed while Bearing was closed: a tab that
+    /// was clean then takes the file, and one with unsaved edits comes back in conflict with it.
+    /// </summary>
+    public string? BaselineHash { get; init; }
 
     /// <summary>Display name for a scratch buffer ("Scratch N" or a user rename); null for saved scripts.</summary>
     public string? ScratchName { get; init; }

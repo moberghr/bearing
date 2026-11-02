@@ -71,6 +71,9 @@ public sealed partial class ShellViewModel
         {
             ScriptPath = t.ScriptPath is not null ? SessionPath(project.Directory, t.ScriptPath) : null,
             ScratchText = t.Text,
+            // What the file held when this tab last read or wrote it, so a restore can tell an edit made
+            // elsewhere while Bearing was closed from the tab's own unsaved one (RestoreTabsAsync).
+            BaselineHash = t.ScriptPath is not null ? Bearing.App.Workspace.ScriptFileSync.Hash(t.SavedText) : null,
             // Only a label the user typed on a tab with no file is worth carrying: a tab with a file is
             // named after that file (#1), and the "Scratch N" placeholder is regenerated on restore.
             ScratchName = t.ScriptPath is null && t.IsUserNamed ? t.DisplayName : null,

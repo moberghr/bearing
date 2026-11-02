@@ -49,6 +49,11 @@ public sealed class DialogService : IDialogService
             ? new ConfirmCloseDialog(tabName).ShowDialog<CloseChoice>(window)
             : Task.FromResult(CloseChoice.Discard); // no window → close as it did before the prompt existed
 
+    public Task<DiskConflictChoice> ConfirmDiskConflictAsync(string fileName)
+        => Owner is { } window
+            ? new ConfirmDiskConflictDialog(fileName).ShowDialog<DiskConflictChoice>(window)
+            : Task.FromResult(DiskConflictChoice.Decide); // no window → keep both; a loss needs a real answer
+
     public Task<bool> ConfirmDeleteScriptAsync(string fileName)
         => Owner is { } window
             ? new ConfirmDeleteScriptDialog(fileName).ShowDialog<bool>(window)

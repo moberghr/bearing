@@ -188,8 +188,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
 
         try
         {
-            await SaveScriptAsync(tab, path, tab.Text);
-            return true;
+            return await SaveScriptAsync(tab, path, tab.Text);
         }
         catch (Exception ex)
         {
@@ -338,9 +337,18 @@ public sealed partial class WorkspaceViewModel : ObservableObject
                 // Restore the last editor buffer (which may hold unsaved edits), keeping the on-disk
                 // content as the clean baseline so an unsaved script comes back marked modified.
                 var disk = await _ctx.ScriptStore.ReadTextAsync(abs, CancellationToken.None);
-                var buffer = e.ScratchText ?? disk;
-                tab = NewTab(buffer, abs);   // NewTab re-derives IsScratch from where the file lives
+                var restore = RestoredBuffer(e.ScratchText, e.BaselineHash, disk);
+                tab = NewTab(restore.Buffer, abs);   // NewTab re-derives IsScratch from where the file lives
                 tab.MarkSaved(disk);
+                // Unsaved edits came back, and the file they were made against has since changed: neither copy
+                // may silently win, so nothing writes this tab until the user picks one (ScriptFileSync).
+                if (restore.Conflict)
+                {
+                    tab.HasDiskConflict = true;
+                    _ctx.SetStatus($"{Path.GetFileName(abs)} changed on disk while Bearing was closed, and its tab "
+                                   + "has unsaved edits — it won't be saved until you choose which to keep.");
+                }
+                var buffer = restore.Buffer;
                 tab.CaretOffset = Math.Clamp(e.CaretOffset, 0, buffer.Length);
                 // No label to re-apply: a tab with a file is named after that file (#1). Older sessions
                 // still carry a ScratchName for these; it described a header that no longer exists.
@@ -369,6 +377,21 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         ResplitTabs();
         var idx = session?.SelectedEditorIndex ?? 0;
         SelectedTab = Tabs[Math.Clamp(idx, 0, Tabs.Count - 1)];
+    }
+
+    /// <summary>
+    /// Pure — what a file-backed tab comes back holding, given its saved buffer, the hash of the file as it
+    /// last knew it, and the file now. A file untouched since: the buffer (unsaved edits included). Changed
+    /// under a tab that was clean: the file. Changed under unsaved edits: the edits, in conflict. An older
+    /// session has no hash and keeps its buffer, as it always did.
+    /// </summary>
+    internal static (string Buffer, bool Conflict) RestoredBuffer(string? saved, string? baselineHash, string disk)
+    {
+        if (saved is null) return (disk, false);
+        if (baselineHash is null || saved == disk) return (saved, false);
+        if (string.Equals(baselineHash, ScriptFileSync.Hash(disk), StringComparison.OrdinalIgnoreCase)) return (saved, false);
+        var wasClean = string.Equals(baselineHash, ScriptFileSync.Hash(saved), StringComparison.OrdinalIgnoreCase);
+        return wasClean ? (disk, false) : (saved, true);
     }
 
     // ---- Tab-bridging (open/load/save/rename a script into an editor tab) ---------------------
@@ -401,15 +424,26 @@ public sealed partial class WorkspaceViewModel : ObservableObject
     /// <summary>Write <paramref name="text"/> to disk and rebind <paramref name="tab"/> to it as its clean
     /// baseline. Per-tab rather than selection-based, because closing a background tab has to save that
     /// tab, not whichever one happens to be focused.</summary>
-    public async Task SaveScriptAsync(EditorTabViewModel tab, string absolutePath, string text)
+    /// <returns>False when nothing was written: the tab's own file changed on disk and the user did not choose
+    /// to overwrite it (see <see cref="ScriptFileSync.MaySaveAsync"/>) — the tab may still hold unsaved work.</returns>
+    public async Task<bool> SaveScriptAsync(EditorTabViewModel tab, string absolutePath, string text)
     {
+        if (_ctx.FileSync is { } sync
+            && string.Equals(tab.ScriptPath, absolutePath, StringComparison.Ordinal)
+            && !await sync.MaySaveAsync(tab))
+        {
+            return false;
+        }
+
         await _ctx.ScriptStore.WriteTextAsync(absolutePath, text, CancellationToken.None);
         tab.Text = text;
         tab.ScriptPath = absolutePath;
         SyncScratchFlag(tab);   // saving somewhere the user chose promotes the tab out of scratch
         tab.MarkSaved(text);
         _scripts.RefreshScripts();
+        tab.HasDiskConflict = false;
         _ctx.SetStatus($"Saved {Path.GetFileName(absolutePath)}.");
+        return true;
     }
 
     /// <summary>Re-derive scratch membership from where the tab's file now lives. Anything that repoints

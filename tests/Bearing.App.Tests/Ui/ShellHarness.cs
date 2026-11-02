@@ -56,7 +56,9 @@ internal sealed class ShellHarness : IDisposable
     /// catalog with no server (§4.6). Defaults to the real Postgres registry, which is what most of these
     /// tests want — a shell with no reachable connection.
     /// </param>
-    public static async Task<ShellHarness> ShowAsync(string name, IProviderRegistry? providers = null)
+    /// <param name="dialogs">The dialog answers, for a test that puts a question to the user.</param>
+    public static async Task<ShellHarness> ShowAsync(string name, IProviderRegistry? providers = null,
+        FakeDialogs? dialogs = null)
     {
         var root = Path.Combine(Path.GetTempPath(), "bearing-shell", Guid.NewGuid().ToString("N"));
         var vm = new ShellViewModel(
@@ -65,7 +67,7 @@ internal sealed class ShellHarness : IDisposable
             new JsonSessionStore(),
             new SqliteQueryLog(Path.Combine(root, "log.sqlite")),
             new FileRecentProjects(Path.Combine(root, "recent.json")),
-            dialogs: new FakeDialogs(),
+            dialogs: dialogs ?? new FakeDialogs(),
             // Autosave off: these tests are about the window, and a background writer racing the temp
             // directory they delete on the way out is noise they don't need.
             settings: SettingsService.InMemory(new AppSettings { AutosaveMode = AutosaveMode.Off }));
