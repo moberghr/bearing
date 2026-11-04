@@ -10,6 +10,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Platform;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
+using Bearing.App.Controls;
 using Bearing.App.Services;
 using Bearing.App.ViewModels;
 using Bearing.App.Views;
@@ -42,6 +43,9 @@ public partial class App : Application
         // submenu open and shut instead of ignoring it. Dial it to ~75 ms if that flash costs more than the
         // wait did — it still reads as instant, and it swallows a sweep.
         DefaultMenuInteractionHandler.MenuShowDelay = TimeSpan.Zero;
+        // ...and the close-on-sibling half of that trade is what made a submenu vanish while the pointer
+        // crossed to it diagonally: the safe triangle swallows sibling enter/exit on the way there.
+        SubmenuSafeTriangle.Install();
         AvaloniaXamlLoader.Load(this);
     }
 
