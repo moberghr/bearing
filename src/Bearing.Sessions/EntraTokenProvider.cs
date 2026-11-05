@@ -86,8 +86,17 @@ public sealed class EntraTokenProvider : IEntraTokenProvider
     /// Pure, for the same reason as <see cref="ParseTokenResponse"/>.
     /// <para>
     /// The signature is not checked, and need not be: this only names the role, and the server verifies the
-    /// token it is sent. <c>unique_name</c> is deliberately not a fallback — for a guest it is
-    /// <c>live.com#…</c>, which is no role's name.
+    /// token it is sent. <c>unique_name</c> is deliberately not a general fallback — for a personal Microsoft
+    /// account it is <c>live.com#…</c>, which is no role's name.
+    /// </para>
+    /// <para>
+    /// A <b>guest</b> (B2B) is the exception: their <c>upn</c> in the host tenant is the mangled
+    /// <c>ana_contoso.com#EXT#@host.onmicrosoft.com</c>, while the role an admin creates for them — by picking them in
+    /// the portal or with <c>pgaadauth_create_principal</c> — is named by their home address. So when the
+    /// <c>upn</c> carries <c>#EXT#</c>, the token's <c>unique_name</c> names them — their home UPN, which the role
+    /// is named after — else its <c>email</c>, each only when it is a plain address (measured on a real guest
+    /// token: both held the home address). Neither usable, the mangled name is kept — it is still the token's own
+    /// word for the account.
     /// </para>
     /// <para>
     /// No name is refused rather than passed on: a connect with an empty user name fails at the server with a
@@ -104,6 +113,10 @@ public sealed class EntraTokenProvider : IEntraTokenProvider
             {
                 using var claims = JsonDocument.Parse(Base64UrlDecode(parts[1]));
                 upn = Claim(claims.RootElement, "upn") ?? Claim(claims.RootElement, "preferred_username");
+                if (upn is not null && upn.Contains("#EXT#", StringComparison.OrdinalIgnoreCase))
+                {
+                    upn = GuestHomeName(claims.RootElement) ?? upn;
+                }
             }
         }
         catch (Exception ex) when (ex is FormatException or JsonException)
@@ -114,6 +127,14 @@ public sealed class EntraTokenProvider : IEntraTokenProvider
             "The Entra token names no signed-in user. A service principal or managed identity has no user "
             + "principal name — untick \"User is whoever az is signed in as\" and type the role name instead.");
     }
+
+    /// <summary>A guest's home address: <c>unique_name</c>, else <c>email</c>, whichever is first a plain address
+    /// (not the <c>live.com#…</c> or <c>#EXT#</c> forms, which name no role).</summary>
+    private static string? GuestHomeName(JsonElement claims)
+        => PlainAddress(Claim(claims, "unique_name")) ?? PlainAddress(Claim(claims, "email"));
+
+    private static string? PlainAddress(string? name)
+        => name is not null && !name.Contains('#') && name.Contains('@') ? name : null;
 
     private static string? Claim(JsonElement claims, string name)
         => claims.ValueKind == JsonValueKind.Object
