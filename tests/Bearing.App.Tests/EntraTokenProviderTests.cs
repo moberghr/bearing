@@ -112,6 +112,51 @@ public class EntraTokenProviderTests
             Jwt("""{ "preferred_username": "ana@contoso.com" }""")));
 
     [Fact]
+    public void A_guest_is_named_by_their_home_address_not_the_ext_upn()
+        // The shape of a real B2B guest's v1 token for Azure Database for PostgreSQL.
+        => Assert.Equal("ana@contoso.com", EntraTokenProvider.UserFromToken(Jwt("""
+            { "upn": "ana_contoso.com#EXT#@fabrikam.onmicrosoft.com",
+              "unique_name": "ana@contoso.com", "email": "ana@contoso.com" }
+            """)));
+
+    [Fact]
+    public void A_guest_without_email_is_named_by_unique_name()
+        => Assert.Equal("ana@contoso.com", EntraTokenProvider.UserFromToken(Jwt("""
+            { "upn": "ana_contoso.com#EXT#@fabrikam.onmicrosoft.com", "unique_name": "ana@contoso.com" }
+            """)));
+
+    [Fact]
+    public void A_guest_whose_email_differs_from_their_upn_is_named_by_the_upn()
+        // The role is named after the home UPN; a mailbox alias would name no role.
+        => Assert.Equal("ana.k@contoso.com", EntraTokenProvider.UserFromToken(Jwt("""
+            { "upn": "ana.k_contoso.com#EXT#@fabrikam.onmicrosoft.com",
+              "unique_name": "ana.k@contoso.com", "email": "ana@contoso.com" }
+            """)));
+
+    [Fact]
+    public void A_guest_whose_unique_name_is_no_address_falls_back_to_email()
+        => Assert.Equal("ana@contoso.com", EntraTokenProvider.UserFromToken(Jwt("""
+            { "upn": "ana_contoso.com#EXT#@fabrikam.onmicrosoft.com",
+              "unique_name": "live.com#ana@outlook.com", "email": "ana@contoso.com" }
+            """)));
+
+    [Theory]
+    [InlineData("ana_contoso.com#EXT#@fabrikam.onmicrosoft.com")]
+    [InlineData("not an address")]
+    public void A_guest_email_that_is_no_plain_address_is_not_used(string email)
+        => Assert.Equal("ana_contoso.com#EXT#@fabrikam.onmicrosoft.com", EntraTokenProvider.UserFromToken(Jwt($$"""
+            { "upn": "ana_contoso.com#EXT#@fabrikam.onmicrosoft.com", "email": "{{email}}" }
+            """)));
+
+    [Theory]
+    [InlineData("live.com#ana@outlook.com")]
+    [InlineData("ana_contoso.com#EXT#@fabrikam.onmicrosoft.com")]
+    public void A_guest_with_no_home_address_keeps_the_upn(string uniqueName)
+        => Assert.Equal("ana_contoso.com#EXT#@fabrikam.onmicrosoft.com", EntraTokenProvider.UserFromToken(Jwt($$"""
+            { "upn": "ana_contoso.com#EXT#@fabrikam.onmicrosoft.com", "unique_name": "{{uniqueName}}" }
+            """)));
+
+    [Fact]
     public void A_payload_needing_padding_and_url_safe_characters_still_decodes()
     {
         // This payload's base64 holds both '/' and '+' (base64url: '_' and '-') and needs one '=' of padding,
