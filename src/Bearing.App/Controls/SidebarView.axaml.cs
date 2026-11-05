@@ -637,9 +637,9 @@ public partial class SidebarView : UserControl
         transfer.Add(_connDragNode switch
         {
             ServerNodeViewModel server
-                => DataTransferItem.Create(ConnectionIdFormat, server.Connection.Id.ToString()),
+                => DragItem(ConnectionIdFormat, server.Connection.Id.ToString(), server.Title),
             ConnectionFolderNodeViewModel folder
-                => DataTransferItem.Create(ConnectionFolderFormat, folder.Path),
+                => DragItem(ConnectionFolderFormat, folder.Path, folder.Path),
             _ => throw new InvalidOperationException("only servers and folders are draggable"),
         });
 
@@ -658,15 +658,18 @@ public partial class SidebarView : UserControl
         _connGhost = new DragGhost(this);
         _connGhost.Show(dragged.Title);
 
-        var outcome = DragDropEffects.None;
-        try { outcome = await DragDrop.DoDragDropAsync(press, transfer, DragDropEffects.Move); }
+        _dropLanded = false;
+        try { await DragDrop.DoDragDropAsync(press, transfer, DragDropEffects.Move); }
         finally
         {
             _connGhost?.Dispose();
             _connGhost = null;
             Vm?.Connections.MarkDragging(null);
             Vm?.Connections.ClearDropTarget();
-            if (outcome == DragDropEffects.None && Vm is not null) Vm.StatusText = "";
+            if (!_dropLanded && Vm is not null)
+            {
+                Vm.StatusText = "";
+            }
         }
     }
 
@@ -713,6 +716,7 @@ public partial class SidebarView : UserControl
 
     private async Task DropIntoAsync(DragEventArgs e, string? targetPath)
     {
+        _dropLanded = true;
         if (Vm is null) return;
         Vm.Connections.ClearDropTarget();
 
@@ -720,6 +724,24 @@ public partial class SidebarView : UserControl
             await Vm.Connections.MoveConnectionToFolderAsync(connectionId, targetPath);
         else if (e.DataTransfer.TryGetValue(ConnectionFolderFormat) is string path)
             await Vm.Connections.MoveFolderAsync(path, targetPath);
+    }
+
+    /// <summary>Whether the drag in flight was dropped on one of our own targets. Not the drag's returned
+    /// effect: the text label lets another app (or a text box) accept the drop too, which reports Move although
+    /// nothing moved — and then the "Moving …" status line must still come down.</summary>
+    private bool _dropLanded;
+
+    /// <summary>
+    /// A drag item carrying our in-process value <b>and</b> a plain-text label. The text is not for us — every drop
+    /// handler here reads the in-process format — but for macOS: an in-process format never reaches the native
+    /// pasteboard, and AppKit aborts the whole process when a drag session has a drag image and no pasteboard item
+    /// ("There are 0 items on the pasteboard, but 1 drag images"). Text is a format every platform carries.
+    /// </summary>
+    private static DataTransferItem DragItem<T>(DataFormat<T> format, T value, string label) where T : class
+    {
+        var item = DataTransferItem.Create(format, value);
+        item.SetText(label);
+        return item;
     }
 
     // ---- scripts drag & drop (move a script into a folder) — Avalonia 12 typed in-process transfer ----
@@ -748,7 +770,7 @@ public partial class SidebarView : UserControl
         if (System.Math.Abs(pos.X - _dragStart.X) <= 4 && System.Math.Abs(pos.Y - _dragStart.Y) <= 4) return;
 
         var transfer = new DataTransfer();
-        transfer.Add(DataTransferItem.Create(ScriptPathFormat, _dragItem.FullPath));
+        transfer.Add(DragItem(ScriptPathFormat, _dragItem.FullPath, _dragItem.FullPath));
         var press = _dragPress;
         var dragged = _dragItem;
         _dragItem = null;
@@ -767,18 +789,20 @@ public partial class SidebarView : UserControl
         _ghost.Show(dragged.Name);
 
         // Awaited so both marks are released however the drag ends — dropped, cancelled with Esc, or let go
-        // outside the window, where no DragLeave arrives to do it. The result also says whether a drop
-        // happened at all: a completed move reports itself, so only a cancelled one has to take its own line
-        // back down.
-        var outcome = DragDropEffects.None;
-        try { outcome = await DragDrop.DoDragDropAsync(press, transfer, DragDropEffects.Move); }
+        // outside the window, where no DragLeave arrives to do it. A completed move reports itself, so only a
+        // drag that didn't land on one of our drop targets takes its own line back down (see _dropLanded).
+        _dropLanded = false;
+        try { await DragDrop.DoDragDropAsync(press, transfer, DragDropEffects.Move); }
         finally
         {
             _ghost?.Dispose();
             _ghost = null;
             Vm?.Scripts.MarkDragging(null);
             ClearDropTarget();
-            if (outcome == DragDropEffects.None && Vm is not null) Vm.StatusText = "";
+            if (!_dropLanded && Vm is not null)
+            {
+                Vm.StatusText = "";
+            }
         }
     }
 
@@ -814,6 +838,7 @@ public partial class SidebarView : UserControl
 
     private void OnScriptDropOnFolder(object? sender, DragEventArgs e)
     {
+        _dropLanded = true;
         ClearDropTarget();
         if (Vm is not null && FolderOf(sender) is { } folder && e.DataTransfer.TryGetValue(ScriptPathFormat) is string src)
         {
@@ -824,6 +849,7 @@ public partial class SidebarView : UserControl
 
     private void OnScriptDropOnRoot(object? sender, DragEventArgs e)
     {
+        _dropLanded = true;
         ClearDropTarget();
         if (Vm?.ScriptsDirectory is { } root && e.DataTransfer.TryGetValue(ScriptPathFormat) is string src)
         {
