@@ -503,7 +503,8 @@ public class TableFormatsTests
         var rs = TwoColumnResult();
         var onSqlServer = new ResultSetViewModel(
             new QueryResult(rs.Columns, rs.Rows.ToArray(), 1, TimeSpan.Zero, null, null, false),
-            "select * from t", pageable: false) { Traits = ProviderTraits.SqlServer };
+            "select * from t", pageable: false)
+        { Traits = ProviderTraits.SqlServer };
 
         var rendered = CopyRenderer.Render(
             onSqlServer, ResultBlocks.ForResult(onSqlServer), CopyFormat.SqlInsert);
