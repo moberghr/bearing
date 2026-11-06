@@ -17,7 +17,14 @@ namespace Bearing.App.Results;
 /// <param name="End">Buffer offset just past the last non-whitespace character the run covered.</param>
 /// <param name="IsWholeBuffer">Run All: every statement in the buffer, so its results replace every inline
 /// result in the tab and may be split per statement.</param>
-public sealed record RunScope(string Sql, IReadOnlyList<int> StatementEnds, int Start, int End, bool IsWholeBuffer);
+public sealed record RunScope(string Sql, IReadOnlyList<int> StatementEnds, int Start, int End, bool IsWholeBuffer)
+{
+    /// <summary>Whether a run over this scope replaces the zone hanging at <paramref name="offset"/>: Run All
+    /// replaces every zone, a Run the zones inside the text it ran. Exclusive at Start: a zone sitting exactly
+    /// there belongs to the statement before, whose end touches this one's start when nothing separates them
+    /// (<c>select 1;select 2;</c>). The one rule — the run and the unsaved-edits guard both ask it.</summary>
+    public bool Replaces(int offset) => IsWholeBuffer || (offset > Start && offset <= End);
+}
 
 /// <summary>
 /// Decides where inline results go (spec: docs/specs/2026-11-06-inline-results.md). Pure.

@@ -83,6 +83,7 @@ public partial class MainWindow : Window
         _inline = new InlineResultsCoordinator(Editor, () => Vm?.SettingsService, () => Vm?.Workspace.SelectedTab,
             RebuildResults, _resultsPane.SetVisible, text => { if (Vm is not null) { Vm.StatusText = text; } },
             () => Editor.TextArea.Focus(), () => _zoneHost);
+        _text.AroundRewrite = _inline.Controller.Rewrite;
         _tabScroll = new TabStripScroller(TabScroll, TabStrip);
         _pinnedTabScroll = new TabStripScroller(PinnedTabScroll, PinnedTabStrip);
         // Dragging a tab to a new position, and across the rows to pin or unpin it. Both rows, because the
@@ -212,18 +213,22 @@ public partial class MainWindow : Window
         _resultWiring.Apply(ResultsView, () => Vm?.Workspace.SelectedTab, () => RebuildResults(Vm?.Workspace.SelectedTab));
         _zoneHost = new InlineResultsCoordinator.Host(
             (view, frames, render) => _resultWiring.Apply(view, () => frames, render),
-            e => !_palette.AnyOpen && _dispatcher.TryHandle(e, KeyScope.Global),
+            HandleGlobalKey,
             (what, action) => Vm?.Dialogs?.ConfirmDiscardEditsAsync(what, action) ?? Task.FromResult(false),
-            () =>
-            {
-                ResultsView.CommitOpenEdits();
-                _inline.ForEachZoneView(view => view.CommitOpenEdits());
-            });
+            CommitOpenEdits,
+            e => !_palette.AnyOpen && _dispatcher.TryHandleCommand(e, KeyScope.Grid, CommandIds.GridLeaveInline));
 
         // The header's ✕. Collapse rather than toggle — the button is only reachable while the pane is open —
         // and take focus with it, or it stays parked in a grid that is no longer on screen.
         ResultsView.CloseRequested = () => { _resultsPane.SetVisible(false); Editor.TextArea.Focus(); };
         ResultsView.ShowInlineRequested = _inline.ShowResultsInline;
+    }
+
+    /// <summary>Commit the cell editor open in the pane or any zone, so it counts as pending (§9.15).</summary>
+    private void CommitOpenEdits()
+    {
+        ResultsView.CommitOpenEdits();
+        _inline.ForEachZoneView(view => view.CommitOpenEdits());
     }
 
     /// <summary>
@@ -255,6 +260,7 @@ public partial class MainWindow : Window
         // (bindings now point straight at the child VMs, so the shell no longer forwards their changes).
         Vm.PropertyChanged -= OnViewModelPropertyChanged;
         Vm.PropertyChanged += OnViewModelPropertyChanged;
+        Vm.Context.CommitOpenEdits = CommitOpenEdits;
         Vm.SettingsService.Changed -= _inline.OnSettingsChanged;
         Vm.SettingsService.Changed += _inline.OnSettingsChanged;
         _inline.SyncPlacement();
@@ -379,6 +385,7 @@ public partial class MainWindow : Window
     /// </summary>
     protected override void OnClosing(WindowClosingEventArgs e)
     {
+        CommitOpenEdits();   // a value still in a cell editor is an unsaved edit too (§9.15)
         var running = QuitGuard.RunningCount(Vm);
         if (!_closeConfirmed && QuitGuard.NeedsConfirmation(Vm) && Vm is { } vm)
         {

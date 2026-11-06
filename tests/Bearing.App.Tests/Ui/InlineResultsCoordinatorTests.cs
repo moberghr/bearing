@@ -73,7 +73,7 @@ public class InlineResultsCoordinatorTests
         System.Action? commitOpenEdits = null)
         => new((_, _, _) => { }, _ => false,
             (what, _) => { asked.Add(what); return Task.FromResult(answer); },
-            commitOpenEdits ?? (() => { }));
+            commitOpenEdits ?? (() => { }), _ => false);
 
     private static RunScope SecondStatement()
         => InlineResultPlacement.Scope(PostgresDialect.Instance, "select 2;", "select 1;\n".Length, isWholeBuffer: false);

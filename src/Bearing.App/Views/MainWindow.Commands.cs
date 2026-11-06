@@ -25,6 +25,7 @@ public partial class MainWindow
     /// Grid-scoped commands register themselves from <c>ResultView</c> into this same registry.</summary>
     private void RegisterCommands(CommandRegistry r)
     {
+        _inline.RegisterCommands(r);
         // ---- Global ----
         r.Register(new KeyCommand(CommandIds.Run, "Run", KeyScope.Global, "Query", async () => await RunAsync()));
         r.Register(KeyCommand.Sync(CommandIds.CompletionTrigger, "Trigger completion", KeyScope.Global, "Editor", () => _completion.TriggerExplicit()));
@@ -179,13 +180,16 @@ public partial class MainWindow
     {
         // An inline zone sits inside the editor, so its keys tunnel through here first — they are the grid's
         // (or its cell editor's), never the SQL text's (spec §8).
-        if (InlineZoneView.IsInside(e.Source)) return;
+        if (InlineZoneView.IsInside(e.Source))
+        {
+            return;
+        }
         _dispatcher.TryHandle(e, KeyScope.Editor);
     }
 
     /// <summary>The caret is in the SQL text — focus within the editor, but not inside an inline zone.</summary>
     private bool EditorTextHasFocus
-        => Editor.TextArea.IsKeyboardFocusWithin && _inline.Controller.FocusedZone() is null;
+        => Editor.TextArea.IsKeyboardFocusWithin && !InlineZoneView.IsInside(FocusManager?.GetFocusedElement());
 
     // Tracks whether Alt was pressed on its own (no other key during the hold) → a "tap" toggles the menu.
     private bool _altAlone;
@@ -193,11 +197,21 @@ public partial class MainWindow
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+        HandleGlobalKey(e);
+    }
+
+    /// <summary>A key nothing below took: the Alt-tap tracking and the Global scope. Shared with the inline
+    /// zones, which stop their keys bubbling into the editor and hand them here instead.</summary>
+    private bool HandleGlobalKey(KeyEventArgs e)
+    {
         // While an overlay (palette / quick-pick) is up it owns the keyboard — don't fire globals under it.
-        if (_palette.AnyOpen) return;
+        if (_palette.AnyOpen)
+        {
+            return false;
+        }
         // Alt-tap tracking: a lone Alt press arms the menu toggle (fired on key-up); any other key cancels it.
         _altAlone = e.Key is Key.LeftAlt or Key.RightAlt;
-        _dispatcher.TryHandle(e, KeyScope.Global); // Global scope; Editor/Grid scopes are handled in their tunnels
+        return _dispatcher.TryHandle(e, KeyScope.Global); // Editor/Grid scopes are handled in their tunnels
     }
 
     protected override void OnKeyUp(KeyEventArgs e)
@@ -325,7 +339,10 @@ public partial class MainWindow
         {
             var caret = Editor.CaretOffset;
             var statement = _text.StatementBounds(caret);
-            if (_inline.FocusZoneAt(caret, statement.Start, statement.End)) return;
+            if (_inline.FocusZoneAt(caret, statement.Start, statement.End))
+            {
+                return;
+            }
         }
         if (_resultsPane.IsVisible) ResultsView.FocusableGrid?.Focus();
     }
@@ -341,9 +358,13 @@ public partial class MainWindow
         if (_inline.IsInline && _inline.Controller.FocusedZone() is { } focused
             && _inline.Controller.Views.FirstOrDefault(v => v.Zone == focused) is { } current
             && current.Results.FocusableGrid is { } zoneGrid)
+        {
             regions.Add((zoneGrid, current));
+        }
         else if (_inline.IsInline && CaretZoneView() is { } zone && zone.Results.FocusableGrid is { } caretGrid)
+        {
             regions.Add((caretGrid, zone));
+        }
         if (_resultsPane.IsVisible && ResultsView.FocusableGrid is { } grid) regions.Add((grid, ResultsView));
         if (Sidebar.FocusTarget is { } side) regions.Add((side, side));
         FocusRing.Cycle(TopLevel.GetTopLevel(this), regions);
@@ -618,11 +639,24 @@ public partial class MainWindow
     /// <summary>Render the given tab's current result frame, plus the back-bar state (FK-nav history).</summary>
     internal void RebuildResults(EditorTabViewModel? tab)
     {
-        ResultsView.CanGoBack = tab?.CanGoBack ?? false;
-        ResultsView.Results = tab?.Results; // assignment triggers the rebuild (reads CanGoBack)
-        if (_inline.PaneVisibilityFor(tab) is { } visible)
+        var visible = _inline.PaneVisibilityFor(tab);
+        // Built only when it will be seen: a collapsed pane is rendered when it is next shown.
+        _resultsPane.Render(
+            () =>
+            {
+                ResultsView.CanGoBack = tab?.CanGoBack ?? false;
+                ResultsView.Results = tab?.Results; // assignment triggers the rebuild (reads CanGoBack)
+            },
+            () =>
+            {
+                ResultsView.CanGoBack = false;
+                ResultsView.Results = null;
+            },
+            hasResults: tab?.Results is { Count: > 0 },
+            defer: visible != true);
+        if (visible is { } shown)
         {
-            _resultsPane.SetVisible(visible);
+            _resultsPane.SetVisible(shown);
         }
     }
 

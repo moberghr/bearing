@@ -123,6 +123,10 @@ public static class KeymapDefaults
         // clean grid the gesture is simply unclaimed rather than opening an empty window.
         yield return R(CommandIds.GridShowSql, "Ctrl+Alt+P");
         yield return R(CommandIds.GridClearSelection, "Escape");
+        // In an inline zone, Escape gives the keyboard back to the SQL text. Listed after clearSelection on the
+        // same gesture: a plain Grid resolve (the pane) still finds clearSelection, and the zone asks for this
+        // command by id (KeyDispatcher.TryHandleCommand), so the two never compete.
+        yield return R(CommandIds.GridLeaveInline, "Escape");
         yield return R(CommandIds.GridInspect, "F7");          // peek at the active cell's full value
         yield return R(CommandIds.GridFollowFk, "Alt+Right"); // drill into the FK the active cell points to
         yield return R(CommandIds.GridBack, "Alt+Left");      // return to the pre-navigation result

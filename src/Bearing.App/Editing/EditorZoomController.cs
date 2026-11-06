@@ -3,6 +3,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using AvaloniaEdit;
 using Bearing.App.Input;
+using Bearing.App.Controls;
 using Bearing.App.ViewModels;
 
 namespace Bearing.App.Editing;
@@ -77,7 +78,15 @@ internal sealed class EditorZoomController
     /// </summary>
     private void OnPointerWheel(object? sender, PointerWheelEventArgs e)
     {
-        if (!e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.Delta.Y == 0) return;
+        if (!e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.Delta.Y == 0)
+        {
+            return;
+        }
+        // A zone's wheel is its own (the cell inspector zooms its text on Ctrl+wheel), not the SQL text's.
+        if (InlineZoneView.IsInside(e.Source))
+        {
+            return;
+        }
         e.Handled = true;
         if (_wheel.Add(e.Delta.Y) is var steps && steps != 0) Zoom(steps);
     }

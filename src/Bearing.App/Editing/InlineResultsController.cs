@@ -13,6 +13,7 @@ using AvaloniaEdit.Rendering;
 using Bearing.App.Controls;
 using Bearing.App.Results;
 using Bearing.App.ViewModels;
+using Bearing.Sql;
 
 namespace Bearing.App.Editing;
 
@@ -271,14 +272,62 @@ public sealed class InlineResultsController
     /// and dropping the zone would lose the edits. Done after the document change has finished, not inside
     /// it: the text view is mid-update while anchors are being notified.</summary>
     private void OnAnchorDeleted(object? sender, EventArgs e)
+        => Retire(_shown.Values.Where(s => ReferenceEquals(s.Anchor, sender)).ToList(), _lastChangeOffset);
+
+    /// <summary>
+    /// Run <paramref name="edit"/>, a command that rewrites a span of the buffer in one replace (Ctrl+/, Format),
+    /// and carry the zones across it by what the text means rather than by anchor: such a replace covers text
+    /// that did not really change, and an anchor in it would read as deleted — every zone in the tab gone, or
+    /// moved to the top as "statement removed". <see cref="InlineZoneRemap"/> decides; a zone whose text really
+    /// went is retired as a deletion would.
+    /// </summary>
+    public void Rewrite(Action edit, ISqlDialect dialect)
+    {
+        if (_tab is null || _document is not { } document || _shown.Count == 0)
+        {
+            edit();
+            return;
+        }
+        var before = document.Text;
+        var shown = _shown.Values.ToList();
+        var offsets = shown.Select(s => s.Anchor.IsDeleted ? s.Zone.Offset : s.Anchor.Offset).ToList();
+        foreach (var s in shown)
+        {
+            s.Anchor.Deleted -= OnAnchorDeleted;
+        }
+        try
+        {
+            edit();
+        }
+        finally
+        {
+            var after = document.Text;
+            var mapped = ReferenceEquals(before, after) || string.Equals(before, after, StringComparison.Ordinal)
+                ? offsets.Select(o => (int?)o).ToList()
+                : InlineZoneRemap.Map(dialect, before, after, offsets);
+            var gone = new List<Shown>();
+            for (var i = 0; i < shown.Count; i++)
+            {
+                var s = shown[i];
+                s.Zone.Offset = mapped[i] ?? Math.Min(offsets[i], document.TextLength);
+                s.Anchor = Anchor(document, s.Zone);
+                if (mapped[i] is null)
+                {
+                    gone.Add(s);
+                }
+            }
+            Retire(gone, _lastChangeOffset);
+            TextView.Redraw();
+        }
+    }
+
+    private void Retire(IReadOnlyList<Shown> dead, int at)
     {
         var tab = _tab;
-        var dead = _shown.Values.Where(s => ReferenceEquals(s.Anchor, sender)).ToList();
         if (tab is null || dead.Count == 0)
         {
             return;
         }
-        var at = _lastChangeOffset;
         Dispatcher.UIThread.Post(() =>
         {
             foreach (var shown in dead)

@@ -176,6 +176,10 @@ public sealed partial class ResultView : UserControl
     /// <summary>The grids this view shows (tests, and the zone's focus-in).</summary>
     internal IReadOnlyCollection<DataGrid> Grids => _gridsByResult.Values;
 
+    /// <summary>Whether this view has a grid on <paramref name="result"/> — a run's sets can be shown by the
+    /// pane and by their inline zone at once.</summary>
+    internal bool Shows(ResultSetViewModel result) => _gridsByResult.ContainsKey(result);
+
     /// <summary>The shared keybinding pipeline (set once by the window), used to resolve a keystroke that
     /// lands in a grid. Spatial cell navigation stays local (see <see cref="OnGridKey"/>).
     /// <para>

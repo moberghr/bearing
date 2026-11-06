@@ -180,6 +180,7 @@ public sealed class ExternalScripts
             if (tab.IsModified && !string.Equals(existing.Text, tab.Text, StringComparison.Ordinal))
             {
                 existing.Text = tab.Text;
+                _ctx.CommitOpenEdits?.Invoke();   // an edit still in a cell editor must be pending, so its zone is kept
                 existing.ClearInlineZones();   // its inline results hung under text that was just replaced
             }
             _workspace.SelectedTab = existing;

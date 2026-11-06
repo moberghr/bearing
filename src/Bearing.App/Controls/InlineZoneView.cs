@@ -30,8 +30,10 @@ public sealed class InlineZoneView : Border
     /// <param name="view">The zone's results view (built with <see cref="ResultView.IsInline"/>).</param>
     /// <param name="globalKeys">Offer a key the grid didn't take to the window's global commands; true when
     /// one ran.</param>
-    /// <param name="leave">Esc outside a cell editor: give the keyboard back to the editor.</param>
-    public InlineZoneView(InlineResultZone zone, ResultView view, Func<KeyEventArgs, bool> globalKeys, Action leave)
+    /// <param name="zoneKeys">Offer a key to the zone's own commands (Escape leaves the zone); true when one
+    /// ran. Asked ahead of the grid, outside a cell editor.</param>
+    public InlineZoneView(InlineResultZone zone, ResultView view, Func<KeyEventArgs, bool> globalKeys,
+        Func<KeyEventArgs, bool> zoneKeys)
     {
         Zone = zone;
         Results = view;
@@ -54,14 +56,14 @@ public sealed class InlineZoneView : Border
         body.Children.Add(view);
         Child = body;
 
-        // Esc leaves the zone — but an open cell editor takes the first one (it cancels the edit, §9.15).
-        // Tunnel, ahead of the grid's own Escape (clear selection), which would otherwise keep focus here.
+        // grid.leaveInline (Escape) leaves the zone — but an open cell editor takes the first one (it cancels
+        // the edit, §9.15). Tunnel, ahead of the grid's own Escape (clear selection), which would otherwise keep
+        // focus here.
         AddHandler(KeyDownEvent, (_, e) =>
         {
-            if (e.Key == Key.Escape && e.KeyModifiers == KeyModifiers.None && e.Source is not TextBox)
+            if (!e.Handled && e.Source is not TextBox)
             {
-                e.Handled = true;
-                leave();
+                zoneKeys(e);
             }
         }, RoutingStrategies.Tunnel);
 

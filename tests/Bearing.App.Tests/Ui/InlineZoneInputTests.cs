@@ -9,6 +9,7 @@ using Avalonia.VisualTree;
 using AvaloniaEdit;
 using Bearing.App.Controls;
 using Bearing.App.ViewModels;
+using Bearing.App.Views;
 using Bearing.Core.Workspace;
 using Bearing.Demo;
 using Bearing.Sql;
@@ -49,9 +50,9 @@ public class InlineZoneInputTests
     }
 
     private static async Task<(ShellHarness Shell, TextEditor Editor, EditorTabViewModel Tab, InlineZoneView Zone, ResultSetViewModel Set)>
-        ZoneWithEditableGrid(string name)
+        ZoneWithEditableGrid(string name, FakeDialogs? dialogs = null)
     {
-        var shell = await ShellHarness.ShowAsync(name);
+        var shell = await ShellHarness.ShowAsync(name, dialogs: dialogs);
         var (editor, tab) = InlineResultsTests.Setup(shell);
         var set = InlineZoneGridTests.Editable();
         InlineZoneGridTests.Place(shell, tab, set);
@@ -207,4 +208,86 @@ public class InlineZoneInputTests
         }
         shell.Pump();
     }
+
+    /// <summary>A value still in a zone's cell editor is an unsaved edit (§9.15): closing the tab commits it
+    /// before the guard counts, so the user is asked rather than the value silently dropped.</summary>
+    [Fact]
+    public Task Closing_the_tab_with_a_value_still_in_a_cell_editor_asks_first() => _ui.Run(async () =>
+    {
+        var dialogs = new FakeDialogs { DiscardEditsAnswer = false };
+        var (shell, _, tab, zone, set) = await ZoneWithEditableGrid(
+            nameof(Closing_the_tab_with_a_value_still_in_a_cell_editor_asks_first), dialogs);
+        using var _ = shell;
+        shell.Vm.Workspace.NewTab();   // a second tab, so the close isn't refused for being the last
+        shell.Vm.Workspace.SelectedTab = tab;
+        shell.Pump();
+        ClickCell(shell, zone, set.Rows[0], 1);
+        Press(shell, Key.Enter, PhysicalKey.Enter);
+        shell.Window.KeyTextInput("typed");
+        Assert.IsType<TextBox>(TopLevel.GetTopLevel(zone)!.FocusManager!.GetFocusedElement());
+        Assert.False(set.HasPendingChanges);   // still in the cell editor, not yet pending
+
+        Assert.False(await shell.Vm.Workspace.CloseTabAsync(tab));
+
+        Assert.Contains(dialogs.DiscardEditsPrompts, p => p.Action.StartsWith("close"));
+        Assert.True(set.HasPendingChanges);
+        Assert.Contains(tab, shell.Vm.Workspace.Tabs);
+    });
+
+    /// <summary>Quit with nothing running and no transaction, only a value still in a cell editor: the window
+    /// commits it and holds the close to ask (it asks through its own dialog service, so what is asserted is
+    /// that the close was held and the value became pending — before, nothing counted and the app closed).</summary>
+    [Fact]
+    public Task Quitting_with_only_a_value_in_a_cell_editor_is_held_to_ask() => _ui.Run(async () =>
+    {
+        var (shell, _, _, zone, set) = await ZoneWithEditableGrid(nameof(Quitting_with_only_a_value_in_a_cell_editor_is_held_to_ask));
+        using var _ = shell;
+        ClickCell(shell, zone, set.Rows[0], 1);
+        Press(shell, Key.Enter, PhysicalKey.Enter);
+        shell.Window.KeyTextInput("typed");
+        Assert.False(set.HasPendingChanges);
+
+        shell.Window.Close();
+        shell.Pump();
+
+        Assert.True(set.HasPendingChanges);
+        Assert.True(QuitGuard.NeedsConfirmation(shell.Vm));
+        Assert.True(shell.Window.IsVisible);
+        set.RevertPending();   // let the harness close it
+    });
+
+    [Fact]
+    public Task Ctrl_wheel_in_a_zone_does_not_zoom_the_sql() => _ui.Run(async () =>
+    {
+        var (shell, editor, tab, zone, set) = await ZoneWithEditableGrid(nameof(Ctrl_wheel_in_a_zone_does_not_zoom_the_sql));
+        using var _ = shell;
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        shell.Pump();
+        var cell = ResultsHarness.RequireCell(zone, set.Rows[0], 1);
+        var inZone = cell.TranslatePoint(new Point(cell.Bounds.Width / 2, cell.Bounds.Height / 2), shell.Window)!.Value;
+        var inText = editor.TextArea.TranslatePoint(new Point(40, 4), shell.Window)!.Value;
+
+        shell.Window.MouseWheel(inZone, new Vector(0, 1), RawInputModifiers.Control);
+        shell.Pump();
+        Assert.Equal(0, tab.FontZoomSteps);
+
+        shell.Window.MouseWheel(inText, new Vector(0, 1), RawInputModifiers.Control);   // the gesture itself works
+        shell.Pump();
+        Assert.NotEqual(0, tab.FontZoomSteps);
+    });
+
+    [Fact]
+    public Task An_alt_tap_in_a_zone_toggles_the_menu_bar() => _ui.Run(async () =>
+    {
+        var (shell, _, _, zone, set) = await ZoneWithEditableGrid(nameof(An_alt_tap_in_a_zone_toggles_the_menu_bar));
+        using var _ = shell;
+        ClickCell(shell, zone, set.Rows[0], 1);
+        Assert.True(zone.IsKeyboardFocusWithin);
+        var before = shell.Vm.IsMenuVisible;
+        Assert.False(shell.Vm.IsMenuPinned && before);   // pinned, a tap has nothing to toggle
+
+        Press(shell, Key.LeftAlt, PhysicalKey.AltLeft);
+
+        Assert.NotEqual(before, shell.Vm.IsMenuVisible);
+    });
 }

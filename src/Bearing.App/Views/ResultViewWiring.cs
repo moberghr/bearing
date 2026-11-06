@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Bearing.App.Controls;
 using Bearing.App.Input;
@@ -22,11 +24,21 @@ internal sealed class ResultViewWiring(
     Func<GridCommandRouter?> router,
     Func<ResultSetViewModel, Task> showPendingSql)
 {
+    // Every view wired so far, with its redraw: a run's sets are shared by the pane and their zone, so a save
+    // or discard in one must reach the other. Weak — a zone's view goes with its zone.
+    private readonly ConditionalWeakTable<ResultView, Action> _views = new();
+
+    /// <summary>The wired views other than <paramref name="except"/> that show <paramref name="rs"/>.</summary>
+    private (ResultView View, Action Render)[] Others(ResultView except, ResultSetViewModel rs)
+        => _views.Where(kv => !ReferenceEquals(kv.Key, except) && kv.Key.Shows(rs))
+            .Select(kv => (kv.Key, kv.Value)).ToArray();
+
     /// <param name="view">The view to wire.</param>
     /// <param name="frames">Where FK navigation pushes and Back pops, read at the time of the action.</param>
     /// <param name="render">Redraw the view from its context (after navigation, Back, discard).</param>
     public void Apply(ResultView view, Func<IResultFrames?> frames, Action render)
     {
+        _views.AddOrUpdate(view, render);
         view.CommandDispatcher = dispatcher();
         view.Router ??= router();
         if (vm() is { } shell)
@@ -44,7 +56,10 @@ internal sealed class ResultViewWiring(
         view.Export = (rs, format) => vm()?.Execution.ExportAsync(rs, format) ?? Task.CompletedTask;
         view.NavigateForeignKey = async (rs, col, row) =>
         {
-            if (vm() is not { } s || frames() is not { } target) return;
+            if (vm() is not { } s || frames() is not { } target)
+            {
+                return;
+            }
             // The tab's own frames are the pane's: navigating there is the default route (null).
             await s.Execution.NavigateForeignKeyAsync(rs, col, row, target is EditorTabViewModel ? null : target);
             render();
@@ -53,21 +68,39 @@ internal sealed class ResultViewWiring(
         {
             // Not mid-run: the run's results replace the tab's when it finishes, and a frame swapped in between
             // would be taken for them (InlineResultsController.PlaceRun) — FK navigation refuses for the same reason.
-            if (vm()?.Workspace.SelectedTab is { IsRunning: false }) frames()?.GoBack();
+            if (vm()?.Workspace.SelectedTab is { IsRunning: false })
+            {
+                frames()?.GoBack();
+            }
             render();
         };
         view.Status = text => { if (vm() is { } s) s.StatusText = text; };
         view.SaveChanges = async rs =>
         {
-            if (vm() is not { } s) return;
+            if (vm() is not { } s)
+            {
+                return;
+            }
             await s.Execution.SaveChangesAsync(rs);   // applies in one tx, updating affected rows in place
             view.RefreshRowHighlights();              // clear the pending tints (no full rebuild → scroll kept)
+            foreach (var (other, _) in Others(view, rs))
+            {
+                other.RefreshRowHighlights();         // the same sets in the pane and their zone
+            }
         };
         view.DiscardChanges = async rs =>
         {
-            if (vm() is not { } s) return;
+            if (vm() is not { } s)
+            {
+                return;
+            }
+            var others = Others(view, rs);
             await s.Execution.DiscardChangesAsync(rs); // reverts pending changes in place
             render();                                  // re-render the restored rows
+            foreach (var (_, redraw) in others)
+            {
+                redraw();                              // the same sets in the pane and their zone
+            }
         };
         view.ShowPendingSql = showPendingSql;
     }

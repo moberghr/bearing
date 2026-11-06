@@ -30,7 +30,12 @@ internal static class QuitGuard
 
     /// <summary>Whether the close needs to stop and ask about anything at all.</summary>
     public static bool NeedsConfirmation(ShellViewModel? vm)
-        => RunningCount(vm) > 0 || OpenTransactionCount(vm) > 0;
+        => RunningCount(vm) > 0 || OpenTransactionCount(vm) > 0 || PendingEditCount(vm) > 0;
+
+    /// <summary>Unsaved grid edits on every tab, pane and inline zone (spec §7), across every open project.
+    /// Read after the window has committed any open cell editor (§9.15).</summary>
+    public static int PendingEditCount(ShellViewModel? vm)
+        => vm?.Workspace.AllTabs.Sum(t => t.PendingEditCount) ?? 0;
 
     /// <summary>
     /// Ask about the in-flight runs and the open transactions and, if the user agrees to both, cancel the
@@ -55,15 +60,29 @@ internal static class QuitGuard
         // user who then declined the second kept their queries, kept the app open — and had already lost
         // the transactions, which is the opposite of what asking about them first was for.
         if (!await TransactionGuard.AskAsync(vm.Context.Transactions, dialogs, _ => true, "quit"))
+        {
             return false;
-        if (running > 0 && !await dialogs.ConfirmCancelRunningAsync(running)) return false;
+        }
+        if (running > 0 && !await dialogs.ConfirmCancelRunningAsync(running))
+        {
+            return false;
+        }
         // Unsaved grid edits on any tab, pane or inline zone (spec §7): quitting drops them.
-        var edits = vm.Workspace.AllTabs.Sum(t => t.PendingEditCount);
+        vm.Context.CommitOpenEdits?.Invoke();
+        var edits = PendingEditCount(vm);
         if (edits > 0 && !await dialogs.ConfirmDiscardEditsAsync(PendingEdits.Describe(edits, 1), "quit"))
+        {
             return false;
+        }
 
         await TransactionGuard.RollbackAsync(vm.Context.Transactions, _ => true);
-        if (running > 0) foreach (var tab in vm.Workspace.AllTabs) tab.CancelRun();
+        if (running > 0)
+        {
+            foreach (var tab in vm.Workspace.AllTabs)
+            {
+                tab.CancelRun();
+            }
+        }
         return true;
     }
 }

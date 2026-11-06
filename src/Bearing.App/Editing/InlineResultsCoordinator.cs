@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Avalonia.Input;
 using AvaloniaEdit;
 using Bearing.App.Controls;
+using Bearing.App.Input;
 using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using Bearing.App.Settings;
@@ -33,11 +34,27 @@ public sealed class InlineResultsCoordinator
     /// <param name="ConfirmDiscardEdits">Ask before unsaved grid edits are lost (what, action) → discard?</param>
     /// <param name="CommitOpenEdits">Commit any open cell editor, in the pane and in every zone, so what the
     /// guard counts includes a value still being typed (§9.15).</param>
+    /// <param name="ZoneKeys">Offer a key to the zone's own commands (<see cref="CommandIds.GridLeaveInline"/>)
+    /// ahead of the grid; true when one ran.</param>
     public sealed record Host(
         Action<ResultView, IResultFrames, Action> Wire,
         Func<KeyEventArgs, bool> GlobalKeys,
         Func<string, string, Task<bool>> ConfirmDiscardEdits,
-        Action CommitOpenEdits);
+        Action CommitOpenEdits,
+        Func<KeyEventArgs, bool> ZoneKeys);
+
+    /// <summary>The zones' own commands: <see cref="CommandIds.GridLeaveInline"/> (Escape) gives the keyboard
+    /// back to the SQL text under the focused zone.</summary>
+    public void RegisterCommands(CommandRegistry r)
+        => r.Register(KeyCommand.Sync(CommandIds.GridLeaveInline, "Leave inline results", KeyScope.Grid, "Grid",
+            () =>
+            {
+                if (Controller.FocusedZone() is { } zone)
+                {
+                    Controller.Leave(zone);
+                }
+            },
+            canRun: () => Controller.FocusedZone() is not null));
 
     private readonly Func<SettingsService?> _settings;
     private readonly Func<EditorTabViewModel?> _selectedTab;
@@ -290,7 +307,7 @@ public sealed class InlineResultsCoordinator
         Render();
         return new InlineZoneView(zone, results,
             e => _host()?.GlobalKeys(e) == true,
-            () => Controller.Leave(zone));
+            e => _host()?.ZoneKeys(e) == true);
     }
 
     /// <summary>✕ on a zone — asks first when it holds unsaved edits (spec §7).</summary>

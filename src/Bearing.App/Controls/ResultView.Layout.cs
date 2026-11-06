@@ -49,7 +49,10 @@ public sealed partial class ResultView
         _editableGrids.Clear();
         _gridsByResult.Clear();
         _inlineSized.Clear();
-        foreach (var (rows, handler) in _rowSubscriptions) rows.CollectionChanged -= handler;
+        foreach (var (rows, handler) in _rowSubscriptions)
+        {
+            rows.CollectionChanged -= handler;
+        }
         _rowSubscriptions.Clear();
         _statsBars.Clear();
         _firstGrid = null;                    // re-captured as grids are built below (region-focus target)
@@ -234,7 +237,10 @@ public sealed partial class ResultView
         if (trailing is not null)
         {
             var both = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            if (right is not null) both.Children.Add(right);
+            if (right is not null)
+            {
+                both.Children.Add(right);
+            }
             both.Children.Add(trailing);
             right = both;
         }

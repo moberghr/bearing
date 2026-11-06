@@ -116,7 +116,10 @@ public sealed partial class ResultView
 
         WireSelection(grid, result);
         if (result.IsEditable) WireEditing(grid, result);
-        if (IsInline) SizeToRows(grid, result);
+        if (IsInline)
+        {
+            SizeToRows(grid, result);
+        }
         return grid;
     }
 
@@ -214,7 +217,10 @@ public sealed partial class ResultView
         grid.GotFocus += (_, _) =>
         {
             Router?.Activate(this);   // palette-invoked grid commands now mean this view (spec §8)
-            if (_selection.NeedsSeed(result)) _selection.SeedActive(grid, result);
+            if (_selection.NeedsSeed(result))
+            {
+                _selection.SeedActive(grid, result);
+            }
         };
     }
 
@@ -281,7 +287,10 @@ public sealed partial class ResultView
     /// reads the pending set (a run's unsaved-edits guard, §9.15).</summary>
     public void CommitOpenEdits()
     {
-        foreach (var grid in _gridsByResult.Values) CommitOpenEdit(grid);
+        foreach (var grid in _gridsByResult.Values)
+        {
+            CommitOpenEdit(grid);
+        }
     }
 
     /// <summary>The same, for the routes that name a result rather than a grid (the toolbar's buttons, a

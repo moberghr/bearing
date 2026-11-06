@@ -91,9 +91,10 @@ fetch all, inspector, sorting, column freeze / hide, Stacked / Tabs — hosted i
    - **In**: clicking a cell focuses that zone's grid. In Inline mode `focus.results` (Ctrl+Shift+0) focuses
      the zone of the statement under the caret, else the nearest zone above it; F6 cycles editor → that
      zone → sidebar.
-   - **Out**: Esc in the grid (no cell editor open) returns focus to the editor, caret at the end of the
-     zone's statement; an open cell editor takes the first Esc (§9.15). Clicking the SQL text leaves the
-     zone and commits an open cell edit, the same rule as focus leaving the pane's grid.
+   - **Out**: Esc in the grid (no cell editor open; the rebindable `grid.leaveInline`) returns focus to the
+     editor, caret at the end of the zone's statement; an open cell editor takes the first Esc (§9.15).
+     Clicking the SQL text leaves the zone and commits an open cell edit, the same rule as focus leaving the
+     pane's grid.
    - Arrow keys never leave the grid.
    - **No key or text input from a zone reaches the document** — neither the editor's tunnel handler, nor
      AvaloniaEdit's own key bindings / text input.

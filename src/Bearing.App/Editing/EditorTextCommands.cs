@@ -28,6 +28,11 @@ public sealed class EditorTextCommands
     private readonly Func<ISqlDialect> _dialect;
     private readonly StatementMargin _highlight = new();
 
+    /// <summary>Runs a one-replace rewrite of the buffer (Ctrl+/, Format) so whatever hangs on the text — the
+    /// inline result zones — can be carried across it by meaning rather than lost to the replace. Null runs
+    /// the edit as is.</summary>
+    public Action<Action, ISqlDialect>? AroundRewrite { get; set; }
+
     /// <summary>Wraps <paramref name="editor"/> and installs the statement-highlight margin in its own
     /// column, right of the line numbers. <paramref name="dialect"/> supplies the engine whose lexical
     /// rules decide where the statements in the buffer are.</summary>
@@ -180,7 +185,7 @@ public sealed class EditorTextCommands
         var result = LineCommenter.Toggle(_editor.Text, start, end);
         if (result.Text == _editor.Text) return;
 
-        _editor.Document.Replace(0, _editor.Document.TextLength, result.Text);
+        Rewrite(() => _editor.Document.Replace(0, _editor.Document.TextLength, result.Text));
         _editor.SelectionStart = result.SelectionStart;
         _editor.SelectionLength = result.SelectionLength;
         _editor.CaretOffset = result.SelectionStart + result.SelectionLength;
@@ -198,6 +203,18 @@ public sealed class EditorTextCommands
         _editor.Document.Remove(range.Start, range.Length);
         _editor.CaretOffset = range.Start;
         _editor.TextArea.Caret.BringCaretToView();
+    }
+
+    private void Rewrite(Action edit)
+    {
+        if (AroundRewrite is { } around)
+        {
+            around(edit, _dialect());
+        }
+        else
+        {
+            edit();
+        }
     }
 
     /// <summary>The editor's (start, end) offsets: the selection when there is one, else the caret twice.</summary>
@@ -249,7 +266,7 @@ public sealed class EditorTextCommands
 
         // One Replace, so the whole reformat is a single undo step rather than a stack of them.
         var caret = _editor.CaretOffset;
-        _editor.Document.Replace(start, length, result.Text);
+        Rewrite(() => _editor.Document.Replace(start, length, result.Text));
 
         if (selected)
         {

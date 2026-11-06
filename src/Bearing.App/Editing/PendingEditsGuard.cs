@@ -35,12 +35,10 @@ public static class PendingEditsGuard
         }
     }
 
-    /// <summary>The zones a run over <paramref name="scope"/> replaces — the same rule as
-    /// <see cref="EditorTabViewModel.ApplyInlineRun"/>.</summary>
+    /// <summary>The zones a run over <paramref name="scope"/> replaces (<see cref="RunScope.Replaces"/>, the rule
+    /// <see cref="EditorTabViewModel.ApplyInlineRun"/> applies).</summary>
     public static IEnumerable<InlineResultZone> ZonesReplacedBy(EditorTabViewModel tab, RunScope scope)
-        => scope.IsWholeBuffer
-            ? tab.InlineZones
-            : tab.InlineZones.Where(z => z.Offset > scope.Start && z.Offset <= scope.End);
+        => tab.InlineZones.Where(z => scope.Replaces(z.Offset));
 
     /// <summary>
     /// What a run over <paramref name="scope"/> on <paramref name="tab"/> would lose: the pane's frames (a run

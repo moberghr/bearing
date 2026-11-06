@@ -137,7 +137,10 @@ public sealed partial class EditorTabViewModel : ObservableObject, IResultFrames
     /// <summary>Discard the current (navigated) results and restore the previous frame.</summary>
     public void GoBack()
     {
-        if (_resultHistory.Pop() is not { } previous) return;
+        if (_resultHistory.Pop() is not { } previous)
+        {
+            return;
+        }
         Results = previous;
         OnPropertyChanged(nameof(CanGoBack));
     }
@@ -146,9 +149,15 @@ public sealed partial class EditorTabViewModel : ObservableObject, IResultFrames
     /// sets, their pending edits, and its Back stack. False (nothing changes) while the tab runs.</summary>
     public bool ShowZoneInPane(InlineResultZone zone)
     {
-        if (IsRunning) return false;
+        if (IsRunning)
+        {
+            return false;
+        }
         _resultHistory.Clear();
-        foreach (var frame in zone.StashedFrames) _resultHistory.Push(frame);
+        foreach (var frame in zone.StashedFrames)
+        {
+            _resultHistory.Push(frame);
+        }
         Results = zone.Sets;
         OnPropertyChanged(nameof(CanGoBack));
         return true;
@@ -185,11 +194,7 @@ public sealed partial class EditorTabViewModel : ObservableObject, IResultFrames
     /// </summary>
     public void ApplyInlineRun(Results.RunScope scope, IReadOnlyList<InlineResultZone> zones)
     {
-        // Exclusive at Start: a zone sitting exactly there belongs to the statement before, whose end touches
-        // this one's start when nothing separates them (`select 1;select 2;`).
-        var replaced = _inlineZones
-            .Where(z => scope.IsWholeBuffer || (z.Offset > scope.Start && z.Offset <= scope.End))
-            .ToList();
+        var replaced = _inlineZones.Where(z => scope.Replaces(z.Offset)).ToList();
         _inlineZones.RemoveAll(replaced.Contains);
         _inlineZones.AddRange(zones);
         _inlineZones.Sort((a, b) => a.Offset.CompareTo(b.Offset));

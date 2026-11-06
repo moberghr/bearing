@@ -31,7 +31,7 @@ public class InlineRunPlacementTests
         var window = new Window { Content = editor, Width = 600, Height = 400 };
         window.Show();
         var controller = new InlineResultsController(editor, () => true,
-            (_, zone) => new InlineZoneView(zone, new ResultView { IsInline = true }, _ => false, () => { }));
+            (_, zone) => new InlineZoneView(zone, new ResultView { IsInline = true }, _ => false, _ => false));
         var tab = new EditorTabViewModel("t", Buffer);
         controller.Bind(tab);
         return (editor, controller, tab);
