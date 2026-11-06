@@ -352,6 +352,7 @@ public sealed class ScriptFileSync : IDisposable
         var caret = tab.CaretOffset;
         tab.MarkSaved(disk);   // baseline first, so the Text change below reads as clean
         tab.Text = disk;
+        tab.ClearInlineZones();   // its inline results hung under text that is gone (any tab, not only the shown one)
         tab.HasDiskConflict = false;
         tab.CaretOffset = Math.Clamp(caret, 0, disk.Length);
         Reloaded?.Invoke(tab);

@@ -53,6 +53,7 @@ public partial class MainWindow
         r.Register(KeyCommand.Sync(CommandIds.ViewToggleSidePane, "Toggle side pane", KeyScope.Global, "View",
             () => { if (Vm is not null) Vm.SidePaneOpen = !Vm.SidePaneOpen; }));
         r.Register(KeyCommand.Sync(CommandIds.ViewToggleResults, "Toggle results", KeyScope.Global, "View", ToggleResultsVisible));
+        r.Register(KeyCommand.Sync(CommandIds.ViewToggleInlineResults, "Toggle inline results", KeyScope.Global, "View", () => _inline.Toggle()));
         r.Register(new KeyCommand(CommandIds.QueryExportRun, "Export run to Excel workbook", KeyScope.Global, "Query",
             async () => { if (Vm is { } vm) await vm.Execution.ExportRunAsync(); },
             canRun: () => Vm?.Workspace.SelectedTab?.Results.Any(rs => rs.HasGrid) == true));
@@ -495,9 +496,7 @@ public partial class MainWindow
         // Capture the tab the run belongs to: execution is per-tab, so the user may switch tabs while it
         // runs. Only refresh the visible grid if that tab is still selected — otherwise its results are
         // stored on its own VM and render when the user switches back.
-        var ran = Vm.Workspace.SelectedTab;
-        await Vm.Execution.ExecuteAsync(_text.SqlToRun());
-        if (ReferenceEquals(ran, Vm.Workspace.SelectedTab)) RebuildResults(ran);
+        await _inline.RunAsync(_text.ScopeToRun(), Vm.Execution.ExecuteAsync);
     }
 
     /// <summary>
@@ -528,9 +527,7 @@ public partial class MainWindow
     private async Task RunAllAsync()
     {
         if (Vm is null) return;
-        var ran = Vm.Workspace.SelectedTab;
-        await Vm.Execution.ExecuteAsync(_text.SqlToRunAll());
-        if (ReferenceEquals(ran, Vm.Workspace.SelectedTab)) RebuildResults(ran);
+        await _inline.RunAsync(_text.ScopeToRunAll(), Vm.Execution.ExecuteAsync);
     }
 
     private async Task OpenAsync()
@@ -588,6 +585,11 @@ public partial class MainWindow
     {
         ResultsView.CanGoBack = tab?.CanGoBack ?? false;
         ResultsView.Results = tab?.Results; // assignment triggers the rebuild (reads CanGoBack)
-        _resultsPane.SetVisible(tab?.Results is { Count: > 0 }); // reveal on results, collapse when none
+        if (_inline.PaneVisibilityFor(tab) is { } visible)
+        {
+            _resultsPane.SetVisible(visible);
+        }
     }
+
+    private void OnToggleInlineResultsClick(object? sender, RoutedEventArgs e) => _inline.Toggle();
 }

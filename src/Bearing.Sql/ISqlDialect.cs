@@ -247,6 +247,15 @@ public interface ISqlDialect
     IReadOnlyList<StatementSpan> SplitStatements(string sql);
 
     /// <summary>
+    /// Offset just past the last token of <paramref name="sql"/> that is code — not whitespace, not a comment
+    /// — or null when there is none (or this engine can't say). A split can hand a statement the comment lines
+    /// that follow it (the PostgreSQL split keeps an own-line comment with the statement above when a blank
+    /// line follows it), so "where does this statement end on screen" is asked here rather than read off
+    /// <see cref="StatementSpan.TrimmedEnd"/>.
+    /// </summary>
+    int? CodeEnd(string sql) => null;
+
+    /// <summary>
     /// Whether <paramref name="offset"/> sits inside a character literal, in this engine's lexical
     /// rules. The completion engine asks this <em>first</em> — a caret inside a string gets no
     /// suggestions — which is what made getting it wrong so total: while this was answered with the

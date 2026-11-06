@@ -266,6 +266,28 @@ public class ExternalScriptTests : IDisposable
         Assert.Equal("select 1 -- edited in a", inB.Text);
     }
 
+    /// <summary>The kept tab's text is replaced by the moved tab's, so its inline results no longer hang under
+    /// what they described.</summary>
+    [Fact]
+    public async Task Moving_edits_onto_a_tab_drops_that_tabs_inline_results()
+    {
+        var vm = NewVm();
+        await SeedAsync(vm, Dir("b"), "b");
+        var file = Outside("report.sql", "select 1");
+        await vm.OpenScriptFilesAsync([file]);
+        var inB = vm.Workspace.SelectedTab!;
+        var all = new Bearing.App.Results.RunScope("select 1", [8], 0, 8, IsWholeBuffer: true);
+        inB.ApplyInlineRun(all, [new InlineResultZone(8, Array.Empty<ResultSetViewModel>(), null)]);
+        await SeedAsync(vm, Dir("a"), "a");
+        var inA = vm.Workspace.NewTab("select 1", file);
+        inA.Text = "select 1 -- edited in a";
+
+        Assert.True(await vm.MoveTabToProjectAsync(inA, Dir("b")));
+
+        Assert.Same(inB, vm.Workspace.SelectedTab);
+        Assert.Empty(inB.InlineZones);
+    }
+
     [Fact]
     public async Task Scratch_tabs_and_a_tabs_own_project_are_not_move_targets()
     {

@@ -128,6 +128,10 @@ public sealed partial class ResultView : UserControl
     /// </summary>
     public Action? CloseRequested { get; set; }
 
+    /// <summary>The header's inline toggle: show results under their statements instead of in this pane.
+    /// Null hides the button.</summary>
+    public Action? ShowInlineRequested { get; set; }
+
     /// <summary>The shared keybinding pipeline (set once by the window), used to resolve a keystroke that
     /// lands in a grid. Spatial cell navigation stays local (see <see cref="OnGridKey"/>).
     /// <para>

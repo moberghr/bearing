@@ -692,7 +692,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // Results always route to the tab that started the run, never to whichever tab is focused now.
             // A tab that has since been closed (or dropped by a project switch) is dead but harmless to
             // assign to — RunFinished is what tells the user the run ended, with TabStillOpen false.
-            tab.SetFreshResults(ResultSetBuilder.BuildResultSets(
+            tab.SetRunResults(ResultSetBuilder.BuildResultSets(
                 results, sql, session.Snapshot, ProviderTraits.For(info), SessionPolicy.IsReadOnly(info)));
             LogExecution(info, sql, results, _ctx.Transactions.For(tab)?.Id);
             var summary = ResultSetBuilder.DescribeResults(

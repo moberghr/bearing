@@ -1,0 +1,53 @@
+{
+  "slug": "inline-results",
+  "scope": "feature",
+  "change_manifest": [
+    "src/Bearing.Core/Workspace/ResultsPlacement.cs",
+    "src/Bearing.Core/Workspace/AppSettings.cs",
+    "src/Bearing.Core/Workspace/SettingsCatalog.cs",
+    "src/Bearing.App/Results/InlineResultPlacement.cs",
+    "src/Bearing.App/ViewModels/InlineResultZone.cs",
+    "src/Bearing.App/ViewModels/ResultSetViewModel.cs",
+    "src/Bearing.App/ViewModels/EditorTabViewModel.cs",
+    "src/Bearing.App/Editing/InlineResultsController.cs",
+    "src/Bearing.App/Editing/EditorTextCommands.cs",
+    "src/Bearing.App/Controls/InlineResultView.cs",
+    "src/Bearing.App/Views/MainWindow.Commands.cs",
+    "src/Bearing.App/Views/MainWindow.axaml.cs",
+    "src/Bearing.App/Views/MainWindow.axaml",
+    "src/Bearing.App/Input/CommandIds.cs",
+    "src/Bearing.App/Controls/ResultCellFactory.cs",
+    "src/Bearing.Sql/ISqlDialect.cs",
+    "src/Bearing.Sql/PostgresDialect.cs",
+    "src/Bearing.Sql/SqlServerDialect.cs",
+    "src/Bearing.App/Workspace/ScriptFileSync.cs",
+    "src/Bearing.App/ViewModels/WorkspaceViewModel.cs"
+  ],
+  "test_manifest": [
+    "tests/Bearing.App.Tests/InlineResultPlacementTests.cs",
+    "tests/Bearing.App.Tests/Ui/InlineResultsTests.cs",
+    "tests/Bearing.App.Tests/Ui/InlineRunPlacementTests.cs",
+    "tests/Bearing.App.Tests/Ui/InlineRunPathTests.cs",
+    "tests/Bearing.App.Tests/Ui/InlineResultViewTests.cs",
+    "tests/Bearing.App.Tests/ScriptFileSyncTests.cs",
+    "tests/Bearing.Sql.Tests/DialectCodeEndTests.cs"
+  ],
+  "public_contracts": [
+    "AppSettings.ResultsPlacement",
+    "SettingsCatalog key results.placement",
+    "CommandIds.ViewToggleInlineResults = view.toggleInlineResults",
+    "ResultSetViewModel.StatementIndex",
+    "ResultsPlacement enum",
+    "EditorTabViewModel.InlineZones / InlineZonesChanged / ApplyInlineRun / RemoveInlineZone",
+    "EditorTextCommands.ScopeToRun / ScopeToRunAll",
+    "ISqlDialect.CodeEnd (default interface method)",
+    "EditorTabViewModel.ClearInlineZones / ShowInlineZoneInResults"
+  ],
+  "security_impact": "none — execution, write guard, refusals and providers untouched",
+  "out_of_scope": [
+    "editing/sorting/FK navigation/export inside an inline zone",
+    "persisting zones across restarts",
+    "default key binding",
+    "per-statement attribution on SQL Server"
+  ]
+}

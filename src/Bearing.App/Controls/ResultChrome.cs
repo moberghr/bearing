@@ -388,15 +388,19 @@ public static class ResultChrome
         };
     }
 
+    /// <summary>The inline-results glyph: text lines with a small table between them.</summary>
+    public const string InlineGlyph = "M1,1.5 H12 M2,4 H11 V8.5 H2 Z M1,11 H12";
+
     /// <summary>The persistent dock header: a RESULTS label plus the segmented Stacked/Tabbed toggle.
     /// <paramref name="onPick"/> fires only for a mode other than <paramref name="active"/>.</summary>
     /// <param name="onClose">Collapses the results pane. Null leaves the ✕ off entirely — a close button on a
     /// dock nothing can close is a dead control, and <see cref="ResultView"/> is used bare in tests.</param>
     /// <param name="closeTip">The ✕'s tooltip, so the caller can name the gesture that does the same thing
     /// (resolved from the live keymap rather than hardcoded, which is how the menu's dead entries happened).</param>
+    /// <param name="onShowInline">Switches to inline results. Null leaves the toggle off.</param>
     public static Control DockHeader(
         ResultsViewMode active, Action<ResultsViewMode> onPick,
-        Action? onClose = null, string closeTip = "Close results")
+        Action? onClose = null, string closeTip = "Close results", Action? onShowInline = null)
     {
         var label = new TextBlock
         {
@@ -414,6 +418,12 @@ public static class ResultChrome
             VerticalAlignment = VerticalAlignment.Center,
         };
         right.Children.Add(ViewToggle(active, onPick));
+        if (onShowInline is not null)
+        {
+            var inline = GlyphIconButton(InlineGlyph, "Show results inline, under their statements", size: 12);
+            inline.Click += (_, _) => onShowInline();
+            right.Children.Add(inline);
+        }
         if (onClose is not null)
         {
             var close = GlyphIconButton("M1.5,1.5 L11.5,11.5 M11.5,1.5 L1.5,11.5", closeTip, size: 11);

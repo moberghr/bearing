@@ -177,7 +177,11 @@ public sealed class ExternalScripts
         // carry over what was typed here, which the target's tab (same file, same disk baseline) never saw.
         if (_workspace.Tabs.FirstOrDefault(t => SamePath(t.ScriptPath, tab.ScriptPath)) is { } existing)
         {
-            if (tab.IsModified) existing.Text = tab.Text;
+            if (tab.IsModified && !string.Equals(existing.Text, tab.Text, StringComparison.Ordinal))
+            {
+                existing.Text = tab.Text;
+                existing.ClearInlineZones();   // its inline results hung under text that was just replaced
+            }
             _workspace.SelectedTab = existing;
             _ctx.SetStatus($"{Path.GetFileName(tab.ScriptPath)} was already open in '{target.Manifest.Name}'.");
             return true;

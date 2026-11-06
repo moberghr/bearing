@@ -411,6 +411,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         var text = await _ctx.ScriptStore.ReadTextAsync(absolutePath, CancellationToken.None);
         var tab = SelectedTab ?? NewTab();
         tab.Text = text;
+        tab.ClearInlineZones();   // another script in this tab: the old inline results describe nothing here
         tab.ScriptPath = absolutePath;
         SyncScratchFlag(tab);
         tab.MarkSaved(text);

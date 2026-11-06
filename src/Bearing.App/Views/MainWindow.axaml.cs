@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     private readonly SqlFoldingController _folding;
     private readonly EditorAutoClose _autoClose;            // paired quotes/brackets (#70)
     private readonly EditorTextCommands _text;              // statement-aware editor ops + Run's SQL
+    private readonly InlineResultsCoordinator _inline;      // results under their statements, and when the pane opens
     private readonly EditorTextBehavior _editorText;        // editor <-> SelectedTab buffer/caret sync
     private readonly EditorZoomController _zoom;            // per-tab transient font zoom (Ctrl+= / - / 0)
     private readonly CommandRegistry _commands = new();
@@ -76,6 +77,10 @@ public partial class MainWindow : Window
         _tabs = new TabNavigator(() => _dispatcher!.Keymap);
         _palette = new CommandPaletteHost(this, _commands, () => _dispatcher!.Keymap);
         _resultsPane = new ResultsPaneController(WorkspaceGrid, ResultsSplitter, ResultsView);
+        // Results under their statements, when the setting says so; ⤢ on one puts its sets in the pane.
+        _inline = new InlineResultsCoordinator(Editor, () => Vm?.SettingsService, () => Vm?.Workspace.SelectedTab,
+            RebuildResults, _resultsPane.SetVisible, text => { if (Vm is not null) { Vm.StatusText = text; } },
+            () => Editor.TextArea.Focus());
         _tabScroll = new TabStripScroller(TabScroll, TabStrip);
         _pinnedTabScroll = new TabStripScroller(PinnedTabScroll, PinnedTabStrip);
         // Dragging a tab to a new position, and across the rows to pin or unpin it. Both rows, because the
@@ -215,13 +220,19 @@ public partial class MainWindow : Window
         };
         ResultsView.GoBack = () =>
         {
-            Vm?.Workspace.SelectedTab?.GoBack();
+            // Not mid-run: the run's results replace the tab's when it finishes, and a frame swapped in between
+            // would be taken for them (InlineResultsController.PlaceRun) — FK navigation refuses for the same reason.
+            if (Vm?.Workspace.SelectedTab is { IsRunning: false } tab)
+            {
+                tab.GoBack();
+            }
             RebuildResults(Vm?.Workspace.SelectedTab);
         };
         ResultsView.Status = text => { if (Vm is not null) Vm.StatusText = text; };
         // The header's ✕. Collapse rather than toggle — the button is only reachable while the pane is open —
         // and take focus with it, or it stays parked in a grid that is no longer on screen.
         ResultsView.CloseRequested = () => { _resultsPane.SetVisible(false); Editor.TextArea.Focus(); };
+        ResultsView.ShowInlineRequested = _inline.ShowResultsInline;
         ResultsView.SaveChanges = async rs =>
         {
             if (Vm is null) return;
@@ -266,6 +277,8 @@ public partial class MainWindow : Window
         // (bindings now point straight at the child VMs, so the shell no longer forwards their changes).
         Vm.PropertyChanged -= OnViewModelPropertyChanged;
         Vm.PropertyChanged += OnViewModelPropertyChanged;
+        Vm.SettingsService.Changed -= _inline.OnSettingsChanged;
+        Vm.SettingsService.Changed += _inline.OnSettingsChanged;
         Vm.Workspace.PropertyChanged -= OnViewModelPropertyChanged;
         Vm.Workspace.PropertyChanged += OnViewModelPropertyChanged;
         Vm.Connections.PropertyChanged -= OnViewModelPropertyChanged;
@@ -504,7 +517,9 @@ public partial class MainWindow : Window
         // buffer swap.
         if (!ReferenceEquals(tab, _editorText.Tab) || !string.Equals(tab?.Text ?? "", Editor.Text, StringComparison.Ordinal))
             _folding.Reset();
+        _inline.Controller.Unbind();        // before the swap, or the new text reads as the zones' text being deleted
         _editorText.Bind(tab);   // pushes text/caret into the editor under the load guard
+        _inline.Controller.Bind(tab);
         _text.UpdateStatementHighlight();
         // Rebuild the folds for the buffer that is now loaded, explicitly — like the highlight above, and
         // unlike the side effect this used to rely on. Refresh is wired to Editor.TextChanged, so after

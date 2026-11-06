@@ -109,6 +109,22 @@ public sealed partial class EditorTabViewModel : ObservableObject
         OnPropertyChanged(nameof(CanGoBack));
     }
 
+    /// <summary>Bumped each time a run (not FK navigation, Back or ⤢) sets the tab's results — so whoever
+    /// started a run can tell afterwards whether <i>it</i> produced results, rather than guessing from
+    /// whether <see cref="Results"/> changed.</summary>
+    public int RunResultsStamp { get; private set; }
+
+    /// <summary>The results the latest run set (see <see cref="RunResultsStamp"/>); empty before any run.</summary>
+    public IReadOnlyList<ResultSetViewModel> RunResults { get; private set; } = Array.Empty<ResultSetViewModel>();
+
+    /// <summary>A run's results: <see cref="SetFreshResults"/>, and stamped as the run's own.</summary>
+    public void SetRunResults(IReadOnlyList<ResultSetViewModel> results)
+    {
+        RunResults = results;
+        RunResultsStamp++;
+        SetFreshResults(results);
+    }
+
     /// <summary>Stash the current results and display the FK-navigated ones on top.</summary>
     public void PushResults(IReadOnlyList<ResultSetViewModel> results)
     {
@@ -127,6 +143,74 @@ public sealed partial class EditorTabViewModel : ObservableObject
 
     /// <summary>Swap the current result frame (e.g. after a save/discard refresh) without touching history.</summary>
     public void ReplaceResults(IReadOnlyList<ResultSetViewModel> results) => Results = results;
+
+    // ---- inline results ---------------------------------------------------------------------------
+    private readonly List<InlineResultZone> _inlineZones = new();
+
+    /// <summary>Results shown inline in the editor, under their statements, ordered by offset. Per tab, kept
+    /// across tab switches, never persisted.</summary>
+    public IReadOnlyList<InlineResultZone> InlineZones => _inlineZones;
+
+    /// <summary>Raised whenever <see cref="InlineZones"/> gains or loses a zone (not when offsets move).</summary>
+    public event Action? InlineZonesChanged;
+
+    /// <summary>
+    /// Show a run's inline results. Run All replaces every zone in the tab; a Run replaces only the zones that
+    /// hang inside the text it ran, so results under other statements stay.
+    /// </summary>
+    public void ApplyInlineRun(Results.RunScope scope, IReadOnlyList<InlineResultZone> zones)
+    {
+        if (scope.IsWholeBuffer)
+        {
+            _inlineZones.Clear();
+        }
+        else
+        {
+            // Exclusive at Start: a zone sitting exactly there belongs to the statement before, whose end
+            // touches this one's start when nothing separates them (`select 1;select 2;`).
+            _inlineZones.RemoveAll(z => z.Offset > scope.Start && z.Offset <= scope.End);
+        }
+        _inlineZones.AddRange(zones);
+        _inlineZones.Sort((a, b) => a.Offset.CompareTo(b.Offset));
+        InlineZonesChanged?.Invoke();
+    }
+
+    /// <summary>⤢ on an inline zone: make its sets the tab's results (for the pane). Refused — false — while
+    /// the tab runs: the run's results replace the tab's when it finishes, and a swap in between would be
+    /// taken for them.</summary>
+    public bool ShowInlineZoneInResults(InlineResultZone zone)
+    {
+        if (IsRunning)
+        {
+            return false;
+        }
+        SetFreshResults(zone.Sets);
+        return true;
+    }
+
+    /// <summary>Drop every inline zone — the buffer was replaced by different text (another script opened into
+    /// this tab, or a reload from disk), so the old results no longer sit under anything they describe.</summary>
+    public void ClearInlineZones()
+    {
+        if (_inlineZones.Count == 0)
+        {
+            return;
+        }
+        _inlineZones.Clear();
+        InlineZonesChanged?.Invoke();
+    }
+
+    /// <summary>Remove one inline zone (its ✕, or the text it hung under was deleted). False when it was
+    /// already gone.</summary>
+    public bool RemoveInlineZone(Guid id)
+    {
+        if (_inlineZones.RemoveAll(z => z.Id == id) == 0)
+        {
+            return false;
+        }
+        InlineZonesChanged?.Invoke();
+        return true;
+    }
 
     // ---- execution state (per-tab) --------------------------------------------------------------
     // Each tab owns its own busy flag + cancellation source, so tabs run concurrently: every execute

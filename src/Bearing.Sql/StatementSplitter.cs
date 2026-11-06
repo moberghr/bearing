@@ -273,8 +273,13 @@ public static class StatementSplitter
     /// </para>
     /// </summary>
     public static string EnsureSeparated(ISqlDialect dialect, string sql)
+        => EnsureSeparated(sql, Split(dialect, sql));
+
+    /// <summary><see cref="EnsureSeparated(ISqlDialect, string)"/> over a split the caller already has
+    /// (<paramref name="spans"/> must be <see cref="Split(ISqlDialect, string)"/> of <paramref name="sql"/>),
+    /// so a caller that needs the spans too lexes the text once.</summary>
+    public static string EnsureSeparated(string sql, IReadOnlyList<StatementSpan> spans)
     {
-        var spans = Split(dialect, sql);
         if (spans.Count <= 1) return sql;
 
         var parts = new List<string>();

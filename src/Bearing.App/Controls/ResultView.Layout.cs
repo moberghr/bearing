@@ -71,7 +71,8 @@ public sealed partial class ResultView
                 ViewModeChanged?.Invoke(mode); // persist on the VM
             },
             CloseRequested is null ? null : () => CloseRequested?.Invoke(),
-            CloseTip());
+            CloseTip(),
+            ShowInlineRequested is null ? null : () => ShowInlineRequested?.Invoke());
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
         root.Children.Add(BuildBody(results));

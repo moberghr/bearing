@@ -45,6 +45,7 @@ public sealed class EditorTextCommands
     /// a batch instead of one malformed command.</summary>
     public string SqlToRun()
     {
+        // Not ScopeToRun().Sql: Explain needs only the text, not where each statement ends in the buffer.
         var selected = _editor.SelectedText;
         var sql = string.IsNullOrWhiteSpace(selected)
             ? StatementSplitter.StatementAt(_dialect(), _editor.Text, _editor.CaretOffset)?.Text ?? _editor.Text
@@ -54,6 +55,27 @@ public sealed class EditorTextCommands
 
     /// <summary>query.runAll: the entire buffer as a batch, ignoring caret and selection.</summary>
     public string SqlToRunAll() => StatementSplitter.EnsureSeparated(_dialect(), _editor.Text);
+
+    /// <summary><see cref="SqlToRun"/> together with where that text sits in the buffer, so its results can
+    /// be placed under it (inline results).</summary>
+    public Results.RunScope ScopeToRun()
+    {
+        var text = _editor.Text;
+        if (!string.IsNullOrWhiteSpace(_editor.SelectedText))
+        {
+            return Results.InlineResultPlacement.Scope(_dialect(), _editor.SelectedText, _editor.SelectionStart,
+                isWholeBuffer: false);
+        }
+        if (StatementSplitter.StatementAt(_dialect(), text, _editor.CaretOffset) is { } stmt)
+        {
+            return Results.InlineResultPlacement.Scope(_dialect(), stmt.Text, stmt.Start, isWholeBuffer: false);
+        }
+        return Results.InlineResultPlacement.Scope(_dialect(), text, 0, isWholeBuffer: false);
+    }
+
+    /// <summary><see cref="SqlToRunAll"/> together with where each statement ends in the buffer.</summary>
+    public Results.RunScope ScopeToRunAll()
+        => Results.InlineResultPlacement.Scope(_dialect(), _editor.Text, 0, isWholeBuffer: true);
 
     // ---- statement highlight -----------------------------------------------------------------
 
