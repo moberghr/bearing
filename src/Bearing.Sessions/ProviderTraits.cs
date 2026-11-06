@@ -1,6 +1,7 @@
 using System;
 using Bearing.Core.Data;
 using Bearing.Data.Postgres;
+using Bearing.Data.MySql;
 using Bearing.Data.SqlServer;
 using Bearing.Sql;
 
@@ -59,6 +60,18 @@ public sealed record ProviderTraits(
         // SqlClient refuses a User ID next to an access token; the token is the identity.
         EntraTakesUser: false);
 
+    /// <summary>MySQL and MariaDB — one engine id, one dialect, one set of traits.</summary>
+    public static ProviderTraits MySql { get; } = new(
+        MySqlProvider.ProviderId,
+        MySqlDialect.Instance,
+        SqlLiteralStyle.MySql,
+        // Azure Database for MySQL shares Azure Database for PostgreSQL's resource: both are the
+        // "open-source RDBMS" service family, and a token for one audience is refused by the other.
+        EntraResource: "https://ossrdbms-aad.database.windows.net",
+        EndpointHint: null,
+        // The Entra user name goes in User, with the token as the password — the Postgres arrangement.
+        EntraTakesUser: true);
+
     /// <summary>
     /// The traits for a provider id, matched the way the registry matches it (case-insensitively).
     /// <para>
@@ -71,9 +84,17 @@ public sealed record ProviderTraits(
     /// </para>
     /// </summary>
     public static ProviderTraits For(string? providerId)
-        => string.Equals(providerId, SqlServer.ProviderId, StringComparison.OrdinalIgnoreCase)
-            ? SqlServer
-            : Postgres;
+    {
+        if (string.Equals(providerId, SqlServer.ProviderId, StringComparison.OrdinalIgnoreCase))
+        {
+            return SqlServer;
+        }
+        if (string.Equals(providerId, MySql.ProviderId, StringComparison.OrdinalIgnoreCase))
+        {
+            return MySql;
+        }
+        return Postgres;
+    }
 
     /// <summary>The traits for the engine <paramref name="info"/> connects to. The overload every caller
     /// holding a connection should use.</summary>

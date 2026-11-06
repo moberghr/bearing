@@ -42,18 +42,23 @@ public static class ExternalSqlPolicy
 
         foreach (var statement in statements)
         {
-            // Transaction control first: it is the shape that defeated read-only, so it gets a sentence
-            // that says why rather than being lumped in with "not a read".
-            if (statement.IsTransactionControl)
-                return $"'{statement.TransactionControl}' is not allowed on a connection exposed to external "
-                     + "tools — it is what would let a read-only session become writable. Send one read.";
-
             // A write the deny-list actually *named*. NamesAWrite rather than IsRisky, deliberately: the
             // generous verdict treats any unrecognised T-SQL lead word as a write so that it gets
             // confirmed, and saying "'DECLARE' writes" would assert a cause nobody checked (§1.1). A
             // statement like that is still refused — by the allow-list below, in its own words.
+            //
+            // Ahead of transaction control, because on MySQL a write can be both: DDL commits implicitly, so
+            // MySqlDialect names `CREATE` as transaction control too — and the sentence below ("would let a
+            // read-only session become writable") is not why CREATE is refused. No Postgres or T-SQL statement
+            // is both, so for those engines the order changes nothing.
             if (statement.NamesAWrite)
                 return $"'{statement.Label}' writes, and an exposed connection runs reads only.";
+
+            // Transaction control: it is the shape that defeated read-only, so it gets a sentence that says
+            // why rather than being lumped in with "not a read".
+            if (statement.IsTransactionControl)
+                return $"'{statement.TransactionControl}' is not allowed on a connection exposed to external "
+                     + "tools — it is what would let a read-only session become writable. Send one read.";
 
             if (!dialect.ExternalReadVerbs.Contains(statement.Verb))
                 return $"'{statement.Verb}' is not a read. A connection exposed to external tools runs only "

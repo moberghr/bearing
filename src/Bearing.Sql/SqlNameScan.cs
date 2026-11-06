@@ -104,6 +104,10 @@ internal static class SqlNameScan
         {
             if (text[0] == '"' && text[^1] == '"') return text[1..^1].Replace("\"\"", "\"");
             if (text[0] == '[' && text[^1] == ']') return text[1..^1].Replace("]]", "]");
+            if (text[0] == '`' && text[^1] == '`')
+            {
+                return text[1..^1].Replace("``", "`");
+            }
         }
 
         return text;

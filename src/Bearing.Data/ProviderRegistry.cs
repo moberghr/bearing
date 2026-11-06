@@ -1,4 +1,5 @@
 using Bearing.Core.Data;
+using Bearing.Data.MySql;
 using Bearing.Data.Postgres;
 using Bearing.Data.SqlServer;
 
@@ -14,7 +15,7 @@ public sealed class ProviderRegistry : IProviderRegistry
     public ProviderRegistry(IEnumerable<IDbProvider>? providers = null)
     {
         var list = providers?.ToList()
-            ?? new List<IDbProvider> { new PostgresProvider(), new SqlServerProvider() };
+            ?? new List<IDbProvider> { new PostgresProvider(), new SqlServerProvider(), new MySqlProvider() };
         _providers = list.ToDictionary(p => p.Id, StringComparer.OrdinalIgnoreCase);
     }
 

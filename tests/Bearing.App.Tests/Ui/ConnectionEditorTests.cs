@@ -45,7 +45,7 @@ public class ConnectionEditorTests
     /// <summary>The engines this build ships, in the registry's own order, which is also the dropdown's
     /// (<c>ProviderRegistry</c>: PostgreSQL first, because it is the engine every existing project file
     /// names).</summary>
-    private static readonly string[] Engines = { "PostgreSQL", "Microsoft SQL Server" };
+    private static readonly string[] Engines = { "PostgreSQL", "Microsoft SQL Server", "MySQL / MariaDB" };
 
     private const string Integrated = "Windows / integrated authentication";
 
@@ -107,6 +107,23 @@ public class ConnectionEditorTests
                 ConnectionEditorProbe.FieldKeys(dialog));
         }
         finally { ConnectionEditorProbe.Close(dialog); }
+    });
+
+    /// <summary>
+    /// MySQL / MariaDB's own rows: its default port, no Windows authentication, and no session time zone
+    /// (see <c>MySqlProvider.SupportsSessionTimeZone</c> for why the setting is not offered). Asserted on
+    /// the realized controls, since a rebuild that kept the previous engine's rows would show none of this.
+    /// </summary>
+    [Fact]
+    public Task Switching_to_mysql_offers_its_port_and_none_of_the_other_engines_extras() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Dialog();
+        ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = 2;
+
+        Assert.Equal("3306", ConnectionEditorProbe.Editor<TextBox>(dialog, "Port").Text);
+        Assert.DoesNotContain(Integrated, ConnectionEditorProbe.Items(dialog, "CredentialKindBox"));
+        Assert.False(dialog.FindControl<StackPanel>("TimeZoneGroup")!.IsVisible);
+        Assert.Equal("mysql", dialog.BuildConnection().ProviderId);
     });
 
     // ---- The Credential dropdown -----------------------------------------------------------------

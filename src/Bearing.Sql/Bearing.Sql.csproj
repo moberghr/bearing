@@ -73,6 +73,22 @@
     </Antlr4>
   </ItemGroup>
 
+  <!--
+    MySQL grammar (grammars-v4 sql/mysql/Positive-Technologies), for MySQL and MariaDB completion and the
+    exposed-connection name scan. Like T-SQL's it declares no superClass and is caseInsensitive, so it needs
+    no hand-written base classes. Two local edits, listed in vendor/grammars-v4/mysql/README.md.
+  -->
+  <ItemGroup>
+    <Antlr4 Include="..\..\vendor\grammars-v4\mysql\MySqlLexer.g4">
+      <Listener>false</Listener>
+      <Visitor>false</Visitor>
+    </Antlr4>
+    <Antlr4 Include="..\..\vendor\grammars-v4\mysql\MySqlParser.g4">
+      <Listener>false</Listener>
+      <Visitor>false</Visitor>
+    </Antlr4>
+  </ItemGroup>
+
   <!-- Vendored C#: grammar base classes + error listeners (required by the grammar's superClass). -->
   <ItemGroup>
     <Compile Include="..\..\vendor\grammars-v4\postgresql\PostgreSQLLexerBase.cs" Link="Grammar\PostgreSQLLexerBase.cs" />

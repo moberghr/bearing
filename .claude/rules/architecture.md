@@ -15,7 +15,7 @@ Layered clean architecture. Reference: `.claude/references/architecture-principl
 Core  ←  Sql, Data, Persistence, Updates  ←  Sessions  ←  Results  ←  App  ←  Desktop
                                                                     ↖  Cli   (the `bearing` command)
 ```
-- `Sql` (SQL parsing/completion), `Data` (Postgres/Npgsql, SQL Server), `Persistence` (SQLite), `Updates`
+- `Sql` (SQL parsing/completion), `Data` (Postgres/Npgsql, SQL Server, MySQL/MariaDB), `Persistence` (SQLite), `Updates`
   (Velopack release feed / self-update) each depend on `Core` only.
 - `Sessions` depends on `Core`, `Sql` and `Data` — see §2.6.
 - `Results` depends on those plus `Sessions` — see §2.7.

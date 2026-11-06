@@ -95,6 +95,15 @@ holds before selecting `*` or an options bag.
 - No server read-only exists; `WriteRefusal` is the whole guarantee. `IDbProvider.EnforcesReadOnlyOnServer`
   picks the dialog wording. A new engine must answer this flag (default `true`) before shipping.
 
+### §1.9b — MySQL / MariaDB
+- Read-only = `set session transaction read only` in a MySqlConnector **connection-opened callback**, which runs on
+  every new *and every reset* pooled connection (§1.9's "not a `SET`" rule, met another way). Server refuses with
+  1792. Timeout = `DefaultCommandTimeout` (MySqlConnector issues `KILL QUERY`), applied after the options bag.
+- DDL, `LOCK TABLES` etc. **commit implicitly**: `MySqlDialect.TransactionControl` names them
+  ("CREATE (commits implicitly)") so manual-commit refuses them. Temporary tables excepted.
+- Scanner lexes `/*! … */` as code (the server runs it); `RevealExecutableComments` does the same for the external
+  name scan. `SqlLiteralStyle.MySql` escapes backslashes.
+
 ## §1.10 — Manual commit (#131)
 `ConnectionInfo.ManualCommit`: a **write** opens a transaction held until Commit/Rollback. `CommitPolicy`;
 not part of `SamePool`/`SameConnection`.
