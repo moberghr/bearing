@@ -47,6 +47,7 @@ public partial class App : Application
         // crossed to it diagonally: the safe triangle swallows sibling enter/exit on the way there.
         SubmenuSafeTriangle.Install();
         AvaloniaXamlLoader.Load(this);
+        Theming.ColorSchemes.Install(this);
     }
 
     /// <summary>
@@ -89,6 +90,8 @@ public partial class App : Application
             // The type scale, before any window is built: the tokens in Tokens.axaml carry defaults, and this
             // overwrites them from settings so the first frame is already at the user's size (#52).
             Theming.FontScale.Apply(settings.Current.UiFontSize, settings.Current.GridFontSize);
+            // The palette, for the same reason: a light user should never see a dark first frame.
+            Theming.ColorSchemes.Apply(this, settings.Current.ColorScheme);
             // The timezone setting's picker, validation and description live in the app layer: resolving a
             // zone id means TimeZoneInfo, and Core holds abstractions and records only (§2.1, #77).
             Formatting.DisplayTimeZone.InstallSettingsHooks();
@@ -131,8 +134,18 @@ public partial class App : Application
             // {DynamicResource} and updates itself; the results grid is built in code and reads its sizes
             // once, so it is told to re-render — a font setting that waited for the next query would look
             // broken while the user was still moving the dial.
+            // A palette switch — from settings, the toggle command, or the OS under "Match system". The token
+            // brushes have already been repainted in place; what is left is everything that holds a colour of
+            // its own: the editors' TextMate theme, and the results grid, which bakes translucent copies of
+            // tokens (row tints, badges) into the cells it builds.
+            Theming.ColorSchemes.Repainted += app =>
+            {
+                Editing.EditorChrome.ApplyColorScheme(Theming.ColorSchemes.IsLight(app));
+                Dispatcher.UIThread.Post(window.RefreshTypeScale);
+            };
             settings.Changed += s =>
             {
+                Theming.ColorSchemes.Apply(this, s.ColorScheme);
                 Theming.FontScale.Apply(s.UiFontSize, s.GridFontSize);
                 // The zone reaches the grid the same way a font size does — the cell text is built in code,
                 // so the results have to be re-rendered rather than left to a binding (#77).

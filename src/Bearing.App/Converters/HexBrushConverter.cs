@@ -22,7 +22,7 @@ public sealed class HexBrushConverter : IValueConverter
 
     // Translucent {Text.Faint} — same slate hue as ConnectionColors.Neutral / ConnectionBrush's
     // default (the badge stays translucent by design; only the hue is unified). Resolved from the token.
-    private static (Avalonia.Application? Owner, Avalonia.Media.IImmutableBrush Brush)? _neutral;
+    private static (Avalonia.Application? Owner, int Generation, Avalonia.Media.IImmutableBrush Brush)? _neutral;
     private static IBrush Neutral =>
         ThemeBrush.AtAlphaCached(ref _neutral, "Text.Faint", 0x55, Color.FromRgb(0x4E, 0x58, 0x65));
 

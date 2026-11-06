@@ -7,6 +7,12 @@
        future re-skin is again a one-file change: reference as {DynamicResource Bg.Window} etc.
 
        Colour SEMANTICS are unchanged from the previous (Kanagawa) skin — only the hues moved.
+
+       These are the DARK values, and the brushes are the only instances: switching to light mutates each
+       brush's Color in place (Theming/ColorSchemes) from Tokens.Light.axaml, the same trick
+       App.SetConnectionAccent plays on ConnectionBrush. That is what lets a brush captured in C# through
+       Tokens.Res follow a theme switch. Every colour brush here needs a twin in Tokens.Light.axaml — a test
+       holds the two files to the same key set.
        Teal is app state (active nav, unsaved, current line, PK); the per-connection environment
        colour is separate and lives in ConnectionBrush, never in this file.
        ============================================================================================ -->
@@ -19,6 +25,13 @@
   <SolidColorBrush x:Key="Bg.TileActive"  Color="#2A323C"/>  <!-- active rail tile, active pill/toggle segment -->
   <SolidColorBrush x:Key="Bg.Select"      Color="#223440"/>  <!-- selected list row (schema / scripts / history / menu) -->
   <SolidColorBrush x:Key="Bg.Hover"       Color="#222831"/>  <!-- ink-600: rail/menu row hover, quick-stats bar -->
+
+  <SolidColorBrush x:Key="Bg.Warn"       Color="#2F2B22"/>  <!-- amber advisory block fill (keychain / TLS notes) -->
+  <SolidColorBrush x:Key="Select.Text"    Color="#662B4455"/>  <!-- translucent editor selection, glyphs read through it -->
+
+  <!-- Results grid body (design §Results grid) -->
+  <SolidColorBrush x:Key="Grid.Line"      Color="#232A33"/>  <!-- 1px in-grid row + column dividers -->
+  <SolidColorBrush x:Key="Grid.Stripe"    Color="#1E242B"/>  <!-- alternate-row lift over Bg.Editor -->
 
   <!-- Borders -->
   <SolidColorBrush x:Key="Border"         Color="#2A323C"/>  <!-- 1px region separators -->
@@ -43,6 +56,14 @@
   <SolidColorBrush x:Key="Ok.Green"       Color="#98BB6C"/>  <!-- run, success, save, timings -->
   <SolidColorBrush x:Key="Warn.Amber"     Color="#E3B457"/>  <!-- gold: folder glyph, warnings -->
   <SolidColorBrush x:Key="Error.Red"      Color="#D2555A"/>  <!-- errors, delete/discard -->
+
+  <!-- Schema-tree glyph hues that are not one of the semantic tokens above (SchemaNodes.IconColorKey). -->
+  <SolidColorBrush x:Key="Tree.Folder"    Color="#E6C384"/>  <!-- connection folder -->
+  <SolidColorBrush x:Key="Tree.Schema"    Color="#7AA89F"/>  <!-- schema / group folder -->
+  <SolidColorBrush x:Key="Tree.Sequence"  Color="#7FB4CA"/>
+  <SolidColorBrush x:Key="Tree.Type"      Color="#957FB8"/>
+  <SolidColorBrush x:Key="Tree.Policy"    Color="#7E9CD8"/>  <!-- permissive policy -->
+  <SolidColorBrush x:Key="Tree.Caution"   Color="#DCA561"/>  <!-- restrictive policy, superuser role -->
 
   <!-- Connection *state*, and nothing else (CONNECTION_STATUS rev. 2026-08-27 §1). This is a separate
        palette from the per-connection environment hue on purpose: the environment answers "where am I

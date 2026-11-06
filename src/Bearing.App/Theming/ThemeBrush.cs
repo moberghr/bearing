@@ -37,14 +37,22 @@ public static class ThemeBrush
     /// test order — a shell test filling it from the real token, or a unit test filling it from the
     /// fallback, and the other one then reading the wrong one.
     /// </para>
+    /// <para>
+    /// Also keyed on <see cref="ColorSchemes.Generation"/>: this is a copy of the token's colour, not the token
+    /// brush itself, so a light/dark switch has to retire it.
+    /// </para>
     /// </summary>
     public static IImmutableBrush AtAlphaCached(
-        ref (Application? Owner, IImmutableBrush Brush)? cache, string tokenKey, byte alpha, Color fallback)
+        ref (Application? Owner, int Generation, IImmutableBrush Brush)? cache, string tokenKey, byte alpha, Color fallback)
     {
         var app = Application.Current;
-        if (cache is { } hit && ReferenceEquals(hit.Owner, app)) return hit.Brush;
+        var generation = ColorSchemes.Generation;
+        if (cache is { } hit && ReferenceEquals(hit.Owner, app) && hit.Generation == generation)
+        {
+            return hit.Brush;
+        }
         var brush = AtAlpha(tokenKey, alpha, fallback);
-        cache = (app, brush);
+        cache = (app, generation, brush);
         return brush;
     }
 }

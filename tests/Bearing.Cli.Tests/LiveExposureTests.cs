@@ -425,7 +425,8 @@ public class LiveExposureTests : IAsyncLifetime
 
         var response = (ExportResponse)await host.QueryAsync(
             Run("agent-reads", "select title from film order by title limit 3; select first_name from actor order by actor_id limit 2")
-                with { OutPath = path },
+                with
+            { OutPath = path },
             CancellationToken.None);
 
         Assert.Equal(2, response.Results);
@@ -466,7 +467,8 @@ public class LiveExposureTests : IAsyncLifetime
 
         var response = (ExportResponse)await host.QueryAsync(
             Run("agent-reads", "select film_id from film order by film_id; select actor_id from actor order by actor_id", maxRows: 3)
-                with { OutPath = path },
+                with
+            { OutPath = path },
             CancellationToken.None);
 
         Assert.Equal(2, response.Results);

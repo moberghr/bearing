@@ -80,7 +80,7 @@ public class HistoryPanelTests
         var row = vm.Groups.SelectMany(g => g.Rows).Single();
         Assert.Equal("#E46876", row.ConnectionColor);
         Assert.StartsWith("✕", row.DisplayQuery);
-        Assert.Equal("#D2555A", row.QueryColorHex);   // Error.Red
+        Assert.Equal("Error.Red", row.QueryColorKey);
     }
 
     [Fact]
