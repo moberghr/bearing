@@ -21,6 +21,22 @@ public sealed class KeyDispatcher
         Registry = registry;
     }
 
+    /// <summary>Handle the keystroke only if it is bound to <paramref name="commandId"/> in
+    /// <paramref name="scope"/> — even when another command shares the gesture and a plain resolve would pick
+    /// that one. For a control that owns one command on a gesture its scope also binds elsewhere (an inline
+    /// zone's Escape).</summary>
+    public bool TryHandleCommand(KeyEventArgs e, KeyScope scope, string commandId)
+    {
+        var id = Keymap.Resolve(scope, e.KeyModifiers, e.Key, e.PhysicalKey, c => c == commandId);
+        if (id is null || Registry.Get(id) is not { } command || !command.CanRun())
+        {
+            return false;
+        }
+        e.Handled = true;
+        CrashReporter.Observe(command.Run(), $"command '{command.Id}'");
+        return true;
+    }
+
     /// <param name="only">When given, only handle the keystroke if the resolved command id is in this set.
     /// Used by the window's tunnel handler to claim navigation keys before the framework/editor, while
     /// leaving every other key to the normal tunnel/bubble path.</param>

@@ -388,15 +388,93 @@ public static class ResultChrome
         };
     }
 
+    /// <summary>The inline-results glyph: text lines with a small table between them.</summary>
+    public const string InlineGlyph = "M1,1.5 H12 M2,4 H11 V8.5 H2 Z M1,11 H12";
+
+    /// <summary>The results-pane glyph: a window with its lower part filled — results below, not inline.</summary>
+    public const string PaneGlyph = "M1,1 H11 V11 H1 Z M1,7 H11";
+
+    /// <summary>The back arrow on an inline zone's header (FK navigation).</summary>
+    public const string BackGlyph = "M5,2 L1,6 L5,10 M1,6 L11,6";
+
+    /// <summary>
+    /// The right-hand actions of an inline zone's one header bar (spec §5): Back (while FK navigation has a
+    /// frame to return to), the Stacked/Tabbed toggle (only when there are several sets to arrange), the
+    /// placement toggle back to the pane, and ✕. Null callbacks leave their button off.
+    /// </summary>
+    public static StackPanel ZoneActions(
+        Action? onBack, ResultsViewMode? viewMode, Action<ResultsViewMode> onPick,
+        Action? onShowInPane, Action? onClose)
+    {
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 2,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0, 0, 0),
+        };
+        if (onBack is not null)
+        {
+            var back = GlyphIconButton(BackGlyph, "Back (foreign-key navigation)", size: 12);
+            back.Click += (_, _) => onBack();
+            actions.Children.Add(back);
+        }
+        if (viewMode is { } mode)
+        {
+            actions.Children.Add(ViewToggle(mode, onPick));
+        }
+        if (onShowInPane is not null)
+        {
+            var pane = GlyphIconButton(PaneGlyph, "Show results in the pane instead of inline", size: 12);
+            pane.Click += (_, _) => onShowInPane();
+            actions.Children.Add(pane);
+        }
+        if (onClose is not null)
+        {
+            var close = GlyphIconButton("M1.5,1.5 L11.5,11.5 M11.5,1.5 L1.5,11.5", "Close these results", size: 11);
+            close.Click += (_, _) => onClose();
+            actions.Children.Add(close);
+        }
+        return actions;
+    }
+
+    /// <summary>An inline zone's own top bar, used when the zone has something to say above its sets — a
+    /// batch caption, a "statement removed" notice, or several sets to arrange — with the actions at the right.</summary>
+    public static Control ZoneHeader(string? text, bool warn, Control actions)
+    {
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        var label = new TextBlock
+        {
+            Text = text ?? "",
+            FontSize = Metric("Font.Body"),
+            Foreground = warn ? Res("Warn.Amber") : Res("Text.Dim"),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        Grid.SetColumn(label, 0);
+        Grid.SetColumn(actions, 1);
+        grid.Children.Add(label);
+        grid.Children.Add(actions);
+        return new Border
+        {
+            Background = Res("Bg.Window"),
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            BorderBrush = SeparatorBrush,
+            Padding = new Thickness(10, 3),
+            Child = grid,
+        };
+    }
+
     /// <summary>The persistent dock header: a RESULTS label plus the segmented Stacked/Tabbed toggle.
     /// <paramref name="onPick"/> fires only for a mode other than <paramref name="active"/>.</summary>
     /// <param name="onClose">Collapses the results pane. Null leaves the ✕ off entirely — a close button on a
     /// dock nothing can close is a dead control, and <see cref="ResultView"/> is used bare in tests.</param>
     /// <param name="closeTip">The ✕'s tooltip, so the caller can name the gesture that does the same thing
     /// (resolved from the live keymap rather than hardcoded, which is how the menu's dead entries happened).</param>
+    /// <param name="onShowInline">Switches to inline results. Null leaves the toggle off.</param>
     public static Control DockHeader(
         ResultsViewMode active, Action<ResultsViewMode> onPick,
-        Action? onClose = null, string closeTip = "Close results")
+        Action? onClose = null, string closeTip = "Close results", Action? onShowInline = null)
     {
         var label = new TextBlock
         {
@@ -414,6 +492,12 @@ public static class ResultChrome
             VerticalAlignment = VerticalAlignment.Center,
         };
         right.Children.Add(ViewToggle(active, onPick));
+        if (onShowInline is not null)
+        {
+            var inline = GlyphIconButton(InlineGlyph, "Show results inline, under their statements", size: 12);
+            inline.Click += (_, _) => onShowInline();
+            right.Children.Add(inline);
+        }
         if (onClose is not null)
         {
             var close = GlyphIconButton("M1.5,1.5 L11.5,11.5 M11.5,1.5 L1.5,11.5", closeTip, size: 11);

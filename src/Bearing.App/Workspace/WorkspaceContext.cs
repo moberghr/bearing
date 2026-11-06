@@ -110,6 +110,11 @@ public sealed class WorkspaceContext
     /// write and a file that changed under it. Null until the shell builds it (and in some tests).</summary>
     public ScriptFileSync? FileSync { get; set; }
 
+    /// <summary>Commit any cell editor still open in a results grid (pane or inline zone), so a value being
+    /// typed counts as a pending edit before anything reads the pending set (§9.15). Set by the window; null
+    /// without one (tests).</summary>
+    public Action? CommitOpenEdits { get; set; }
+
     // ---- shared state -------------------------------------------------------------------------
     /// <summary>The <b>active</b> project (manifest + directory), or null before one is loaded. Other
     /// projects opened this session stay alive alongside it — see <see cref="OpenProjects"/>.</summary>

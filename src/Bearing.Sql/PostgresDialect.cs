@@ -101,6 +101,20 @@ public sealed class PostgresDialect : ISqlDialect
     public IReadOnlyList<StatementSpan> SplitStatements(string sql)
         => StatementSplitter.SplitWithPostgresLexer(sql);
 
+    /// <summary>The last default-channel token: whitespace and comments sit on the hidden channel.</summary>
+    public int? CodeEnd(string sql)
+    {
+        int? end = null;
+        foreach (var token in PgParsing.LexAll(sql))
+        {
+            if (token.Type != Antlr4.Runtime.TokenConstants.EOF && token.Channel == Antlr4.Runtime.Lexer.DefaultTokenChannel)
+            {
+                end = token.StopIndex + 1;
+            }
+        }
+        return end;
+    }
+
     /// <summary>The vendored PostgreSQL grammar, behind the same forwarding arrangement as everything
     /// else here: <see cref="PgParseRules"/> holds no rules of its own, it points at
     /// <see cref="PgCompletionRules"/> and <see cref="PgParsing"/>.</summary>

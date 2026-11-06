@@ -74,6 +74,17 @@ public class KeybindingTests
         Assert.Equal(CommandIds.Run, Defaults.Resolve(KeyScope.Global, KeyModifiers.None, Key.F5, NoPhys));
     }
 
+    /// <summary>Escape is both the grid's clear-selection and a zone's leave: a plain resolve (the pane) still
+    /// finds clear-selection, and a zone asking for its own command by id finds that one.</summary>
+    [Fact]
+    public void Escape_in_the_grid_scope_serves_both_clear_selection_and_leaving_a_zone()
+    {
+        Assert.Equal(CommandIds.GridClearSelection,
+            Defaults.Resolve(KeyScope.Grid, KeyModifiers.None, Key.Escape, NoPhys));
+        Assert.Equal(CommandIds.GridLeaveInline,
+            Defaults.Resolve(KeyScope.Grid, KeyModifiers.None, Key.Escape, NoPhys, id => id == CommandIds.GridLeaveInline));
+    }
+
     [Fact]
     public void Meta_matches_a_control_binding()
         => Assert.Equal(CommandIds.FileSave, Defaults.Resolve(KeyScope.Global, KeyModifiers.Meta, Key.S, NoPhys));

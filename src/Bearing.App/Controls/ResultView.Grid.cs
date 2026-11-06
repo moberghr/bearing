@@ -116,7 +116,23 @@ public sealed partial class ResultView
 
         WireSelection(grid, result);
         if (result.IsEditable) WireEditing(grid, result);
+        if (IsInline)
+        {
+            SizeToRows(grid, result);
+        }
         return grid;
+    }
+
+    /// <summary>Inline: a definite height that follows the loaded rows up to the cap (spec §6) — the editor
+    /// measures a zone with infinite height, and a grid measured that way would realize every row.</summary>
+    private void SizeToRows(DataGrid grid, ResultSetViewModel result)
+    {
+        _inlineSized.Add((grid, result));
+        SizeInlineGrid(grid, result);
+        void OnRows(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+            => SizeInlineGrid(grid, result);
+        result.Rows.CollectionChanged += OnRows;
+        _rowSubscriptions.Add((result.Rows, OnRows));
     }
 
     /// <summary>
@@ -198,7 +214,14 @@ public sealed partial class ResultView
 
         // When the grid takes focus (e.g. via F6) with no active cell yet, seed the top-left cell so the
         // focus is visible instead of the caller having to press an arrow first.
-        grid.GotFocus += (_, _) => { if (_selection.NeedsSeed(result)) _selection.SeedActive(grid, result); };
+        grid.GotFocus += (_, _) =>
+        {
+            Router?.Activate(this);   // palette-invoked grid commands now mean this view (spec §8)
+            if (_selection.NeedsSeed(result))
+            {
+                _selection.SeedActive(grid, result);
+            }
+        };
     }
 
     /// <summary>A press the cells didn't take: the row-number gutter selects the whole row, a column header
@@ -260,6 +283,16 @@ public sealed partial class ResultView
     private static void CommitOpenEdit(DataGrid grid)
         => grid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
 
+    /// <summary>Commit an open cell editor in any of this view's grids — before something outside the view
+    /// reads the pending set (a run's unsaved-edits guard, §9.15).</summary>
+    public void CommitOpenEdits()
+    {
+        foreach (var grid in _gridsByResult.Values)
+        {
+            CommitOpenEdit(grid);
+        }
+    }
+
     /// <summary>The same, for the routes that name a result rather than a grid (the toolbar's buttons, a
     /// palette-invoked command).</summary>
     private void CommitOpenEdit(ResultSetViewModel result)
@@ -314,6 +347,7 @@ public sealed partial class ResultView
         if (inCellEditor) CommitOpenEdit(grid);
 
         _keyStrokeTarget = (grid, result);
+        Router?.Activate(this);   // the shared grid commands act on this view for this keystroke (and after)
         bool handled;
         try { handled = _dispatcher?.TryHandle(e, KeyScope.Grid, inCellEditor ? CommitFirstCommands : null) == true; }
         finally { _keyStrokeTarget = null; }

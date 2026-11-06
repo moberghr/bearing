@@ -117,6 +117,10 @@ internal static class EditorContextMenu
     private static void PlaceCaretForRightClick(TextEditor editor, PointerPressedEventArgs e)
     {
         if (!e.GetCurrentPoint(editor.TextArea).Properties.IsRightButtonPressed) return;
+        if (Controls.InlineZoneView.IsInside(e.Source))
+        {
+            return;   // a right-click in a zone is the grid's menu
+        }
         if (editor.GetPositionFromPoint(e.GetPosition(editor)) is not { } position) return;
 
         var offset = editor.Document.GetOffset(position.Location);

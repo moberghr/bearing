@@ -122,6 +122,10 @@ public sealed record AppSettings
     /// </summary>
     public bool GroupNumbersInResults { get; init; } = true;
 
+    /// <summary>Where results are shown: the pane below the editor (default), or inline beneath the statement
+    /// that produced them (<see cref="Workspace.ResultsPlacement"/>).</summary>
+    public ResultsPlacement ResultsPlacement { get; init; } = ResultsPlacement.Pane;
+
     /// <summary>
     /// The zone <c>timestamptz</c> values are displayed in (#77). <c>UTC</c> by default, which keeps every
     /// existing display identical — the same instant, now with its offset shown — and <c>system</c> for the

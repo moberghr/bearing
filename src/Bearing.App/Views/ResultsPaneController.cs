@@ -1,3 +1,4 @@
+using System;
 using Avalonia.Controls;
 using Bearing.App.Controls;
 
@@ -18,11 +19,36 @@ public sealed class ResultsPaneController
     private GridLength _savedEditorRow = new(2, GridUnitType.Star);
     private GridLength _savedResultsRow = new(3, GridUnitType.Star);
 
+    // A render put off while the pane was collapsed (inline mode), run when it is next shown; and whether it
+    // has anything to show, which is what Toggle asks.
+    private Action? _owed;
+    private bool _owedHasResults;
+
     public ResultsPaneController(Grid workspace, Control splitter, ResultView results)
     {
         _workspace = workspace;
         _splitter = splitter;
         _results = results;
+    }
+
+    /// <summary>
+    /// Render the pane through <paramref name="render"/> — now when it is shown, or when <paramref name="defer"/>
+    /// is false; otherwise <paramref name="clear"/> now and <paramref name="render"/> when it is next shown. In
+    /// inline mode the results are drawn in their zones and the pane stays collapsed, and building every grid a
+    /// second time for a pane nobody sees was work on the UI thread for nothing. Cleared rather than left
+    /// stale, so a grid command routed to the pane can't act on an earlier run's sets.
+    /// </summary>
+    public void Render(Action render, Action clear, bool hasResults, bool defer)
+    {
+        if (defer && !IsVisible)
+        {
+            _owed = render;
+            _owedHasResults = hasResults;
+            clear();
+            return;
+        }
+        _owed = null;
+        render();
     }
 
     /// <summary>Whether the pane is currently shown.</summary>
@@ -33,6 +59,11 @@ public sealed class ResultsPaneController
     public void SetVisible(bool visible)
     {
         var rows = _workspace.RowDefinitions;
+        if (visible && _owed is { } owed)
+        {
+            _owed = null;
+            owed();
+        }
         if (visible)
         {
             rows[0].Height = _savedEditorRow;
@@ -57,7 +88,10 @@ public sealed class ResultsPaneController
     /// have been sitting in the now-collapsed grid).</summary>
     public bool Toggle()
     {
-        if (_results.Results is not { Count: > 0 }) return false;
+        if (_results.Results is not { Count: > 0 } && !(_owed is not null && _owedHasResults))
+        {
+            return false;
+        }
         var show = !_results.IsVisible;
         SetVisible(show);
         return !show;

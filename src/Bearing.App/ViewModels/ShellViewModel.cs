@@ -58,6 +58,10 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The dialog surface, kept because the history export has to ask two questions (#113).</summary>
     private readonly IDialogService? _dialogs;
 
+    /// <summary>The dialogs this shell asks through (a fake in tests) — for window-side prompts that must reach
+    /// the same service.</summary>
+    public IDialogService? Dialogs => _dialogs;
+
     private IProviderRegistry _providers => _ctx.Providers;
     private IProjectStore _projectStore => _ctx.ProjectStore;
     private ISessionStore _sessionStore => _ctx.SessionStore;

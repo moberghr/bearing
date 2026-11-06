@@ -457,7 +457,10 @@ public sealed partial class ExecutionViewModel : ObservableObject
     }
 
     /// <summary>Execute SQL for the selected tab against that tab's connection; record it in the log.</summary>
-    public async Task ExecuteAsync(string sql)
+    /// <param name="beforeRun">Asked once every refusal and the write confirmation have passed, right before the
+    /// run starts; false stops it. The unsaved-grid-edits question goes here, so it is never asked — and edits
+    /// never given up — for a run that was going to be refused anyway.</param>
+    public async Task ExecuteAsync(string sql, Func<Task<bool>>? beforeRun = null)
     {
         if (string.IsNullOrWhiteSpace(sql)) return;
         var tab = Selected;
@@ -508,6 +511,11 @@ public sealed partial class ExecutionViewModel : ObservableObject
                     return;
                 }
             }
+        }
+
+        if (beforeRun is not null && !await beforeRun())
+        {
+            return;
         }
 
         // AutosaveMode.OnExecute writes the buffer at the moment it runs, so what's on disk is what was
@@ -692,7 +700,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // Results always route to the tab that started the run, never to whichever tab is focused now.
             // A tab that has since been closed (or dropped by a project switch) is dead but harmless to
             // assign to — RunFinished is what tells the user the run ended, with TabStillOpen false.
-            tab.SetFreshResults(ResultSetBuilder.BuildResultSets(
+            tab.SetRunResults(ResultSetBuilder.BuildResultSets(
                 results, sql, session.Snapshot, ProviderTraits.For(info), SessionPolicy.IsReadOnly(info)));
             LogExecution(info, sql, results, _ctx.Transactions.For(tab)?.Id);
             var summary = ResultSetBuilder.DescribeResults(
@@ -1180,7 +1188,10 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// <summary>Navigate a foreign-key cell in place: run the lookup on the current tab's connection and
     /// swap the displayed result for the referenced row, stacking the previous result so Back can return.
     /// The query is never surfaced in the editor.</summary>
-    public async Task NavigateForeignKeyAsync(ResultSetViewModel rs, int columnIndex, object?[] row)
+    /// <param name="into">Where the referenced row is shown: the results context the key was followed from —
+    /// an inline zone, or (null) the tab's own results, which the pane shows.</param>
+    public async Task NavigateForeignKeyAsync(ResultSetViewModel rs, int columnIndex, object?[] row,
+        IResultFrames? into = null)
     {
         if (Selected is not { } tab || tab.IsRunning) return;
         if (columnIndex < 0 || columnIndex >= row.Length) return;
@@ -1199,7 +1210,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             var results = await ExecutorFor(tab, session)
                 .ExecuteAsync(sql, new QueryOptions { MaxRows = PageSize }, ct);
             var info = _ctx.EffectiveConnection(tab);
-            tab.PushResults(ResultSetBuilder.BuildResultSets(
+            (into ?? tab).Push(ResultSetBuilder.BuildResultSets(
                 results, sql, session.Snapshot, ProviderTraits.For(session.Info),
                 info is not null && SessionPolicy.IsReadOnly(info)));
             // The connection has to travel here too, or a 57014 from its own statement timeout reads as

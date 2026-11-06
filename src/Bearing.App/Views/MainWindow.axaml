@@ -153,6 +153,7 @@
       </MenuItem>
       <MenuItem Header="_View">
         <MenuItem x:Name="MenuToggleSidePane" Header="Toggle Side Pane" Click="OnToggleSidePane"/>
+        <MenuItem x:Name="MenuToggleInlineResults" Header="Toggle Inline Results" Click="OnToggleInlineResultsClick"/>
         <Separator/>
         <MenuItem Header="Schema" Click="OnMenuSchemaClick"/>
         <MenuItem Header="Scripts" Click="OnMenuScriptsClick"/>

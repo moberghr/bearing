@@ -226,13 +226,24 @@ public sealed class TabAutosave : IDisposable
         {
             try
             {
-                await _ctx.ScriptStore.WriteTextAsync(path, tab.Text, CancellationToken.None);
-                tab.ScriptPath = path;
+                var text = tab.Text;
+                await _ctx.ScriptStore.WriteTextAsync(path, text, CancellationToken.None);
+                // Baseline and kind first, path last: ScriptPath is what announces "this tab has a file", and
+                // its change handlers (file watchers) run before the next line. Anything that sees the path
+                // while the baseline still read "" would take the file for somebody else's edit and flag a
+                // conflict — the next autosave then refuses to write (seen on macOS CI and locally).
+                tab.MarkSaved(text);
                 // Creating the file settles what the tab is: a user-named buffer lands outside the scratch
                 // folder, which promotes it. Anything that repoints ScriptPath has to re-derive this.
-                if (isNew) tab.IsScratch = ScratchNaming.IsUnderScratch(path, owner!.ScratchDirectory);
-                tab.MarkSaved(tab.Text);
-                if (isNew) FileCreated?.Invoke();  // a new file changes the tree; an update doesn't
+                if (isNew)
+                {
+                    tab.IsScratch = ScratchNaming.IsUnderScratch(path, owner!.ScratchDirectory);
+                }
+                tab.ScriptPath = path;
+                if (isNew)
+                {
+                    FileCreated?.Invoke();  // a new file changes the tree; an update doesn't
+                }
                 return;
             }
             catch (IOException ex) when (attempt < WriteAttempts)

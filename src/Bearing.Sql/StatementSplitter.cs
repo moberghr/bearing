@@ -273,15 +273,19 @@ public static class StatementSplitter
     /// </para>
     /// </summary>
     public static string EnsureSeparated(ISqlDialect dialect, string sql)
+        => EnsureSeparated(sql, Split(dialect, sql));
+
+    /// <summary><see cref="EnsureSeparated(ISqlDialect, string)"/> over a split the caller already has
+    /// (<paramref name="spans"/> must be <see cref="Split(ISqlDialect, string)"/> of <paramref name="sql"/>),
+    /// so a caller that needs the spans too lexes the text once.</summary>
+    public static string EnsureSeparated(string sql, IReadOnlyList<StatementSpan> spans)
     {
-        var spans = Split(dialect, sql);
         if (spans.Count <= 1) return sql;
 
         var parts = new List<string>();
         foreach (var span in spans)
         {
-            var t = span.Text.Trim();
-            while (t.EndsWith(";", StringComparison.Ordinal)) t = t[..^1].TrimEnd();
+            var t = SentText(span.Text);
             if (t.Length > 0) parts.Add(t);
         }
         if (parts.Count == 0) return sql;
@@ -292,5 +296,18 @@ public static class StatementSplitter
         foreach (var p in parts)
             terminated.Add(EndsWithLineComment(p) ? p + "\n;" : p + ";");
         return string.Join("\n", terminated);
+    }
+
+    /// <summary>What <see cref="EnsureSeparated(string, IReadOnlyList{StatementSpan})"/> sends of a span: its
+    /// text without surrounding whitespace and trailing semicolons. Empty means the span is not sent, so it
+    /// takes no statement number (<c>QueryResult.StatementIndex</c>).</summary>
+    public static string SentText(string spanText)
+    {
+        var t = spanText.Trim();
+        while (t.EndsWith(";", StringComparison.Ordinal))
+        {
+            t = t[..^1].TrimEnd();
+        }
+        return t;
     }
 }

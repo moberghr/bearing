@@ -28,6 +28,11 @@ public sealed class EditorTextCommands
     private readonly Func<ISqlDialect> _dialect;
     private readonly StatementMargin _highlight = new();
 
+    /// <summary>Runs a one-replace rewrite of the buffer (Ctrl+/, Format) so whatever hangs on the text — the
+    /// inline result zones — can be carried across it by meaning rather than lost to the replace. Null runs
+    /// the edit as is.</summary>
+    public Action<Action, ISqlDialect>? AroundRewrite { get; set; }
+
     /// <summary>Wraps <paramref name="editor"/> and installs the statement-highlight margin in its own
     /// column, right of the line numbers. <paramref name="dialect"/> supplies the engine whose lexical
     /// rules decide where the statements in the buffer are.</summary>
@@ -45,6 +50,7 @@ public sealed class EditorTextCommands
     /// a batch instead of one malformed command.</summary>
     public string SqlToRun()
     {
+        // Not ScopeToRun().Sql: Explain needs only the text, not where each statement ends in the buffer.
         var selected = _editor.SelectedText;
         var sql = string.IsNullOrWhiteSpace(selected)
             ? StatementSplitter.StatementAt(_dialect(), _editor.Text, _editor.CaretOffset)?.Text ?? _editor.Text
@@ -54,6 +60,57 @@ public sealed class EditorTextCommands
 
     /// <summary>query.runAll: the entire buffer as a batch, ignoring caret and selection.</summary>
     public string SqlToRunAll() => StatementSplitter.EnsureSeparated(_dialect(), _editor.Text);
+
+    /// <summary><see cref="SqlToRun"/> together with where that text sits in the buffer, so its results can
+    /// be placed under it (inline results).</summary>
+    public Results.RunScope ScopeToRun()
+    {
+        var text = _editor.Text;
+        if (!string.IsNullOrWhiteSpace(_editor.SelectedText))
+        {
+            return Results.InlineResultPlacement.Scope(_dialect(), _editor.SelectedText, _editor.SelectionStart,
+                isWholeBuffer: false);
+        }
+        if (StatementSplitter.StatementAt(_dialect(), text, _editor.CaretOffset) is { } stmt)
+        {
+            return Results.InlineResultPlacement.Scope(_dialect(), stmt.Text, stmt.Start, isWholeBuffer: false);
+        }
+        return Results.InlineResultPlacement.Scope(_dialect(), text, 0, isWholeBuffer: false);
+    }
+
+    /// <summary>
+    /// Run with focus in an inline zone (spec §8): the zone's own statements, wherever the caret is. A zone
+    /// holding a whole batch's sets (an unattributed Run All) re-runs the batch; one whose statement was
+    /// removed falls back to the caret, as there is nothing left to re-run.
+    /// </summary>
+    public Results.RunScope ScopeForZone(ViewModels.InlineResultZone zone)
+    {
+        if (zone.StatementRemoved)
+        {
+            return ScopeToRun();
+        }
+        if (zone.FromWholeBuffer)
+        {
+            return ScopeToRunAll();
+        }
+        var text = _editor.Text;
+        // As many statements as the run that made the zone: a multi-statement selection's zone re-runs them
+        // all, not just the last one, or the rest of its sets would vanish.
+        return Results.InlineResultPlacement.ZoneSpan(_dialect(), text, zone.Offset, zone.StatementCount) is { } span
+            ? Results.InlineResultPlacement.Scope(_dialect(), text[span.Start..span.End], span.Start, isWholeBuffer: false)
+            : ScopeToRun();
+    }
+
+    /// <summary>The bounds of the statement at <paramref name="caret"/> (raw span), or the caret itself when it
+    /// is on none — where focus.results looks for that statement's zone.</summary>
+    public (int Start, int End) StatementBounds(int caret)
+        => StatementSplitter.StatementAt(_dialect(), _editor.Text, caret) is { } stmt
+            ? (stmt.Start, stmt.End)
+            : (caret, caret);
+
+    /// <summary><see cref="SqlToRunAll"/> together with where each statement ends in the buffer.</summary>
+    public Results.RunScope ScopeToRunAll()
+        => Results.InlineResultPlacement.Scope(_dialect(), _editor.Text, 0, isWholeBuffer: true);
 
     // ---- statement highlight -----------------------------------------------------------------
 
@@ -128,7 +185,7 @@ public sealed class EditorTextCommands
         var result = LineCommenter.Toggle(_editor.Text, start, end);
         if (result.Text == _editor.Text) return;
 
-        _editor.Document.Replace(0, _editor.Document.TextLength, result.Text);
+        Rewrite(() => _editor.Document.Replace(0, _editor.Document.TextLength, result.Text));
         _editor.SelectionStart = result.SelectionStart;
         _editor.SelectionLength = result.SelectionLength;
         _editor.CaretOffset = result.SelectionStart + result.SelectionLength;
@@ -146,6 +203,18 @@ public sealed class EditorTextCommands
         _editor.Document.Remove(range.Start, range.Length);
         _editor.CaretOffset = range.Start;
         _editor.TextArea.Caret.BringCaretToView();
+    }
+
+    private void Rewrite(Action edit)
+    {
+        if (AroundRewrite is { } around)
+        {
+            around(edit, _dialect());
+        }
+        else
+        {
+            edit();
+        }
     }
 
     /// <summary>The editor's (start, end) offsets: the selection when there is one, else the caret twice.</summary>
@@ -197,7 +266,7 @@ public sealed class EditorTextCommands
 
         // One Replace, so the whole reformat is a single undo step rather than a stack of them.
         var caret = _editor.CaretOffset;
-        _editor.Document.Replace(start, length, result.Text);
+        Rewrite(() => _editor.Document.Replace(start, length, result.Text));
 
         if (selected)
         {
