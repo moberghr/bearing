@@ -100,6 +100,7 @@ internal sealed class EditorAutoClose
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
+        if (Controls.InlineZoneView.IsInside(e.Source)) return;   // a zone's cell editor, not the SQL text
         if (!_enabled()) return;
 
         if (e.Key == Key.Back && _editor.SelectionLength == 0

@@ -24,6 +24,8 @@ public partial class MainWindow : Window
     private readonly EditorAutoClose _autoClose;            // paired quotes/brackets (#70)
     private readonly EditorTextCommands _text;              // statement-aware editor ops + Run's SQL
     private readonly InlineResultsCoordinator _inline;      // results under their statements, and when the pane opens
+    private ResultViewWiring? _resultWiring;                  // the pane's and every zone's results-view callbacks
+    private InlineResultsCoordinator.Host? _zoneHost;         // what a zone's view needs from this window
     private readonly EditorTextBehavior _editorText;        // editor <-> SelectedTab buffer/caret sync
     private readonly EditorZoomController _zoom;            // per-tab transient font zoom (Ctrl+= / - / 0)
     private readonly CommandRegistry _commands = new();
@@ -80,7 +82,7 @@ public partial class MainWindow : Window
         // Results under their statements, when the setting says so; ⤢ on one puts its sets in the pane.
         _inline = new InlineResultsCoordinator(Editor, () => Vm?.SettingsService, () => Vm?.Workspace.SelectedTab,
             RebuildResults, _resultsPane.SetVisible, text => { if (Vm is not null) { Vm.StatusText = text; } },
-            () => Editor.TextArea.Focus());
+            () => Editor.TextArea.Focus(), () => _zoneHost);
         _tabScroll = new TabStripScroller(TabScroll, TabStrip);
         _pinnedTabScroll = new TabStripScroller(PinnedTabScroll, PinnedTabStrip);
         // Dragging a tab to a new position, and across the rows to pin or unpin it. Both rows, because the
@@ -202,50 +204,26 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Bridge the results dock's callbacks to the shell view-model. <c>Vm</c> is resolved lazily at
-    /// invoke time — these are wired before a DataContext exists.</summary>
+    /// invoke time — these are wired before a DataContext exists. The same wiring serves every inline zone's
+    /// results view (<see cref="ResultViewWiring"/>), with FK navigation and Back landing in the zone.</summary>
     private void WireResultsView()
     {
-        // Stacked/Tabbed toggle persists on the VM (which round-trips it into the session).
-        ResultsView.ViewModeChanged = mode => { if (Vm is not null) Vm.ResultsViewMode = mode; };
-
-        ResultsView.LoadMore = rs => Vm?.Execution.LoadMoreAsync(rs) ?? Task.CompletedTask;
-        ResultsView.CountTotal = rs => Vm?.Execution.CountTotalAsync(rs) ?? Task.CompletedTask;
-        ResultsView.FetchAll = async rs => { if (Vm is not null) await Vm.Execution.FetchAllAsync(rs); };
-        ResultsView.Export = (rs, format) => Vm?.Execution.ExportAsync(rs, format) ?? Task.CompletedTask;
-        ResultsView.NavigateForeignKey = async (rs, col, row) =>
-        {
-            if (Vm is null) return;
-            await Vm.Execution.NavigateForeignKeyAsync(rs, col, row); // runs inline, stacks the prior result
-            RebuildResults(Vm.Workspace.SelectedTab);
-        };
-        ResultsView.GoBack = () =>
-        {
-            // Not mid-run: the run's results replace the tab's when it finishes, and a frame swapped in between
-            // would be taken for them (InlineResultsController.PlaceRun) — FK navigation refuses for the same reason.
-            if (Vm?.Workspace.SelectedTab is { IsRunning: false } tab)
+        _resultWiring = new ResultViewWiring(() => Vm, () => _dispatcher, () => ResultsView.Router, ShowPendingEditsSqlAsync);
+        _resultWiring.Apply(ResultsView, () => Vm?.Workspace.SelectedTab, () => RebuildResults(Vm?.Workspace.SelectedTab));
+        _zoneHost = new InlineResultsCoordinator.Host(
+            (view, frames, render) => _resultWiring.Apply(view, () => frames, render),
+            e => !_palette.AnyOpen && _dispatcher.TryHandle(e, KeyScope.Global),
+            (what, action) => Vm?.Dialogs?.ConfirmDiscardEditsAsync(what, action) ?? Task.FromResult(false),
+            () =>
             {
-                tab.GoBack();
-            }
-            RebuildResults(Vm?.Workspace.SelectedTab);
-        };
-        ResultsView.Status = text => { if (Vm is not null) Vm.StatusText = text; };
+                ResultsView.CommitOpenEdits();
+                _inline.ForEachZoneView(view => view.CommitOpenEdits());
+            });
+
         // The header's ✕. Collapse rather than toggle — the button is only reachable while the pane is open —
         // and take focus with it, or it stays parked in a grid that is no longer on screen.
         ResultsView.CloseRequested = () => { _resultsPane.SetVisible(false); Editor.TextArea.Focus(); };
         ResultsView.ShowInlineRequested = _inline.ShowResultsInline;
-        ResultsView.SaveChanges = async rs =>
-        {
-            if (Vm is null) return;
-            await Vm.Execution.SaveChangesAsync(rs);      // applies in one tx, updating affected rows in place
-            ResultsView.RefreshRowHighlights();           // clear the pending tints (no full rebuild → scroll kept)
-        };
-        ResultsView.DiscardChanges = async rs =>
-        {
-            if (Vm is null) return;
-            await Vm.Execution.DiscardChangesAsync(rs);   // reverts pending changes in place
-            RebuildResults(Vm.Workspace.SelectedTab);     // re-render the restored rows
-        };
-        ResultsView.ShowPendingSql = ShowPendingEditsSqlAsync;
     }
 
     /// <summary>
@@ -279,6 +257,7 @@ public partial class MainWindow : Window
         Vm.PropertyChanged += OnViewModelPropertyChanged;
         Vm.SettingsService.Changed -= _inline.OnSettingsChanged;
         Vm.SettingsService.Changed += _inline.OnSettingsChanged;
+        _inline.SyncPlacement();
         Vm.Workspace.PropertyChanged -= OnViewModelPropertyChanged;
         Vm.Workspace.PropertyChanged += OnViewModelPropertyChanged;
         Vm.Connections.PropertyChanged -= OnViewModelPropertyChanged;
@@ -434,15 +413,22 @@ public partial class MainWindow : Window
         else if (e.PropertyName == nameof(ConnectionsViewModel.SelectedTabConnection))
             QueueConnectionPickerSync();
         else if (e.PropertyName == nameof(ShellViewModel.ResultsViewMode))
-            ResultsView.ViewMode = Vm?.ResultsViewMode ?? Bearing.Core.Workspace.ResultsViewMode.Stacked;
+        {
+            var mode = Vm?.ResultsViewMode ?? Bearing.Core.Workspace.ResultsViewMode.Stacked;
+            ResultsView.ViewMode = mode;
+            _inline.ForEachZoneView(view => view.ViewMode = mode);   // one setting, every view on every tab
+        }
         else if (e.PropertyName is nameof(ShellViewModel.Title) or nameof(ShellViewModel.ProjectDirectory))
             SyncProjectCombo();
         else if (e.PropertyName == nameof(ShellViewModel.EditorFontSize))
             _zoom.Refresh();   // settings changed the base size; keep the selected tab's zoom on top of it
         else if (e.PropertyName == nameof(ShellViewModel.InspectorFontSize))
-            // The open inspector keeps the size it was opened at (re-rendering it would drop its folds);
-            // the next value you inspect uses the new one.
+        // The open inspector keeps the size it was opened at (re-rendering it would drop its folds);
+        // the next value you inspect uses the new one.
+        {
             ResultsView.InspectorFontSize = Vm?.InspectorFontSize ?? 13;
+            _inline.ForEachZoneView(view => view.InspectorFontSize = Vm?.InspectorFontSize ?? 13);
+        }
     }
 
     /// <summary>Say what a zoom did. A one-point change is easy to miss, and the status line is the only

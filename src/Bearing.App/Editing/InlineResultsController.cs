@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Media.TextFormatting;
 using Avalonia.Threading;
 using AvaloniaEdit;
@@ -35,11 +37,14 @@ public sealed class InlineResultsController
 {
     private readonly TextEditor _editor;
     private readonly Func<bool> _enabled;
-    private readonly Action<EditorTabViewModel, InlineResultZone> _openInPane;
-    private readonly Action<EditorTabViewModel, InlineResultZone>? _showInPaneMode;
+    private readonly Func<EditorTabViewModel, InlineResultZone, InlineZoneView> _createView;
     private readonly Dictionary<string, StackPanel> _hosts = new();   // per line's zone set, reused across rebuilds
     private readonly ZoneGenerator _generator;
     private readonly Dictionary<Guid, Shown> _shown = new();
+    // A zone's view lives as long as the zone (spec §10): scrolled off-screen, or its tab switched away and
+    // back, it comes back as it was left — scroll, selection, inspector, Back stack. Keyed weakly, so a zone
+    // that is closed, replaced by a run or dropped with its tab takes its view with it.
+    private readonly ConditionalWeakTable<InlineResultZone, InlineZoneView> _views = new();
     private EditorTabViewModel? _tab;
     private int _caretLine = 1;
     private bool _inCaretHandler;
@@ -47,31 +52,29 @@ public sealed class InlineResultsController
     private bool _steppingCaret;
     private TextDocument? _document;
     private int _bindGeneration;   // bumped on every Bind: a run that spans one cannot map its offsets
+    private int _lastChangeOffset;  // where the latest edit happened — where a kept zone lands (spec §3)
 
     /// <summary>A zone of the bound tab: its anchor always (the offset must follow edits in either mode), its
     /// control only once it is drawn — in Pane mode a run's zones are placed but never shown, and building
-    /// a table of TextBlocks for each would be work on the UI thread for nothing.</summary>
+    /// a results view for each would be work on the UI thread for nothing.</summary>
     private sealed class Shown(InlineResultZone zone, TextAnchor anchor)
     {
         public InlineResultZone Zone { get; } = zone;
-        public TextAnchor Anchor { get; } = anchor;
-        public InlineResultView? View { get; set; }
+        public TextAnchor Anchor { get; set; } = anchor;
     }
 
     /// <param name="enabled">Whether results are placed inline right now (the setting), read live.</param>
-    /// <param name="openInPane">⤢ on a zone: show its sets in the results pane.</param>
-    /// <param name="showInPaneMode">The zone's placement toggle: switch to the pane and show its sets there.</param>
+    /// <param name="createView">Build a zone's view, wired to its tab (called once per zone, on first draw).</param>
     public InlineResultsController(TextEditor editor, Func<bool> enabled,
-        Action<EditorTabViewModel, InlineResultZone> openInPane,
-        Action<EditorTabViewModel, InlineResultZone>? showInPaneMode = null)
+        Func<EditorTabViewModel, InlineResultZone, InlineZoneView> createView)
     {
         _editor = editor;
         _enabled = enabled;
-        _openInPane = openInPane;
-        _showInPaneMode = showInPaneMode;
+        _createView = createView;
         _generator = new ZoneGenerator(this);
         TextView.ElementGenerators.Add(_generator);
         TextView.SizeChanged += (_, _) => FitWidths();
+        TextView.ScrollOffsetChanged += (_, _) => PinHosts();
         _editor.TextArea.Caret.PositionChanged += OnCaretPositionChanged;
     }
 
@@ -80,8 +83,16 @@ public sealed class InlineResultsController
     /// <summary>The tab whose zones are shown, or null.</summary>
     public EditorTabViewModel? Tab => _tab;
 
-    /// <summary>The zone controls built so far for the bound tab (built on first draw, kept while bound).</summary>
-    internal IReadOnlyCollection<InlineResultView> Views => _shown.Values.Select(s => s.View).OfType<InlineResultView>().ToList();
+    /// <summary>The zone views built so far for the bound tab's zones (built on first draw, kept with the zone).</summary>
+    internal IReadOnlyCollection<InlineZoneView> Views
+        => _shown.Values.Select(s => _views.TryGetValue(s.Zone, out var v) ? v : null).OfType<InlineZoneView>().ToList();
+
+    /// <summary>Every zone view still alive, on any tab — kept per zone across tab switches (spec §10).</summary>
+    internal IReadOnlyList<InlineZoneView> AllViews => _views.Select(kv => kv.Value).ToList();
+
+    /// <summary>The zone whose view holds keyboard focus, or null.</summary>
+    public InlineResultZone? FocusedZone()
+        => Views.FirstOrDefault(v => v.IsKeyboardFocusWithin)?.Zone;
 
     /// <summary>Start showing <paramref name="tab"/>'s zones over the buffer now in the editor. Call after the
     /// tab's text has been loaded.</summary>
@@ -95,6 +106,7 @@ public sealed class InlineResultsController
             return;
         }
         _document = _editor.Document;
+        _document.Changing += OnDocumentChanging;
         _document.Changed += OnDocumentChanged;
         tab.InlineZonesChanged += Sync;
         Sync();
@@ -110,6 +122,7 @@ public sealed class InlineResultsController
         }
         if (_document is not null)
         {
+            _document.Changing -= OnDocumentChanging;
             _document.Changed -= OnDocumentChanged;
         }
         foreach (var s in _shown.Values)
@@ -224,16 +237,23 @@ public sealed class InlineResultsController
             }
             // The run finished after the buffer moved on (or the tab's text was reloaded): clamp rather than
             // throw. The zone then hangs under whatever line the offset now falls on.
-            zone.Offset = Math.Clamp(zone.Offset, 0, document.TextLength);
-            var anchor = document.CreateAnchor(zone.Offset);
-            anchor.MovementType = AnchorMovementType.BeforeInsertion;
-            anchor.SurviveDeletion = false;
-            anchor.Deleted += OnAnchorDeleted;
-            _shown[zone.Id] = new Shown(zone, anchor);
+            _shown[zone.Id] = new Shown(zone, Anchor(document, zone));
         }
         FitWidths();
         TextView.Redraw();
     }
+
+    private TextAnchor Anchor(TextDocument document, InlineResultZone zone)
+    {
+        zone.Offset = Math.Clamp(zone.Offset, 0, document.TextLength);
+        var anchor = document.CreateAnchor(zone.Offset);
+        anchor.MovementType = AnchorMovementType.BeforeInsertion;
+        anchor.SurviveDeletion = false;
+        anchor.Deleted += OnAnchorDeleted;
+        return anchor;
+    }
+
+    private void OnDocumentChanging(object? sender, DocumentChangeEventArgs e) => _lastChangeOffset = e.Offset;
 
     private void OnDocumentChanged(object? sender, DocumentChangeEventArgs e)
     {
@@ -246,57 +266,112 @@ public sealed class InlineResultsController
         }
     }
 
-    /// <summary>The text a zone hung under was deleted. Removed after the document change has finished, not
-    /// inside it — the text view is mid-update while anchors are being notified.</summary>
+    /// <summary>The text a zone hung under was deleted. A zone without unsaved edits goes with it; one holding
+    /// edits is kept where the text was, marked "statement removed" (spec §3) — deleting text can't stop to ask,
+    /// and dropping the zone would lose the edits. Done after the document change has finished, not inside
+    /// it: the text view is mid-update while anchors are being notified.</summary>
     private void OnAnchorDeleted(object? sender, EventArgs e)
     {
         var tab = _tab;
-        var dead = _shown.Values.Where(s => ReferenceEquals(s.Anchor, sender)).Select(s => s.Zone.Id).ToList();
+        var dead = _shown.Values.Where(s => ReferenceEquals(s.Anchor, sender)).ToList();
         if (tab is null || dead.Count == 0)
         {
             return;
         }
+        var at = _lastChangeOffset;
         Dispatcher.UIThread.Post(() =>
         {
-            foreach (var id in dead)
+            foreach (var shown in dead)
             {
-                tab.RemoveInlineZone(id);
+                if (shown.Zone.PendingCount == 0 || _document is not { } document || !ReferenceEquals(tab, _tab))
+                {
+                    tab.RemoveInlineZone(shown.Zone.Id);
+                    continue;
+                }
+                shown.Anchor.Deleted -= OnAnchorDeleted;
+                shown.Zone.Offset = at;
+                shown.Anchor = Anchor(document, shown.Zone);
+                shown.Zone.StatementRemoved = true;
+                shown.Zone.NotifyChanged();
+                TextView.Redraw();
             }
         }, DispatcherPriority.Normal);
     }
 
-    /// <summary>Inline objects are measured with infinite space, so each zone is given an explicit width: the
-    /// visible text area, less a little room so it doesn't touch the edge.</summary>
+    /// <summary>Inline objects are measured with infinite space, so each zone is given an explicit width
+    /// limit: the visible text area, less a little room so it doesn't touch the edge. Within it the zone fits
+    /// its columns (spec §6).</summary>
     private void FitWidths()
     {
-        var width = Math.Max(160, TextView.Bounds.Width - 24);
-        foreach (var s in _shown.Values)
+        foreach (var view in Views)
         {
-            if (s.View is { } view)
-            {
-                view.MaxWidth = width;
-            }
+            view.MaxWidth = ZoneWidth;
         }
     }
 
-    private InlineResultView ViewFor(Shown shown)
+    private double ZoneWidth => Math.Max(160, TextView.Bounds.Width - 24);
+
+    /// <summary>Keep every zone at the viewport's left edge while the editor scrolls sideways (spec §6): the
+    /// zone sits in the text, which slides left, and would take its first columns and buttons with it.</summary>
+    private void PinHosts()
     {
-        if (shown.View is { } built)
+        foreach (var host in _hosts.Values)
+        {
+            Pin(host);
+        }
+    }
+
+    private void Pin(Control host)
+        => host.RenderTransform = TextView.HorizontalOffset > 0 ? new TranslateTransform(TextView.HorizontalOffset, 0) : null;
+
+    private InlineZoneView ViewFor(Shown shown)
+    {
+        if (_views.TryGetValue(shown.Zone, out var built))
         {
             return built;
         }
-        var tab = _tab!;
-        var zone = shown.Zone;
-        var view = new InlineResultView(zone,
-            close: () => tab.RemoveInlineZone(zone.Id),
-            openInPane: () => _openInPane(tab, zone),
-            showInPane: _showInPaneMode is null ? null : () => _showInPaneMode(tab, zone));
-        // A taller or shorter table changes the inline object's size; the text view re-measures that line on
-        // its next measure pass.
+        var view = _createView(_tab!, shown.Zone);
+        // A taller or shorter zone changes the inline object's size; the text view re-measures that line on
+        // its next measure pass. A grip drag says so; rows arriving (paging, an added row) resize it too.
         view.HeightChanged += () => TextView.InvalidateMeasure();
-        view.MaxWidth = Math.Max(160, TextView.Bounds.Width - 24);
-        shown.View = view;
+        view.SizeChanged += (_, e) =>
+        {
+            if (Math.Abs(e.NewSize.Height - e.PreviousSize.Height) >= 0.5)
+            {
+                TextView.InvalidateMeasure();
+            }
+        };
+        view.MaxWidth = ZoneWidth;
+        _views.Add(shown.Zone, view);
         return view;
+    }
+
+    /// <summary>
+    /// Give <paramref name="zone"/>'s grid the keyboard (spec §8): scroll its line into view so the zone is
+    /// realized, then focus its first grid. False when the zone has no grid to focus (a message, an error) or
+    /// isn't on the bound tab.
+    /// </summary>
+    public bool Focus(InlineResultZone zone)
+    {
+        if (_document is not { } document || !_shown.TryGetValue(zone.Id, out var shown) || shown.Anchor.IsDeleted)
+        {
+            return false;
+        }
+        var line = document.GetLineByOffset(Math.Clamp(zone.Offset, 0, document.TextLength)).LineNumber;
+        _editor.ScrollToLine(line);
+        _editor.UpdateLayout();
+        var view = ViewFor(shown);
+        return view.Results.FocusableGrid?.Focus() == true;
+    }
+
+    /// <summary>Esc out of a zone: the editor gets the keyboard, the caret at the end of the zone's statement.</summary>
+    public void Leave(InlineResultZone zone)
+    {
+        if (_document is { } document)
+        {
+            _editor.CaretOffset = Math.Clamp(zone.Offset, 0, document.TextLength);
+        }
+        _editor.TextArea.Focus();
     }
 
     /// <summary>
@@ -434,6 +509,7 @@ public sealed class InlineResultsController
             }
             var host = new StackPanel { Orientation = Orientation.Vertical, HorizontalAlignment = HorizontalAlignment.Left };
             owner._hosts[key] = host;
+            owner.Pin(host);
             foreach (var view in views)
             {
                 if (view.Parent is Panel previous)

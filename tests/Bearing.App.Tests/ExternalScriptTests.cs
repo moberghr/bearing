@@ -224,6 +224,25 @@ public class ExternalScriptTests : IDisposable
         Assert.DoesNotContain(aSession!.OpenEditors, e => e.ScriptPath == file);
     }
 
+    /// <summary>Inline results came from the old project's connection: a moved tab must not keep them, or
+    /// saving, paging or counting in one would run against the new project's connection.</summary>
+    [Fact]
+    public async Task Moving_a_tab_drops_its_inline_results_with_its_pane_results()
+    {
+        var vm = NewVm();
+        await SeedAsync(vm, Dir("b"), "b");
+        await SeedAsync(vm, Dir("a"), "a");
+        await vm.OpenScriptFilesAsync([Outside("report.sql", "select 1")]);
+        var tab = vm.Workspace.SelectedTab!;
+        var all = new Bearing.App.Results.RunScope("select 1", [8], 0, 8, IsWholeBuffer: true);
+        tab.ApplyInlineRun(all, [new InlineResultZone(8, Array.Empty<ResultSetViewModel>(), null)]);
+
+        Assert.True(await vm.MoveTabToProjectAsync(tab, Dir("b")));
+
+        Assert.Empty(tab.Results);
+        Assert.Empty(tab.InlineZones);
+    }
+
     [Fact]
     public async Task A_tab_with_a_query_running_does_not_move()
     {

@@ -69,6 +69,11 @@ public sealed class DialogService : IDialogService
             ? new ConfirmDiscardTransactionDialog(count, action).ShowDialog<bool>(window)
             : Task.FromResult(true); // no window → proceed, as the running-query confirmation does
 
+    public Task<bool> ConfirmDiscardEditsAsync(string what, string action)
+        => Owner is { } window
+            ? new ConfirmDiscardEditsDialog(what, action).ShowDialog<bool>(window)
+            : Task.FromResult(false); // no window → keep the edits; losing them needs a real answer
+
     public Task<ProjectRemoval> ConfirmRemoveProjectAsync(string name, string directory)
         => Owner is { } window
             ? new ConfirmRemoveProjectDialog(name, directory).ShowDialog<ProjectRemoval>(window)

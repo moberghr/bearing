@@ -8,6 +8,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Bearing.App.Controls;
 using Bearing.App.Editing;
 using Bearing.App.Input;
 using Bearing.App.ViewModels;
@@ -174,7 +175,17 @@ public partial class MainWindow
     /// Editor-scoped editing shortcuts, handled in the tunnel phase so they win over AvaloniaEdit's
     /// own handling of Enter / '/' / brackets. App-level shortcuts (Run, Save, …) stay in <see cref="OnKeyDown"/>.
     /// </summary>
-    private void OnEditorKeyDown(object? sender, KeyEventArgs e) => _dispatcher.TryHandle(e, KeyScope.Editor);
+    private void OnEditorKeyDown(object? sender, KeyEventArgs e)
+    {
+        // An inline zone sits inside the editor, so its keys tunnel through here first — they are the grid's
+        // (or its cell editor's), never the SQL text's (spec §8).
+        if (InlineZoneView.IsInside(e.Source)) return;
+        _dispatcher.TryHandle(e, KeyScope.Editor);
+    }
+
+    /// <summary>The caret is in the SQL text — focus within the editor, but not inside an inline zone.</summary>
+    private bool EditorTextHasFocus
+        => Editor.TextArea.IsKeyboardFocusWithin && _inline.Controller.FocusedZone() is null;
 
     // Tracks whether Alt was pressed on its own (no other key during the hold) → a "tap" toggles the menu.
     private bool _altAlone;
@@ -214,7 +225,7 @@ public partial class MainWindow
         // handler — which is why editor.zoomReset never saw Ctrl+0: focus.editor shares that gesture and
         // was swallowing it here. Focusing the editor is a no-op when the caret is already in it, so drop
         // that one claim in that case and let the editor's binding have the key.
-        var claimed = Editor.TextArea.IsKeyboardFocusWithin ? _navCommandsFromEditor : _navCommands;
+        var claimed = EditorTextHasFocus ? _navCommandsFromEditor : _navCommands;
         _dispatcher.TryHandle(e, KeyScope.Global, claimed);
     }
 
@@ -306,8 +317,16 @@ public partial class MainWindow
         if (_resultsPane.Toggle()) Editor.TextArea.Focus();
     }
 
+    /// <summary>focus.results: the results pane's grid — or, in inline mode, the zone of the statement under
+    /// the caret (else the nearest zone above it), spec §8.</summary>
     private void FocusResultsPane()
     {
+        if (_inline.IsInline && Vm is not null)
+        {
+            var caret = Editor.CaretOffset;
+            var statement = _text.StatementBounds(caret);
+            if (_inline.FocusZoneAt(caret, statement.Start, statement.End)) return;
+        }
         if (_resultsPane.IsVisible) ResultsView.FocusableGrid?.Focus();
     }
 
@@ -317,9 +336,23 @@ public partial class MainWindow
     private void CycleFocus()
     {
         var regions = new List<(Control Focus, Visual Container)> { (Editor.TextArea, Editor) };
+        // Inline: the caret's zone is the results region (it sits inside the editor; FocusRing classifies by
+        // the innermost container, so a focused zone is not mistaken for the editor).
+        if (_inline.IsInline && _inline.Controller.FocusedZone() is { } focused
+            && _inline.Controller.Views.FirstOrDefault(v => v.Zone == focused) is { } current
+            && current.Results.FocusableGrid is { } zoneGrid)
+            regions.Add((zoneGrid, current));
+        else if (_inline.IsInline && CaretZoneView() is { } zone && zone.Results.FocusableGrid is { } caretGrid)
+            regions.Add((caretGrid, zone));
         if (_resultsPane.IsVisible && ResultsView.FocusableGrid is { } grid) regions.Add((grid, ResultsView));
         if (Sidebar.FocusTarget is { } side) regions.Add((side, side));
         FocusRing.Cycle(TopLevel.GetTopLevel(this), regions);
+    }
+
+    private InlineZoneView? CaretZoneView()
+    {
+        var statement = _text.StatementBounds(Editor.CaretOffset);
+        return _inline.ZoneViewAt(Editor.CaretOffset, statement.Start, statement.End);
     }
 
     // select.project / connection / database: open a filterable quick-pick (type to filter, ↑/↓, Enter).
@@ -496,7 +529,9 @@ public partial class MainWindow
         // Capture the tab the run belongs to: execution is per-tab, so the user may switch tabs while it
         // runs. Only refresh the visible grid if that tab is still selected — otherwise its results are
         // stored on its own VM and render when the user switches back.
-        await _inline.RunAsync(_text.ScopeToRun(), Vm.Execution.ExecuteAsync);
+        // Focus in an inline zone: re-run that zone's statement (spec §8), whatever the caret is on.
+        var scope = _inline.FocusedZone is { } zone ? _text.ScopeForZone(zone) : _text.ScopeToRun();
+        await _inline.RunAsync(scope, Vm.Execution.ExecuteAsync);
     }
 
     /// <summary>
@@ -512,7 +547,7 @@ public partial class MainWindow
     private async Task ExplainAsync(bool analyze)
     {
         if (Vm is null) return;
-        var sql = _text.SqlToRun();
+        var sql = _inline.FocusedZone is { } zone ? _text.ScopeForZone(zone).Sql : _text.SqlToRun();
         if (string.IsNullOrWhiteSpace(sql)) { Vm.StatusText = "Nothing to explain."; return; }
 
         var plan = await Vm.Execution.ExplainAsync(sql, analyze);

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 
@@ -12,7 +13,7 @@ namespace Bearing.App.ViewModels;
 /// result. Each tab runs against its own <see cref="ConnectionId"/>; the shell resolves that to a
 /// live session at execution time.
 /// </summary>
-public sealed partial class EditorTabViewModel : ObservableObject
+public sealed partial class EditorTabViewModel : ObservableObject, IResultFrames
 {
     public EditorTabViewModel(string displayName, string text = "", string? scriptPath = null, bool isScratch = false)
     {
@@ -96,10 +97,10 @@ public sealed partial class EditorTabViewModel : ObservableObject
     public ResultSetViewModel? LastResult => Results.Count > 0 ? Results[0] : null;
 
     /// <summary>Frames displayed before the current one — grows on FK navigation, shrinks on Back.</summary>
-    private readonly Stack<IReadOnlyList<ResultSetViewModel>> _resultHistory = new();
+    private readonly ResultHistory _resultHistory = new();
 
     /// <summary>True when FK navigation has stacked earlier results that Back can return to.</summary>
-    public bool CanGoBack => _resultHistory.Count > 0;
+    public bool CanGoBack => _resultHistory.CanGoBack;
 
     /// <summary>Show the results of a fresh run — clears any FK-navigation history.</summary>
     public void SetFreshResults(IReadOnlyList<ResultSetViewModel> results)
@@ -136,10 +137,34 @@ public sealed partial class EditorTabViewModel : ObservableObject
     /// <summary>Discard the current (navigated) results and restore the previous frame.</summary>
     public void GoBack()
     {
-        if (_resultHistory.Count == 0) return;
-        Results = _resultHistory.Pop();
+        if (_resultHistory.Pop() is not { } previous) return;
+        Results = previous;
         OnPropertyChanged(nameof(CanGoBack));
     }
+
+    /// <summary>The placement toggle from a zone (spec §9): the pane takes over that zone's context — its
+    /// sets, their pending edits, and its Back stack. False (nothing changes) while the tab runs.</summary>
+    public bool ShowZoneInPane(InlineResultZone zone)
+    {
+        if (IsRunning) return false;
+        _resultHistory.Clear();
+        foreach (var frame in zone.StashedFrames) _resultHistory.Push(frame);
+        Results = zone.Sets;
+        OnPropertyChanged(nameof(CanGoBack));
+        return true;
+    }
+
+    // The pane's results context (§4): the tab's own Results and Back stack.
+    IReadOnlyList<ResultSetViewModel> IResultFrames.Current => Results;
+    void IResultFrames.Push(IReadOnlyList<ResultSetViewModel> results) => PushResults(results);
+
+    /// <summary>Every set the pane holds, its Back stack included.</summary>
+    public IEnumerable<ResultSetViewModel> AllSets => System.Linq.Enumerable.Concat(_resultHistory.Sets, Results);
+
+    /// <summary>Unsaved grid edits anywhere on this tab — the pane's frames and every inline zone's.</summary>
+    public int PendingEditCount
+        => PendingEdits.Count(System.Linq.Enumerable.Concat(AllSets,
+            System.Linq.Enumerable.SelectMany(_inlineZones, z => z.AllSets)));
 
     /// <summary>Swap the current result frame (e.g. after a save/discard refresh) without touching history.</summary>
     public void ReplaceResults(IReadOnlyList<ResultSetViewModel> results) => Results = results;
@@ -160,56 +185,61 @@ public sealed partial class EditorTabViewModel : ObservableObject
     /// </summary>
     public void ApplyInlineRun(Results.RunScope scope, IReadOnlyList<InlineResultZone> zones)
     {
-        if (scope.IsWholeBuffer)
-        {
-            _inlineZones.Clear();
-        }
-        else
-        {
-            // Exclusive at Start: a zone sitting exactly there belongs to the statement before, whose end
-            // touches this one's start when nothing separates them (`select 1;select 2;`).
-            _inlineZones.RemoveAll(z => z.Offset > scope.Start && z.Offset <= scope.End);
-        }
+        // Exclusive at Start: a zone sitting exactly there belongs to the statement before, whose end touches
+        // this one's start when nothing separates them (`select 1;select 2;`).
+        var replaced = _inlineZones
+            .Where(z => scope.IsWholeBuffer || (z.Offset > scope.Start && z.Offset <= scope.End))
+            .ToList();
+        _inlineZones.RemoveAll(replaced.Contains);
         _inlineZones.AddRange(zones);
         _inlineZones.Sort((a, b) => a.Offset.CompareTo(b.Offset));
         InlineZonesChanged?.Invoke();
+        RetireAll(replaced);
     }
 
-    /// <summary>⤢ on an inline zone: make its sets the tab's results (for the pane). Refused — false — while
-    /// the tab runs: the run's results replace the tab's when it finishes, and a swap in between would be
-    /// taken for them.</summary>
-    public bool ShowInlineZoneInResults(InlineResultZone zone)
-    {
-        if (IsRunning)
-        {
-            return false;
-        }
-        SetFreshResults(zone.Sets);
-        return true;
-    }
-
-    /// <summary>Drop every inline zone — the buffer was replaced by different text (another script opened into
-    /// this tab, or a reload from disk), so the old results no longer sit under anything they describe.</summary>
+    /// <summary>Drop the inline zones — the buffer was replaced by different text (another script opened into
+    /// this tab, or a reload from disk), so the old results no longer sit under anything they describe. A zone
+    /// holding unsaved grid edits is kept, marked <see cref="InlineResultZone.StatementRemoved"/> and clamped to
+    /// the new text: dropping it would lose the edits without asking (spec §7).</summary>
     public void ClearInlineZones()
     {
         if (_inlineZones.Count == 0)
         {
             return;
         }
-        _inlineZones.Clear();
+        var dropped = _inlineZones.Where(z => z.PendingCount == 0).ToList();
+        _inlineZones.RemoveAll(dropped.Contains);
+        foreach (var kept in _inlineZones)
+        {
+            kept.StatementRemoved = true;
+            kept.Offset = Math.Clamp(kept.Offset, 0, Text.Length);
+            kept.NotifyChanged();
+        }
         InlineZonesChanged?.Invoke();
+        RetireAll(dropped);
     }
 
     /// <summary>Remove one inline zone (its ✕, or the text it hung under was deleted). False when it was
     /// already gone.</summary>
     public bool RemoveInlineZone(Guid id)
     {
-        if (_inlineZones.RemoveAll(z => z.Id == id) == 0)
+        var removed = _inlineZones.Where(z => z.Id == id).ToList();
+        if (removed.Count == 0)
         {
             return false;
         }
+        _inlineZones.RemoveAll(removed.Contains);
         InlineZonesChanged?.Invoke();
+        RetireAll(removed);
         return true;
+    }
+
+    private static void RetireAll(IEnumerable<InlineResultZone> zones)
+    {
+        foreach (var zone in zones)
+        {
+            zone.Retire();
+        }
     }
 
     // ---- execution state (per-tab) --------------------------------------------------------------

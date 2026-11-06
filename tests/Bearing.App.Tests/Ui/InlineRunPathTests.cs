@@ -38,7 +38,7 @@ public class InlineRunPathTests
         editor.TextArea.Focus();
         editor.Text = text;
         shell.Pump();
-        var pane = shell.Window.GetVisualDescendants().OfType<ResultView>().Single();
+        var pane = InlineResultsTests.PaneResults(shell);
         return (shell, editor, shell.Vm.Workspace.SelectedTab!, pane);
     }
 
@@ -75,7 +75,7 @@ public class InlineRunPathTests
         Assert.Equal("select id from shop.payment;".Length, zone.Offset);
         Assert.Same(tab.Results, zone.Sets);
         Assert.False(pane.IsVisible);
-        Assert.Single(editor.TextArea.TextView.GetVisualDescendants().OfType<InlineResultView>());
+        Assert.Single(editor.TextArea.TextView.GetVisualDescendants().OfType<InlineZoneView>());
     });
 
     [Fact]
@@ -105,7 +105,7 @@ public class InlineRunPathTests
         await WaitFor(shell, () => tab.InlineZones.Count > 0);
 
         Assert.Equal(3, tab.InlineZones.Count);
-        Assert.Equal(3, editor.TextArea.TextView.GetVisualDescendants().OfType<InlineResultView>().Count());
+        Assert.Equal(3, editor.TextArea.TextView.GetVisualDescendants().OfType<InlineZoneView>().Count());
         Assert.False(pane.IsVisible);
     });
 
@@ -122,7 +122,7 @@ public class InlineRunPathTests
 
         Assert.True(pane.IsVisible);
         // Not even built: a hidden zone's table would be UI-thread work for nothing.
-        Assert.Empty(editor.TextArea.TextView.GetVisualDescendants().OfType<InlineResultView>());
+        Assert.Empty(editor.TextArea.TextView.GetVisualDescendants().OfType<InlineZoneView>());
         // Placed all the same, so switching to inline shows them where they belong.
         Assert.Single(tab.InlineZones);
     });
@@ -146,7 +146,7 @@ public class InlineRunPathTests
 
         Assert.Equal(ResultsPlacement.Inline, shell.Vm.SettingsService.Current.ResultsPlacement);
         Assert.False(pane.IsVisible);
-        Assert.Single(editor.TextArea.TextView.GetVisualDescendants().OfType<InlineResultView>(), v => v.IsEffectivelyVisible);
+        Assert.Single(editor.TextArea.TextView.GetVisualDescendants().OfType<InlineZoneView>(), v => v.IsEffectivelyVisible);
     });
 
     /// <summary>query.runAll ships unbound (palette only); its handler, as the palette reaches it.</summary>

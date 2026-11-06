@@ -41,7 +41,7 @@ internal static class InlineResultPlacement
         int? codeEnd = null;
         foreach (var span in spans)
         {
-            if (!IsSent(span.Text))
+            if (StatementSplitter.SentText(span.Text).Length == 0)
             {
                 continue;
             }
@@ -58,18 +58,6 @@ internal static class InlineResultPlacement
         var trimmedEnd = codeEnd ?? start + text.TrimEnd().Length;
         return new RunScope(StatementSplitter.EnsureSeparated(text, spans), ends,
             Math.Min(start + leading, trimmedEnd), trimmedEnd, isWholeBuffer);
-    }
-
-    /// <summary>Mirrors <see cref="StatementSplitter.EnsureSeparated"/>'s filter: a span that is only
-    /// whitespace and semicolons is not sent, so it takes no statement number.</summary>
-    private static bool IsSent(string text)
-    {
-        var t = text.Trim();
-        while (t.EndsWith(";", StringComparison.Ordinal))
-        {
-            t = t[..^1].TrimEnd();
-        }
-        return t.Length > 0;
     }
 
     /// <summary>The inline results for <paramref name="sets"/> returned by a run over <paramref name="scope"/>.</summary>
@@ -104,6 +92,34 @@ internal static class InlineResultPlacement
             : scope.IsWholeBuffer && ends.Count > 1
                 ? $"{sets.Count} result sets from this batch"
                 : $"{sets.Count} result sets";
-        return [new InlineResultZone(offset, sets, caption)];
+        return [new InlineResultZone(offset, sets, caption, fromWholeBuffer: scope.IsWholeBuffer && ends.Count > 1,
+            statementCount: Math.Max(1, ends.Count))];
+    }
+
+    /// <summary>
+    /// The buffer span a zone's statements occupy now, to re-run them from the zone (spec §8): the statement
+    /// the zone hangs under — at <paramref name="offset"/>, its last code character — and the
+    /// <paramref name="statementCount"/> − 1 sent statements before it, as many as the run that made the zone
+    /// covered (a multi-statement selection). Null when no statement sits there any more.
+    /// </summary>
+    public static (int Start, int End)? ZoneSpan(ISqlDialect dialect, string text, int offset, int statementCount)
+    {
+        var at = Math.Clamp(offset, 0, text.Length);
+        var sent = StatementSplitter.Split(dialect, text)
+            .Where(s => StatementSplitter.SentText(s.Text).Length > 0)
+            .ToList();
+        // The character before the offset is inside the statement for certain; the offset itself can be the
+        // boundary with the next one.
+        var last = sent.FindIndex(s => at > s.Start && at - 1 < s.End);
+        if (last < 0)
+        {
+            last = sent.FindIndex(s => at >= s.Start && at <= s.End);
+        }
+        if (last < 0)
+        {
+            return null;
+        }
+        var first = Math.Max(0, last - Math.Max(1, statementCount) + 1);
+        return (sent[first].Start, sent[last].End);
     }
 }

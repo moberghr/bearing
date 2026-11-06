@@ -57,6 +57,10 @@ internal static class QuitGuard
         if (!await TransactionGuard.AskAsync(vm.Context.Transactions, dialogs, _ => true, "quit"))
             return false;
         if (running > 0 && !await dialogs.ConfirmCancelRunningAsync(running)) return false;
+        // Unsaved grid edits on any tab, pane or inline zone (spec §7): quitting drops them.
+        var edits = vm.Workspace.AllTabs.Sum(t => t.PendingEditCount);
+        if (edits > 0 && !await dialogs.ConfirmDiscardEditsAsync(PendingEdits.Describe(edits, 1), "quit"))
+            return false;
 
         await TransactionGuard.RollbackAsync(vm.Context.Transactions, _ => true);
         if (running > 0) foreach (var tab in vm.Workspace.AllTabs) tab.CancelRun();

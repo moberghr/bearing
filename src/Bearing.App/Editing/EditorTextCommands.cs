@@ -73,6 +73,36 @@ public sealed class EditorTextCommands
         return Results.InlineResultPlacement.Scope(_dialect(), text, 0, isWholeBuffer: false);
     }
 
+    /// <summary>
+    /// Run with focus in an inline zone (spec §8): the zone's own statements, wherever the caret is. A zone
+    /// holding a whole batch's sets (an unattributed Run All) re-runs the batch; one whose statement was
+    /// removed falls back to the caret, as there is nothing left to re-run.
+    /// </summary>
+    public Results.RunScope ScopeForZone(ViewModels.InlineResultZone zone)
+    {
+        if (zone.StatementRemoved)
+        {
+            return ScopeToRun();
+        }
+        if (zone.FromWholeBuffer)
+        {
+            return ScopeToRunAll();
+        }
+        var text = _editor.Text;
+        // As many statements as the run that made the zone: a multi-statement selection's zone re-runs them
+        // all, not just the last one, or the rest of its sets would vanish.
+        return Results.InlineResultPlacement.ZoneSpan(_dialect(), text, zone.Offset, zone.StatementCount) is { } span
+            ? Results.InlineResultPlacement.Scope(_dialect(), text[span.Start..span.End], span.Start, isWholeBuffer: false)
+            : ScopeToRun();
+    }
+
+    /// <summary>The bounds of the statement at <paramref name="caret"/> (raw span), or the caret itself when it
+    /// is on none — where focus.results looks for that statement's zone.</summary>
+    public (int Start, int End) StatementBounds(int caret)
+        => StatementSplitter.StatementAt(_dialect(), _editor.Text, caret) is { } stmt
+            ? (stmt.Start, stmt.End)
+            : (caret, caret);
+
     /// <summary><see cref="SqlToRunAll"/> together with where each statement ends in the buffer.</summary>
     public Results.RunScope ScopeToRunAll()
         => Results.InlineResultPlacement.Scope(_dialect(), _editor.Text, 0, isWholeBuffer: true);

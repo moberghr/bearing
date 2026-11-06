@@ -60,7 +60,7 @@ public class InlineResultsTests
         var before = editor.TextArea.TextView.GetVisualTopByDocumentLine(2);
         PlaceUnderFirstStatement(shell, tab);
 
-        Assert.Single(Zones(editor)).CloseButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Click(ZoneButton(Assert.Single(Zones(editor)), "Close these results"));
         shell.Pump();
 
         Assert.Empty(tab.InlineZones);
@@ -140,36 +140,6 @@ public class InlineResultsTests
         Assert.Single(Zones(editor));
     });
 
-    [Fact]
-    public Task Open_in_pane_shows_the_zones_sets_in_the_results_pane() => _ui.Run(async () =>
-    {
-        using var shell = await ShellHarness.ShowAsync(nameof(Open_in_pane_shows_the_zones_sets_in_the_results_pane));
-        var (editor, tab) = Setup(shell);
-        PlaceUnderFirstStatement(shell, tab);
-        var results = shell.Window.GetVisualDescendants().OfType<ResultView>().Single();
-        Assert.False(results.IsVisible);
-
-        Assert.Single(Zones(editor)).OpenInPaneButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-        shell.Pump();
-
-        Assert.Same(tab.InlineZones[0].Sets, tab.Results);
-        Assert.True(results.IsVisible);
-    });
-
-    /// <summary>Nothing in a zone may take the keyboard: focus inside the text view would send typing and
-    /// the editor's bindings to a control the user isn't looking at.</summary>
-    [Fact]
-    public Task Nothing_in_a_zone_can_take_focus() => _ui.Run(async () =>
-    {
-        using var shell = await ShellHarness.ShowAsync(nameof(Nothing_in_a_zone_can_take_focus));
-        var (editor, tab) = Setup(shell);
-        PlaceUnderFirstStatement(shell, tab);
-
-        var view = Assert.Single(Zones(editor));
-        Assert.All(view.GetVisualDescendants().OfType<InputElement>().Append(view), e => Assert.False(e.Focusable, e.GetType().Name));
-        Assert.True(editor.TextArea.IsFocused);
-    });
-
     /// <summary>The zone's row has no caret stops: Down from the statement's line lands on the next text
     /// line, and Up comes back.</summary>
     [Fact]
@@ -243,35 +213,14 @@ public class InlineResultsTests
         Assert.Empty(Zones(editor));
     });
 
-    private static void Press(ShellHarness shell, Key key, PhysicalKey physical)
+    internal static void Press(ShellHarness shell, Key key, PhysicalKey physical)
     {
         shell.Window.KeyPress(key, RawInputModifiers.None, physical, null);
         shell.Window.KeyRelease(key, RawInputModifiers.None, physical, null);
         shell.Pump();
     }
 
-    /// <summary>⤢ while the tab runs is refused: the run's results replace the tab's when it finishes, and a
-    /// swap in between would be taken for them.</summary>
-    [Fact]
-    public Task Open_in_pane_is_refused_while_the_tab_runs() => _ui.Run(async () =>
-    {
-        using var shell = await ShellHarness.ShowAsync(nameof(Open_in_pane_is_refused_while_the_tab_runs));
-        var (editor, tab) = Setup(shell);
-        PlaceUnderFirstStatement(shell, tab);
-        var results = shell.Window.GetVisualDescendants().OfType<ResultView>().Single();
-        var before = tab.Results;
-        tab.BeginRun();
-
-        Assert.Single(Zones(editor)).OpenInPaneButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-        shell.Pump();
-
-        Assert.Same(before, tab.Results);
-        Assert.False(results.IsVisible);
-        Assert.Contains("Wait for the running query", shell.Vm.StatusText);
-        tab.EndRun();
-    });
-
-    /// <summary>The zone's placement toggle while the tab runs: refused like ⤢, and the setting stays put —
+    /// <summary>The zone's placement toggle while the tab runs: refused, and the setting stays put —
     /// flipping it anyway would hide every zone with the pane still closed.</summary>
     [Fact]
     public Task The_zones_toggle_while_the_tab_runs_changes_nothing() => _ui.Run(async () =>
@@ -279,10 +228,10 @@ public class InlineResultsTests
         using var shell = await ShellHarness.ShowAsync(nameof(The_zones_toggle_while_the_tab_runs_changes_nothing));
         var (editor, tab) = Setup(shell);
         PlaceUnderFirstStatement(shell, tab);
-        var results = shell.Window.GetVisualDescendants().OfType<ResultView>().Single();
+        var results = PaneResults(shell);
         tab.BeginRun();
 
-        Assert.Single(Zones(editor)).PlacementButton!.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Click(ZoneButton(Assert.Single(Zones(editor)), "Show results in the pane instead of inline"));
         shell.Pump();
 
         Assert.Equal(ResultsPlacement.Inline, shell.Vm.SettingsService.Current.ResultsPlacement);
@@ -319,9 +268,9 @@ public class InlineResultsTests
         using var shell = await ShellHarness.ShowAsync(nameof(The_zones_toggle_goes_back_to_the_pane_with_its_results));
         var (editor, tab) = Setup(shell);
         PlaceUnderFirstStatement(shell, tab);
-        var results = shell.Window.GetVisualDescendants().OfType<ResultView>().Single();
+        var results = PaneResults(shell);
 
-        Assert.Single(Zones(editor)).PlacementButton!.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Click(ZoneButton(Assert.Single(Zones(editor)), "Show results in the pane instead of inline"));
         shell.Pump();
 
         Assert.Equal(ResultsPlacement.Pane, shell.Vm.SettingsService.Current.ResultsPlacement);
@@ -355,7 +304,7 @@ public class InlineResultsTests
         shell.Pump();
 
         var row = ResultGridChrome.RowMinHeight;
-        Assert.Equal(row * InlineResultView.VisibleRows + 80, tab.InlineZones[0].TableHeight!.Value, 1);
+        Assert.Equal(InlineGridSizing.DefaultCap(row) + 80, tab.InlineZones[0].TableHeight!.Value, 1);
         Assert.Equal(lineTwo + 80, editor.TextArea.TextView.GetVisualTopByDocumentLine(2), 1);
         Assert.Equal(0, editor.CaretOffset);   // the drag never reached the text
     });
@@ -367,7 +316,7 @@ public class InlineResultsTests
 
     // ---- helpers ---------------------------------------------------------------------------
 
-    private static (TextEditor Editor, EditorTabViewModel Tab) Setup(ShellHarness shell, string buffer = Buffer)
+    internal static (TextEditor Editor, EditorTabViewModel Tab) Setup(ShellHarness shell, string buffer = Buffer)
     {
         shell.Vm.SettingsService.Update(s => s with { ResultsPlacement = ResultsPlacement.Inline });
         var editor = shell.Window.GetVisualDescendants().OfType<TextEditor>().First(e => e.Name == "Editor");
@@ -379,7 +328,7 @@ public class InlineResultsTests
         return (editor, tab);
     }
 
-    private static void PlaceUnderFirstStatement(ShellHarness shell, EditorTabViewModel tab)
+    internal static void PlaceUnderFirstStatement(ShellHarness shell, EditorTabViewModel tab)
     {
         var scope = InlineResultPlacement.Scope(PostgresDialect.Instance, "select 1;", 0, isWholeBuffer: false);
         tab.ApplyInlineRun(scope, InlineResultPlacement.Assign(scope, [OneSet()]));
@@ -391,7 +340,17 @@ public class InlineResultsTests
             TimeSpan.FromMilliseconds(4), null, null, false),
         "select 1;", pageable: false);
 
-    private static InlineResultView[] Zones(TextEditor editor)
-        => editor.TextArea.TextView.GetVisualDescendants().OfType<InlineResultView>()
+    internal static InlineZoneView[] Zones(TextEditor editor)
+        => editor.TextArea.TextView.GetVisualDescendants().OfType<InlineZoneView>()
             .Where(v => v.IsEffectivelyVisible).ToArray();
+
+    /// <summary>The results pane's view (zones hold results views of their own).</summary>
+    internal static ResultView PaneResults(ShellHarness shell)
+        => shell.Window.GetVisualDescendants().OfType<ResultView>().Single(v => v.Name == "ResultsView");
+
+    /// <summary>A zone header button, by the tooltip that names it.</summary>
+    internal static Button ZoneButton(InlineZoneView zone, string tip)
+        => zone.GetVisualDescendants().OfType<Button>().Single(b => Equals(ToolTip.GetTip(b), tip));
+
+    internal static void Click(Button button) => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
 }

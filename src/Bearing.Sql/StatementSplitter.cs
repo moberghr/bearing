@@ -285,8 +285,7 @@ public static class StatementSplitter
         var parts = new List<string>();
         foreach (var span in spans)
         {
-            var t = span.Text.Trim();
-            while (t.EndsWith(";", StringComparison.Ordinal)) t = t[..^1].TrimEnd();
+            var t = SentText(span.Text);
             if (t.Length > 0) parts.Add(t);
         }
         if (parts.Count == 0) return sql;
@@ -297,5 +296,18 @@ public static class StatementSplitter
         foreach (var p in parts)
             terminated.Add(EndsWithLineComment(p) ? p + "\n;" : p + ";");
         return string.Join("\n", terminated);
+    }
+
+    /// <summary>What <see cref="EnsureSeparated(string, IReadOnlyList{StatementSpan})"/> sends of a span: its
+    /// text without surrounding whitespace and trailing semicolons. Empty means the span is not sent, so it
+    /// takes no statement number (<c>QueryResult.StatementIndex</c>).</summary>
+    public static string SentText(string spanText)
+    {
+        var t = spanText.Trim();
+        while (t.EndsWith(";", StringComparison.Ordinal))
+        {
+            t = t[..^1].TrimEnd();
+        }
+        return t;
     }
 }

@@ -230,16 +230,16 @@ public static class SettingsCatalog
             Key = "results.placement",
             CategoryId = Results,
             Title = "Show results",
-            Description = "In the results pane below the editor, or inline — a compact table directly under the "
-                        + "statement that produced it. Inline results are read-only; open one in the pane to "
-                        + "edit, follow a foreign key or export. Also switchable from View ▸ Toggle Inline Results.",
+            Description = "In the results pane below the editor, or inline — directly under the statement that "
+                        + "produced them, each with everything the pane offers: editing, foreign keys, export. "
+                        + "Also switchable from View ▸ Toggle Inline Results.",
             Keywords = "inline results editor notebook beneath statement pane placement table under query",
             Options =
             [
                 new(nameof(ResultsPlacement.Pane), "In the results pane",
                     "Below the editor, stacked or tabbed."),
                 new(nameof(ResultsPlacement.Inline), "Inline, under the statement",
-                    "A compact table in the editor, beneath the statement that ran. Run All gives each "
+                    "Results in the editor, beneath the statement that ran. Run All gives each "
                     + "statement its own table only when the server says which result came from which "
                     + "statement; otherwise the batch's results share one table under the last statement."),
             ],

@@ -144,7 +144,7 @@ public sealed class ExternalScripts
             _ctx.SetStatus(blocked);
             return false;
         }
-        if (tab.Results.Any(r => r.HasPendingChanges))
+        if (tab.PendingEditCount > 0)   // the pane's results and every inline zone's
         {
             _ctx.SetStatus("This tab has unsaved grid edits — save or discard them before moving it.");
             return false;
@@ -191,6 +191,9 @@ public sealed class ExternalScripts
         tab.ConnectionId = _ctx.DefaultConnectionId;
         tab.DatabaseName = null;
         tab.SetFreshResults(Array.Empty<ResultSetViewModel>());
+        // Its inline results too: they came from the old project's connection, and saving, paging or counting
+        // in them would now run against the new one. Nothing is pending (refused above), so none is kept.
+        tab.ClearInlineZones();
         _connections.ApplyConnectionDisplay(tab);
         _workspace.Adopt(tab);
         _scripts.RefreshScripts();

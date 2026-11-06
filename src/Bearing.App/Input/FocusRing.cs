@@ -50,9 +50,13 @@ public static class FocusRing
 
         var focused = top?.FocusManager?.GetFocusedElement() as Visual;
         var current = -1;
+        // The innermost container holding focus wins: an inline zone sits inside the editor, and focus in the
+        // zone is the zone's region, not the editor's.
         if (focused is not null)
             for (var i = 0; i < regions.Count; i++)
-                if (IsWithin(focused, regions[i].Container)) { current = i; break; }
+                if (IsWithin(focused, regions[i].Container)
+                    && (current < 0 || IsWithin(regions[i].Container, regions[current].Container)))
+                    current = i;
 
         foreach (var i in Order(regions.Count, current))
             if (regions[i].Focus.Focus()) return;

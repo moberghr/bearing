@@ -412,12 +412,6 @@ public sealed class ResultCellFactory
     /// </summary>
     private static string Shown(string raw, bool numeric) => numeric ? NumberGrouping.Apply(raw) : raw;
 
-    /// <summary>What a cell of <paramref name="result"/> draws, for read-only surfaces that render a result
-    /// without building grid cells (inline results). Goes through <see cref="Shown"/>, so it groups digits
-    /// exactly where the grid does and adds no caller of <see cref="NumberGrouping"/> (§9.10c).</summary>
-    internal static string DisplayText(ResultSetViewModel result, object?[]? row, int index)
-        => Shown(GridSelectionOps.CellText(row, index), CellStats.IsNumeric(result.Columns[index].ClrType));
-
     /// <summary>The SQL a pending edit in this cell will be saved as, or null when it is an ordinary value
     /// (#149). Only asked of an editable result — nothing else can hold a pending edit.</summary>
     private static string? PendingExpression(ResultSetViewModel result, int index, object?[]? row)

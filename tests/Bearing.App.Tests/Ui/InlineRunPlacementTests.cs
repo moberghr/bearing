@@ -1,6 +1,7 @@
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using AvaloniaEdit;
+using Bearing.App.Controls;
 using Bearing.App.Editing;
 using Bearing.App.Results;
 using Bearing.App.ViewModels;
@@ -29,7 +30,8 @@ public class InlineRunPlacementTests
         var editor = new TextEditor { Text = Buffer };
         var window = new Window { Content = editor, Width = 600, Height = 400 };
         window.Show();
-        var controller = new InlineResultsController(editor, () => true, (_, _) => { });
+        var controller = new InlineResultsController(editor, () => true,
+            (_, zone) => new InlineZoneView(zone, new ResultView { IsInline = true }, _ => false, () => { }));
         var tab = new EditorTabViewModel("t", Buffer);
         controller.Bind(tab);
         return (editor, controller, tab);

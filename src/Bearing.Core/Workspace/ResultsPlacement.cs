@@ -9,7 +9,7 @@ public enum ResultsPlacement
     /// <summary>The results pane below the editor (Stacked or Tabbed, <see cref="ResultsViewMode"/>).</summary>
     Pane,
 
-    /// <summary>A compact read-only table under the statement, inside the editor's scroll. The pane still holds
-    /// the run's results for editing, navigation and export, but does not open by itself.</summary>
+    /// <summary>Under the statement, inside the editor's scroll: the same results view as the pane (editing,
+    /// foreign-key navigation, export), one per zone. The pane does not open by itself.</summary>
     Inline,
 }
