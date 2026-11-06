@@ -138,10 +138,26 @@ public partial class App : Application
             // brushes have already been repainted in place; what is left is everything that holds a colour of
             // its own: the editors' TextMate theme, and the results grid, which bakes translucent copies of
             // tokens (row tints, badges) into the cells it builds.
+            // One posted re-render however many routes ask for it in the same turn: a scheme picked in
+            // Settings repaints (Repainted) *and* raises Changed, and each used to post its own rebuild.
+            var resultsRefreshPosted = false;
+            void PostResultsRefresh()
+            {
+                if (resultsRefreshPosted)
+                {
+                    return;
+                }
+                resultsRefreshPosted = true;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    resultsRefreshPosted = false;
+                    window.RefreshTypeScale();
+                });
+            }
             Theming.ColorSchemes.Repainted += app =>
             {
                 Editing.EditorChrome.ApplyColorScheme(Theming.ColorSchemes.IsLight(app));
-                Dispatcher.UIThread.Post(window.RefreshTypeScale);
+                PostResultsRefresh();
             };
             settings.Changed += s =>
             {
@@ -151,7 +167,7 @@ public partial class App : Application
                 // so the results have to be re-rendered rather than left to a binding (#77).
                 CellFormat.Zone = Formatting.DisplayTimeZone.Resolve(s.DisplayTimeZone);
                 Formatting.NumberGrouping.Enabled = s.GroupNumbersInResults;
-                Dispatcher.UIThread.Post(window.RefreshTypeScale);
+                PostResultsRefresh();
             };
             LogStartup("window constructed");
 

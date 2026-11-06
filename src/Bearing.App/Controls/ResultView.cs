@@ -81,7 +81,18 @@ public sealed partial class ResultView : UserControl
     /// </summary>
     public void RefreshTypeScale()
     {
-        if (_results is not null) Rebuild();
+        if (_results is null)
+        {
+            return;
+        }
+        // A re-render can now arrive with no user action (the OS flipping light/dark under "Match system"),
+        // so a cell editor may be open. Commit it first, as focus leaving the grid would (§9.15) — otherwise
+        // the rebuild drops the editor and the half-typed value never becomes pending.
+        foreach (var grid in _gridsByResult.Values)
+        {
+            CommitOpenEdit(grid);
+        }
+        Rebuild();
     }
 
     /// <summary>Invoked when the user requests the next page of a pageable result set.</summary>

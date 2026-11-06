@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Avalonia.Media;
 using Avalonia.Styling;
 using AvaloniaEdit;
@@ -101,18 +102,15 @@ public static class EditorChrome
         {
             installation.SetTheme(SqlRegistry.LoadTheme(ThemeName.LightPlus));
         }
-        lock (Installed)
-        {
-            Installed.RemoveAll(w => !w.TryGetTarget(out _));
-            Installed.Add(new WeakReference<Highlighted>(new Highlighted(editor, installation)));
-        }
+        // Keyed weakly on the editor and holding the installation strongly *through* it: the installation
+        // lives exactly as long as its editor. A WeakReference to a record nothing else held was collected
+        // at the next GC, and the switch then found no editors to re-theme.
+        Installed.AddOrUpdate(editor, installation);
     }
 
-    private sealed record Highlighted(TextEditor Editor, TextMate.Installation Installation);
-
-    /// <summary>Every highlighted surface still alive. Weak, because the history preview and the SQL-preview
-    /// windows come and go and nothing tells this class they went.</summary>
-    private static readonly List<WeakReference<Highlighted>> Installed = new();
+    /// <summary>Every highlighted surface still alive. Weak on the editor, because the history preview and the
+    /// SQL-preview windows come and go and nothing tells this class they went.</summary>
+    private static readonly ConditionalWeakTable<TextEditor, TextMate.Installation> Installed = new();
 
     /// <summary>
     /// Re-theme every live SQL surface for a light/dark switch: the TextMate theme (its own palette, which
@@ -121,21 +119,16 @@ public static class EditorChrome
     /// </summary>
     public static void ApplyColorScheme(bool light)
     {
-        List<Highlighted> live;
-        lock (Installed)
-        {
-            Installed.RemoveAll(w => !w.TryGetTarget(out _));
-            live = Installed.Select(w => w.TryGetTarget(out var h) ? h : null).OfType<Highlighted>().ToList();
-        }
+        var live = Installed.ToList();
         if (live.Count == 0)
         {
             return;
         }
         var theme = SqlRegistry.LoadTheme(light ? ThemeName.LightPlus : ThemeName.DarkPlus);
-        foreach (var h in live)
+        foreach (var (editor, installation) in live)
         {
-            h.Installation.SetTheme(theme);
-            h.Editor.TextArea.TextView.Redraw();
+            installation.SetTheme(theme);
+            editor.TextArea.TextView.Redraw();
         }
     }
 }

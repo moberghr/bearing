@@ -585,7 +585,6 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>Render the given tab's current result frame, plus the back-bar state (FK-nav history).</summary>
     /// <summary>view.toggleColorScheme: flip to the opposite of what is on screen, as an explicit Dark/Light
     /// setting — under "Match system" that means leaving it, which is what pressing a toggle asks for. Goes
     /// through settings so it persists and the settings window agrees; the repaint follows from Changed.</summary>
@@ -594,6 +593,7 @@ public partial class MainWindow
 
     private void OnToggleColorSchemeClick(object? sender, RoutedEventArgs e) => ToggleColorScheme();
 
+    /// <summary>Render the given tab's current result frame, plus the back-bar state (FK-nav history).</summary>
     internal void RebuildResults(EditorTabViewModel? tab)
     {
         ResultsView.CanGoBack = tab?.CanGoBack ?? false;
