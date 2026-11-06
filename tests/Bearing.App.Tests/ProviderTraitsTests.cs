@@ -5,6 +5,7 @@ using Bearing.App.Connections;
 using Bearing.App.Results;
 using Bearing.Core.Data;
 using Bearing.Data;
+using Bearing.Data.MySql;
 using Bearing.Data.Postgres;
 using Bearing.Data.SqlServer;
 using Bearing.Results;
@@ -36,6 +37,19 @@ public class ProviderTraitsTests
     {
         Assert.Equal(PostgresProvider.ProviderId, ProviderTraits.Postgres.Dialect.Id);
         Assert.Equal(SqlServerProvider.ProviderId, ProviderTraits.SqlServer.Dialect.Id);
+        Assert.Equal(MySqlProvider.ProviderId, ProviderTraits.MySql.Dialect.Id);
+    }
+
+    [Fact]
+    public void A_mysql_connection_writes_mysql_text()
+    {
+        var traits = ProviderTraits.For("MySQL");
+
+        Assert.Same(MySqlDialect.Instance, traits.Dialect);
+        Assert.Equal(SqlLiteralStyle.MySql, traits.Literals);
+        // Azure Database for MySQL is in the same service family as the Postgres one, so the same audience.
+        Assert.Equal(ProviderTraits.Postgres.EntraResource, traits.EntraResource);
+        Assert.True(traits.EntraTakesUser);
     }
 
     [Fact]

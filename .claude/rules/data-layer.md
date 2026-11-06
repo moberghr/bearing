@@ -7,6 +7,18 @@ Raw ADO.NET — **no ORM**. Postgres / SQL Server are query targets; SQLite is l
 - Column origin = table OID + attnum (`TableOID`/`ColumnAttributeNumber`); `BaseTableName` is null.
 - Propagate `CancellationToken` through every async DB call.
 
+## §5.1a — MySQL / MariaDB (`Bearing.Data/MySql`)
+One provider (`mysql`) and one dialect for both engines. Differences are server facts, read from the handshake
+version (`MySqlServerFlavor`) where they matter — never a user setting.
+- `INSERT … RETURNING` only on MariaDB 10.5+; the executor picks `SqlWithoutReturning` up front elsewhere. No
+  engine reads back an UPDATE.
+- Ids are derived (`MySqlMetadataReader.StableId`, FNV over schema+name) and resolved back by re-hashing the
+  table list. A database is the snapshot's one schema; column origin is by name with the database as catalog.
+- A run of non-row statements comes back as one result with the batch total (measured; like SqlClient).
+- A killed `SLEEP()`/`BENCHMARK()` *returns* (1 / 0) instead of failing — use a real query in timeout tests.
+- `AllowUserVariables` on, `ConvertZeroDateTime` on, `AllowLoadLocalInfile`/`AllowPublicKeyRetrieval` reserved.
+- Session time zone is **not** supported (named zones need the server's tz tables).
+
 ## §5.2 — SQLite (`Bearing.Persistence`)
 Best-effort: persistence failures must never crash the app — surface in the status bar, swallow on
 shutdown/save. Pruning uses `julianday()` + FTS `'rebuild'`.

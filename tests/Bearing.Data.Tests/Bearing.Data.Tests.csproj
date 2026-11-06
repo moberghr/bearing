@@ -19,6 +19,7 @@
          it lives in Shared/ beside PgTestServer so the next project that needs it links the same file
          rather than copying the defaults (see PgTestServer's comment on why copies are forbidden). -->
     <Compile Include="..\Shared\MsSqlTestServer.cs" Link="Shared\MsSqlTestServer.cs" />
+    <Compile Include="..\Shared\MySqlTestServer.cs" Link="Shared\MySqlTestServer.cs" />
   </ItemGroup>
 
   <ItemGroup>

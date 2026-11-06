@@ -76,4 +76,26 @@ public class SqlLiteralStyleTests
         // A long value is capped with its real length rather than truncated silently.
         Assert.Contains("(40 bytes)", CellFormat.Display(new byte[40]));
     }
+    /// <summary>
+    /// MySQL reads a backslash as an escape inside a string under the default <c>sql_mode</c>. Doubling only
+    /// the quote left a value ending in <c>\</c> able to escape its own closing quote — on the FK-lookup path,
+    /// where this literal is SQL that runs, that is a value from the database rewriting the statement.
+    /// </summary>
+    [Fact]
+    public void A_mysql_string_escapes_the_backslash_as_well_as_the_quote()
+    {
+        Assert.Equal(@"'a\\'' or 1=1 -- '", SqlValue.Literal(SqlLiteralStyle.MySql, @"a\' or 1=1 -- "));
+        // The other engines read a backslash literally and must keep doing so.
+        Assert.Equal(@"'a\'", SqlValue.Literal(SqlLiteralStyle.Postgres, @"a\"));
+    }
+
+    [Fact]
+    public void Mysql_spells_booleans_binary_and_time_its_own_way()
+    {
+        Assert.Equal("true", SqlValue.Literal(SqlLiteralStyle.MySql, true));
+        Assert.Equal("0x0102FF", SqlValue.Literal(SqlLiteralStyle.MySql, new byte[] { 1, 2, 255 }));
+        // TIME is a duration up to 838 hours with no day part — `c`'s 1.02:03:04 would be misread.
+        Assert.Equal("'26:03:04'", SqlValue.Literal(SqlLiteralStyle.MySql, new TimeSpan(1, 2, 3, 4)));
+        Assert.Equal("'-0:00:01.500000'", SqlValue.Literal(SqlLiteralStyle.MySql, TimeSpan.FromMilliseconds(-1500)));
+    }
 }

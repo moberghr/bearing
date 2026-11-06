@@ -146,6 +146,23 @@ public static class StatementSplitter
         return spans;
     }
 
+    /// <summary>
+    /// The MySQL / MariaDB split: <see cref="MySqlScanner"/>'s, so a <c>DELIMITER</c>-separated routine
+    /// definition runs as one statement, a <c>BEGIN … END</c> body is not cut at its first semicolon, and a
+    /// semicolon inside <c>'it\'s;'</c> or a backticked name does not split. <see cref="MySqlDialect"/> is
+    /// the only caller.
+    /// </summary>
+    internal static IReadOnlyList<StatementSpan> SplitWithMySqlScanner(string sql)
+    {
+        var spans = new List<StatementSpan>();
+        foreach (var statement in MySqlScanner.Split(sql))
+        {
+            spans.Add(new StatementSpan(
+                statement.Start, statement.Start + statement.Text.Length, statement.Text));
+        }
+        return spans;
+    }
+
     /// <summary>True for a line (<c>--</c>) or block (<c>/* */</c>) comment token.</summary>
     private static bool IsComment(IToken t)
         => t.Text is { } text && (text.StartsWith("--") || text.StartsWith("/*"));
