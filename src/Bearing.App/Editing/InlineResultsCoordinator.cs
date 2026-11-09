@@ -101,6 +101,9 @@ public sealed class InlineResultsCoordinator
         Controller = new InlineResultsController(editor, () => IsInline, CreateZoneView);
     }
 
+    /// <summary>Put a line in the status bar.</summary>
+    internal void Say(string text) => _status(text);
+
     /// <summary>Draws the zones in the editor.</summary>
     public InlineResultsController Controller { get; }
 

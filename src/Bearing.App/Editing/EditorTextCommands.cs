@@ -78,19 +78,26 @@ public sealed class EditorTextCommands
     }
 
     /// <summary>
-    /// Run with focus in an inline zone (spec §8): the zone's own statements, wherever the caret is. A zone
-    /// holding a whole batch's sets (an unattributed Run All) re-runs the batch; one whose statement was
-    /// removed falls back to the caret, as there is nothing left to re-run.
+    /// Run with focus in an inline zone (spec §8): the zone's own statements, wherever the caret is. One whose
+    /// statement was removed falls back to the caret, as there is nothing left to re-run.
+    /// <para>
+    /// A zone holding a whole batch's sets (an unattributed Run All — every multi-statement Run All on SQL
+    /// Server) does <b>not</b> re-run the batch: Run never escalates to running everything, the buffer as it is
+    /// now, possibly with writes typed since. It runs the caret's statement, and <paramref name="note"/> says so.
+    /// </para>
     /// </summary>
-    public Results.RunScope ScopeForZone(ViewModels.InlineResultZone zone)
+    /// <param name="note">A status line when the scope is not what the zone held, else null.</param>
+    public Results.RunScope ScopeForZone(ViewModels.InlineResultZone zone, out string? note)
     {
+        note = null;
         if (zone.StatementRemoved)
         {
             return ScopeToRun();
         }
         if (zone.FromWholeBuffer)
         {
-            return ScopeToRunAll();
+            note = "Ran the statement at the caret — Run All re-runs the whole batch.";
+            return ScopeToRun();
         }
         var text = _editor.Text;
         // As many statements as the run that made the zone: a multi-statement selection's zone re-runs them
@@ -276,9 +283,11 @@ public sealed class EditorTextCommands
         Task<IReadOnlyList<Results.TextHunks.Hunk>> Diff(bool keepEnds)
             => Task.Run(() =>
             {
-                var diffed = Results.TextHunks.Diff(source, result.Text,
-                    keepEnds ? Results.TextHunks.StatementSync(dialect, source, result.Text) : null);
-                return diffed.Count > Results.TextHunks.MaxHunks ? Results.TextHunks.Whole(source, result.Text) : diffed;
+                var sync = keepEnds ? Results.TextHunks.StatementSync(dialect, source, result.Text) : null;
+                var diffed = Results.TextHunks.Diff(source, result.Text, sync);
+                // Too many edits: one trimmed replace per stretch between statement ends (with zones, so their
+                // anchors stay on the boundaries), else one for the whole text.
+                return diffed.Count > Results.TextHunks.MaxHunks ? Results.TextHunks.PerStretch(source, result.Text, sync) : diffed;
             });
         var keepEnds = KeepsStatementEnds?.Invoke() == true;
         var hunks = await Diff(keepEnds);

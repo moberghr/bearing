@@ -381,4 +381,27 @@ public class InlineZoneInputTests
         Press(shell, Key.Left, PhysicalKey.ArrowLeft, RawInputModifiers.Alt);
         Assert.Same(set, Assert.Single(zone.Zone.Sets));
     });
+
+    /// <summary>Run with focus in a batch zone (an unattributed Run All — every multi-statement Run All on SQL
+    /// Server) runs the caret's statement, never the whole buffer, and says so.</summary>
+    [Fact]
+    public Task Run_in_a_batch_zone_runs_its_statement_not_the_whole_buffer() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(Run_in_a_batch_zone_runs_its_statement_not_the_whole_buffer));
+        var (editor, tab) = InlineResultsTests.Setup(shell, "select 1;\nselect 2;\n");
+        var all = Results.InlineResultPlacement.Scope(PostgresDialect.Instance, tab.Text, 0, isWholeBuffer: true);
+        tab.ApplyInlineRun(all, Results.InlineResultPlacement.Assign(all,
+            [InlineResultsTests.OneSet(), InlineResultsTests.OneSet(), InlineResultsTests.OneSet()]));   // unattributed
+        var zone = Assert.Single(tab.InlineZones);
+        Assert.True(zone.FromWholeBuffer);
+        editor.Text = "select 1;\nselect 2;\ndelete from t;\n";   // typed since: never to be swept in
+        editor.CaretOffset = editor.Text.IndexOf("select 2", System.StringComparison.Ordinal) + 3;
+        var text = new Editing.EditorTextCommands(editor, () => PostgresDialect.Instance);
+
+        var scope = text.ScopeForZone(zone, out var note);
+
+        Assert.False(scope.IsWholeBuffer);
+        Assert.Equal("select 2;", scope.Sql.Trim());
+        Assert.NotNull(note);
+    });
 }

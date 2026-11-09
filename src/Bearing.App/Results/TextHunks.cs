@@ -122,6 +122,11 @@ internal static class TextHunks
         return hunks;
     }
 
+    /// <summary>One trimmed hunk per stretch between <paramref name="sync"/> points — no diff — so the sync points
+    /// stay boundaries; with none, the same as <see cref="Whole"/>.</summary>
+    public static IReadOnlyList<Hunk> PerStretch(string before, string after, IReadOnlyList<(int Before, int After)>? sync)
+        => Segments(before, after, sync, work: null);
+
     /// <summary>Matching statement ends of <paramref name="before"/> and <paramref name="after"/> — where inline
     /// zones hang — when both hold the same number of statements (a reformat); none otherwise.</summary>
     public static IReadOnlyList<(int Before, int After)> StatementSync(Bearing.Sql.ISqlDialect dialect, string before, string after)

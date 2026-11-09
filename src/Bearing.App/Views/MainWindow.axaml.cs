@@ -402,7 +402,10 @@ public partial class MainWindow : Window
 
     private async Task ConfirmQuitAsync(ShellViewModel vm, int running)
     {
-        if (!await QuitGuard.ConfirmAsync(vm, _dialogs, running)) return;
+        if (!await QuitGuard.ConfirmAsync(vm, _dialogs, running))
+        {
+            return;
+        }
         _closeConfirmed = true;
         Close();
     }

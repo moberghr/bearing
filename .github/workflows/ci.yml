@@ -120,6 +120,7 @@ jobs:
             # --no-build: the solution is already built above. Each project on its own, for the contention
             # reason in this file's header.
             if ! dotnet test "tests/Bearing.$project.Tests" -c Release --no-build --nologo \
+                 --blame-hang-timeout 10m --blame-hang-dump-type none \
                  --results-directory "artifacts/test-results" \
                  --logger "GitHubActions;summary.includePassedTests=false;summary.includeSkippedTests=true" \
                  --logger "trx;LogFileName=$project.trx"; then

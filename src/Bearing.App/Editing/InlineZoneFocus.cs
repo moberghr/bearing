@@ -93,12 +93,20 @@ public sealed class InlineZoneFocus
 
     /// <summary>What Run covers: with focus in a zone, that zone's statement (whatever the caret is on), else
     /// the caret's statement or the selection.</summary>
-    public RunScope ScopeToRun()
-        => _inline.FocusedZone is { } zone ? _text.ScopeForZone(zone) : _text.ScopeToRun();
+    public RunScope ScopeToRun() => _inline.FocusedZone is { } zone ? ForZone(zone) : _text.ScopeToRun();
 
     /// <summary>What Explain covers, by the same rule as <see cref="ScopeToRun"/>.</summary>
-    public string SqlToExplain()
-        => _inline.FocusedZone is { } zone ? _text.ScopeForZone(zone).Sql : _text.SqlToRun();
+    public string SqlToExplain() => _inline.FocusedZone is { } zone ? ForZone(zone).Sql : _text.SqlToRun();
+
+    private RunScope ForZone(ViewModels.InlineResultZone zone)
+    {
+        var scope = _text.ScopeForZone(zone, out var note);
+        if (note is not null)
+        {
+            _inline.Say(note);   // a batch zone runs one statement, never the whole buffer: say so
+        }
+        return scope;
+    }
 
     /// <summary>The caret is in the SQL text: focus within the editor, but not inside an inline zone.</summary>
     public bool EditorTextHasFocus(IInputElement? focused)

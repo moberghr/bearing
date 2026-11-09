@@ -207,4 +207,21 @@ public class TextHunksTests
         document.UndoStack.Redo();
         Assert.Equal(after.Length, anchor.Offset);
     }
+
+    /// <summary>The cheap fallback for a rewrite with too many edits still keeps statement ends as boundaries.</summary>
+    [Fact]
+    public void Per_stretch_keeps_statement_ends_as_boundaries()
+    {
+        var before = string.Concat(Enumerable.Range(0, 50).Select(i => $"select     {i};\n"));
+        var after = string.Concat(Enumerable.Range(0, 50).Select(i => $"SELECT\n  {i};\n\n"));
+        var sync = TextHunks.StatementSync(Bearing.Sql.PostgresDialect.Instance, before, after);
+
+        var hunks = TextHunks.PerStretch(before, after, sync);
+
+        Assert.Equal(after, ApplyHunks(before, hunks));
+        foreach (var (end, _) in sync)
+        {
+            Assert.DoesNotContain(hunks, h => h.Offset < end && end < h.Offset + h.Length);
+        }
+    }
 }
