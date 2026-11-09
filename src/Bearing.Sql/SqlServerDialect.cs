@@ -40,6 +40,9 @@ public sealed class SqlServerDialect : ISqlDialect
     private static readonly HashSet<string> RowReturningStarts =
         new(StringComparer.OrdinalIgnoreCase) { "SELECT", "WITH" };
 
+    /// <summary>T-SQL has no <c>LIMIT</c>; the first rows are <c>TOP (n)</c>, after <c>select</c>.</summary>
+    public string SelectTopRows(string qualifiedTable, int rows) => $"select top ({rows}) * from {qualifiedTable}";
+
     // A top-level occurrence of any of these means OFFSET/FETCH must NOT be appended:
     //   OFFSET/FETCH — the query already pages itself (a second clause is a syntax error);
     //   TOP          — T-SQL forbids TOP and OFFSET/FETCH in the same query expression;

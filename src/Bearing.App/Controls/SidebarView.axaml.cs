@@ -279,6 +279,38 @@ public partial class SidebarView : UserControl
         }
     }
 
+    /// <summary>
+    /// "Select top 100 rows": a new tab on the relation's own connection and database, holding the statement, and
+    /// run — the run itself is the window's (<see cref="RunSelectedTabRequested"/>), since it goes through the
+    /// editor and the ordinary run path like a typed query.
+    /// </summary>
+    private void OnSelectTopRows(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is null || NodeOf(sender) is not RelationNodeViewModel relation)
+        {
+            return;
+        }
+        var tab = Vm.Workspace.NewTab(relation.SelectTopRowsSql, connectionId: relation.ConnectionId);
+        Vm.Connections.SetTabDatabase(tab, relation.Database);
+        RunSelectedTabRequested?.Invoke();
+    }
+
+    /// <summary>Raised once a tab with a statement to run has been opened and selected; the window loads it into
+    /// the editor and runs it.</summary>
+    public System.Action? RunSelectedTabRequested { get; set; }
+
+    /// <summary>"New query window" on a database row: an empty tab on that connection, pointed at that database.
+    /// The editor follows the new selected tab on its own, as it does for the server row's "New script".</summary>
+    private void OnNewQueryForDatabase(object? sender, RoutedEventArgs e)
+    {
+        if (Vm is null || NodeOf(sender) is not DatabaseNodeViewModel database)
+        {
+            return;
+        }
+        var tab = Vm.Workspace.NewTab(connectionId: database.ConnectionId);
+        Vm.Connections.SetTabDatabase(tab, database.Database);
+    }
+
     private void OnCopyNodeName(object? sender, RoutedEventArgs e)
     {
         if (NodeOf(sender) is { } node) TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(node.Title);

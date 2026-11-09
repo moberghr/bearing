@@ -307,6 +307,15 @@ public interface ISqlDialect
     string SequenceReference(string qualifiedName) => $"'{qualifiedName}'";
 
     /// <summary>
+    /// The first <paramref name="rows"/> rows of <paramref name="qualifiedTable"/> (already quoted by this
+    /// dialect), for the schema tree's "Select top N rows". A whole-statement hook because where the limit goes
+    /// varies: Postgres and MySQL end with <c>limit N</c> (the default), T-SQL puts <c>top (N)</c> after
+    /// <c>select</c>. No <c>order by</c>: which rows come first is the server's choice, as it is for any
+    /// unordered query — the statement opens in an editor, where one can be added.
+    /// </summary>
+    string SelectTopRows(string qualifiedTable, int rows) => $"select * from {qualifiedTable} limit {rows}";
+
+    /// <summary>
     /// Why the SQL formatter must not lay out this engine's SQL, or null when it may. The formatter reads
     /// PostgreSQL; a dialect whose lexical forms it misreads in a way that changes the statement (MySQL's
     /// <c>#</c> comment) refuses rather than be formatted into a different statement. The text completes

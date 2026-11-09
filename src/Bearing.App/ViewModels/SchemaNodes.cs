@@ -74,6 +74,10 @@ public abstract partial class SchemaNodeViewModel : ObservableObject
     /// <summary>Whether this row is a sequence — for the context menu's copy-nextval items (#119).</summary>
     public virtual bool IsSequence => false;
 
+    /// <summary>Whether this row is something rows can be selected from (a table or view) — for the context
+    /// menu's "Select top 100 rows".</summary>
+    public virtual bool CanSelectRows => false;
+
     public ObservableCollection<SchemaNodeViewModel> Children { get; } = new();
 
     /// <summary>The row above this one, or null at the root. Set wherever children are attached, so a
@@ -551,6 +555,9 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
 
     /// <summary>The database this row is for, so a server-level size read can match it by name.</summary>
     internal string Database => _database;
+
+    /// <summary>The connection this database was listed through — where "New query window" opens its tab.</summary>
+    internal Guid ConnectionId => _connection.Id;
 
     /// <summary>
     /// Label this row with the database's size (#76), keeping whatever else the detail said. Leading with the
@@ -1181,6 +1188,31 @@ public sealed class RelationNodeViewModel : SchemaNodeViewModel
 
     /// <summary>Which database this relation is in, so a reveal can confirm it landed on the right one.</summary>
     internal string Database => _database;
+
+    /// <summary>The connection this relation was read through — where "Select top rows" opens its tab.</summary>
+    internal Guid ConnectionId => _connection.Id;
+
+    /// <summary>How many rows the context menu's "Select top … rows" asks for.</summary>
+    public const int TopRowCount = 100;
+
+    public override bool CanSelectRows => true;
+
+    /// <summary>
+    /// The first <see cref="TopRowCount"/> rows of this relation, in this connection's own dialect
+    /// (<c>limit</c> on Postgres and MySQL, <c>top</c> on SQL Server). Quoted unconditionally, as generated DML
+    /// is: a mixed-case or keyword name must not turn into a different (or no) table.
+    /// </summary>
+    public string SelectTopRowsSql
+    {
+        get
+        {
+            var dialect = ProviderTraits.For(_connection).Dialect;
+            var qualified = string.IsNullOrEmpty(_table.Schema)
+                ? dialect.Quote(_table.Name)
+                : $"{dialect.Quote(_table.Schema)}.{dialect.Quote(_table.Name)}";
+            return dialect.SelectTopRows(qualified, TopRowCount);
+        }
+    }
 
     /// <summary>What this relation costs on disk, once a size read has answered. Null until then, and for a
     /// view, which has no storage of its own.</summary>
