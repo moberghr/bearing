@@ -146,6 +146,23 @@ public static class StatementSplitter
         return spans;
     }
 
+    /// <summary>
+    /// The MySQL / MariaDB split: <see cref="MySqlScanner"/>'s, so a <c>DELIMITER</c>-separated routine
+    /// definition runs as one statement, a <c>BEGIN … END</c> body is not cut at its first semicolon, and a
+    /// semicolon inside <c>'it\'s;'</c> or a backticked name does not split. <see cref="MySqlDialect"/> is
+    /// the only caller.
+    /// </summary>
+    internal static IReadOnlyList<StatementSpan> SplitWithMySqlScanner(string sql)
+    {
+        var spans = new List<StatementSpan>();
+        foreach (var statement in MySqlScanner.Split(sql))
+        {
+            spans.Add(new StatementSpan(
+                statement.Start, statement.Start + statement.Text.Length, statement.Text));
+        }
+        return spans;
+    }
+
     /// <summary>True for a line (<c>--</c>) or block (<c>/* */</c>) comment token.</summary>
     private static bool IsComment(IToken t)
         => t.Text is { } text && (text.StartsWith("--") || text.StartsWith("/*"));
@@ -190,8 +207,8 @@ public static class StatementSplitter
     /// <summary>Whether the last token of <paramref name="fragment"/> is a line comment (<c>-- …</c>),
     /// which runs to end of line and would swallow a <c>;</c> appended on the same line.
     /// <para>
-    /// The PostgreSQL lexer answers this for every dialect, which is the one place here that does not
-    /// pick a lexer per engine — deliberately, because <c>-- to end of line</c> and <c>'…'</c> literals are
+    /// <see cref="ISqlDialect.EndsWithLineComment"/>'s default: the PostgreSQL lexer answers this for Postgres
+    /// and T-SQL alike — deliberately, because <c>-- to end of line</c> and <c>'…'</c> literals are
     /// the same lexical forms in both dialects, so both lexers give the same answer to this question. Where
     /// they could differ is a T-SQL-only form (<c>[a--b]</c>), and there the PG lexer answers "yes" where
     /// T-SQL would say "no": the <c>;</c> goes on its own line and the SQL is still correct. That is the
@@ -200,7 +217,7 @@ public static class StatementSplitter
     /// statement.
     /// </para>
     /// </summary>
-    private static bool EndsWithLineComment(string fragment)
+    internal static bool EndsWithPostgresLineComment(string fragment)
     {
         IToken? last = null;
         foreach (var t in PgParsing.LexAll(fragment))
@@ -273,13 +290,20 @@ public static class StatementSplitter
     /// </para>
     /// </summary>
     public static string EnsureSeparated(ISqlDialect dialect, string sql)
-        => EnsureSeparated(sql, Split(dialect, sql));
+        => EnsureSeparated(dialect, sql, Split(dialect, sql));
 
     /// <summary><see cref="EnsureSeparated(ISqlDialect, string)"/> over a split the caller already has
     /// (<paramref name="spans"/> must be <see cref="Split(ISqlDialect, string)"/> of <paramref name="sql"/>),
     /// so a caller that needs the spans too lexes the text once.</summary>
-    public static string EnsureSeparated(string sql, IReadOnlyList<StatementSpan> spans)
+    public static string EnsureSeparated(ISqlDialect dialect, string sql, IReadOnlyList<StatementSpan> spans)
     {
+        // A lone MySQL statement wrapped in DELIMITER lines is still one statement, but the directive and the
+        // custom delimiter are the client's, not SQL: sent as typed, the server rejects the whole run (1064).
+        // The span's text is the statement without them.
+        if (spans.Count == 1 && dialect.HasDelimiterDirective(sql))
+        {
+            return spans[0].Text;
+        }
         if (spans.Count <= 1) return sql;
 
         var parts = new List<string>();
@@ -294,11 +318,13 @@ public static class StatementSplitter
         // fresh line, or the comment (which runs to end of line) would swallow it and merge statements.
         var terminated = new List<string>(parts.Count);
         foreach (var p in parts)
-            terminated.Add(EndsWithLineComment(p) ? p + "\n;" : p + ";");
+        {
+            terminated.Add(dialect.EndsWithLineComment(p) ? p + "\n;" : p + ";");
+        }
         return string.Join("\n", terminated);
     }
 
-    /// <summary>What <see cref="EnsureSeparated(string, IReadOnlyList{StatementSpan})"/> sends of a span: its
+    /// <summary>What <see cref="EnsureSeparated(ISqlDialect, string, IReadOnlyList{StatementSpan})"/> sends of a span: its
     /// text without surrounding whitespace and trailing semicolons. Empty means the span is not sent, so it
     /// takes no statement number (<c>QueryResult.StatementIndex</c>).</summary>
     public static string SentText(string spanText)

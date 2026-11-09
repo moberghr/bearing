@@ -242,6 +242,13 @@ public sealed class EditorTextCommands
         var length = selected ? _editor.SelectionLength : _editor.Document.TextLength;
         if (length == 0) return null;
 
+        // The formatter reads PostgreSQL; a dialect it would misread (MySQL's `#` comment) refuses rather than
+        // be formatted into a different statement.
+        if (_dialect().FormatRefusal is { } refusal)
+        {
+            return $"Not formatted — {refusal}.";
+        }
+
         // The document's line endings, not the fragment's: a one-line selection out of a CRLF file has no
         // CRLF in it for the formatter to find, and it would hand back LF to splice into a CRLF buffer.
         var newline = _editor.Document.Text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";

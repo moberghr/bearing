@@ -27,7 +27,7 @@
 
 - **Active stack:** dotnet (.NET 10, `Nullable` enabled, `ImplicitUsings` on, central package versions)
 - **Build command:** `dotnet build`
-- **Test command:** `dotnet test` — live Postgres / SQL Server suites skip without their containers (`./build/test-db.sh`, `./build/test-db-mssql.sh`). **Run both before trusting a green run** — a skip is not a pass (§4.2).
+- **Test command:** `dotnet test` — live Postgres / SQL Server / MariaDB+MySQL suites skip without their containers (`./build/test-db.sh`, `./build/test-db-mssql.sh`, `./build/test-db-mysql.sh`). **Run them before trusting a green run** — a skip is not a pass (§4.2).
 - **Format:** `dotnet format --verbosity quiet`
 
 For framework-specific guidance, see `.claude/skills/tech-stack-dotnet/SKILL.md`.
@@ -71,10 +71,10 @@ Full reference docs (read on-demand by skills and review agents):
 
 - **Type:** Cross-platform desktop SQL query tool & script manager (Avalonia 12.1)
 - **UI:** Avalonia + AvaloniaEdit (editor) + Avalonia DataGrid (results); MVVM via CommunityToolkit.Mvvm
-- **SQL intelligence:** ANTLR4 grammars — PostgreSQL **and** T-SQL — behind one antlr4-c3 completion engine, each dialect handing over its own rule set (`Bearing.Sql`, `ISqlDialect.ParseRules`, §9.5)
-- **Data layer:** raw ADO.NET — Npgsql (PostgreSQL targets), Microsoft.Data.SqlClient (SQL Server targets), Microsoft.Data.Sqlite (local query log + workspace). **No ORM.**
+- **SQL intelligence:** ANTLR4 grammars — PostgreSQL, T-SQL **and** MySQL — behind one antlr4-c3 completion engine, each dialect handing over its own rule set (`Bearing.Sql`, `ISqlDialect.ParseRules`, §9.5)
+- **Data layer:** raw ADO.NET — Npgsql (PostgreSQL targets), Microsoft.Data.SqlClient (SQL Server targets), MySqlConnector (MySQL + MariaDB targets, one provider), Microsoft.Data.Sqlite (local query log + workspace). **No ORM.**
 - **DI:** manual composition root in `src/Bearing.App/App.axaml.cs` (no container)
-- **Database targets:** PostgreSQL and Microsoft SQL Server, behind `IDbProvider` (connect/metadata/execute) + `ISqlDialect` (the SQL text)
+- **Database targets:** PostgreSQL, Microsoft SQL Server and MySQL/MariaDB, behind `IDbProvider` (connect/metadata/execute) + `ISqlDialect` (the SQL text)
 - **Test stack:** xUnit v2 + `Xunit.SkippableFact`, hand-rolled fakes (`tests/**/Fakes.cs`), no Moq/NSubstitute, no EF InMemory. Headless UI tests in `tests/Bearing.App.Tests/Ui/` on `Avalonia.Headless` (§4.5)
 - **Layout:** `src/Bearing.{Core,Sql,Data,Persistence,Updates,Sessions,Results,Demo,App,Desktop,Cli}` — dependency-free `Core` ← `Sql`/`Data`/`Persistence`/`Updates` ← `Sessions` ← `App` ← `Desktop`. `Sessions` is the windowless connect/credential/refusal layer and `Results` the formatters and exporters, both shared by two hosts (§2.6, §2.7), and `Cli` is that second host — the `bearing` command: read-only access to exposed connections, and with no arguments it opens the app (the GUI apphost is `bearing-app`, §1.11)
 - **Distribution:** Velopack installers + delta auto-update on this repo's GitHub Releases. **Cutting a release is publishing a GitHub Release** — `.github/workflows/release.yml` tests, builds all three platforms (macOS on its own runner — Velopack cannot cross-build it) and verifies the assets landed; the version is the git tag via MinVer, so nothing in the tree is bumped (§9.6a). See `docs/RELEASING.md`. `build/release.sh` is the older archive path, kept.

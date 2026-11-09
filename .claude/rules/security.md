@@ -24,7 +24,10 @@ absences typed.
 - `SqliteQueryLog`, retention `QueryLogRetentionDays` (default 180, ≤0 = forever). No PII beyond the SQL.
 - Literal redaction (`QueryLogRedactLiterals`, `SqlRedactor`) is **opt-in, default off** — never assume a
   log is sanitized. It runs in `Append`; a redactor that throws stores `(redaction failed)`, never the
-  verbatim SQL. It reaches the store as `Func<string,string>` (`Persistence` may not reference `Sql`).
+  verbatim SQL. It reaches the store as `Func<string,string,string>` — (provider id, SQL), so each engine's
+  SQL is redacted by its own lexer (`Persistence` may not reference `Sql`).
+- MySQL redaction (`MySqlLiterals.RedactLiterals`) reads a statement holding a backslash twice — default and
+  `NO_BACKSLASH_ESCAPES` — and redacts every span either reading calls a literal (merged; shape gives way).
 - Files (incl. `-wal`/`-shm`) are narrowed to the owner on start (`LocalFilePermissions.HardenDatabase`),
   best-effort. No encryption at rest (it would need a user-supplied key — a new design, see §1.1).
 
@@ -95,6 +98,20 @@ holds before selecting `*` or an options bag.
 - No server read-only exists; `WriteRefusal` is the whole guarantee. `IDbProvider.EnforcesReadOnlyOnServer`
   picks the dialog wording. A new engine must answer this flag (default `true`) before shipping.
 
+### §1.9b — MySQL / MariaDB
+- Read-only = `set session transaction read only` in a MySqlConnector **connection-opened callback**, which runs on
+  every new *and every reset* pooled connection (§1.9's "not a `SET`" rule, met another way). Server refuses with
+  1792. Timeout = `DefaultCommandTimeout` (MySqlConnector issues `KILL QUERY`), applied after the options bag.
+- DDL, `LOCK TABLES` etc. **commit implicitly**: `MySqlDialect.TransactionControl` names them
+  ("CREATE (commits implicitly)") so manual-commit refuses them while a transaction is held or would open (§1.10).
+  Temporary tables excepted.
+- `sql_mode` is unknown to the lexer: `MySqlWriteGuard.Describe` reads a batch with a backslash under the default
+  **and** the `NO_BACKSLASH_ESCAPES`/`ANSI_QUOTES` readings, appending any statement only another reading sees
+  (widening only). `StatementRisk.CommitsImplicitly` (from `ISqlDialect.CommitsImplicitly`, never the label)
+  marks implicit commits: manual-commit refuses them like explicit control, the external policy as "not a read".
+- Scanner lexes `/*! … */` as code (the server runs it); `RevealExecutableComments` does the same for the external
+  name scan. `SqlLiteralStyle.MySql` escapes backslashes.
+
 ## §1.10 — Manual commit (#131)
 `ConnectionInfo.ManualCommit`: a **write** opens a transaction held until Commit/Rollback. `CommitPolicy`;
 not part of `SamePool`/`SameConnection`.
@@ -111,6 +128,9 @@ not part of `SamePool`/`SameConnection`.
   `XACT_STATE()` without re-deciding).
 - Typed `BEGIN`/`COMMIT`/`ROLLBACK` refused on manual-commit connections only, via per-dialect
   `ISqlDialect.TransactionControl` (T-SQL `BEGIN`/`END` are blocks).
+- Implicit commits (`StatementRisk.CommitsImplicitly`, MySQL DDL / `LOCK` …) are refused only while a transaction
+  is held or another write in the batch would open one — own sentence, never the typed-`COMMIT` one — and never
+  open a transaction themselves (`WriteRefusal.OpensTransaction`).
 - Commit/Rollback refused while `tab.IsRunning`. Forced rollbacks cancel the statement first. Idle sweep
   skips running tabs, is not re-entrant, and activity is stamped at statement start and finish.
 - Per tab (`TabTransactions`), each holding a `SessionLease`; capped at `CommitPolicy.MaxOpenPerPool`.

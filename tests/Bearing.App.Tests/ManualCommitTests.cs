@@ -38,7 +38,7 @@ public class ManualCommitTests : IDisposable
 
     private Harness NewHarness(
         bool manualCommit = true, IDialogService? dialogs = null, AppSettings? settings = null,
-        FakeExecutor? executor = null)
+        FakeExecutor? executor = null, string providerId = "postgres")
     {
         Directory.CreateDirectory(_root);
         var provider = new FakeProvider { Executor = executor };
@@ -54,7 +54,7 @@ public class ManualCommitTests : IDisposable
         {
             Id = Guid.NewGuid(),
             Name = "prod",
-            ProviderId = "postgres",
+            ProviderId = providerId,
             Database = "app",
             ManualCommit = manualCommit,
         };
@@ -270,6 +270,107 @@ public class ManualCommitTests : IDisposable
         Assert.Contains("manual-commit mode", status);
         Assert.Contains("COMMIT", status);
         Assert.Null(h.Ctx.Transactions.For(tab));   // refused before anything opened, let alone ran
+    }
+
+    /// <summary>
+    /// MySQL DDL commits implicitly, but with nothing held it commits only itself — so it runs, and opens no
+    /// transaction: one opened for it would be committed by the statement it was opened for, leaving Bearing
+    /// holding a transaction the server no longer has (PR #180 review).
+    /// </summary>
+    [Fact]
+    public async Task Mysql_ddl_runs_on_its_own_and_opens_nothing()
+    {
+        var h = NewHarness(providerId: "mysql");
+        var tab = Tab(h);
+        var status = "";
+        h.Ctx.Status = s => status = s;
+
+        await h.Exec.ExecuteAsync("create table x (a int)");
+
+        Assert.DoesNotContain("manual-commit mode", status);
+        Assert.Null(h.Ctx.Transactions.For(tab));
+    }
+
+    [Fact]
+    public async Task Mysql_ddl_is_refused_while_a_transaction_is_held_and_says_why()
+    {
+        var h = NewHarness(providerId: "mysql");
+        var tab = Tab(h);
+        var status = "";
+        h.Ctx.Status = s => status = s;
+        await h.Exec.ExecuteAsync("insert into t values (1)");
+        Assert.NotNull(h.Ctx.Transactions.For(tab));
+
+        await h.Exec.ExecuteAsync("create table x (a int)");
+
+        Assert.Contains("manual-commit mode", status);
+        Assert.Contains("would end the transaction Bearing holds", status);
+        Assert.DoesNotContain("use Commit or Rollback to end it", status);
+        Assert.NotNull(h.Ctx.Transactions.For(tab));
+    }
+
+    [Theory]
+    [InlineData("insert into t values (1); create table x (a int)")]
+    [InlineData("create table x (a int); insert into x values (1)")]
+    public async Task Mysql_ddl_beside_a_write_in_one_batch_is_refused(string sql)
+    {
+        var h = NewHarness(providerId: "mysql");
+        var tab = Tab(h);
+        var status = "";
+        h.Ctx.Status = s => status = s;
+
+        await h.Exec.ExecuteAsync(sql);
+
+        Assert.Contains("other writes in this batch", status);
+        Assert.Null(h.Ctx.Transactions.For(tab));
+    }
+
+    /// <summary>A MariaDB block that writes and commits implicitly would autocommit its write: refused with
+    /// nothing held, and nothing is opened for it.</summary>
+    [Theory]
+    [InlineData("begin not atomic insert into t values (1); create table x (a int); end")]
+    [InlineData("if 1 then insert into t values (1); create table x (a int); end if")]
+    public async Task Mysql_block_mixing_a_write_with_ddl_is_refused_with_nothing_held(string sql)
+    {
+        var h = NewHarness(providerId: "mysql");
+        var tab = Tab(h);
+        var status = "";
+        h.Ctx.Status = s => status = s;
+
+        await h.Exec.ExecuteAsync(sql);
+
+        Assert.Contains("inside a block that also writes", status);
+        Assert.Null(h.Ctx.Transactions.For(tab));
+    }
+
+    /// <summary>Creating a procedure whose body writes runs: the body does not run at creation.</summary>
+    [Fact]
+    public async Task Mysql_create_procedure_with_a_writing_body_runs_and_opens_nothing()
+    {
+        var h = NewHarness(providerId: "mysql");
+        var tab = Tab(h);
+        var status = "";
+        h.Ctx.Status = s => status = s;
+
+        await h.Exec.ExecuteAsync("create procedure p() begin insert into t values (1); create table x (a int); end");
+
+        Assert.DoesNotContain("manual-commit mode", status);
+        Assert.Null(h.Ctx.Transactions.For(tab));
+    }
+
+    /// <summary>Typed control keeps its documented refusal on MySQL too, held transaction or not.</summary>
+    [Fact]
+    public async Task Mysql_typed_commit_is_still_refused_with_nothing_held()
+    {
+        var h = NewHarness(providerId: "mysql");
+        Tab(h);
+        var status = "";
+        h.Ctx.Status = s => status = s;
+
+        await h.Exec.ExecuteAsync("commit");
+
+        Assert.Contains("COMMIT not run", status);
+        Assert.Contains("use Commit or Rollback to end it", status);
     }
 
     /// <summary>The refusal is manual-commit's alone: a script that manages its own transactions keeps

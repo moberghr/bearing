@@ -1,4 +1,5 @@
 using Bearing.Core.Data;
+using Bearing.Data.MySql;
 using Bearing.Data.Postgres;
 using Bearing.Data.SqlServer;
 using Bearing.Testing;
@@ -16,17 +17,24 @@ namespace Bearing.Data.Tests;
 public class ProviderRegistryTests
 {
     [Fact]
-    public void Both_engines_are_registered_with_postgres_first()
+    public void Every_engine_is_registered_with_postgres_first()
     {
         var all = new ProviderRegistry().All.ToList();
 
         // The order is the order the connection dialog offers them in, and PostgreSQL — the engine every
         // existing project file names — stays first.
         Assert.Equal(
-            new[] { PostgresProvider.ProviderId, SqlServerProvider.ProviderId },
+            new[] { PostgresProvider.ProviderId, SqlServerProvider.ProviderId, MySqlProvider.ProviderId },
             all.Select(p => p.Id));
         Assert.Equal("Microsoft SQL Server", all[1].DisplayName);
+        Assert.Equal("MySQL / MariaDB", all[2].DisplayName);
     }
+
+    [Theory]
+    [InlineData("mysql")]
+    [InlineData("MySQL")]
+    public void My_sql_resolves_by_id_case_insensitively(string id)
+        => Assert.IsType<MySqlProvider>(new ProviderRegistry().Get(id));
 
     [Theory]
     [InlineData("sqlserver")]
@@ -40,8 +48,8 @@ public class ProviderRegistryTests
     {
         // A project file naming an engine this build does not ship must say so, rather than quietly
         // connecting with whichever provider happened to be first.
-        var ex = Assert.Throws<KeyNotFoundException>(() => new ProviderRegistry().Get("mysql"));
-        Assert.Contains("mysql", ex.Message);
+        var ex = Assert.Throws<KeyNotFoundException>(() => new ProviderRegistry().Get("duckdb"));
+        Assert.Contains("duckdb", ex.Message);
     }
 
     [Fact]

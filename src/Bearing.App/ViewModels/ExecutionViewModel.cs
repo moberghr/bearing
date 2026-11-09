@@ -490,7 +490,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
         // ROLLBACK is refused rather than run behind the driver's back (#131). Ahead of the read-only
         // refusal because it is about who owns the transaction rather than about what the statement writes,
         // and a COMMIT is neither a read nor a write.
-        if (WriteRefusal.ReasonForTransactionControl(info, risks) is { } notOurs)
+        // A statement that only commits implicitly (MySQL DDL) is refused only where it would end a transaction:
+        // one this tab holds, or the one its batch's other writes would open.
+        if (WriteRefusal.ReasonForTransactionControl(info, risks, _ctx.Transactions.For(tab) is not null) is { } notOurs)
         { _ctx.SetStatus(notOurs); return; }
 
         // Read-only connection: refuse, don't ask (#99). Ahead of the confirmation because it is independent
@@ -504,7 +506,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
         {
             if (risks.Any(s => s.IsRisky))
             {
-                var impacts = await CountRowImpactsAsync(risks);
+                var impacts = await CountRowImpactsAsync(traits.Dialect, risks);
                 if (!await dialogs.ConfirmWriteAsync(WriteConfirmation.ForBatch(info, risks, impacts)))
                 {
                     _ctx.SetStatus("Cancelled — write not confirmed.");
@@ -532,10 +534,12 @@ public sealed partial class ExecutionViewModel : ObservableObject
         // NamesAWrite, not IsRisky. The guard's verdict is deliberately generous — on T-SQL anything whose
         // lead word is not a known read is treated as a write so that it gets confirmed — and that is the
         // wrong test for this question: `declare @id int; select …` is ordinary T-SQL for a read, and
-        // opening a transaction on it would make browsing hold locks.
+        // opening a transaction on it would make browsing hold locks. Nor a statement that commits implicitly
+        // (WriteRefusal.OpensTransaction): it would commit the transaction it opened, leaving Bearing holding
+        // one the server no longer has.
         var opensTransaction = CommitPolicy.IsManualCommit(info)
             && _ctx.Transactions.For(tab) is null
-            && risks.Any(s => s.NamesAWrite);
+            && risks.Any(WriteRefusal.OpensTransaction);
 
         await RunExclusiveAsync(tab, async ct =>
         {
@@ -583,7 +587,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// </para>
     /// </summary>
     private async Task<IReadOnlyDictionary<int, RowImpact>?> CountRowImpactsAsync(
-        IReadOnlyList<StatementRisk> statements)
+        ISqlDialect dialect, IReadOnlyList<StatementRisk> statements)
     {
         var impacts = new Dictionary<int, RowImpact>();
         var toCount = new List<(int Index, UpdateDeleteTarget Target)>();
@@ -591,7 +595,10 @@ public sealed partial class ExecutionViewModel : ObservableObject
         for (var i = 0; i < statements.Count; i++)
         {
             if (!statements[i].IsRisky) continue;
-            if (UpdateDeleteTarget.TryReduce(statements[i].Text) is not { } target) continue;
+            if (UpdateDeleteTarget.TryReduce(dialect, statements[i].Text) is not { } target)
+            {
+                continue;
+            }
             // "Every row" is answered by the statement itself — #100's warning needs no server round trip,
             // and asking one for it would be the slowest way to learn what the missing WHERE already said.
             if (target.EveryRow) impacts[i] = RowImpact.Every(target);

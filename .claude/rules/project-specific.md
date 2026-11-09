@@ -177,6 +177,8 @@ Tests must start from a non-zero horizontal offset.
 - Default scope: own database, non-idle (`state is distinct from 'idle'`); status line names the scope.
   Append predicates, not `$1 is null or …`.
 - Neither the poll nor the actions are logged. Own control (`Controls/ActivityPanelView`).
+- `ActivityFilter.RecheckVisibility`: visibility (`SeesAllSessions`) is re-read on polling start, refresh, filter
+  change and after an action — not on timer ticks (MySQL pieces it from `SHOW GRANTS`, cached per session).
 
 ### §9.13a — Restricted roles don't see other sessions at all
 Ask `ServerActivity.SeesAllSessions` separately and say so in the status line. WHEN a read depends on role

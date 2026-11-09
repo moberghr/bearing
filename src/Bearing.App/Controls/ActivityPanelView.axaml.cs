@@ -120,6 +120,11 @@ public partial class ActivityPanelView : UserControl
             EditorChrome.InstallSqlHighlighting(BackendSql);
         }
 
+        if (Vm is { FormatsQueries: false })
+        {
+            return;
+        }
+
         CrashReporter.Observe(FormatAsync(sql), "activity.format-sql");
     }
 

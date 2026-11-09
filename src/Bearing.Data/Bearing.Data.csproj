@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Bearing.Data: the provider abstractions' engine implementations — PostgreSQL/Npgsql (Postgres/) and
-    Microsoft SQL Server/SqlClient (SqlServer/). One folder per engine behind IDbProvider; no driver type
+    Bearing.Data: the provider abstractions' engine implementations — PostgreSQL/Npgsql (Postgres/),
+    Microsoft SQL Server/SqlClient (SqlServer/) and MySQL + MariaDB/MySqlConnector (MySql/). One folder per engine behind IDbProvider; no driver type
     escapes this project.
     Core only, per §2.2 — deliberately NOT Bearing.Sql. Every executor entry point that needs
     dialect-varying text takes it already built (ExecutePageAsync, CountAsync), the way the App layer
@@ -17,6 +17,7 @@
   <ItemGroup>
     <PackageReference Include="Npgsql" />
     <PackageReference Include="Microsoft.Data.SqlClient" />
+    <PackageReference Include="MySqlConnector" />
   </ItemGroup>
 
 </Project>

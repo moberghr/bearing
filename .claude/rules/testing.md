@@ -12,9 +12,11 @@ Supplement: `.claude/references/dotnet/testing-supplement.md`.
 ## §4.2 — Live database tests skip, and a skip is not a pass
 - Postgres: `SkippableFact` + `await PgTestServer.RequireAsync(factory)` (`tests/Shared/PgTestServer.cs`,
   defaults to `squirrel-pg-test` on 55434, override via `BEARING_TEST_PG_*`). SQL Server:
-  `MsSqlTestServer` / `BEARING_TEST_MSSQL_*`, `bearing-mssql-test` on 1433.
+  `MsSqlTestServer` / `BEARING_TEST_MSSQL_*`, `bearing-mssql-test` on 1433. MySQL provider: `MySqlTestServer`
+  / `BEARING_TEST_{MARIADB,MYSQL}_*`, `bearing-mariadb-test` on 13306 and `bearing-mysql-test` on 13307 — every
+  live test is a theory over **both** engines.
 - Never a plain `[Fact]` that fails without a DB; never a `catch { return false; }` probe.
-- Containers: `./build/test-db.sh`, `./build/test-db-mssql.sh`. WHEN a change touches a provider, run its
+- Containers: `./build/test-db.sh`, `./build/test-db-mssql.sh`, `./build/test-db-mysql.sh` (starts both). WHEN a change touches a provider, run its
   container before reporting a result.
 
 ## §4.3 — UI: headless tests assert, eyeball QA confirms

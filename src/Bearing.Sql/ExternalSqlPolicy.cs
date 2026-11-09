@@ -38,35 +38,62 @@ public static class ExternalSqlPolicy
     public static string? Refuse(ISqlDialect dialect, string sql)
     {
         var statements = WriteGuard.Describe(dialect, sql);
-        if (statements.Count == 0) return "There is no statement here to run.";
+        if (statements.Count == 0)
+        {
+            return "There is no statement here to run.";
+        }
 
         foreach (var statement in statements)
         {
-            // Transaction control first: it is the shape that defeated read-only, so it gets a sentence
-            // that says why rather than being lumped in with "not a read".
-            if (statement.IsTransactionControl)
-                return $"'{statement.TransactionControl}' is not allowed on a connection exposed to external "
-                     + "tools — it is what would let a read-only session become writable. Send one read.";
-
             // A write the deny-list actually *named*. NamesAWrite rather than IsRisky, deliberately: the
             // generous verdict treats any unrecognised T-SQL lead word as a write so that it gets
             // confirmed, and saying "'DECLARE' writes" would assert a cause nobody checked (§1.1). A
             // statement like that is still refused — by the allow-list below, in its own words.
+            //
+            // Ahead of transaction control, because on MySQL a write can be both: DDL commits implicitly, so
+            // MySqlDialect names `CREATE` as transaction control too — and the sentence below ("would let a
+            // read-only session become writable") is not why CREATE is refused. No Postgres or T-SQL statement
+            // is both, so for those engines the order changes nothing.
             if (statement.NamesAWrite)
+            {
                 return $"'{statement.Label}' writes, and an exposed connection runs reads only.";
+            }
 
-            if (!dialect.ExternalReadVerbs.Contains(statement.Verb))
+            // Transaction control: it is the shape that defeated read-only, so it gets a sentence that says
+            // why rather than being lumped in with "not a read". Only the explicit kind: MySQL's `LOCK TABLES`
+            // or `ANALYZE` ends a transaction as a side effect, and saying it "would let a read-only session
+            // become writable" would assert a cause that is not true of it (§1.1). Those are refused below,
+            // as what they are — not a read — whatever the allow-list holds.
+            if (statement.IsTransactionControl && !statement.CommitsImplicitly)
+            {
+                return $"'{statement.TransactionControl}' is not allowed on a connection exposed to external "
+                     + "tools — it is what would let a read-only session become writable. Send one read.";
+            }
+
+            if (statement.CommitsImplicitly || !dialect.ExternalReadVerbs.Contains(statement.Verb))
+            {
                 return $"'{statement.Verb}' is not a read. A connection exposed to external tools runs only "
                      + $"{Listed(dialect.ExternalReadVerbs)} — anything else is refused, including statements "
                      + "that would change how this session behaves.";
+            }
 
             if (DeniedFunction(dialect, statement.Text) is { } function)
+            {
                 return $"'{function}' is not available through an exposed connection. It reaches outside the "
                      + "data — the server's files, its other sessions, or this session's own settings.";
+            }
 
             if (DeniedRelation(dialect, statement.Text) is { } relation)
+            {
                 return $"'{relation}' is not readable through an exposed connection. It holds credentials — "
                      + "a password hash, or a connection string for another server (§1.8).";
+            }
+
+            if (dialect.ExternalDeniedStatement(statement.Text) is { } shape)
+            {
+                return $"'{shape}' is not available through an exposed connection. It can return credentials — "
+                     + "a password hash, or a connection string for another server (§1.8).";
+            }
         }
 
         return null;
@@ -110,7 +137,12 @@ public static class ExternalSqlPolicy
     private static string? First(IReadOnlySet<string> denied, IReadOnlySet<string> found)
     {
         foreach (var name in denied)
-            if (found.Contains(name)) return name;
+        {
+            if (found.Contains(name))
+            {
+                return name;
+            }
+        }
 
         return null;
     }
@@ -128,8 +160,14 @@ public static class ExternalSqlPolicy
     private static (IReadOnlySet<string> Called, IReadOnlySet<string> Mentioned)? Scan(
         ISqlDialect dialect, string statement)
     {
-        try { return dialect.ExternalNameScan(statement); }
-        catch (Exception) { return null; }
+        try
+        {
+            return dialect.ExternalNameScan(statement);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -144,7 +182,9 @@ public static class ExternalSqlPolicy
             // The name as a call: a word boundary, the name, an optional closing delimiter, then '(' past
             // any whitespace. A column that merely shares the name is not a call and is left alone.
             if (Regex.IsMatch(statement, $@"\b{Regex.Escape(name)}[""\]]?\s*\(", RegexOptions.IgnoreCase))
+            {
                 return name;
+            }
         }
 
         return null;

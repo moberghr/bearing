@@ -115,7 +115,7 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
 internal sealed class FakeActivity : IServerActivity
 {
     public IReadOnlyList<BackendActivity> Backends = [];
-    public bool SeesAllSessions = true;
+    public bool? SeesAllSessions = true;
     public Exception? Throws;
     public TaskCompletionSource? Gate;
     public int Reads;

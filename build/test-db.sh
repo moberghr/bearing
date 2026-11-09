@@ -83,11 +83,11 @@ start() {
     say "$NAME is already running on port $PORT."
   else
     if exists; then
-      say "Starting the existing $NAME…"
+      say "Starting the existing ${NAME}…"
       docker start "$NAME" >/dev/null
     else
       check_port_is_free
-      say "Creating $NAME from $IMAGE on port $PORT…"
+      say "Creating $NAME from $IMAGE on port ${PORT}…"
       docker run -d \
         --name "$NAME" \
         -e POSTGRES_USER="$USER_NAME" \
@@ -100,15 +100,21 @@ start() {
 
   # Bound wait: the tests skip rather than fail on an unreachable server, so a hang here would be the worst
   # of both — a script that neither works nor gives up.
+  #
+  # Asked over TCP (-h 127.0.0.1), not the default Unix socket: on a fresh container the image's entrypoint
+  # first runs a temporary server for initdb scripts, socket-only, then stops it and starts the real one. A
+  # socket probe answers "ready" from that temporary server, and the check after the loop then lands in the
+  # restart gap — CI printed "Ready." followed by "It never became ready." The temporary server never listens
+  # on TCP, so a TCP probe only passes once the real server is up.
   say "Waiting for it to accept connections…"
   for _ in $(seq 1 60); do
-    if docker exec "$NAME" pg_isready -U "$USER_NAME" -q >/dev/null 2>&1; then
+    if docker exec "$NAME" pg_isready -h 127.0.0.1 -U "$USER_NAME" -q >/dev/null 2>&1; then
       say "Ready."
       break
     fi
     sleep 1
   done
-  docker exec "$NAME" pg_isready -U "$USER_NAME" -q >/dev/null 2>&1 || {
+  docker exec "$NAME" pg_isready -h 127.0.0.1 -U "$USER_NAME" -q >/dev/null 2>&1 || {
     say "It never became ready. \`docker logs $NAME\` will say why."
     exit 1
   }
@@ -218,7 +224,7 @@ status() {
 stop() {
   need_docker
   if exists; then
-    say "Removing $NAME…"
+    say "Removing ${NAME}…"
     docker rm -f "$NAME" >/dev/null
   else
     say "$NAME does not exist."

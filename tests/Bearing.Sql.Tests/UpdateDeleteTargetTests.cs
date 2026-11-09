@@ -182,6 +182,21 @@ public class UpdateDeleteTargetTests
     [InlineData("   ")]
     [InlineData("delete")]
     [InlineData("delete payment where id = 1")]
+    // MySQL: a join in the target is the multi-table form; a LIMIT without a WHERE is not "every row"; and a
+    // user variable is unset (NULL, not an error) on the connection the count runs on.
+    [InlineData("update customer c join payment p on p.customer_id = c.customer_id set c.active = 1")]
+    [InlineData("update customer c inner join payment p on p.customer_id = c.customer_id set c.active = 1 where p.amount > 5")]
+    [InlineData("delete from payment limit 10")]
+    [InlineData("delete from payment order by payment_date limit 10")]
+    [InlineData("update payment set amount = 1 order by payment_id limit 1")]
+    [InlineData("delete from payment where payment_id = @id")]
+    [InlineData("update payment set amount = 1 where customer_id = @@session.last_insert_id")]
+    [InlineData("delete from payment where payment_id = @'id'")]
+    [InlineData("update low_priority payment set amount = 1")]
+    [InlineData("update ignore payment set amount = 1 where payment_id = 1")]
+    // A partition selection without a WHERE empties that partition, not the table.
+    [InlineData("delete from payment partition (p0)")]
+    [InlineData("update payment partition (p0) set amount = 1")]
     public void Anything_it_cannot_flatten_with_certainty_declines(string statement)
         => Assert.Null(UpdateDeleteTarget.TryReduce(statement));
 
@@ -228,6 +243,21 @@ public class UpdateDeleteTargetTests
     public void A_tsql_top_clause_declines(string statement)
         => Assert.Null(UpdateDeleteTarget.TryReduce(statement));
 
+    // A partition selection declines (above) only where it selects: PARTITION is not reserved in Postgres, and a
+    // column of that name in the SET list must keep #100's "every row".
+    [Theory]
+    [InlineData("update payment set partition = 1")]
+    [InlineData("update payment set amount = 1, partition = 'p0'")]
+    public void A_column_called_partition_is_still_every_row(string statement)
+        => Assert.True(UpdateDeleteTarget.TryReduce(statement) is { EveryRow: true, Relation: "payment" });
+
+    // A variable declines (above); the operators Postgres spells with an @ are not variables.
+    [Theory]
+    [InlineData("delete from doc where body @> '{\"a\": 1}'")]
+    [InlineData("update doc set seen = true where tsv @@ to_tsquery('x')")]
+    public void Postgres_operators_that_start_with_an_at_sign_still_reduce(string statement)
+        => Assert.NotNull(UpdateDeleteTarget.TryReduce(statement));
+
     /// <summary>
     /// And the decline is the <c>TOP (</c> shape, not the word: a relation actually named <c>top</c> still
     /// reduces, because it is followed by its <c>SET</c> rather than by a row count.
@@ -240,5 +270,37 @@ public class UpdateDeleteTargetTests
         Assert.NotNull(target);
         Assert.Equal("top", target.Relation);
         Assert.Equal("id = 2", target.Where);
+    }
+
+    // MySQL reads these differently from the Postgres lexer the reduction uses: `#` starts a comment, so the
+    // WHERE below is not there and the statement deletes every row — counting `id = 1` would be a reassuring
+    // number about it. An executable comment runs; `--` without a space is not a comment; a backslash moves
+    // where a literal ends.
+    [Theory]
+    [InlineData("delete from payment # where payment_id = 1")]
+    [InlineData("update payment set amount = 0 # where payment_id = 1")]
+    [InlineData("delete from payment where 1 = 1 /*!50000 and payment_id = 1*/")]
+    [InlineData("delete from payment where payment_id = 1 --1")]
+    [InlineData("delete from payment where note = 'it\\'s'")]
+    // A span the splitter kept together (it read a block): a count of the first statement would be about part
+    // of what runs — "every row in payment" for a span that also deletes from another table.
+    [InlineData("update payment set amount = 1; delete from rental;")]
+    [InlineData("delete from payment where payment_id = 1; drop table rental")]
+    // `$x$` is a name to MySQL and the start of one string to Postgres, which would hide the comma (and the
+    // WHERE) of a multi-table UPDATE and report it as "every row in payment".
+    [InlineData("update payment $x$, rental $x$y set $x$.amount = 0 where $x$.rental_id = $x$y.rental_id")]
+    [InlineData("update payment $x$ join rental $x$y on $x$.rental_id = $x$y.rental_id set $x$.amount = 0")]
+    public void A_mysql_statement_the_postgres_lexer_misreads_declines(string statement)
+        => Assert.Null(UpdateDeleteTarget.TryReduce(MySqlDialect.Instance, statement));
+
+    [Theory]
+    [InlineData("delete from payment where payment_id = 1 -- tidy", "payment", "payment_id = 1")]
+    [InlineData("update payment p set p.amount = 0 where p.payment_id = 'a#b'", "payment", "p.payment_id = 'a#b'")]
+    public void A_mysql_statement_both_lexers_read_alike_still_reduces(string statement, string relation, string where)
+    {
+        var target = UpdateDeleteTarget.TryReduce(MySqlDialect.Instance, statement);
+        Assert.NotNull(target);
+        Assert.Equal(relation, target.Relation);
+        Assert.Equal(where, target.Where);
     }
 }

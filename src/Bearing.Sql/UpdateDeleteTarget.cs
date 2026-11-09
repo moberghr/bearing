@@ -35,6 +35,83 @@ public sealed record UpdateDeleteTarget(string Verb, string Relation, string Tar
     public string RowsSql => Where is null ? $"select * from {Target}" : $"select * from {Target} where {Where}";
 
     /// <summary>
+    /// <see cref="TryReduce(string)"/> for a statement written in <paramref name="dialect"/>. The reduction
+    /// reads with the Postgres lexer, so a MySQL statement that lexer reads differently from the server
+    /// declines: <c>delete from t # where id = 1</c> is a comment to MySQL and deletes every row, while the
+    /// Postgres lexer sees <c>#</c> as an operator and would count the rows of <c>id = 1</c> — a reassuring
+    /// number about a statement that deletes everything. Likewise an executable <c>/*! … */</c> comment the
+    /// server runs, a <c>--</c> MySQL does not treat as a comment, and a backslash escape, which moves where
+    /// a literal ends (<see cref="MySqlQuoting"/>).
+    /// </summary>
+    public static UpdateDeleteTarget? TryReduce(ISqlDialect dialect, string statement)
+    {
+        if (string.IsNullOrWhiteSpace(statement))
+        {
+            return null;
+        }
+        // Lexed once: the dialect's check reads the same on-channel tokens the reduction does.
+        var tokens = OnChannel(statement);
+        return dialect.ReadsLikePostgresForCounting(statement, tokens) ? Reduce(statement, tokens) : null;
+    }
+
+    /// <summary>
+    /// <see cref="MySqlDialect"/>'s <see cref="ISqlDialect.ReadsLikePostgresForCounting"/>: whether every
+    /// character MySQL reads as code (any <see cref="MySqlScanner"/> token) is code to the Postgres lexer too,
+    /// and the reverse — whitespace and backticks aside, which only delimit names — and the text is one
+    /// statement, not several the splitter kept together. Here rather than on the dialect because it is a
+    /// question about this reduction's lexer.
+    /// </summary>
+    internal static bool ReadsAlikeOnMySql(string statement, IReadOnlyList<IToken> pgTokens)
+    {
+        if (statement.Contains('\\'))
+        {
+            return false;
+        }
+
+        var mysql = new bool[statement.Length];
+        var mysqlTokens = MySqlScanner.Tokenize(statement);
+        // A delimiter with more SQL after it: the splitter read a block and kept several statements as one
+        // (`update t set t.case = 1; delete from x`). A count of the first would be about part of what runs.
+        for (var k = 0; k + 1 < mysqlTokens.Count; k++)
+        {
+            if (mysqlTokens[k].Kind == MySqlTokenKind.Delimiter)
+            {
+                return false;
+            }
+        }
+        foreach (var t in mysqlTokens)
+        {
+            for (var k = t.Start; k < t.Start + t.Length && k < mysql.Length; k++)
+            {
+                mysql[k] = true;
+            }
+        }
+        var pg = new bool[statement.Length];
+        foreach (var t in pgTokens)
+        {
+            // A dollar-quoted string is code to both lexers, so the coverage check below cannot see it — but to
+            // MySQL `$x$` is a name, and what Postgres reads as one string can be a comma, a JOIN or a WHERE:
+            // `update t $x$, u $x$y set …` is a multi-table UPDATE that would reduce as "every row in t".
+            if (t.Type == PostgreSQLLexer.BeginDollarStringConstant)
+            {
+                return false;
+            }
+            for (var k = t.StartIndex; k <= t.StopIndex && k < pg.Length; k++)
+            {
+                pg[k] = true;
+            }
+        }
+        for (var k = 0; k < statement.Length; k++)
+        {
+            if (mysql[k] != pg[k] && !char.IsWhiteSpace(statement[k]) && statement[k] != '`')
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>
     /// Reduce one statement, or return null when it cannot be reduced <b>with certainty</b>.
     /// <para>
     /// Conservative by construction, and that asymmetry is the whole design: a missing number costs the user
@@ -51,11 +128,14 @@ public sealed record UpdateDeleteTarget(string Verb, string Relation, string Tar
     /// </summary>
     /// <param name="statement">One statement, as <see cref="WriteGuard.Describe"/> hands it over.</param>
     public static UpdateDeleteTarget? TryReduce(string statement)
-    {
-        if (string.IsNullOrWhiteSpace(statement)) return null;
+        => string.IsNullOrWhiteSpace(statement) ? null : Reduce(statement, OnChannel(statement));
 
-        var tokens = OnChannel(statement);
-        if (tokens.Count == 0) return null;
+    private static UpdateDeleteTarget? Reduce(string statement, List<IToken> tokens)
+    {
+        if (tokens.Count == 0)
+        {
+            return null;
+        }
 
         var verb = tokens[0].Text.ToUpperInvariant();
         var isUpdate = verb == "UPDATE";
@@ -63,8 +143,13 @@ public sealed record UpdateDeleteTarget(string Verb, string Relation, string Tar
 
         // A placeholder has no value here, so the count would either fail or — worse, if the driver defaulted
         // it — succeed against a different predicate than the statement will run.
-        foreach (var token in tokens)
-            if (IsPlaceholder(token.Text)) return null;
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            if (IsPlaceholder(tokens[i].Text) || IsVariable(tokens, i))
+            {
+                return null;
+            }
+        }
 
         var cursor = isUpdate ? 1 : 2;
         if (!isUpdate && !Is(tokens, 1, "FROM")) return null;   // `DELETE t` is not Postgres
@@ -85,7 +170,16 @@ public sealed record UpdateDeleteTarget(string Verb, string Relation, string Tar
 
             // A comma at this level means several relations, and neither the count nor the display could
             // honestly pick one of them.
-            if (tokens[i].Text == ",") return null;
+            if (tokens[i].Text == ",")
+            {
+                return null;
+            }
+            // MySQL's multi-table form, `update a join b on … set …`: the count would be of joined rows, one
+            // per match, not of the target's rows — the multi-table case again, spelled without a comma.
+            if (IsAny(tokens[i], "JOIN", "STRAIGHT_JOIN"))
+            {
+                return null;
+            }
 
             if (IsAny(tokens[i], "SET", "WHERE", "FROM", "USING", "RETURNING", ";"))
             {
@@ -110,6 +204,14 @@ public sealed record UpdateDeleteTarget(string Verb, string Relation, string Tar
         // about a table that does not exist, in amber, about a statement that touches ten rows. There is no
         // honest count for a TOP either way, because the predicate does not decide the row set on its own.
         if (Is(tokens, targetStart, "TOP") && Is(tokens, targetStart + 1, "(")) return null;
+
+        // MySQL's modifiers, `update low_priority t set …` / `update ignore t set …`, would reduce with the
+        // modifier as the relation — "every row in ignore" — for the same reason. (The DELETE spellings put
+        // them before FROM and already decline.) A relation named like one is followed by its SET, as TOP's is.
+        if (IsAny(tokens[targetStart], "LOW_PRIORITY", "IGNORE") && targetEnd > targetStart)
+        {
+            return null;
+        }
 
         var target = Slice(statement, tokens[targetStart], tokens[targetEnd]);
         if (RelationName(tokens, targetStart, targetEnd) is not { } relation) return null;
@@ -143,8 +245,18 @@ public sealed record UpdateDeleteTarget(string Verb, string Relation, string Tar
         // so its WHERE is found by the scan above and the terminator is no guide.
         if (sawWhere && where >= tokens.Count) return null;
 
-        // No WHERE at all: every row (#100).
-        if (where < 0 || where >= tokens.Count) return new UpdateDeleteTarget(verb, relation, target, null);
+        // No WHERE at all: every row (#100) — unless a top-level LIMIT caps it. MySQL's row-limited write,
+        // `delete from t limit 10` / `update t set … order by id limit 1`, touches at most that many rows, and
+        // "every row in t" about it is the claim T-SQL's TOP was declined for. (With a WHERE the LIMIT is part
+        // of the predicate's slice, and the wrapped count honours it.) A partition selection is the same claim
+        // made about a narrower set: `delete from t partition (p0)` empties p0, not t. Looked for in the target
+        // clause only: PARTITION is not reserved in Postgres, and `update t set partition = 1` is a column.
+        if (where < 0 || where >= tokens.Count)
+        {
+            return HasTopLevel(tokens, "LIMIT") || HasTopLevel(tokens.Skip(targetStart).Take(targetEnd - targetStart + 1).ToList(), "PARTITION")
+                ? null
+                : new UpdateDeleteTarget(verb, relation, target, null);
+        }
 
         // The predicate runs to a top-level RETURNING (which changes what comes back, not what matches) or
         // to the end of the statement.
@@ -208,6 +320,39 @@ public sealed record UpdateDeleteTarget(string Verb, string Relation, string Tar
             if (t.Text is { Length: > 0 }) list.Add(t);
         }
         return list;
+    }
+
+    /// <summary>
+    /// A variable — <c>@id</c>, <c>@'name'</c> (MySQL, T-SQL) or <c>@@session.x</c> — which this lexer reads as
+    /// an <c>@</c> / <c>@@</c> operator with a name right against it. The count runs on another pooled
+    /// connection, where an unset MySQL user variable is NULL rather than an error: <c>where id = @id</c> would
+    /// count 0 rows and report that as the statement's answer. Adjacency is what keeps Postgres' own
+    /// <c>tsv @@ query</c> and <c>@&gt;</c> reducing.
+    /// </summary>
+    private static bool IsVariable(IReadOnlyList<IToken> tokens, int index)
+    {
+        var t = tokens[index];
+        if (t.Text is not ("@" or "@@") || index + 1 >= tokens.Count)
+        {
+            return false;
+        }
+        var next = tokens[index + 1];
+        return next.StartIndex == t.StopIndex + 1
+               && (char.IsLetterOrDigit(next.Text[0]) || next.Text[0] is '_' or '$' or '\'' or '"' or '`');
+    }
+
+    private static bool HasTopLevel(IReadOnlyList<IToken> tokens, string keyword)
+    {
+        var depth = 0;
+        foreach (var t in tokens)
+        {
+            depth += Nesting(t);
+            if (depth == 0 && t.Text.Equals(keyword, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static int Nesting(IToken token) => token.Type switch

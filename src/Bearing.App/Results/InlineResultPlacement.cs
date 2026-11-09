@@ -49,7 +49,7 @@ internal static class InlineResultPlacement
         // Where the code ends, not the text: a statement's span may carry the comment lines after it, and its
         // results belong under the statement, not under a comment heading the next section.
         var trimmedEnd = codeEnd ?? start + text.TrimEnd().Length;
-        return new RunScope(StatementSplitter.EnsureSeparated(text, spans), ends,
+        return new RunScope(StatementSplitter.EnsureSeparated(dialect, text, spans), ends,
             Math.Min(start + leading, trimmedEnd), trimmedEnd, isWholeBuffer);
     }
 

@@ -44,25 +44,46 @@ public static class SqlValue
         // timestamptz key would match nothing. Unspecified (timestamp without time zone) has no zone to state.
         // SqlClient never produces Kind = Utc, so a T-SQL literal is unaffected.
         DateTime { Kind: DateTimeKind.Utc } utc
-            => Quote(utc.ToString("yyyy-MM-dd HH:mm:ss.FFFFFF", CultureInfo.InvariantCulture) + "+00:00"),
-        DateTime dt => Quote(dt.ToString("yyyy-MM-dd HH:mm:ss.FFFFFF", CultureInfo.InvariantCulture)),
-        DateTimeOffset dto => Quote(dto.ToString("yyyy-MM-dd HH:mm:ss.FFFFFFzzz", CultureInfo.InvariantCulture)),
-        DateOnly d => Quote(d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
-        TimeOnly t => Quote(t.ToString("HH:mm:ss.FFFFFF", CultureInfo.InvariantCulture)),
-        TimeSpan ts => Quote(ts.ToString("c", CultureInfo.InvariantCulture)),
+            => QuoteFor(style, utc.ToString("yyyy-MM-dd HH:mm:ss.FFFFFF", CultureInfo.InvariantCulture) + "+00:00"),
+        DateTime dt => QuoteFor(style, dt.ToString("yyyy-MM-dd HH:mm:ss.FFFFFF", CultureInfo.InvariantCulture)),
+        DateTimeOffset dto => QuoteFor(style, dto.ToString("yyyy-MM-dd HH:mm:ss.FFFFFFzzz", CultureInfo.InvariantCulture)),
+        DateOnly d => QuoteFor(style, d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
+        TimeOnly t => QuoteFor(style, t.ToString("HH:mm:ss.FFFFFF", CultureInfo.InvariantCulture)),
+        // MySQL's TIME is a signed duration up to 838 hours with no day part, so `c`'s `1.02:03:04` would be
+        // misread; it takes total hours instead.
+        TimeSpan ts when style == SqlLiteralStyle.MySql => QuoteFor(style, MySqlTime(ts)),
+        TimeSpan ts => QuoteFor(style, ts.ToString("c", CultureInfo.InvariantCulture)),
         // Ahead of the Array arm deliberately — a byte[] *is* an Array, and falling through would render a
         // bytea / varbinary value as the array literal `'{1,2,3}'`. T-SQL's binary constant is bare:
-        // quoting `0x01` would turn it into the four-character string "0x01".
-        byte[] bytes => style == SqlLiteralStyle.TSql
+        // quoting `0x01` would turn it into the four-character string "0x01". An empty value has no bare form
+        // on MySQL — `0x` alone is not a hex literal there (it is on SQL Server) — so it takes X''.
+        byte[] { Length: 0 } when style == SqlLiteralStyle.MySql => "X''",
+        byte[] bytes => style is SqlLiteralStyle.TSql or SqlLiteralStyle.MySql
             ? "0x" + Convert.ToHexString(bytes)
             : @"'\x" + Convert.ToHexString(bytes).ToLowerInvariant() + "'",
-        Guid g => Quote(g.ToString()),
+        Guid g => QuoteFor(style, g.ToString()),
         // Arrays and everything else are quoted and left to the server to cast from its text form. Note
         // this is the *full* value: unlike the grid's display, a literal must never be truncated. The array
         // text form is Postgres's own; SQL Server has no array type, so nothing it returns reaches here.
-        Array arr => Quote(PostgresArray(arr)),
-        _ => Quote(value.ToString()!),
+        Array arr => QuoteFor(style, PostgresArray(arr)),
+        _ => QuoteFor(style, value.ToString()!),
     };
+
+    /// <summary>A quoted literal in <paramref name="style"/>: MySQL also escapes the backslash, which it reads as
+    /// an escape character under the default <c>sql_mode</c>. (Under <c>NO_BACKSLASH_ESCAPES</c> the doubled
+    /// backslash reads as two — a wrong value, never a broken-out literal, which is the side to err on.)</summary>
+    private static string QuoteFor(SqlLiteralStyle style, string s)
+        => Quote(style == SqlLiteralStyle.MySql ? s.Replace("\\", "\\\\") : s);
+
+    /// <summary>A duration as MySQL's <c>[-]H:MM:SS[.ffffff]</c>, hours unbounded by a day.</summary>
+    private static string MySqlTime(TimeSpan ts)
+    {
+        var sign = ts < TimeSpan.Zero ? "-" : "";
+        var abs = ts.Duration();
+        var text = $"{sign}{(long)abs.TotalHours}:{abs.Minutes:00}:{abs.Seconds:00}";
+        var micros = abs.Ticks % TimeSpan.TicksPerSecond / 10;
+        return micros == 0 ? text : $"{text}.{micros:000000}";
+    }
 
     /// <summary>Single-quote a string literal, doubling embedded quotes.</summary>
     private static string Quote(string s) => "'" + s.Replace("'", "''") + "'";

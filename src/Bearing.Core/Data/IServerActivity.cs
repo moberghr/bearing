@@ -38,7 +38,9 @@ namespace Bearing.Core.Data;
 /// True when this backend reports <c>application_name = 'bearing'</c> — what
 /// <c>PostgresConnectionString.Build</c> stamps on every connection this app opens. It says "something
 /// Bearing opened", which is usually the row you came here for; it cannot narrow to this pool's own sockets
-/// and does not claim to.
+/// and does not claim to. On MySQL and MariaDB the same name rides the <c>program_name</c> connection
+/// attribute, readable only where <c>performance_schema</c> is on and the account may read it — elsewhere
+/// every row is false, which says "not known to be ours", never "not ours".
 /// </param>
 public sealed record BackendActivity(
     int Pid,
@@ -71,8 +73,15 @@ public sealed record BackendActivity(
 /// allowed to see the others" are different answers, and rendering the second as the first is the one
 /// mistake this panel must not make.
 /// </para>
+/// <para>
+/// <b>Null is a third answer: the reader could not find out.</b> Postgres always can (one query over two
+/// facts), but an engine whose answer is pieced together from what the account was granted — MySQL and
+/// MariaDB read it from <c>SHOW GRANTS</c> — may be refused or handed something it cannot read. That is
+/// neither "sees everything" nor "restricted", and reporting it as either would be a claim nobody measured
+/// (§1.1's rule).
+/// </para>
 /// </param>
-public sealed record ServerActivity(IReadOnlyList<BackendActivity> Backends, bool SeesAllSessions);
+public sealed record ServerActivity(IReadOnlyList<BackendActivity> Backends, bool? SeesAllSessions);
 
 /// <summary>
 /// What to ask the server for (#101). Both narrowings exist because the honest unfiltered answer is
@@ -88,7 +97,14 @@ public sealed record ServerActivity(IReadOnlyList<BackendActivity> Backends, boo
 /// remove the row the panel most exists to show.
 /// </para>
 /// </param>
-public sealed record ActivityFilter(string? Database, bool IncludeIdle = false)
+/// <param name="RecheckVisibility">
+/// Whether <see cref="ServerActivity.SeesAllSessions"/> must be asked again, or may be the answer this reader
+/// last found. True by default; the panel passes false on its timer ticks only, so the answer is re-read when
+/// polling starts, on an explicit refresh, and on a filter change — never on every 2.5-second tick. A reader
+/// whose answer costs one cheap query (Postgres) may ignore it; one that pieces it together from the
+/// account's grants (MySQL, MariaDB) should not pay for that every tick.
+/// </param>
+public sealed record ActivityFilter(string? Database, bool IncludeIdle = false, bool RecheckVisibility = true)
 {
     /// <summary>Everything the server will say, unnarrowed — what a test or an audit wants.</summary>
     public static ActivityFilter Everything { get; } = new(null, IncludeIdle: true);

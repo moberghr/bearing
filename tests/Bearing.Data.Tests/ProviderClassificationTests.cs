@@ -65,6 +65,19 @@ public class ProviderClassificationTests
     public void SqlServer_classifies_by_error_number(string? number, DbErrorKind expected)
         => Assert.Equal(expected, new SqlServerProvider().Classify(Error(number)));
 
+    // ---- MySQL / MariaDB: numbers, as the executor records them ---------------------------------
+
+    [Theory]
+    [InlineData("1045", DbErrorKind.Authentication)]   // access denied (using password)
+    [InlineData("1317", DbErrorKind.Canceled)]         // query execution was interrupted
+    [InlineData("1064", DbErrorKind.SyntaxOrShape)]    // parse error
+    // Access denied to a database, on a statement of a session that is already in (`use other_db`,
+    // `create database x`): a privilege, not a credential. As Authentication the run re-prompted, evicted
+    // the session and re-ran the whole batch, a write before the refused statement included.
+    [InlineData("1044", DbErrorKind.Unknown)]
+    public void MySql_classifies_a_statement_by_error_number(string number, DbErrorKind expected)
+        => Assert.Equal(expected, new Bearing.Data.MySql.MySqlProvider().Classify(Error(number)));
+
     [Fact]
     public void SqlServer_does_not_read_a_postgres_sqlstate_as_anything()
     {
