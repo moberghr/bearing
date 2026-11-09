@@ -107,32 +107,14 @@ public class SqlFormatSafetyTests
     /// </summary>
     [Theory]
     // json / jsonb
-    [InlineData("->")]
-    [InlineData("->>")]
-    [InlineData("#>")]
-    [InlineData("#>>")]
-    [InlineData("#-")]
-    [InlineData("@>")]
-    [InlineData("<@")]
-    [InlineData("?|")]
-    [InlineData("?&")]
+    [InlineData("->")] [InlineData("->>")] [InlineData("#>")] [InlineData("#>>")] [InlineData("#-")]
+    [InlineData("@>")] [InlineData("<@")] [InlineData("?|")] [InlineData("?&")]
     // pattern matching (single-character ~ is covered by the corpus; this theory is about splitting)
-    [InlineData("~*")]
-    [InlineData("!~")]
-    [InlineData("!~*")]
-    [InlineData("~~")]
-    [InlineData("~~*")]
-    [InlineData("!~~")]
-    [InlineData("!~~*")]
+    [InlineData("~*")] [InlineData("!~")] [InlineData("!~*")]
+    [InlineData("~~")] [InlineData("~~*")] [InlineData("!~~")] [InlineData("!~~*")]
     // comparison, bitwise, arithmetic, text search
-    [InlineData("<>")]
-    [InlineData("!=")]
-    [InlineData(">=")]
-    [InlineData("<=")]
-    [InlineData("<<")]
-    [InlineData(">>")]
-    [InlineData("||")]
-    [InlineData("@@")]
+    [InlineData("<>")] [InlineData("!=")] [InlineData(">=")] [InlineData("<=")]
+    [InlineData("<<")] [InlineData(">>")] [InlineData("||")] [InlineData("@@")]
     [InlineData("::")]
     public void A_multi_character_operator_is_never_split(string op)
     {
