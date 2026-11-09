@@ -76,11 +76,11 @@ start() {
     say "$NAME is already running on port $PORT."
   else
     if exists; then
-      say "Starting the existing $NAME…"
+      say "Starting the existing ${NAME}…"
       docker start "$NAME" >/dev/null
     else
       check_port_is_free
-      say "Creating $NAME from $IMAGE on port $PORT…"
+      say "Creating $NAME from $IMAGE on port ${PORT}…"
       # MSSQL_PID=Developer is the free edition for non-production use, which is what a test container is.
       docker run -d --name "$NAME" \
         -e ACCEPT_EULA=Y \
@@ -143,7 +143,7 @@ status() {
 stop() {
   need_docker
   if exists; then
-    say "Removing $NAME…"
+    say "Removing ${NAME}…"
     docker rm -f "$NAME" >/dev/null
   else
     say "$NAME does not exist."

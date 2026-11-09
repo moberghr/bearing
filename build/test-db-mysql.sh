@@ -67,9 +67,12 @@ start_one() {
       "$image" >/dev/null
   fi
 
+  # Over TCP, not the default socket: on a fresh container both images first run a temporary
+  # --skip-networking server for initialisation, then restart into the real one. A socket probe answers from
+  # the temporary server, and what follows lands in the restart gap (build/test-db.sh hit the same race).
   say "Waiting for ${name} to accept a query…"
   local waited=0
-  until client_in "$name" -e "select 1" >/dev/null 2>&1; do
+  until client_in "$name" --protocol=TCP -h 127.0.0.1 -e "select 1" >/dev/null 2>&1; do
     waited=$((waited + 2))
     if [ "$waited" -ge 180 ]; then
       say "${name} did not become ready within 180s. Its log:"
