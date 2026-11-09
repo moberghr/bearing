@@ -158,6 +158,12 @@ public sealed record AppSettings
     /// </summary>
     public bool AutoUpdate { get; init; } = true;
 
+    /// <summary>
+    /// Light or dark palette for the whole app, or whichever the OS is set to. Dark by default: it is the
+    /// palette Bearing shipped with, so upgrading changes nobody's screen.
+    /// </summary>
+    public ColorScheme ColorScheme { get; init; } = ColorScheme.Dark;
+
     // ---- persisted state, not user-facing preferences (no catalog entry; see SettingsCatalogTests) ----
 
     /// <summary>Last main-window width, written on close. Null until a window has been closed once.</summary>
@@ -220,4 +226,17 @@ public enum AutosaveMode
 
     /// <summary>Never write automatically. Named scripts go dirty and are guarded by the close prompt.</summary>
     Off,
+}
+
+/// <summary>The app's palette (<see cref="AppSettings.ColorScheme"/>).</summary>
+public enum ColorScheme
+{
+    /// <summary>Graphite surfaces, steel text — the palette Bearing shipped with.</summary>
+    Dark,
+
+    /// <summary>Light surfaces, ink text; same semantics token for token.</summary>
+    Light,
+
+    /// <summary>Follow the operating system's light/dark preference, live.</summary>
+    System,
 }

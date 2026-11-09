@@ -1,0 +1,65 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- ============================================================================================
+       Light twin of Tokens.axaml. NOT merged into the application: Theming/ColorSchemes reads these
+       colours and writes them into the existing token brushes when the light scheme is applied, so every
+       consumer — {DynamicResource}, and brushes captured in C# via Tokens.Res — follows the switch.
+
+       Same keys, same semantics, one for one (a test holds the key sets equal). The surface order is
+       inverted rather than mirrored: the editor body is the brightest surface, chrome a step down, the
+       window frame (rail, title, status bar) the deepest — so the eye still lands on the editor first.
+       Accents are darkened to stay legible on white; the hue of each one is kept.
+       ============================================================================================ -->
+
+  <!-- Surfaces -->
+  <Color x:Key="Bg.Window">#E6EAEF</Color>
+  <Color x:Key="Bg.Chrome">#F0F3F6</Color>
+  <Color x:Key="Bg.Editor">#FCFDFE</Color>
+  <Color x:Key="Bg.LineActive">#EEF2F7</Color>
+  <Color x:Key="Bg.TileActive">#D9E0E8</Color>
+  <Color x:Key="Bg.Select">#D2E7EC</Color>
+  <Color x:Key="Bg.Hover">#E1E6EC</Color>
+  <Color x:Key="Bg.Warn">#FBF2DC</Color>
+  <Color x:Key="Select.Text">#5598C2E8</Color>
+
+  <!-- Results grid body -->
+  <Color x:Key="Grid.Line">#E3E8ED</Color>
+  <Color x:Key="Grid.Stripe">#F4F6F9</Color>
+
+  <!-- Borders -->
+  <Color x:Key="Border">#D4DBE3</Color>
+  <Color x:Key="Border.Control">#C2CBD5</Color>
+
+  <!-- Text -->
+  <Color x:Key="Text.Primary">#1B2129</Color>
+  <Color x:Key="Text.Code">#2C3540</Color>
+  <Color x:Key="Text.Muted">#56616D</Color>
+  <Color x:Key="Text.Dim">#65707C</Color>
+  <Color x:Key="Text.Faint">#9AA3AE</Color>
+
+  <!-- Accents / syntax / status -->
+  <Color x:Key="Accent.Brand">#0B8F80</Color>
+  <Color x:Key="Syntax.Keyword">#6A55C9</Color>
+  <Color x:Key="Syntax.Func">#2867B2</Color>
+  <Color x:Key="Syntax.Number">#B05E17</Color>
+  <Color x:Key="Syntax.Table">#2B7F73</Color>
+  <Color x:Key="Syntax.TableSel">#16866B</Color>
+  <Color x:Key="Ok.Green">#4A7F25</Color>
+  <Color x:Key="Warn.Amber">#A2730C</Color>
+  <Color x:Key="Error.Red">#BE343B</Color>
+
+  <!-- Schema-tree glyph hues -->
+  <Color x:Key="Tree.Folder">#A87B12</Color>
+  <Color x:Key="Tree.Schema">#3E7A70</Color>
+  <Color x:Key="Tree.Sequence">#2F7896</Color>
+  <Color x:Key="Tree.Type">#6E4FA3</Color>
+  <Color x:Key="Tree.Policy">#3F62B0</Color>
+  <Color x:Key="Tree.Caution">#B06A12</Color>
+
+  <!-- Connection state (icon strokes and label text only — see Tokens.axaml) -->
+  <Color x:Key="Status.Connected">#1E9A52</Color>
+  <Color x:Key="Status.Connecting">#3474C4</Color>
+  <Color x:Key="Status.Disconnected">#CC3426</Color>
+
+</ResourceDictionary>

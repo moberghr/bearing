@@ -171,8 +171,8 @@ public sealed class HistoryRowViewModel
     public string DisplayQuery
         => (IsError ? "✕ " : "") + (IsExternal ? $"[{Origin}] " : "") + Query;
 
-    /// <summary>Row text color (via HexBrush): error red, else primary text.</summary>
-    public string QueryColorHex => IsError ? "#D2555A" : "#D8DEE6";
+    /// <summary>Row text colour as a token key (via TokenBrush): error red, else primary text.</summary>
+    public string QueryColorKey => IsError ? "Error.Red" : "Text.Primary";
 
     private static string OneLine(string sql)
     {

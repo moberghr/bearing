@@ -74,6 +74,25 @@ public static class SettingsCatalog
             Set = (s, v) => s with { AutoUpdate = v },
         },
 
+        new EnumSetting
+        {
+            Key = "general.colorScheme",
+            CategoryId = General,
+            Title = "Theme",
+            Description = "Dark or light palette for the whole app. Also switchable from the command palette "
+                        + "(Toggle light/dark theme).",
+            Keywords = "theme color colour scheme dark light mode appearance palette system os",
+            Options =
+            [
+                new(nameof(ColorScheme.Dark), "Dark", "Graphite surfaces, steel text."),
+                new(nameof(ColorScheme.Light), "Light", "Light surfaces, ink text."),
+                new(nameof(ColorScheme.System), "Match system",
+                    "Follow the operating system's light/dark setting, and change when it does."),
+            ],
+            Get = s => s.ColorScheme.ToString(),
+            Set = (s, v) => s with { ColorScheme = Enum.Parse<ColorScheme>(v) },
+        },
+
         // ---- Editor ----------------------------------------------------------------------------
         new EnumSetting
         {

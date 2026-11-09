@@ -127,6 +127,8 @@ public partial class MainWindow
             KeyScope.Global, "Query", async () => await ExplainAsync(analyze: true)));
         r.Register(new KeyCommand(CommandIds.SettingsKeybindings, "Keyboard shortcuts…", KeyScope.Global, "View", async () => await EditKeybindingsAsync()));
         r.Register(new KeyCommand(CommandIds.SettingsOpen, "Settings…", KeyScope.Global, "View", async () => await OpenSettingsAsync()));
+        r.Register(KeyCommand.Sync(CommandIds.ViewToggleColorScheme, "Toggle light/dark theme", KeyScope.Global, "View",
+            ToggleColorScheme));
 
         // ---- Editor ----
         r.Register(KeyCommand.Sync(CommandIds.EditorOpenLineBelow, "Open line below", KeyScope.Editor, "Editor", () => _text.OpenLine(below: true)));
@@ -593,6 +595,14 @@ public partial class MainWindow
             tab.CaretOffset = Editor.CaretOffset;
         }
     }
+
+    /// <summary>view.toggleColorScheme: flip to the opposite of what is on screen, as an explicit Dark/Light
+    /// setting — under "Match system" that means leaving it, which is what pressing a toggle asks for. Goes
+    /// through settings so it persists and the settings window agrees; the repaint follows from Changed.</summary>
+    private void ToggleColorScheme()
+        => Vm?.SettingsService.Update(s => s with { ColorScheme = Theming.ColorSchemes.Toggled(Application.Current) });
+
+    private void OnToggleColorSchemeClick(object? sender, RoutedEventArgs e) => ToggleColorScheme();
 
     /// <summary>Render the given tab's current result frame, plus the back-bar state (FK-nav history).</summary>
     internal void RebuildResults(EditorTabViewModel? tab)

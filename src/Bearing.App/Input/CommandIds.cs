@@ -23,6 +23,7 @@ public static class CommandIds
     public const string ViewToggleSidePane = "view.toggleSidePane";
     public const string ViewToggleResults = "view.toggleResults";
     public const string ViewToggleInlineResults = "view.toggleInlineResults";
+    public const string ViewToggleColorScheme = "view.toggleColorScheme"; // light ⇄ dark; no default binding
     public const string StatementPrev = "statement.prev";
     public const string StatementNext = "statement.next";
     public const string AppEscape = "app.escape";

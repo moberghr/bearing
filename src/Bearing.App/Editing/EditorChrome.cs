@@ -1,3 +1,7 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Runtime.CompilerServices;
 using Avalonia.Media;
 using Avalonia.Styling;
 using AvaloniaEdit;
@@ -21,20 +25,19 @@ public static class EditorChrome
     /// <summary>Translucent selection (steel-blue ~40%), so syntax-highlighted glyphs stay readable through
     /// it — the opaque default paints solid over the coloured text. Shared with the read-only viewers: a
     /// selection in the history preview is how a past query gets to the clipboard, so it has to be visible
-    /// there for the same reason.</summary>
-    public static IBrush SelectionBrush { get; } =
-        new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.FromArgb(0x66, 0x2B, 0x44, 0x55));
+    /// there for the same reason. The <c>Select.Text</c> token, so it follows a light/dark switch.</summary>
+    public static IBrush SelectionBrush => Res("Select.Text");
 
-    /// <summary>Graphite surface (#1A2027), current-line highlight (#232B36), faint line numbers (#4E5865),
-    /// and the translucent <see cref="SelectionBrush"/>.</summary>
+    /// <summary>Editor surface, current-line highlight, faint line numbers, and the translucent
+    /// <see cref="SelectionBrush"/> — all the live token brushes, so a light/dark switch repaints them.</summary>
     public static void Apply(TextEditor editor)
     {
         editor.Background = Res("Bg.Editor");
         editor.LineNumbersForeground = Res("Text.Faint");
         editor.Options.HighlightCurrentLine = true;
-        var lineActive = (Res("Bg.LineActive") as ISolidColorBrush)?.Color ?? Colors.Transparent;
-        editor.TextArea.TextView.CurrentLineBackground = new SolidColorBrush(lineActive);
-        editor.TextArea.TextView.CurrentLineBorder = new Pen(new SolidColorBrush(lineActive)); // no contrasting box
+        var lineActive = Res("Bg.LineActive");
+        editor.TextArea.TextView.CurrentLineBackground = lineActive;
+        editor.TextArea.TextView.CurrentLineBorder = new Pen(lineActive); // no contrasting box
         editor.TextArea.SelectionBrush = SelectionBrush;
         ApplyFoldMarginColours(editor);
     }
@@ -82,14 +85,50 @@ public static class EditorChrome
     /// for surfaces the user may never open.</summary>
     internal static RegistryOptions SqlRegistry => SqlOptions.Registry;
 
-    /// <summary>Install TextMate SQL syntax highlighting. DarkPlus supplies token colours; exact Bearing
-    /// syntax hues are deferred (needs internal TextMateSharp APIs — docs/design/editor-4a/README.md
-    /// §Fidelity). Going through here is what keeps every SQL surface changing together when they land.</summary>
+    /// <summary>Install TextMate SQL syntax highlighting. DarkPlus / LightPlus supply token colours; exact
+    /// Bearing syntax hues are deferred (needs internal TextMateSharp APIs — docs/design/editor-4a/README.md
+    /// §Fidelity). Going through here is what keeps every SQL surface changing together when they land, and
+    /// what lets <see cref="ApplyColorScheme"/> find them.</summary>
     public static void InstallSqlHighlighting(TextEditor editor)
     {
         var installation = editor.InstallTextMate(SqlOptions);
         var sql = SqlRegistry.GetLanguageByExtension(".sql");
         if (sql is not null)
+        {
             installation.SetGrammar(SqlRegistry.GetScopeByLanguageId(sql.Id));
+        }
+        // The registry's default theme is DarkPlus; a surface opened while light is showing starts light.
+        if (Theming.ColorSchemes.IsLight(Avalonia.Application.Current))
+        {
+            installation.SetTheme(SqlRegistry.LoadTheme(ThemeName.LightPlus));
+        }
+        // Keyed weakly on the editor and holding the installation strongly *through* it: the installation
+        // lives exactly as long as its editor. A WeakReference to a record nothing else held was collected
+        // at the next GC, and the switch then found no editors to re-theme.
+        Installed.AddOrUpdate(editor, installation);
+    }
+
+    /// <summary>Every highlighted surface still alive. Weak on the editor, because the history preview and the
+    /// SQL-preview windows come and go and nothing tells this class they went.</summary>
+    private static readonly ConditionalWeakTable<TextEditor, TextMate.Installation> Installed = new();
+
+    /// <summary>
+    /// Re-theme every live SQL surface for a light/dark switch: the TextMate theme (its own palette, which
+    /// the token repaint cannot reach), then a redraw, because the selection and current-line layers paint
+    /// their brushes only when asked to.
+    /// </summary>
+    public static void ApplyColorScheme(bool light)
+    {
+        var live = Installed.ToList();
+        if (live.Count == 0)
+        {
+            return;
+        }
+        var theme = SqlRegistry.LoadTheme(light ? ThemeName.LightPlus : ThemeName.DarkPlus);
+        foreach (var (editor, installation) in live)
+        {
+            installation.SetTheme(theme);
+            editor.TextArea.TextView.Redraw();
+        }
     }
 }

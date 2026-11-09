@@ -8,6 +8,14 @@
 # author (§9.5).
 #
 # `generated_code = true` tells the formatter and the analyzers to leave these alone.
+#
+# C# layout is Roslyn's default, deliberately unconfigured: the tree passes `dotnet format whitespace` clean, so
+# a format run should change nothing. Two defaults trip people up, and neither has an option that would relax
+# it — `csharp_new_line_before_open_brace` without initializers re-brace ~200 files the other way:
+#   - an initializer `{` (incl. `with { … }`) that does not sit on the line of its expression goes on its own
+#     line — so keep `x with { … }` on one line, or open a real block;
+#   - attribute lists go one per line. Where rows deliberately read as a table (grouped [InlineData]), fence
+#     them with `#pragma warning disable format` / `#pragma warning restore format`.
 [vendor/**.cs]
 generated_code = true
 

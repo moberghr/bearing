@@ -47,7 +47,7 @@ public sealed partial class ResultView
             GridLinesVisibility = DataGridGridLinesVisibility.All,
             HeadersVisibility = DataGridHeadersVisibility.All,      // row-number gutter + column headers
             Background = Res("Bg.Editor"),                          // flat body per design (#1A2027)
-            HorizontalGridLinesBrush = ResultRowPainter.GridLine,   // subtle #232A33 row/column dividers
+            HorizontalGridLinesBrush = ResultRowPainter.GridLine,   // subtle Grid.Line row/column dividers
             VerticalGridLinesBrush = ResultRowPainter.GridLine,
         };
         _firstGrid ??= grid;          // first grid of this render → region-focus target

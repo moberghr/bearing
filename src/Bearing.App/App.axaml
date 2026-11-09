@@ -16,6 +16,7 @@
       </ResourceDictionary.MergedDictionaries>
 
       <conv:HexBrushConverter x:Key="HexBrush"/>
+      <conv:TokenBrushConverter x:Key="TokenBrush"/>
       <conv:EnumToBoolConverter x:Key="EnumToBool"/>
       <conv:ResourceGeometryConverter x:Key="ResourceGeometry"/>
       <conv:MatchHighlightConverter x:Key="MatchHighlight"/>
