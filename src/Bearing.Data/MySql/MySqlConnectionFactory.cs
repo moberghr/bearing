@@ -30,6 +30,10 @@ public sealed class MySqlConnectionFactory : IDbConnectionFactory
     /// bag that travels in the shared project.json. Every MySqlConnector synonym is listed, as the SQL Server
     /// factory lists SqlClient's, because the builder accepts them all.
     /// <para>
+    /// A key is also matched by the canonical name the builder files it under (<see cref="IsReserved(string, string)"/>),
+    /// so a synonym a later driver adds before this list catches up is refused all the same.
+    /// </para>
+    /// <para>
     /// Two are here for what they would let the <em>server</em> do: <c>AllowLoadLocalInfile</c> lets a server
     /// ask the client for any file the user can read, and <c>AllowPublicKeyRetrieval</c> lets a server that
     /// is not who it claims to be fetch the password over an unencrypted connection. Neither is a setting a
@@ -43,23 +47,89 @@ public sealed class MySqlConnectionFactory : IDbConnectionFactory
         "default authentication plugin", "defaultauthenticationplugin",
         // Where we connect.
         "server", "host", "data source", "datasource", "address", "addr", "network address",
-        "port", "database", "initial catalog", "pipe", "pipename", "protocol", "connection protocol",
+        "port", "database", "initial catalog", "pipe", "pipename", "pipe name", "protocol", "connection protocol",
         "connectionprotocol", "transport", "load balance", "loadbalance",
         // Transport security is ConnectionInfo.Tls.
         "sslmode", "ssl mode", "ssl-mode", "ssl ca", "sslca", "ssl-ca", "cacertificatefile",
         "certificate file", "certificatefile", "certificate password", "certificatepassword",
         "ssl cert", "sslcert", "ssl-cert", "ssl key", "sslkey", "ssl-key",
-        "certificate store location", "certificatestorelocation", "certificate thumbprint",
-        "certificatethumbprint", "tls version", "tlsversion", "tls-version", "tls cipher suites",
+        "ca certificate file", "certificate store location", "certificatestorelocation", "certificate thumbprint",
+        "certificatethumbprint", "certificate thumb print", "skip certificate revocation check",
+        "skipcertificaterevocationcheck", "tls version", "tlsversion", "tls-version", "tls cipher suites",
         "tlsciphersuites", "server rsa public key file", "serverrsapublickeyfile", "server spn", "serverspn",
         "allow public key retrieval", "allowpublickeyretrieval",
+        // A server that may redirect us takes our credentials to a host the record does not name.
+        "server redirection mode", "serverredirectionmode",
         // What the server may ask of us.
         "allow load local infile", "allowloadlocalinfile", "allow local infile",
         // Set by this factory for reasons the comments below give.
         "allow user variables", "allowuservariables",
+        // How parameter values reach the server. NoBackslashEscapes on a server without that sql_mode lets a
+        // value ending in a backslash swallow its closing quote, so a generated UPDATE's WHERE stops being the
+        // one written; IgnorePrepare would turn the binary binding generated DML relies on back into those
+        // inlined literals (MySqlQueryExecutor.ExecuteWriteAsync).
+        "no backslash escapes", "nobackslashescapes", "ignore prepare", "ignoreprepare",
+        // How §1.9's timeout is enforced. A negative value makes an expired command close its socket without
+        // the KILL QUERY, so the statement the timeout was meant to stop keeps running on the server.
+        "cancellation timeout", "cancellationtimeout",
     };
 
     private readonly MySqlDataSource _dataSource;
+
+    /// <summary>
+    /// True when <paramref name="key"/> may not come from the options bag: listed itself, or filed by the
+    /// builder under a listed name. The second half is what makes the list a list of <em>settings</em> rather
+    /// than of spellings — the builder accepts synonyms with any spacing, and canonicalises them. A key whose
+    /// value the builder rejects is left to fail where it is applied, with the driver's own message, as before.
+    /// </summary>
+    internal static bool IsReserved(string key, string value) => IsReserved(key, value, Reserved);
+
+    /// <summary>The check against a given list, so a test can drive the canonical-name half on its own: every
+    /// spelling MySqlConnector 2.6 accepts is in <see cref="Reserved"/> literally, which leaves that half
+    /// unreachable through the real list today.</summary>
+    internal static bool IsReserved(string key, string value, IReadOnlySet<string> reserved)
+    {
+        if (reserved.Contains(key))
+        {
+            return true;
+        }
+        try
+        {
+            var probe = new MySqlConnectionStringBuilder { [key] = value };
+            foreach (string canonical in probe.Keys)
+            {
+                if (reserved.Contains(canonical))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+        catch (Exception e) when (e is ArgumentException or FormatException or InvalidCastException or OverflowException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// True when MySqlConnector owns <paramref name="key"/>, under any of its spellings. Not
+    /// <c>csb.ContainsKey</c>: unlike SqlClient's and Npgsql's builders, MySqlConnector's answers whether the
+    /// key is currently <em>set</em>, so every keyword this factory had not already assigned (Connection
+    /// Timeout, Character Set, Connection Lifetime, …) would be dropped as unknown. Assigning null removes a
+    /// known key and throws only for an unknown one.
+    /// </summary>
+    internal static bool IsDriverKeyword(string key)
+    {
+        try
+        {
+            _ = new MySqlConnectionStringBuilder { [key] = null };
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
 
     public MySqlConnectionFactory(ConnectionInfo info, string? password)
     {
@@ -68,7 +138,7 @@ public sealed class MySqlConnectionFactory : IDbConnectionFactory
             Server = info.Host.Trim(),
             Port = info.Port > 0 ? (uint)info.Port : 3306,
             Database = info.Database,
-            ApplicationName = "bearing",
+            ApplicationName = MySqlServerActivity.OurApplicationName,
             MaximumPoolSize = DefaultMaxPoolSize,
             // A user script may use @variables; without this MySqlConnector reads every one as an unbound
             // parameter and refuses the statement. Generated DML binds @p0… by name, which still works.
@@ -76,6 +146,17 @@ public sealed class MySqlConnectionFactory : IDbConnectionFactory
             // '0000-00-00' is a legal stored value under a permissive sql_mode and throws on read by default,
             // which would make one bad row unreadable along with every row around it.
             ConvertZeroDateTime = true,
+            // tinyint(1) is an integer column: it holds -128..127 (0..255 unsigned) whatever its display width
+            // says, and BOOL is only an alias that creates one. The driver's default reads it as a bool, so a
+            // stored 2 would show as True, export as true and copy out as an INSERT writing 1 — a value changed
+            // on its way through. Read as the integer it is; a schema that keeps 0/1 in it still shows 0/1.
+            // Left settable from the options bag: the bag can only make reads lossy in plain sight (the cells
+            // read True/False), it cannot reach credentials, the target, or what the server may ask of us.
+            TreatTinyAsBoolean = false,
+            // The same rule for char(36): the driver's default reads every char(36) column as a Guid, so one
+            // value of that width that is not a GUID ("order-2024-…") fails the whole result set, and one that
+            // is comes back re-cased. It is text; read it as text. binary(16) stays bytes either way.
+            GuidFormat = MySqlGuidFormat.None,
             // No client-side timeout by default — a slow query is the user's business and Esc stops it (#93).
             // A connection that asks for one gets it below.
             DefaultCommandTimeout = 0,
@@ -104,7 +185,7 @@ public sealed class MySqlConnectionFactory : IDbConnectionFactory
 
         foreach (var (key, value) in info.Options)
         {
-            if (Reserved.Contains(key) || !csb.ContainsKey(key))
+            if (!IsDriverKeyword(key) || IsReserved(key, value))
             {
                 // Reserved: see above. Unknown: Options also carries app-level keys (`entra.*`), which the
                 // driver would throw on.

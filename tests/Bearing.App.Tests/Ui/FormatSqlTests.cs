@@ -94,6 +94,24 @@ public class FormatSqlTests
         Assert.Contains("not formatted", message, StringComparison.OrdinalIgnoreCase);
     });
 
+    /// <summary>
+    /// The formatter reads PostgreSQL, where `#` is an operator: it would lay `b # note⏎, c` out as
+    /// `b # note,⏎c`, which MySQL runs as `b c` — a column gone. A MySQL buffer is left as typed.
+    /// </summary>
+    [Fact]
+    public Task A_MySql_buffer_is_left_alone_and_said_so() => _ui.Run(async () =>
+    {
+        const string sql = "select a, b # note\n, c from t";
+        var editor = new TextEditor { Text = sql };
+        var commands = new EditorTextCommands(editor, () => MySqlDialect.Instance);
+
+        var message = await commands.FormatSqlAsync(Options());
+
+        Assert.Equal(sql, editor.Text);
+        Assert.NotNull(message);
+        Assert.Contains("not formatted", message, StringComparison.OrdinalIgnoreCase);
+    });
+
     [Fact]
     public Task Formatting_is_one_undo_step() => _ui.Run(async () =>
     {

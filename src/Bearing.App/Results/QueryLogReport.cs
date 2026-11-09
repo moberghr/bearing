@@ -5,6 +5,7 @@ using System.Linq;
 using Bearing.Core.Data;
 using Bearing.Core.Logging;
 using Bearing.Results;
+using Bearing.Sessions;
 using Bearing.Sql;
 
 namespace Bearing.App.Results;
@@ -153,8 +154,13 @@ public static class QueryLogReport
         // Re-lexed rather than read from a stored verdict, because there is no stored verdict — and re-lexing
         // is what makes the filter work over history written before this feature existed. It is the same
         // scan the guard itself runs (§1.2), in the App layer because `Persistence` may not reference `Sql`
-        // (§2.2).
-        if (filter.WritesOnly && !WriteGuard.HasRisk(entry.SqlText)) return false;
+        // (§2.2). In the dialect of the engine the row ran on: MySQL's REPLACE / LOAD DATA are writes the
+        // Postgres verb list does not hold, and its `#` comments and backslash escapes lex differently.
+        if (filter.WritesOnly
+            && !WriteGuard.HasRisk(ProviderTraits.For(entry.ProviderId).Dialect, entry.SqlText))
+        {
+            return false;
+        }
 
         return true;
     }

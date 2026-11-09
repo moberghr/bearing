@@ -55,7 +55,9 @@ public static class SqlValue
         TimeSpan ts => QuoteFor(style, ts.ToString("c", CultureInfo.InvariantCulture)),
         // Ahead of the Array arm deliberately — a byte[] *is* an Array, and falling through would render a
         // bytea / varbinary value as the array literal `'{1,2,3}'`. T-SQL's binary constant is bare:
-        // quoting `0x01` would turn it into the four-character string "0x01".
+        // quoting `0x01` would turn it into the four-character string "0x01". An empty value has no bare form
+        // on MySQL — `0x` alone is not a hex literal there (it is on SQL Server) — so it takes X''.
+        byte[] { Length: 0 } when style == SqlLiteralStyle.MySql => "X''",
         byte[] bytes => style is SqlLiteralStyle.TSql or SqlLiteralStyle.MySql
             ? "0x" + Convert.ToHexString(bytes)
             : @"'\x" + Convert.ToHexString(bytes).ToLowerInvariant() + "'",

@@ -200,11 +200,18 @@ public sealed class MySqlDialect : ISqlDialect
     /// documented exception and are not listed.
     /// </para>
     /// </summary>
-    public string? TransactionControl(IReadOnlyList<string> words)
+    public string? TransactionControl(IReadOnlyList<string> words) => Control(words).Name;
+
+    /// <inheritdoc/>
+    /// <remarks>True for every statement <see cref="TransactionControl"/> names "(commits implicitly)" — the
+    /// same classification, typed, so no caller has to read it back out of the label.</remarks>
+    public bool CommitsImplicitly(IReadOnlyList<string> words) => Control(words).Implicit;
+
+    private static (string? Name, bool Implicit) Control(IReadOnlyList<string> words)
     {
         if (words.Count == 0)
         {
-            return null;
+            return (null, false);
         }
         var first = words[0].ToUpperInvariant();
         var second = words.Count > 1 ? words[1].ToUpperInvariant() : "";
@@ -212,22 +219,56 @@ public sealed class MySqlDialect : ISqlDialect
         switch (first)
         {
             case "START" when second == "TRANSACTION":
-                return "START TRANSACTION";
+                return ("START TRANSACTION", false);
             case "BEGIN" when second != "NOT":
-                return "BEGIN";
+                return ("BEGIN", false);
             case "COMMIT" or "ROLLBACK" or "SAVEPOINT" or "XA":
-                return first;
+                return (first, false);
             case "RELEASE" when second == "SAVEPOINT":
-                return "RELEASE SAVEPOINT";
-            case "SET" when words.Skip(1).Take(2).Any(w => w.Equals("AUTOCOMMIT", StringComparison.OrdinalIgnoreCase)):
-                return "SET autocommit";
+                return ("RELEASE SAVEPOINT", false);
+            // Anywhere in the SET, not just first: `set names utf8mb4, autocommit = 1` commits all the same.
+            // A word called autocommit elsewhere in the statement over-refuses on manual commit only (§1.2).
+            case "SET" when words.Skip(1).Any(w => w.Equals("AUTOCOMMIT", StringComparison.OrdinalIgnoreCase)):
+                return ("SET autocommit", false);
             case "CREATE" or "DROP" when second == "TEMPORARY":
-                return null;
+                return (null, false);
+            // Account and replication statements that commit implicitly but whose lead word alone is also
+            // the lead of statements that do not (`SET @x`, `LOAD DATA`, `START TRANSACTION`).
+            case "SET" when second == "PASSWORD":
+                return Implicit("SET PASSWORD");
+            case "LOAD" when second == "INDEX":
+                return Implicit("LOAD INDEX");
+            case "START" or "STOP" when ReplicationTargets.Contains(second):
+                return Implicit($"{first} {second}");
+            case "CHANGE" when second is "MASTER" or "REPLICATION":
+                return Implicit($"CHANGE {second}");
+            // MariaDB's ANALYZE *statement* (`analyze [format=json] select …`) runs the statement and reports
+            // its plan; only ANALYZE TABLE commits. Measured on 11.4: rows inserted before an `analyze select`
+            // or `analyze delete` roll back, those before an `analyze table` do not.
+            case "ANALYZE" when AnalyzedStatementLeads.Contains(second):
+                return (null, false);
         }
 
-        return ImplicitCommitLeads.Contains(first) ? $"{first} (commits implicitly)" : null;
+        return ImplicitCommitLeads.Contains(first) ? Implicit(first) : (null, false);
     }
 
+    /// <summary>The manual-commit refusal lists these by name, so the name says why.</summary>
+    private static (string Name, bool Implicit) Implicit(string statement) => ($"{statement} (commits implicitly)", true);
+
+    /// <summary>The word after <c>ANALYZE</c> in MariaDB's statement form — never <c>TABLE</c>,
+    /// <c>NO_WRITE_TO_BINLOG</c> or <c>LOCAL</c>, which lead ANALYZE TABLE.</summary>
+    private static readonly HashSet<string> AnalyzedStatementLeads = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "FORMAT", "SELECT", "WITH", "INSERT", "REPLACE", "UPDATE", "DELETE",
+    };
+
+    private static readonly HashSet<string> ReplicationTargets = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "REPLICA", "SLAVE", "GROUP_REPLICATION", "ALL",
+    };
+
+    /// <summary>Leads that commit implicitly whatever follows. <c>RESET</c> covers <c>RESET MASTER</c>,
+    /// <c>RESET REPLICA</c> / <c>RESET SLAVE</c> and <c>RESET QUERY CACHE</c> alike.</summary>
     private static readonly HashSet<string> ImplicitCommitLeads = new(StringComparer.OrdinalIgnoreCase)
     {
         "CREATE", "ALTER", "DROP", "RENAME", "TRUNCATE",
@@ -238,6 +279,37 @@ public sealed class MySqlDialect : ISqlDialect
     };
 
     public IReadOnlyList<StatementSpan> SplitStatements(string sql) => StatementSplitter.SplitWithMySqlScanner(sql);
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// MySQL's <c>#</c> comment is an operator to the Postgres lexer, so <c>select 1 # note</c> looked
+    /// comment-free and its <c>;</c> went inside the comment — the next statement then ran on as part of this
+    /// one. Any text after a MySQL statement's last token is a comment, so the <c>;</c> goes on a line of its
+    /// own.
+    /// </remarks>
+    public bool EndsWithLineComment(string fragment)
+    {
+        var tokens = MySqlScanner.Tokenize(fragment);
+        var codeEnd = tokens.Count == 0 ? 0 : tokens[^1].Start + tokens[^1].Length;
+        return fragment.AsSpan(codeEnd).Trim().Length > 0;
+    }
+
+    /// <inheritdoc/>
+    public bool HasDelimiterDirective(string sql) => MySqlScanner.HasDirective(sql);
+
+    /// <inheritdoc/>
+    public bool ReadsLikePostgresForCounting(string statement, IReadOnlyList<Antlr4.Runtime.IToken> postgresTokens)
+        => UpdateDeleteTarget.ReadsAlikeOnMySql(statement, postgresTokens);
+
+    /// <inheritdoc/>
+    /// <remarks>MariaDB (the one MySQL-family engine with sequences) takes the name itself.</remarks>
+    public string SequenceReference(string qualifiedName) => qualifiedName;
+
+    /// <inheritdoc/>
+    /// <remarks>To the formatter's lexer MySQL's <c>#</c> comment is an operator: it parses
+    /// <c>select a, b # note⏎, c from t</c> and lays it out as <c>b # note,⏎c</c> — which MySQL runs as
+    /// <c>b c</c>, column c gone and b renamed.</remarks>
+    public string? FormatRefusal => "the formatter reads PostgreSQL, not MySQL / MariaDB";
 
     public ISqlParseRules ParseRules => MySqlParseRules.Instance;
 
@@ -268,21 +340,95 @@ public sealed class MySqlDialect : ISqlDialect
     /// <remarks>
     /// §1.8's catalogs in this engine's vocabulary. <c>mysql.user</c> and MariaDB's <c>mysql.global_priv</c>
     /// hold password hashes; <c>mysql.servers</c> holds FEDERATED/CONNECT passwords;
-    /// <c>mysql.slave_master_info</c> holds the replication password when the repository is a table.
+    /// <c>mysql.slave_master_info</c> holds the replication password when the repository is a table;
+    /// MySQL 8's <c>mysql.password_history</c> keeps every account's previous password hashes.
     /// Qualified, as on SQL Server: <c>user</c> and <c>servers</c> are ordinary table names, and refusing
     /// them bare would be a false statement about the user's own data. The two names nobody gives a table
     /// are matched bare as well, for a connection whose default database is <c>mysql</c>.
     /// </remarks>
     public IReadOnlySet<string> ExternalDeniedRelations { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        "mysql.user", "mysql.global_priv", "mysql.servers", "mysql.slave_master_info",
+        "mysql.user", "mysql.global_priv", "mysql.servers", "mysql.slave_master_info", "mysql.password_history",
         "global_priv", "slave_master_info",
     };
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// <c>SHOW CREATE USER</c> prints the account's <c>IDENTIFIED … AS '&lt;hash&gt;'</c>, and MariaDB's
+    /// <c>SHOW CREATE SERVER</c> a FEDERATED/CONNECT server's <c>PASSWORD</c> option — the contents of
+    /// <c>mysql.user</c> / <c>mysql.servers</c>, which <see cref="ExternalDeniedRelations"/> already refuses.
+    /// MariaDB's <c>SHOW GRANTS</c> carries the account's <c>IDENTIFIED BY PASSWORD '&lt;hash&gt;'</c> (§1.8),
+    /// so it is refused on both engines — the allow-list is per dialect, not per server.
+    /// <c>SHOW BINLOG EVENTS</c> / <c>SHOW RELAYLOG EVENTS</c> replay the logged statements, and the log
+    /// carries every <c>CREATE USER</c> / <c>ALTER USER</c> with its <c>IDENTIFIED … AS '&lt;hash&gt;'</c>.
+    /// Read off the scanner's bare words, so a comment between the words, or an executable comment around
+    /// them, does not hide the shape.
+    /// </remarks>
+    public string? ExternalDeniedStatement(string statement)
+    {
+        foreach (var s in MySqlScanner.Split(statement))
+        {
+            var words = MySqlScanner.TopLevelWords(s.Tokens);
+            if (words.Count >= 3 && words[0] == "SHOW" && words[1] == "CREATE" && words[2] is "USER" or "SERVER")
+            {
+                return $"SHOW CREATE {words[2]}";
+            }
+            if (words.Count >= 2 && words[0] == "SHOW" && words[1] == "GRANTS")
+            {
+                return "SHOW GRANTS";
+            }
+            if (words.Count >= 3 && words[0] == "SHOW" && words[1] is "BINLOG" or "RELAYLOG" && words[2] == "EVENTS")
+            {
+                return $"SHOW {words[1]} EVENTS";
+            }
+        }
+        return null;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Under <c>ANSI_QUOTES</c> a double-quoted run is a <em>name</em> — <c>select * from "mysql"."user"</c>
+    /// reads the password hashes — and whether the server is in that mode is not something this layer knows
+    /// (the write guard's dual reading has the same cause). So a statement holding <c>"</c> is also read with
+    /// its double quotes as backticks, and the two scans are united: widening only.
+    /// <para>
+    /// <c>NO_BACKSLASH_ESCAPES</c> is the same kind of unknown: <c>select 'a\' , load_file('/etc/passwd') #'</c>
+    /// is one string by default and a call under that mode, with no delimiter for the guard's second reading
+    /// to split at. A backslash only ever changes where a literal ends, so a statement holding one is also
+    /// read with every backslash blanked (the same token boundaries that mode gives), with and without the
+    /// <c>ANSI_QUOTES</c> rewrite.
+    /// </para>
+    /// </remarks>
     public (IReadOnlySet<string> Called, IReadOnlySet<string> Mentioned) ExternalNameScan(string statement)
     {
-        var tokens = MySqlParsing.LexAll(MySqlScanner.RevealExecutableComments(statement));
-        return (SqlNameScan.CalledNames(tokens), SqlNameScan.MentionedNames(tokens));
+        var revealed = MySqlScanner.RevealExecutableComments(statement);
+        var tokens = MySqlParsing.LexAll(revealed);
+        var called = SqlNameScan.CalledNames(tokens);
+        var mentioned = SqlNameScan.MentionedNames(tokens);
+
+        var readings = new List<string>();
+        if (revealed.Contains('"'))
+        {
+            readings.Add(revealed.Replace('"', '`'));
+        }
+        if (statement.Contains('\\'))
+        {
+            // Revealed after the blanking, not before: which `/*!` opens an executable comment depends on where
+            // the literals end, so `select 'a\' /*!, load_file('/etc/passwd') */ #'` hides the call inside a
+            // string by default and runs it under NO_BACKSLASH_ESCAPES.
+            var unescaped = MySqlScanner.RevealExecutableComments(statement.Replace('\\', ' '));
+            readings.Add(unescaped);
+            if (unescaped.Contains('"'))
+            {
+                readings.Add(unescaped.Replace('"', '`'));
+            }
+        }
+        foreach (var reading in readings)
+        {
+            var other = MySqlParsing.LexAll(reading);
+            called.UnionWith(SqlNameScan.CalledNames(other));
+            mentioned.UnionWith(SqlNameScan.MentionedNames(other));
+        }
+        return (called, mentioned);
     }
 }

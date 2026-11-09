@@ -24,7 +24,10 @@ absences typed.
 - `SqliteQueryLog`, retention `QueryLogRetentionDays` (default 180, ≤0 = forever). No PII beyond the SQL.
 - Literal redaction (`QueryLogRedactLiterals`, `SqlRedactor`) is **opt-in, default off** — never assume a
   log is sanitized. It runs in `Append`; a redactor that throws stores `(redaction failed)`, never the
-  verbatim SQL. It reaches the store as `Func<string,string>` (`Persistence` may not reference `Sql`).
+  verbatim SQL. It reaches the store as `Func<string,string,string>` — (provider id, SQL), so each engine's
+  SQL is redacted by its own lexer (`Persistence` may not reference `Sql`).
+- MySQL redaction (`MySqlLiterals.RedactLiterals`) reads a statement holding a backslash twice — default and
+  `NO_BACKSLASH_ESCAPES` — and redacts every span either reading calls a literal (merged; shape gives way).
 - Files (incl. `-wal`/`-shm`) are narrowed to the owner on start (`LocalFilePermissions.HardenDatabase`),
   best-effort. No encryption at rest (it would need a user-supplied key — a new design, see §1.1).
 
@@ -101,6 +104,10 @@ holds before selecting `*` or an options bag.
   1792. Timeout = `DefaultCommandTimeout` (MySqlConnector issues `KILL QUERY`), applied after the options bag.
 - DDL, `LOCK TABLES` etc. **commit implicitly**: `MySqlDialect.TransactionControl` names them
   ("CREATE (commits implicitly)") so manual-commit refuses them. Temporary tables excepted.
+- `sql_mode` is unknown to the lexer: `MySqlWriteGuard.Describe` reads a batch with a backslash under the default
+  **and** the `NO_BACKSLASH_ESCAPES`/`ANSI_QUOTES` readings, appending any statement only another reading sees
+  (widening only). `StatementRisk.CommitsImplicitly` (from `ISqlDialect.CommitsImplicitly`, never the label)
+  marks implicit commits: manual-commit refuses them like explicit control, the external policy as "not a read".
 - Scanner lexes `/*! … */` as code (the server runs it); `RevealExecutableComments` does the same for the external
   name scan. `SqlLiteralStyle.MySql` escapes backslashes.
 

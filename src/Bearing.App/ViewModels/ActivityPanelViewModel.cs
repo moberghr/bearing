@@ -51,8 +51,14 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
         // The cadence lives with the panel rather than the shell: the shell's job is saying whether this is
         // on screen, not how often a server should be asked.
         _timer = new DispatcherTimer { Interval = PollInterval };
-        _timer.Tick += (_, _) => _ = RefreshAsync();
+        // A tick re-reads the rows only; whether this role sees every session is asked again when polling
+        // starts and on every other refresh (ActivityFilter.RecheckVisibility).
+        _timer.Tick += (_, _) => _ = TickAsync();
     }
+
+    /// <summary>What the timer runs on each tick: a refresh that may reuse the reader's last visibility
+    /// answer. Its own member so tests can drive the tick path without waiting on a dispatcher timer.</summary>
+    internal Task TickAsync() => RefreshAsync(tick: true);
 
     /// <summary>The backends, newest read wins. Reconciled per poll rather than rebuilt; see
     /// <see cref="Apply"/> for why.</summary>
@@ -98,8 +104,23 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
     /// The shell sets this; the panel does not know about the rail.</summary>
     public bool IsPolling { get; private set; }
 
+    /// <summary>
+    /// Whether the selected query may be laid out by <c>SqlFormat</c>, which reads PostgreSQL. False where the
+    /// connection's dialect refuses the formatter (<see cref="Bearing.Sql.ISqlDialect.FormatRefusal"/> — MySQL / MariaDB,
+    /// where `#` is a comment the Postgres lexer reads as an operator): formatted, a running statement would be
+    /// shown as one it is not.
+    /// </summary>
+    public bool FormatsQueries { get; private set; } = true;
+
     private bool _reading;
     private CancellationTokenSource? _inFlight;
+
+    /// <summary>
+    /// An explicit refresh arrived while a read was still running and was skipped. Its visibility recheck is
+    /// carried to the next read, tick or not — otherwise reopening the panel while the cancelled read is still
+    /// unwinding would leave every later tick on the reader's old answer until the user pressed refresh.
+    /// </summary>
+    private bool _recheckPending;
 
     /// <summary>
     /// Start or stop polling. Called by the shell whenever the active panel or the pane's openness changes —
@@ -128,12 +149,18 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
         _timer.Start();
     }
 
-    /// <summary>One poll. Safe to call on a tick, on open, and from a refresh button.</summary>
-    public async Task RefreshAsync()
+    /// <summary>One poll. Safe to call on open, from a refresh button, and after an action.</summary>
+    public Task RefreshAsync() => RefreshAsync(tick: false);
+
+    private async Task RefreshAsync(bool tick)
     {
         // A read still running when the next tick arrives is skipped, not queued: two reads of a moving
         // server answer the same question, and the later one is the one worth waiting for.
-        if (_reading) return;
+        if (_reading)
+        {
+            _recheckPending |= !tick;
+            return;
+        }
 
         if (Target() is not { } target)
         {
@@ -158,6 +185,8 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
         _reading = true;
         var cts = new CancellationTokenSource(PollTimeout);
         _inFlight = cts;
+        var recheck = !tick || _recheckPending;
+        _recheckPending = false;
         try
         {
             // Leased for this read only, rather than for as long as the panel is open: a lease outstanding
@@ -170,18 +199,27 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
             // rebuild it — and the bound on it is that polling stops the moment the panel is not on screen.
             using var lease = _ctx.Sessions.Lease(session);
             var activity = await lease.Session.Activity.GetActivityAsync(
-                new ActivityFilter(WholeServer ? null : info.Database, IncludeIdle), cts.Token);
+                new ActivityFilter(WholeServer ? null : info.Database, IncludeIdle, RecheckVisibility: recheck), cts.Token);
             Apply(activity, info, lease.Session.LoginUser);
         }
         catch (OperationCanceledException)
         {
             // Timed out, or the panel was hidden mid-read. Either way the rows on screen are the last good
             // answer and stay — clearing them would make a row blink out from under a pointer aiming at it.
-            if (IsPolling) Status = StaleText("the server did not answer in time");
+            // A recheck this read was carrying is carried on: cut short, it may not have reached the reader.
+            _recheckPending |= recheck;
+            if (IsPolling)
+            {
+                Status = StaleText("the server did not answer in time");
+            }
         }
         catch (Exception ex)
         {
-            if (IsPolling) Status = StaleText(SafeErrorText.Of(ex));
+            _recheckPending |= recheck;
+            if (IsPolling)
+            {
+                Status = StaleText(SafeErrorText.Of(ex));
+            }
         }
         finally
         {
@@ -235,6 +273,7 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
             else if (current != target) Backends.Move(current, target);
         }
 
+        FormatsQueries = ProviderTraits.For(info).Dialect.FormatRefusal is null;
         // Normally a no-op now: the selected row is the same object it was, so this assignment changes
         // nothing and notifies nobody. It still has to be here for the backend that has gone.
         Selected = keep is null ? null : Backends.FirstOrDefault(b => b.Identity == keep);
@@ -289,10 +328,20 @@ public sealed partial class ActivityPanelViewModel : ObservableObject
         // The session's login user, not info.User: a connection that takes its user from az login stores none,
         // and the name az gave is the role this read ran as.
         var who = string.IsNullOrWhiteSpace(loginUser) ? "This role" : loginUser;
-        if (!activity.SeesAllSessions)
+        if (activity.SeesAllSessions is null)
+        {
+            // The reader could not find out (MySQL/MariaDB piece it together from SHOW GRANTS). Neither "the
+            // server is quiet" nor "you are restricted" was measured, so the count is qualified, not explained.
+            var whom = string.IsNullOrWhiteSpace(loginUser) ? "this role" : loginUser;
+            var seen = count == 0 ? $"No{kind} sessions {where}." : $"{sessions}{kind} {where}.";
+            return $"{seen} Couldn't check whether {whom} can see other roles' sessions.";
+        }
+        if (activity.SeesAllSessions == false)
+        {
             return count == 0
                 ? $"No{kind} sessions of your own {where}. {who} can't see other roles' sessions."
                 : $"{sessions} of your own {where}. {who} can't see other roles' sessions.";
+        }
 
         return count == 0 ? $"No{kind} sessions {where}." : $"{sessions}{kind} {where}.";
     }

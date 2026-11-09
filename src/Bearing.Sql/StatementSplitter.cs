@@ -207,8 +207,8 @@ public static class StatementSplitter
     /// <summary>Whether the last token of <paramref name="fragment"/> is a line comment (<c>-- …</c>),
     /// which runs to end of line and would swallow a <c>;</c> appended on the same line.
     /// <para>
-    /// The PostgreSQL lexer answers this for every dialect, which is the one place here that does not
-    /// pick a lexer per engine — deliberately, because <c>-- to end of line</c> and <c>'…'</c> literals are
+    /// <see cref="ISqlDialect.EndsWithLineComment"/>'s default: the PostgreSQL lexer answers this for Postgres
+    /// and T-SQL alike — deliberately, because <c>-- to end of line</c> and <c>'…'</c> literals are
     /// the same lexical forms in both dialects, so both lexers give the same answer to this question. Where
     /// they could differ is a T-SQL-only form (<c>[a--b]</c>), and there the PG lexer answers "yes" where
     /// T-SQL would say "no": the <c>;</c> goes on its own line and the SQL is still correct. That is the
@@ -217,7 +217,7 @@ public static class StatementSplitter
     /// statement.
     /// </para>
     /// </summary>
-    private static bool EndsWithLineComment(string fragment)
+    internal static bool EndsWithPostgresLineComment(string fragment)
     {
         IToken? last = null;
         foreach (var t in PgParsing.LexAll(fragment))
@@ -292,6 +292,13 @@ public static class StatementSplitter
     public static string EnsureSeparated(ISqlDialect dialect, string sql)
     {
         var spans = Split(dialect, sql);
+        // A lone MySQL statement wrapped in DELIMITER lines is still one statement, but the directive and the
+        // custom delimiter are the client's, not SQL: sent as typed, the server rejects the whole run (1064).
+        // The span's text is the statement without them.
+        if (spans.Count == 1 && dialect.HasDelimiterDirective(sql))
+        {
+            return spans[0].Text;
+        }
         if (spans.Count <= 1) return sql;
 
         var parts = new List<string>();
@@ -307,7 +314,9 @@ public static class StatementSplitter
         // fresh line, or the comment (which runs to end of line) would swallow it and merge statements.
         var terminated = new List<string>(parts.Count);
         foreach (var p in parts)
-            terminated.Add(EndsWithLineComment(p) ? p + "\n;" : p + ";");
+        {
+            terminated.Add(dialect.EndsWithLineComment(p) ? p + "\n;" : p + ";");
+        }
         return string.Join("\n", terminated);
     }
 }

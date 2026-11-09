@@ -194,6 +194,21 @@ public class DatabaseObjectKindTests
         Assert.Equal("""select nextval('"Odd Schema"."order"')""", row.NextvalSql);
     }
 
+    /// <summary>
+    /// MariaDB's sequence functions take the name, not a string: `nextval('db.s')` is error 1064 there. The
+    /// copied statement is written for the connection it came from.
+    /// </summary>
+    [Fact]
+    public void A_mariadb_sequence_is_named_not_quoted_as_a_string()
+    {
+        var row = new SequenceNodeViewModel(
+            new SequenceInfo(1, "shop", "order", "bigint", null, 1, 1, 99, false, null), "shop",
+            Bearing.Sql.MySqlDialect.Instance);
+
+        Assert.Equal("select nextval(shop.`order`)", row.NextvalSql);
+        Assert.Equal("select setval(shop.`order`, 1)", row.SetvalSql);
+    }
+
     [Fact]
     public async Task A_type_row_says_what_it_holds()
     {

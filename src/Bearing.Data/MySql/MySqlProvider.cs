@@ -52,8 +52,15 @@ public sealed class MySqlProvider : IDbProvider
     /// arrangement as Azure Database for PostgreSQL, so it needs no path of its own.</summary>
     public bool SupportsEntraToken => true;
 
+    /// <summary>
+    /// A failed statement's verdict. Unlike <see cref="ClassifyException"/> (the connect path), 1044 is not
+    /// an authentication failure here: on a session that is already in, it is the server refusing a database
+    /// this account holds no privilege on (<c>use other_db</c>, <c>create database x</c>, measured on both
+    /// engines), and reading it as one would re-prompt for a credential that is fine, evict the session and
+    /// run the whole batch a second time — any write before the refused statement included.
+    /// </summary>
     public DbErrorKind Classify(QueryError error)
-        => int.TryParse(error.SqlState, out var number) ? FromNumber(number) : DbErrorKind.Unknown;
+        => int.TryParse(error.SqlState, out var number) && number != 1044 ? FromNumber(number) : DbErrorKind.Unknown;
 
     public DbErrorKind ClassifyException(Exception exception)
     {
@@ -83,7 +90,7 @@ public sealed class MySqlProvider : IDbProvider
 
         // We were not let in and re-acquiring the credential may fix it: access denied (1045), denied to
         // this database (1044), the socket-auth refusal (1698), an expired password (1862) and one that must
-        // be reset before anything else runs (1820).
+        // be reset before anything else runs (1820). 1044 counts on the connect path only (see Classify).
         1044 or 1045 or 1698 or 1820 or 1862 => DbErrorKind.Authentication,
 
         // The statement's shape: a parse error (1064), a duplicate column name — what a join dies of

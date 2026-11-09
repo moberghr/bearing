@@ -219,6 +219,14 @@ public sealed class MySqlQueryExecutor : IQueryExecutor
                     {
                         cmd.Parameters.Add(new DriverParameter(p.Name, p.Value ?? DBNull.Value));
                     }
+                    // Prepared, so the values travel bound in the binary protocol. Unprepared, MySqlConnector
+                    // inlines them as escaped literals — and how a backslash must be escaped depends on the
+                    // server's sql_mode (NO_BACKSLASH_ESCAPES), which the driver does not read: under that mode
+                    // a key of 'C:\' would match nothing and a typed value would gain a backslash.
+                    if (c.Parameters.Count > 0)
+                    {
+                        await cmd.PrepareAsync(ct).ConfigureAwait(false);
+                    }
                     await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
                     results.Add(await ReadResultSetAsync(reader, new QueryOptions { MaxRows = null }, sw, ct)
                         .ConfigureAwait(false));

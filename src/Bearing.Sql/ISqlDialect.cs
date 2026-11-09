@@ -201,6 +201,14 @@ public interface ISqlDialect
     (IReadOnlySet<string> Called, IReadOnlySet<string> Mentioned) ExternalNameScan(string statement);
 
     /// <summary>
+    /// A statement shape refused on an exposed connection because of what it returns — credentials (§1.8) —
+    /// even though its lead verb is on <see cref="ExternalReadVerbs"/>: the name of the shape, or null. Where
+    /// <see cref="ExternalDeniedRelations"/> fences a catalog, this fences a command that reads one for you
+    /// (MySQL's <c>SHOW CREATE USER</c> prints the password hash). Same accident-prevention posture.
+    /// </summary>
+    string? ExternalDeniedStatement(string statement) => null;
+
+    /// <summary>
     /// Split a batch into statements and classify each, in <b>this engine's</b> lexical rules. The
     /// guard is a keyword scan, so the lexing is the whole ballgame: a lexer that cannot see a
     /// delimited identifier reads the words inside one as clause keywords, and a lexer that does not
@@ -228,6 +236,14 @@ public interface ISqlDialect
     /// </summary>
     string? TransactionControl(IReadOnlyList<string> words);
 
+    /// <summary>
+    /// Whether the statement <paramref name="words"/> begins is transaction control only <em>implicitly</em>:
+    /// it commits the open transaction as a side effect of doing something else (MySQL's DDL,
+    /// <c>LOCK TABLES</c>, <c>ANALYZE</c>, …). Always false where <see cref="TransactionControl"/> is null, and
+    /// false on engines with no such statements — Postgres and SQL Server run DDL inside the transaction.
+    /// </summary>
+    bool CommitsImplicitly(IReadOnlyList<string> words) => false;
+
     // ---- Statement splitting ----
 
     /// <summary>
@@ -245,6 +261,58 @@ public interface ISqlDialect
     /// </para>
     /// </summary>
     IReadOnlyList<StatementSpan> SplitStatements(string sql);
+
+    /// <summary>
+    /// Whether <paramref name="fragment"/> ends in a comment that runs to end of line, so a <c>;</c> appended
+    /// on the same line would be swallowed by it and the next statement would run on as part of this one —
+    /// what <see cref="StatementSplitter.EnsureSeparated(ISqlDialect,string)"/> asks before terminating a part.
+    /// <para>
+    /// The default reads with the PostgreSQL lexer, which answers for T-SQL too: <c>--</c> and <c>'…'</c> are
+    /// the same lexical forms there, and where they differ (<c>[a--b]</c>) a wrong "yes" costs a newline, not
+    /// a statement. MySQL overrides it, because its <c>#</c> comment is an operator to that lexer.
+    /// </para>
+    /// </summary>
+    bool EndsWithLineComment(string fragment) => StatementSplitter.EndsWithPostgresLineComment(fragment);
+
+    /// <summary>
+    /// Whether <paramref name="sql"/> holds a client-side directive that redefines the statement terminator
+    /// (MySQL's <c>DELIMITER</c>). Such a directive is the client's, not SQL: a lone statement wrapped in one
+    /// is sent as its span's text, never as typed. False on engines with no such directive.
+    /// </summary>
+    bool HasDelimiterDirective(string sql) => false;
+
+    /// <summary>
+    /// Whether <see cref="UpdateDeleteTarget"/>'s reduction — which reads with the PostgreSQL lexer — sees
+    /// <paramref name="statement"/> the way this engine's server will: every character the server reads as
+    /// code is code to that lexer and the reverse, and it is one statement. False declines the count, which
+    /// is always safe (a missing number costs nothing; a number about different rows is a false
+    /// reassurance, #112).
+    /// <para>
+    /// True by default: Postgres is the lexer's own language, and SQL Server's statements reach the reduction
+    /// only after its own guard has split them. MySQL overrides it — <c>#</c> comments, executable
+    /// <c>/*! … */</c> comments, backslash escapes and <c>$x$</c> names all read differently there.
+    /// </para>
+    /// </summary>
+    /// <param name="statement">The statement as typed.</param>
+    /// <param name="postgresTokens">Its on-channel tokens as the PostgreSQL lexer read them, so the check
+    /// compares against the very tokens the reduction will use rather than lexing a second time.</param>
+    bool ReadsLikePostgresForCounting(string statement, IReadOnlyList<Antlr4.Runtime.IToken> postgresTokens)
+        => true;
+
+    /// <summary>
+    /// How a sequence function takes the sequence named by <paramref name="qualifiedName"/> (already quoted
+    /// by this dialect): Postgres' <c>nextval</c> takes a <c>regclass</c> written as a string, so the default
+    /// is the name in single quotes. MariaDB's takes the name itself — a string there is error 1064.
+    /// </summary>
+    string SequenceReference(string qualifiedName) => $"'{qualifiedName}'";
+
+    /// <summary>
+    /// Why the SQL formatter must not lay out this engine's SQL, or null when it may. The formatter reads
+    /// PostgreSQL; a dialect whose lexical forms it misreads in a way that changes the statement (MySQL's
+    /// <c>#</c> comment) refuses rather than be formatted into a different statement. The text completes
+    /// "Not formatted — …".
+    /// </summary>
+    string? FormatRefusal => null;
 
     /// <summary>
     /// Whether <paramref name="offset"/> sits inside a character literal, in this engine's lexical

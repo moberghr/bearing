@@ -160,6 +160,111 @@ public class ActivityPanelTests : IDisposable
     }
 
     [Fact]
+    public async Task Opening_the_panel_and_an_explicit_refresh_recheck_visibility()
+    {
+        // Only the timer's ticks may reuse the reader's last answer (ActivityFilter.RecheckVisibility): MySQL
+        // pieces it together from SHOW GRANTS, which is not worth sending every 2.5 seconds.
+        var (ctx, activity, dialogs, _) = NewPanel();
+        var panel = new ActivityPanelViewModel(ctx, dialogs);
+
+        await panel.RefreshAsync();
+
+        Assert.All(activity.Filters, f => Assert.True(f.RecheckVisibility));
+        Assert.NotEmpty(activity.Filters);
+    }
+
+    [Fact]
+    public async Task A_tick_reuses_the_visibility_answer_and_an_explicit_refresh_does_not()
+    {
+        var (ctx, activity, dialogs, _) = NewPanel();
+        var panel = new ActivityPanelViewModel(ctx, dialogs);
+
+        await panel.TickAsync();
+        await panel.RefreshAsync();
+        await panel.TickAsync();
+
+        Assert.Equal(new[] { false, true, false }, activity.Filters.Select(f => f.RecheckVisibility));
+    }
+
+    [Fact]
+    public async Task A_refresh_skipped_behind_a_running_read_carries_its_recheck_to_the_next_tick()
+    {
+        // Reopening the panel while the previous read is still unwinding skips the reopen's read; without the
+        // carry every later tick would sit on the reader's old visibility answer until the user pressed refresh.
+        var (ctx, activity, dialogs, _) = NewPanel();
+        activity.Gate = new TaskCompletionSource();
+        var panel = new ActivityPanelViewModel(ctx, dialogs);
+
+        var running = panel.TickAsync();
+        await WaitUntil(() => activity.Reads == 1);
+        await panel.RefreshAsync();                        // skipped: a read is in flight
+        await panel.TickAsync();                           // skipped too, and carries nothing of its own
+        Assert.Equal(1, activity.Reads);
+        activity.Gate.SetResult();
+        await running;
+        activity.Gate = null;
+
+        await panel.TickAsync();                           // the carried recheck
+        await panel.TickAsync();                           // and only once
+
+        Assert.Equal(new[] { false, true, false }, activity.Filters.Select(f => f.RecheckVisibility));
+    }
+
+    [Fact]
+    public async Task A_recheck_whose_read_failed_is_carried_to_the_next_tick()
+    {
+        // A refresh that timed out or failed may never have reached the reader's visibility question, so the
+        // ticks after it must not settle for the answer the reader had before.
+        var (ctx, activity, dialogs, _) = NewPanel();
+        activity.Throws = new InvalidOperationException("connection reset");
+        var panel = new ActivityPanelViewModel(ctx, dialogs);
+
+        await panel.RefreshAsync();
+        activity.Throws = null;
+        await panel.TickAsync();
+        await panel.TickAsync();
+
+        Assert.Equal(new[] { true, true, false }, activity.Filters.Select(f => f.RecheckVisibility));
+    }
+
+    [Fact]
+    public async Task A_tick_skipped_behind_a_running_tick_carries_no_recheck()
+    {
+        var (ctx, activity, dialogs, _) = NewPanel();
+        activity.Gate = new TaskCompletionSource();
+        var panel = new ActivityPanelViewModel(ctx, dialogs);
+
+        var running = panel.TickAsync();
+        await WaitUntil(() => activity.Reads == 1);
+        await panel.TickAsync();
+        activity.Gate.SetResult();
+        await running;
+        activity.Gate = null;
+
+        await panel.TickAsync();
+
+        Assert.Equal(new[] { false, false }, activity.Filters.Select(f => f.RecheckVisibility));
+    }
+
+    [Fact]
+    public async Task A_visibility_the_reader_could_not_determine_is_neither_quiet_nor_restricted()
+    {
+        // MySQL/MariaDB answer SeesAllSessions from SHOW GRANTS; when that read fails the answer is null,
+        // and the panel must not turn it into either claim (§1.1).
+        var (ctx, activity, dialogs, _) = NewPanel();
+        activity.Backends = [Backend(101, ours: true)];
+        activity.SeesAllSessions = null;
+        var panel = new ActivityPanelViewModel(ctx, dialogs);
+
+        await panel.RefreshAsync();
+
+        Assert.Contains("1 session running", panel.Status);
+        Assert.Contains("Couldn't check whether", panel.Status);
+        Assert.DoesNotContain("can't see other roles", panel.Status);
+        Assert.DoesNotContain("of your own", panel.Status);
+    }
+
+    [Fact]
     public async Task With_no_live_session_nothing_is_read_and_the_panel_says_why()
     {
         // §1.5's rule: a panel that refreshes itself must never be the reason a connection is opened.

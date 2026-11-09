@@ -501,7 +501,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
         {
             if (risks.Any(s => s.IsRisky))
             {
-                var impacts = await CountRowImpactsAsync(risks);
+                var impacts = await CountRowImpactsAsync(traits.Dialect, risks);
                 if (!await dialogs.ConfirmWriteAsync(WriteConfirmation.ForBatch(info, risks, impacts)))
                 {
                     _ctx.SetStatus("Cancelled — write not confirmed.");
@@ -575,7 +575,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// </para>
     /// </summary>
     private async Task<IReadOnlyDictionary<int, RowImpact>?> CountRowImpactsAsync(
-        IReadOnlyList<StatementRisk> statements)
+        ISqlDialect dialect, IReadOnlyList<StatementRisk> statements)
     {
         var impacts = new Dictionary<int, RowImpact>();
         var toCount = new List<(int Index, UpdateDeleteTarget Target)>();
@@ -583,7 +583,10 @@ public sealed partial class ExecutionViewModel : ObservableObject
         for (var i = 0; i < statements.Count; i++)
         {
             if (!statements[i].IsRisky) continue;
-            if (UpdateDeleteTarget.TryReduce(statements[i].Text) is not { } target) continue;
+            if (UpdateDeleteTarget.TryReduce(dialect, statements[i].Text) is not { } target)
+            {
+                continue;
+            }
             // "Every row" is answered by the statement itself — #100's warning needs no server round trip,
             // and asking one for it would be the slowest way to learn what the missing WHERE already said.
             if (target.EveryRow) impacts[i] = RowImpact.Every(target);

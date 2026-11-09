@@ -40,10 +40,11 @@ public class QueryLogReportTests
         string? environment = "Production",
         DateTimeOffset? at = null,
         bool ok = true,
-        string? origin = null) => new()
+        string? origin = null,
+        string provider = "postgres") => new()
         {
             ExecutedAt = at ?? new DateTimeOffset(2026, 9, 3, 10, 0, 0, TimeSpan.Zero),
-            ProviderId = "postgres",
+            ProviderId = provider,
             ConnectionName = connection,
             ConnectionId = id,
             Environment = environment,
@@ -221,6 +222,23 @@ public class QueryLogReportTests
         // The data-modifying CTE is a write, and the whole reason the classification is lexer-based.
         Assert.Contains(Column(report, "statement"), s => s.Contains("with gone as"));
         Assert.Contains("write guard", Notes(report));
+    }
+
+    /// <summary>
+    /// Each row is re-read in the dialect of the engine it ran on. `replace into` is a MySQL write the Postgres
+    /// verb list does not hold — read with the Postgres guard, an audit of writes left it out.
+    /// </summary>
+    [Fact]
+    public void Writes_only_reads_each_row_in_its_own_engines_dialect()
+    {
+        var report = Build(
+            [
+                Entry("replace into film (film_id) values (1)", provider: "mysql"),
+                Entry("select 1", provider: "mysql"),
+            ],
+            new QueryLogReportFilter(WritesOnly: true));
+
+        Assert.Equal(["replace into film (film_id) values (1)"], Column(report, "statement"));
     }
 
     [Fact]

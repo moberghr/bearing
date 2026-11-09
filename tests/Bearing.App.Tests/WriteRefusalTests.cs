@@ -142,6 +142,33 @@ public class WriteRefusalTests
     }
 
     [Fact]
+    public void A_mysql_read_only_refusal_names_the_setting_too()
+    {
+        // The MySQL executor records the error number (1792), not a SQLSTATE.
+        var explained = QueryErrorText.Explain(Err("1792"), Conn(readOnly: true) with { ProviderId = "mysql" });
+
+        Assert.NotNull(explained);
+        Assert.Contains("prod-eu", explained);
+        Assert.Contains("read-only", explained);
+    }
+
+    [Fact]
+    public void Manual_commit_refuses_an_implicit_commit_and_says_it_commits()
+    {
+        var conn = Conn() with { ProviderId = "mysql", ManualCommit = true };
+        var reason = WriteRefusal.ReasonForTransactionControl(
+            conn, WriteGuard.Describe(MySqlDialect.Instance, "lock tables t read"));
+
+        Assert.NotNull(reason);
+        Assert.Contains("LOCK (commits implicitly)", reason);
+    }
+
+    [Fact]
+    public void Error_number_1792_means_read_only_only_on_mysql()
+        // SQL Server records error numbers as well, and its 1792 is something else entirely.
+        => Assert.Null(QueryErrorText.Explain(Err("1792"), Conn(readOnly: true) with { ProviderId = "sqlserver" }));
+
+    [Fact]
     public void A_refused_write_on_a_connection_we_did_not_mark_claims_no_cause()
     {
         // A read-only *server*, a role with no write privileges, or an enclosing read-only transaction all

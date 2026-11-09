@@ -815,7 +815,7 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
         {
             "Sequences" => Ordered(kinds.Sequences.Where(q => Wanted(q.Schema))
                 .Select(q => Entry(q.Schema, q.Name, 0, defaultSchema,
-                    new SequenceNodeViewModel(q, defaultSchema))).ToList()),
+                    new SequenceNodeViewModel(q, defaultSchema, ProviderTraits.For(_connection).Dialect))).ToList()),
             "Types" => Ordered(kinds.Types.Where(t => Wanted(t.Schema))
                 .Select(t => Entry(t.Schema, t.Name, 0, defaultSchema,
                     new TypeNodeViewModel(t, defaultSchema))).ToList()),
@@ -1380,12 +1380,19 @@ public sealed class RoutineNodeViewModel : SchemaNodeViewModel
 /// </summary>
 public sealed class SequenceNodeViewModel : SchemaNodeViewModel
 {
-    public SequenceNodeViewModel(SequenceInfo sequence, string defaultSchema)
+    /// <param name="dialect">The connection's: the copied statements are pasted back into its editor.
+    /// Postgres when omitted.</param>
+    public SequenceNodeViewModel(SequenceInfo sequence, string defaultSchema, ISqlDialect? dialect = null)
         : base("№",
             SchemaObjectLabel.Title(sequence.Schema, sequence.Name, defaultSchema),
             RelationDetailText.Sequence(sequence),
             hasChildren: false)
-        => Sequence = sequence;
+    {
+        Sequence = sequence;
+        _dialect = dialect ?? PostgresDialect.Instance;
+    }
+
+    private readonly ISqlDialect _dialect;
 
     /// <summary>The sequence itself, for the context menu's copy items.</summary>
     public SequenceInfo Sequence { get; }
@@ -1398,7 +1405,7 @@ public sealed class SequenceNodeViewModel : SchemaNodeViewModel
     /// <c>select nextval('schema.name')</c> — the statement you actually want when you have found a sequence,
     /// quoted so a mixed-case or keyword name survives the paste.
     /// </summary>
-    public string NextvalSql => $"select nextval('{Quoted}')";
+    public string NextvalSql => $"select nextval({Reference})";
 
     /// <summary>
     /// <c>select setval('schema.name', &lt;value&gt;)</c>, seeded with where the sequence is now.
@@ -1409,13 +1416,16 @@ public sealed class SequenceNodeViewModel : SchemaNodeViewModel
     /// </para>
     /// </summary>
     public string SetvalSql
-        => $"select setval('{Quoted}', {Sequence.LastValue?.ToString(CultureInfo.InvariantCulture) ?? "1"})";
+        => $"select setval({Reference}, {Sequence.LastValue?.ToString(CultureInfo.InvariantCulture) ?? "1"})";
 
     /// <summary>Quoted only where the bare form would not round-trip, so the common case reads as
     /// <c>public.payment_id_seq</c> rather than as a wall of quotes — and a mixed-case or keyword name still
     /// survives the paste.</summary>
     private string Quoted
-        => $"{PgIdentifier.QuoteIfNeeded(Sequence.Schema)}.{PgIdentifier.QuoteIfNeeded(Sequence.Name)}";
+        => $"{_dialect.QuoteIfNeeded(Sequence.Schema)}.{_dialect.QuoteIfNeeded(Sequence.Name)}";
+
+    /// <summary>How the functions take the sequence — the dialect's call (<see cref="ISqlDialect.SequenceReference"/>).</summary>
+    private string Reference => _dialect.SequenceReference(Quoted);
 
     public override string? IconKey => "Icon.Sequence";
     public override string IconColorHex => "#7FB4CA";

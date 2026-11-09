@@ -31,9 +31,17 @@ namespace Bearing.Sql;
 /// so: it says what the statement <i>does to the transaction</i>, which is a different question from
 /// whether it writes, and answering it does not change any existing verdict (§1.2).
 /// </param>
+/// <param name="CommitsImplicitly">
+/// True when <see cref="TransactionControl"/> names a statement that ends the open transaction only as a
+/// side effect of what it does — MySQL's DDL, <c>LOCK TABLES</c>, <c>ANALYZE</c>, <c>START REPLICA</c> —
+/// rather than a statement whose purpose is the transaction. Set by the dialect
+/// (<see cref="ISqlDialect.CommitsImplicitly"/>), never read off the label. Manual-commit mode refuses both
+/// kinds alike; an exposed connection refuses these as "not a read", because "it would make a read-only
+/// session writable" is not true of them (§1.1).
+/// </param>
 public sealed record StatementRisk(
     string Text, string Verb, IReadOnlyList<string> RiskyVerbs, bool GuardIsDialectAware = true,
-    string? TransactionControl = null, bool FromConservativeDefault = false)
+    string? TransactionControl = null, bool FromConservativeDefault = false, bool CommitsImplicitly = false)
 {
     /// <summary>
     /// Whether the scan actually <b>named a write</b> in this statement — as opposed to being unable to

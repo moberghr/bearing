@@ -94,6 +94,9 @@ public class SqlLiteralStyleTests
     {
         Assert.Equal("true", SqlValue.Literal(SqlLiteralStyle.MySql, true));
         Assert.Equal("0x0102FF", SqlValue.Literal(SqlLiteralStyle.MySql, new byte[] { 1, 2, 255 }));
+        // `0x` alone is not a hex literal on MySQL (it is on SQL Server, which keeps it).
+        Assert.Equal("X''", SqlValue.Literal(SqlLiteralStyle.MySql, Array.Empty<byte>()));
+        Assert.Equal("0x", SqlValue.Literal(SqlLiteralStyle.TSql, Array.Empty<byte>()));
         // TIME is a duration up to 838 hours with no day part — `c`'s 1.02:03:04 would be misread.
         Assert.Equal("'26:03:04'", SqlValue.Literal(SqlLiteralStyle.MySql, new TimeSpan(1, 2, 3, 4)));
         Assert.Equal("'-0:00:01.500000'", SqlValue.Literal(SqlLiteralStyle.MySql, TimeSpan.FromMilliseconds(-1500)));

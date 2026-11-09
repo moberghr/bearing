@@ -58,9 +58,24 @@ public sealed class MySqlMetadataReader : IMetadataReader
         return new SchemaSnapshot(database, schemas, tables, columns, fks, searchPath: schemas);
     }
 
+    /// <summary>
+    /// The connected database, spelled as the catalog stores it. <c>database()</c> returns the name as the
+    /// connection asked for it, which on a case-insensitive server (<c>lower_case_table_names</c> 1 or 2) may
+    /// differ in case from the <c>table_schema</c> every catalog row carries — and ids hash the schema, so
+    /// the snapshot's ids and the resolvers' would never meet. An exact match wins where a case-sensitive
+    /// server holds both spellings; <c>database()</c> itself is the fallback when the catalog shows nothing.
+    /// </summary>
     private static async Task<string?> CurrentDatabaseAsync(MySqlConnection conn, CancellationToken ct)
     {
-        await using var cmd = new MySqlCommand("select database()", conn);
+        await using var cmd = new MySqlCommand(
+            """
+            select coalesce(
+                (select schema_name from information_schema.schemata
+                 where lower(schema_name) = lower(database())
+                 order by cast(schema_name as binary) = cast(database() as binary) desc
+                 limit 1),
+                database())
+            """, conn);
         return await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false) as string;
     }
 
@@ -355,8 +370,11 @@ public sealed class MySqlMetadataReader : IMetadataReader
             """;
         await using var cmd = new MySqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("@t", table);
+        // Bound, not inlined: the driver's escaping ignores a server's NO_BACKSLASH_ESCAPES.
+        await cmd.PrepareAsync(ct).ConfigureAwait(false);
         await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
+        var isMariaDb = MySqlServerFlavor.Parse(conn.ServerVersion).IsMariaDb;
         var ordinals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var details = new List<ColumnDetail>();
         while (await r.ReadAsync(ct).ConfigureAwait(false))
@@ -370,7 +388,9 @@ public sealed class MySqlMetadataReader : IMetadataReader
             var identity = extra.Contains("auto_increment", StringComparison.OrdinalIgnoreCase)
                 ? ColumnIdentity.ByDefault
                 : ColumnIdentity.None;
-            var @default = generated is not null || identity != ColumnIdentity.None || r.IsDBNull(2) ? null : r.GetString(2);
+            var @default = generated is not null || identity != ColumnIdentity.None || r.IsDBNull(2)
+                ? null
+                : MySqlCatalogValues.ColumnDefault(r.GetString(2), isMariaDb);
             details.Add(new ColumnDetail(
                 ordinal, @default, identity, generated,
                 r.IsDBNull(5) ? null : r.GetString(5),
@@ -390,6 +410,8 @@ public sealed class MySqlMetadataReader : IMetadataReader
             """;
         await using var cmd = new MySqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("@t", table.Name);
+        // Bound, not inlined: the driver's escaping ignores a server's NO_BACKSLASH_ESCAPES.
+        await cmd.PrepareAsync(ct).ConfigureAwait(false);
         await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         var order = new List<string>();
@@ -453,6 +475,8 @@ public sealed class MySqlMetadataReader : IMetadataReader
             """;
         await using var cmd = new MySqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("@t", table.Name);
+        // Bound, not inlined: the driver's escaping ignores a server's NO_BACKSLASH_ESCAPES.
+        await cmd.PrepareAsync(ct).ConfigureAwait(false);
         await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await r.ReadAsync(ct).ConfigureAwait(false))
         {
@@ -462,14 +486,14 @@ public sealed class MySqlMetadataReader : IMetadataReader
             switch (type)
             {
                 case "PRIMARY KEY" or "UNIQUE":
-                {
-                    var backing = indexes.FirstOrDefault(i => i.Name == name);
-                    var kind = type == "PRIMARY KEY" ? ConstraintKind.PrimaryKey : ConstraintKind.Unique;
-                    list.Add(new ConstraintInfo(id, name, kind, backing?.Ordinals ?? [],
-                        backing is null ? "" : (kind == ConstraintKind.PrimaryKey ? "primary key " : "unique ")
-                                               + ColumnsOf(backing.Definition)));
-                    break;
-                }
+                    {
+                        var backing = indexes.FirstOrDefault(i => i.Name == name);
+                        var kind = type == "PRIMARY KEY" ? ConstraintKind.PrimaryKey : ConstraintKind.Unique;
+                        list.Add(new ConstraintInfo(id, name, kind, backing?.Ordinals ?? [],
+                            backing is null ? "" : (kind == ConstraintKind.PrimaryKey ? "primary key " : "unique ")
+                                                   + ColumnsOf(backing.Definition)));
+                        break;
+                    }
                 case "FOREIGN KEY":
                     // Rendered from the snapshot's ForeignKeyInfo, as on SQL Server — listed here by name only.
                     list.Add(new ConstraintInfo(id, name, ConstraintKind.ForeignKey, [], ""));
@@ -495,6 +519,12 @@ public sealed class MySqlMetadataReader : IMetadataReader
     /// MariaDB 10.2+, and only MariaDB's carries the table name — so the join goes through
     /// <c>table_constraints</c>, which both have. Best-effort: on a server without the view the constraints
     /// are still listed, without their text.
+    /// <para>
+    /// On MariaDB the join also matches the table: a CHECK name is unique per <em>table</em> there, and every
+    /// table's first unnamed one is <c>CONSTRAINT_1</c>, so joining on the name alone handed this table the
+    /// clause of whichever other table's <c>CONSTRAINT_1</c> came last (measured on 11.4). MySQL names them
+    /// per schema (<c>t_chk_1</c>) and its view has no table column to match.
+    /// </para>
     /// </summary>
     private static async Task<Dictionary<string, string>> ReadCheckClausesAsync(
         MySqlConnection conn, string table, CancellationToken ct)
@@ -502,16 +532,21 @@ public sealed class MySqlMetadataReader : IMetadataReader
         var clauses = new Dictionary<string, string>(StringComparer.Ordinal);
         try
         {
+            var sameTable = MySqlServerFlavor.Parse(conn.ServerVersion).IsMariaDb
+                ? "\n and cc.table_name = tc.table_name"
+                : "";
             await using var cmd = new MySqlCommand(
-                """
+                $"""
                 select cc.constraint_name, cc.check_clause
                 from information_schema.check_constraints cc
                 join information_schema.table_constraints tc
                   on tc.constraint_schema = cc.constraint_schema and tc.constraint_name = cc.constraint_name
-                 and tc.constraint_type = 'CHECK'
+                 and tc.constraint_type = 'CHECK'{sameTable}
                 where cc.constraint_schema = database() and tc.table_name = @t
                 """, conn);
             cmd.Parameters.AddWithValue("@t", table);
+            // Bound, not inlined: the driver's escaping ignores a server's NO_BACKSLASH_ESCAPES.
+            await cmd.PrepareAsync(ct).ConfigureAwait(false);
             await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             while (await r.ReadAsync(ct).ConfigureAwait(false))
             {
@@ -536,6 +571,8 @@ public sealed class MySqlMetadataReader : IMetadataReader
             """;
         await using var cmd = new MySqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("@t", table.Name);
+        // Bound, not inlined: the driver's escaping ignores a server's NO_BACKSLASH_ESCAPES.
+        await cmd.PrepareAsync(ct).ConfigureAwait(false);
         await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         var list = new List<TriggerInfo>();
         while (await r.ReadAsync(ct).ConfigureAwait(false))
@@ -641,25 +678,37 @@ public sealed class MySqlMetadataReader : IMetadataReader
             {
                 // A MariaDB sequence is readable as a one-row table of its own settings. The last value
                 // handed out is not among them (next_not_cached_value runs ahead by the cache), so it is
-                // reported as unknown rather than approximated.
-                await using var cmd = new MySqlCommand(
-                    $"select minimum_value, maximum_value, increment, cycle_option from {Quote(schema)}.{Quote(name)}", conn);
-                await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-                if (!await r.ReadAsync(ct).ConfigureAwait(false))
+                // reported as unknown rather than approximated. Best-effort per sequence as well as per kind:
+                // one that cannot be read is left out, not the whole list.
+                try
                 {
-                    continue;
+                    await using var cmd = new MySqlCommand(
+                        $"select minimum_value, maximum_value, increment, cycle_option from {Quote(schema)}.{Quote(name)}", conn);
+                    await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                    if (!await r.ReadAsync(ct).ConfigureAwait(false))
+                    {
+                        continue;
+                    }
+                    var min = MySqlCatalogValues.SequenceBound(r.GetValue(0));
+                    var max = MySqlCatalogValues.SequenceBound(r.GetValue(1));
+                    sequences.Add(new SequenceInfo(
+                        Id: StableId(schema, name, "sequence"),
+                        Schema: schema,
+                        Name: name,
+                        // An unsigned sequence (MariaDB 11.5+) can run past a long; its bounds are clamped to
+                        // fit the record, and the type says the range is the unsigned one.
+                        DataType: min.Clamped || max.Clamped ? "bigint unsigned" : "bigint",
+                        LastValue: null,
+                        Increment: MySqlCatalogValues.SequenceBound(r.GetValue(2)).Value,
+                        MinValue: min.Value,
+                        MaxValue: max.Value,
+                        Cycles: MySqlCatalogValues.SequenceBound(r.GetValue(3)).Value != 0,
+                        OwnedBy: null));
                 }
-                sequences.Add(new SequenceInfo(
-                    Id: StableId(schema, name, "sequence"),
-                    Schema: schema,
-                    Name: name,
-                    DataType: "bigint",
-                    LastValue: null,
-                    Increment: Convert.ToInt64(r.GetValue(2), CultureInfo.InvariantCulture),
-                    MinValue: Convert.ToInt64(r.GetValue(0), CultureInfo.InvariantCulture),
-                    MaxValue: Convert.ToInt64(r.GetValue(1), CultureInfo.InvariantCulture),
-                    Cycles: Convert.ToInt64(r.GetValue(3), CultureInfo.InvariantCulture) != 0,
-                    OwnedBy: null));
+                catch (MySqlException)
+                {
+                    // Dropped between the list and the read, or not readable by this account.
+                }
             }
             return new DatabaseObjectKinds { Sequences = sequences };
         }

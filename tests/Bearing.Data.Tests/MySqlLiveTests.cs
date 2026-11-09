@@ -102,6 +102,41 @@ public class MySqlLiveTests
 
     [SkippableTheory]
     [MemberData(nameof(Engines))]
+    public async Task A_check_constraint_shows_its_own_tables_clause(MySqlEngine engine)
+    {
+        // MariaDB names an unnamed CHECK per table (every table's first is CONSTRAINT_1), so a join on the name
+        // alone handed one table another's clause.
+        await MySqlTestServer.RequireAsync(engine);
+        await using var factory = MySqlTestServer.Factory(engine);
+        var exec = Provider.CreateQueryExecutor(factory);
+        var a = Table(engine, "chk_a");
+        var b = Table(engine, "chk_b");
+        try
+        {
+            await RunAsync(exec, $"""
+                drop table if exists {a}, {b};
+                create table {a} (alpha int, check (alpha > 0));
+                create table {b} (beta int, check (beta < 100))
+                """);
+
+            var reader = Provider.CreateMetadataReader(factory);
+            var snapshot = await reader.LoadSnapshotAsync(MySqlTestServer.Database, CancellationToken.None);
+            foreach (var (table, column, other) in new[] { (a, "alpha", "beta"), (b, "beta", "alpha") })
+            {
+                var details = await reader.GetTableDetailsAsync(snapshot.ResolveTable(null, table)!.Id, CancellationToken.None);
+                var check = Assert.Single(details.Constraints, k => k.Kind == ConstraintKind.Check);
+                Assert.Contains(column, check.Definition);
+                Assert.DoesNotContain(other, check.Definition);
+            }
+        }
+        finally
+        {
+            await DropAsync(exec, a, b);
+        }
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Engines))]
     public async Task The_dialects_page_wrap_and_count_sql_is_accepted(MySqlEngine engine)
     {
         await MySqlTestServer.RequireAsync(engine);
@@ -201,6 +236,124 @@ public class MySqlLiveTests
             }
             var stored = await RunAsync(exec, $"select v from {t}");
             Assert.Equal("hello", stored[0].Rows[0][0]);
+        }
+        finally
+        {
+            await DropAsync(exec, t);
+        }
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Engines))]
+    public async Task A_generated_update_binds_backslashes_and_quotes_exactly_on_a_no_backslash_escapes_server(MySqlEngine engine)
+    {
+        // MySqlConnector inlines parameters into the statement text client-side. Under NO_BACKSLASH_ESCAPES a
+        // backslash is an ordinary character, so the escaping must follow the server's mode or a key holding
+        // 'C:\' stops matching (or, the other way round, swallows the closing quote).
+        await MySqlTestServer.RequireAsync(engine);
+        await using var admin = MySqlTestServer.Factory(engine);
+        var adminExec = Provider.CreateQueryExecutor(admin);
+        var t = Table(engine, "nbe");
+        var slashed = Table(engine, @"nbe\x");
+        var saved = Convert.ToString((await RunAsync(adminExec, "select @@global.sql_mode"))[0].Rows[0][0]) ?? "";
+        try
+        {
+            await RunAsync(adminExec,
+                $"drop table if exists {t}; create table {t} (k varchar(20) primary key, v varchar(20))");
+            await RunAsync(adminExec, $@"insert into {t} values ('C:\\', 'one'), ('other', 'two')");
+            await RunAsync(adminExec, $"drop table if exists {Dialect.Quote(slashed)}; create table {Dialect.Quote(slashed)} (id int primary key)");
+            await RunAsync(adminExec, "set global sql_mode = concat(@@global.sql_mode, ',NO_BACKSLASH_ESCAPES')");
+
+            // A fresh pool, so every connection it opens starts in the server's new global mode.
+            await using var factory = MySqlTestServer.Factory(engine);
+            var exec = Provider.CreateQueryExecutor(factory);
+            var mode = Convert.ToString((await RunAsync(exec, "select @@session.sql_mode"))[0].Rows[0][0]);
+            Assert.Contains("NO_BACKSLASH_ESCAPES", mode);
+
+            var update = new SqlWriteCommand(
+                $"update {Dialect.Quote(t)} set `v` = @p0 where `k` = @p1",
+                new[] { new SqlParameter("@p0", @"it's D:\"), new SqlParameter("@p1", @"C:\") },
+                null);
+            var result = await exec.ExecuteWriteAsync(new[] { update }, CancellationToken.None);
+            Assert.Null(result[0].Error);
+            Assert.Equal(1, result[0].RowCount);
+
+            var rows = (await RunAsync(exec, $"select k, v from {t} order by k"))[0].Rows;
+            Assert.Equal(@"C:\", rows[0][0]);
+            Assert.Equal(@"it's D:\", rows[0][1]);
+            Assert.Equal("two", rows[1][1]);
+
+            // The explorer binds a table's name the same way: one with a backslash still has its details.
+            var reader = Provider.CreateMetadataReader(factory);
+            var snapshot = await reader.LoadSnapshotAsync(MySqlTestServer.Database, CancellationToken.None);
+            var details = await reader.GetTableDetailsAsync(snapshot.ResolveTable(null, slashed)!.Id, CancellationToken.None);
+            Assert.Contains(details.Indexes, i => i.IsPrimary);
+            Assert.NotEmpty(details.Columns);
+        }
+        finally
+        {
+            await adminExec.ExecuteAsync($"set global sql_mode = '{saved}'",
+                new QueryOptions(), CancellationToken.None);
+            await DropAsync(adminExec, t, Dialect.Quote(slashed));
+        }
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Engines))]
+    public async Task A_tinyint_1_holding_2_reads_back_as_2_and_round_trips(MySqlEngine engine)
+    {
+        await MySqlTestServer.RequireAsync(engine);
+        await using var factory = MySqlTestServer.Factory(engine);
+        var exec = Provider.CreateQueryExecutor(factory);
+        var t = Table(engine, "tiny");
+        try
+        {
+            // BOOL is an alias that creates tinyint(1); both hold any tinyint, and 2 must not come back as True.
+            await RunAsync(exec,
+                $"drop table if exists {t}; create table {t} (id int primary key, flag tinyint(1), b bool, u tinyint(1) unsigned)");
+            await RunAsync(exec, $"insert into {t} values (1, 2, -3, 200)");
+
+            var read = (await RunAsync(exec, $"select flag, b, u from {t}"))[0];
+            Assert.Equal(typeof(sbyte), read.Columns[0].ClrType);
+            Assert.Equal((sbyte)2, read.Rows[0][0]);
+            Assert.Equal((sbyte)-3, read.Rows[0][1]);
+            Assert.Equal((byte)200, read.Rows[0][2]);
+
+            // The value read goes back out unchanged through a generated, parameterized UPDATE.
+            var update = new SqlWriteCommand(
+                $"update {Dialect.Quote(t)} set `flag` = @p0, `b` = @p1 where `id` = @p2",
+                new[] { new SqlParameter("@p0", read.Rows[0][0]), new SqlParameter("@p1", (sbyte)5), new SqlParameter("@p2", 1) },
+                null);
+            Assert.Null((await exec.ExecuteWriteAsync(new[] { update }, CancellationToken.None))[0].Error);
+
+            var after = (await RunAsync(exec, $"select flag, b from {t}"))[0];
+            Assert.Equal((sbyte)2, after.Rows[0][0]);
+            Assert.Equal((sbyte)5, after.Rows[0][1]);
+        }
+        finally
+        {
+            await DropAsync(exec, t);
+        }
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Engines))]
+    public async Task A_char_36_column_reads_as_the_text_it_holds_guid_or_not(MySqlEngine engine)
+    {
+        await MySqlTestServer.RequireAsync(engine);
+        await using var factory = MySqlTestServer.Factory(engine);
+        var exec = Provider.CreateQueryExecutor(factory);
+        var t = Table(engine, "char36");
+        try
+        {
+            await RunAsync(exec, $"drop table if exists {t}; create table {t} (id int primary key, ref char(36))");
+            // A GUID in upper case, and a value of the same width that is no GUID at all.
+            await RunAsync(exec,
+                $"insert into {t} values (1, 'A1B2C3D4-0000-4000-8000-00000000000F'), (2, 'order-2024-000000000000000000000017')");
+
+            var read = (await RunAsync(exec, $"select ref from {t} order by id"))[0];
+            Assert.Equal("A1B2C3D4-0000-4000-8000-00000000000F", read.Rows[0][0]);
+            Assert.Equal("order-2024-000000000000000000000017", read.Rows[1][0]);
         }
         finally
         {
@@ -366,7 +519,7 @@ public class MySqlLiveTests
             Assert.Equal("varchar(20)", cols[2].DataType);
             Assert.True(cols[2].NotNull);
 
-            var fk = Assert.Single(snapshot.ForeignKeysTouching(c.Id).Where(f => f.ParentTableId == c.Id));
+            var fk = Assert.Single(snapshot.ForeignKeysTouching(c.Id), f => f.ParentTableId == c.Id);
             Assert.Equal(p.Id, fk.ReferencedTableId);
             // Composite, with the child's columns declared in the other order: pa (3) → a (1), pb (2) → b (2),
             // paired by position in the key rather than by column order.
@@ -380,6 +533,44 @@ public class MySqlLiveTests
         {
             await exec.ExecuteAsync($"drop view if exists {view}", new QueryOptions(), CancellationToken.None);
             await DropAsync(exec, child, parent);
+        }
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Engines))]
+    public async Task Sequences_are_read_on_mariadb_and_absent_on_mysql(MySqlEngine engine)
+    {
+        await MySqlTestServer.RequireAsync(engine);
+        await using var factory = MySqlTestServer.Factory(engine);
+        var exec = Provider.CreateQueryExecutor(factory);
+        var seq = Table(engine, "seq");
+        try
+        {
+            if (engine == MySqlEngine.MariaDb)
+            {
+                await RunAsync(exec, $"drop sequence if exists {seq}; create sequence {seq} start with 5 increment by 3 maxvalue 1000");
+            }
+
+            var kinds = await Provider.CreateMetadataReader(factory).GetDatabaseObjectsAsync(CancellationToken.None);
+
+            if (engine == MySqlEngine.MariaDb)
+            {
+                var s = Assert.Single(kinds.Sequences, x => x.Name == seq);
+                Assert.Equal(3, s.Increment);
+                Assert.Equal(1000, s.MaxValue);
+                Assert.Equal("bigint", s.DataType);
+            }
+            else
+            {
+                Assert.Empty(kinds.Sequences);
+            }
+        }
+        finally
+        {
+            if (engine == MySqlEngine.MariaDb)
+            {
+                await exec.ExecuteAsync($"drop sequence if exists {seq}", new QueryOptions(), CancellationToken.None);
+            }
         }
     }
 
@@ -400,6 +591,7 @@ public class MySqlLiveTests
                     id int auto_increment primary key,
                     email varchar(50) not null default 'none',
                     qty int, doubled int as (qty * 2),
+                    note varchar(10) default 'it''s',
                     constraint uq_{t} unique (email),
                     constraint ck_{t} check (qty >= 0)
                 ) comment = 'the details';
@@ -417,7 +609,10 @@ public class MySqlLiveTests
             Assert.Contains(details.Constraints, k => k.Kind == ConstraintKind.Check && k.Definition.Contains("qty"));
             Assert.Contains(details.Triggers, x => x.Name == trigger);
             Assert.Equal(ColumnIdentity.ByDefault, details.ColumnAt(1)!.Identity);
-            Assert.Contains("none", details.ColumnAt(2)!.Default);
+            // The same text on both engines: MariaDB reports a literal quoted and "no default" as 'NULL'.
+            Assert.Equal("none", details.ColumnAt(2)!.Default);
+            Assert.Null(details.ColumnAt(3)!.Default);
+            Assert.Equal("it's", details.ColumnAt(5)!.Default);
             Assert.NotNull(details.ColumnAt(4)!.GeneratedExpression);
             Assert.Null(details.ColumnAt(4)!.Default);
             Assert.Equal("the details", details.Comment);
@@ -445,7 +640,7 @@ public class MySqlLiveTests
             await RunAsync(exec, $"create function {fn}(x int) returns int deterministic return x + 1");
 
             var reader = Provider.CreateMetadataReader(factory);
-            var routine = Assert.Single((await reader.GetRoutinesAsync(CancellationToken.None)).Where(r => r.Name == fn));
+            var routine = Assert.Single((await reader.GetRoutinesAsync(CancellationToken.None)), r => r.Name == fn);
             Assert.Equal(RoutineKind.Function, routine.Kind);
             // MariaDB still spells the display width (int(11)); MySQL 8 dropped it.
             Assert.StartsWith("x int", routine.Arguments);
@@ -484,6 +679,13 @@ public class MySqlLiveTests
             Assert.NotNull(row);
             Assert.Equal("active", row!.State);
 
+            // IsOurs rides the program_name connection attribute, readable only where performance_schema is
+            // on (MySQL by default, MariaDB not) — so the expectation is asked of the server, not assumed.
+            var attributes = await RunAsync(exec, "select @@performance_schema");
+            var readable = Convert.ToInt64(attributes[0].Rows[0][0]) == 1;
+            Assert.Equal(readable, row.IsOurs);
+            Assert.Equal(readable ? "bearing" : null, row.Application);
+
             Assert.True(await activity.CancelBackendAsync(row.Pid, CancellationToken.None));
             var result = (await running)[0];
             // KILL QUERY on a SLEEP() ends it early; MySQL reports the interrupted sleep as 1, MariaDB as an
@@ -493,6 +695,104 @@ public class MySqlLiveTests
         finally
         {
             await running.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Engines))]
+    public async Task A_session_idle_inside_a_transaction_is_not_hidden_with_the_idle_ones(MySqlEngine engine)
+    {
+        // The process list reports it as Sleep like any pooled connection; ActivityFilter promises it is never
+        // hidden, so the reader has to ask innodb_trx (root holds PROCESS).
+        await MySqlTestServer.RequireAsync(engine);
+        await using var factory = MySqlTestServer.Factory(engine);
+        var exec = Provider.CreateQueryExecutor(factory);
+        var activity = Provider.CreateServerActivity(factory);
+        var t = Table(engine, "idle_tx");
+        await RunAsync(exec, $"drop table if exists {t}; create table {t} (id int primary key)");
+        var scope = Provider.CreateTransactionScope(factory);
+        try
+        {
+            await scope.BeginAsync(CancellationToken.None);
+            await RunAsync(scope.Executor, $"insert into {t} values (1)");
+            var pid = Convert.ToInt32((await RunAsync(scope.Executor, "select connection_id()"))[0].Rows[0][0]);
+
+            var seen = await activity.GetActivityAsync(new ActivityFilter(MySqlTestServer.Database), CancellationToken.None);
+            var row = Assert.Single(seen.Backends, b => b.Pid == pid);
+            Assert.Equal("idle in transaction", row.State);
+            Assert.Null(row.RunningFor);
+            // With a session in a transaction the plain idle ones are dropped after the read rather than in the
+            // statement (its text never carries the ids) — still dropped: exec's pooled connection sleeps here.
+            Assert.DoesNotContain(seen.Backends, b => b.State == "idle");
+        }
+        finally
+        {
+            await scope.DisposeAsync();
+            await DropAsync(exec, t);
+        }
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Engines))]
+    public async Task PROCESS_held_through_an_active_role_reveals_every_session_and_an_inactive_one_does_not(MySqlEngine engine)
+    {
+        // §9.13a: an account without PROCESS sees only its own threads, and a role's PROCESS counts only once
+        // the role is active. SUPER alone was measured not to reveal other sessions, so it must not count.
+        await MySqlTestServer.RequireAsync(engine);
+        await using var admin = MySqlTestServer.Factory(engine);
+        var adminExec = Provider.CreateQueryExecutor(admin);
+        var suffix = engine.ToString().ToLowerInvariant();
+        var user = $"bt_probe_{suffix}";
+        var role = $"bt_probe_role_{suffix}";
+        const string password = "Probe!Pass1";
+        var setDefault = engine == MySqlEngine.MariaDb
+            ? $"set default role {role} for {user}"
+            : $"set default role {role} to {user}";
+
+        async Task<bool?> SeesAllAsync()
+        {
+            var info = MySqlTestServer.Info(engine, "activity-probe") with { User = user, Database = "" };
+            await using var factory = Provider.CreateConnectionFactory(info, password);
+            var read = await Provider.CreateServerActivity(factory)
+                .GetActivityAsync(ActivityFilter.Everything, CancellationToken.None);
+            return read.SeesAllSessions;
+        }
+
+        await DropProbeAsync();
+        try
+        {
+            await RunAsync(adminExec, $"create role {role}");
+            await RunAsync(adminExec, $"grant process on *.* to {role}");
+            await RunAsync(adminExec, $"create user {user} identified by '{password}'");
+            await RunAsync(adminExec, $"grant {role} to {user}");
+
+            Assert.False(await SeesAllAsync());          // granted, not active
+
+            await RunAsync(adminExec, setDefault);
+            Assert.True(await SeesAllAsync());           // active by default
+
+            // A poll tick reuses the reader's last answer rather than re-reading the grants; only a recheck
+            // (polling starting, an explicit refresh) asks again.
+            var info = MySqlTestServer.Info(engine, "activity-probe") with { User = user, Database = "" };
+            await using var kept = Provider.CreateConnectionFactory(info, password);
+            var reader = Provider.CreateServerActivity(kept);
+            var tick = ActivityFilter.Everything with { RecheckVisibility = false };
+            Assert.True((await reader.GetActivityAsync(tick, CancellationToken.None)).SeesAllSessions);
+
+            await RunAsync(adminExec, $"revoke {role} from {user}");
+            await RunAsync(adminExec, $"grant super on *.* to {user}");
+            Assert.True((await reader.GetActivityAsync(tick, CancellationToken.None)).SeesAllSessions);
+            Assert.False(await SeesAllAsync());          // SUPER is not PROCESS
+        }
+        finally
+        {
+            await DropProbeAsync();
+        }
+
+        async Task DropProbeAsync()
+        {
+            await adminExec.ExecuteAsync($"drop user if exists {user}", new QueryOptions(), CancellationToken.None);
+            await adminExec.ExecuteAsync($"drop role if exists {role}", new QueryOptions(), CancellationToken.None);
         }
     }
 }

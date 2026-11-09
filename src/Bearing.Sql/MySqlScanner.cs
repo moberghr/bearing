@@ -75,7 +75,13 @@ public static class MySqlScanner
     private const string DefaultDelimiter = ";";
 
     /// <summary>Every token in <paramref name="sql"/>, comments and whitespace dropped.</summary>
-    public static IReadOnlyList<MySqlToken> Tokenize(string sql)
+    public static IReadOnlyList<MySqlToken> Tokenize(string sql) => Tokenize(sql, MySqlQuoting.Default);
+
+    /// <summary>
+    /// Every token, read under <paramref name="quoting"/> — the server's <c>sql_mode</c> decides whether a
+    /// backslash escapes a quote, and this text-only layer cannot know it (see <see cref="MySqlQuoting"/>).
+    /// </summary>
+    internal static IReadOnlyList<MySqlToken> Tokenize(string sql, MySqlQuoting quoting)
     {
         var tokens = new List<MySqlToken>();
         var depth = 0;
@@ -173,7 +179,7 @@ public static class MySqlScanner
                 {
                     i++;
                 }
-                i = SkipQuoted(sql, i, sql[i], backslashEscapes: true);
+                i = SkipQuoted(sql, i, sql[i], backslashEscapes: quoting.Escapes(sql[i]));
                 Add(new MySqlToken(sql[start..i], start, i - start, depth, MySqlTokenKind.Text));
                 continue;
             }
@@ -197,7 +203,7 @@ public static class MySqlScanner
                 }
                 if (i < sql.Length && sql[i] is '\'' or '"' or '`')
                 {
-                    i = SkipQuoted(sql, i, sql[i], backslashEscapes: sql[i] != '`');
+                    i = SkipQuoted(sql, i, sql[i], backslashEscapes: quoting.Escapes(sql[i]));
                 }
                 else
                 {
@@ -259,12 +265,22 @@ public static class MySqlScanner
     }
 
     /// <summary>
-    /// Split <paramref name="sql"/> into statements: at the delimiter in force (outside a <c>BEGIN … END</c>
-    /// body and outside parentheses when it is <c>;</c>; anywhere when a <c>DELIMITER</c> directive changed
-    /// it, which is the directive's whole purpose), and at every <c>DELIMITER</c> line, which belongs to no
-    /// statement. Empty statements are dropped.
+    /// Split <paramref name="sql"/> into statements: at the delimiter in force (outside a block and outside
+    /// parentheses when it is <c>;</c>; anywhere when a <c>DELIMITER</c> directive changed it, which is the
+    /// directive's whole purpose), and at every <c>DELIMITER</c> line, which belongs to no statement. Empty
+    /// statements are dropped.
+    /// <para>
+    /// A block is a <c>BEGIN … END</c> or <c>CASE … END</c>, and — in statement position only — a compound
+    /// <c>IF</c> / <c>WHILE</c> / <c>LOOP</c> / <c>REPEAT</c> / <c>FOR</c>, closed by its own <c>END IF</c> /
+    /// <c>END WHILE</c> / …. MariaDB runs those compounds at the top level, so <c>if @a then delete from t;
+    /// end if</c> is one statement to the server; split at its first semicolon it would offer Run half a
+    /// statement. Openers are kept on a stack so a closer only closes its own kind.
+    /// </para>
     /// </summary>
-    public static IReadOnlyList<MySqlStatement> Split(string sql)
+    public static IReadOnlyList<MySqlStatement> Split(string sql) => Split(sql, MySqlQuoting.Default);
+
+    /// <inheritdoc cref="Split(string)"/>
+    internal static IReadOnlyList<MySqlStatement> Split(string sql, MySqlQuoting quoting)
     {
         var statements = new List<MySqlStatement>();
         if (string.IsNullOrWhiteSpace(sql))
@@ -272,10 +288,14 @@ public static class MySqlScanner
             return statements;
         }
 
-        var tokens = Tokenize(sql);
+        var tokens = Tokenize(sql, quoting);
         var current = new List<MySqlToken>();
         var from = 0;
-        var block = 0;
+        var blocks = new List<string>();
+        // The index of the last word read as the first of a statement, so `label:` can pass the position on.
+        var lastStart = -1;
+        // Which BEGINs this scan read as a block — a body's first word follows only those.
+        var openedBlock = new bool[tokens.Count];
 
         void Flush(int end)
         {
@@ -296,18 +316,20 @@ public static class MySqlScanner
             {
                 Flush(t.Start);
                 from = t.Start + t.Length;
-                block = 0;
+                blocks.Clear();
+                lastStart = -1;
                 continue;
             }
 
             if (t.Kind == MySqlTokenKind.Delimiter)
             {
                 var custom = t.Text != DefaultDelimiter;
-                if (custom || (t.Depth == 0 && block == 0))
+                if (custom || (t.Depth == 0 && blocks.Count == 0))
                 {
                     Flush(t.Start);
                     from = t.Start + t.Length;
-                    block = 0;
+                    blocks.Clear();
+                    lastStart = -1;
                     continue;
                 }
 
@@ -316,15 +338,38 @@ public static class MySqlScanner
                 continue;
             }
 
-            if (t.IsWord && t.Depth == 0)
+            // A word after a `.` is a name, reserved or not (`t.case`, `t.end`): MySQL reads it as one.
+            if (t.IsWord && t.Depth == 0 && !IsPunctuation(tokens, index - 1, "."))
             {
-                if (OpensBlock(tokens, index))
+                var inCaseExpression = blocks.Count > 0 && blocks[^1] == CaseExpression;
+                var atStart = AtStatementStart(tokens, index, current.Count == 0, lastStart, openedBlock, blocks)
+                    // A CASE expression's THEN / ELSE is followed by a value, never a statement.
+                    && !(inCaseExpression && IsWordAt(tokens, index - 1, "THEN", "ELSE"));
+                if (atStart)
                 {
-                    block++;
+                    lastStart = index;
                 }
-                else if (ClosesBlock(tokens, index) && block > 0)
+
+                if (t.Text.Equals("CASE", StringComparison.OrdinalIgnoreCase) && OpensBlock(tokens, index))
                 {
-                    block--;
+                    // In statement position a CASE statement (closed by END CASE), anywhere else an expression.
+                    blocks.Add(atStart ? BlockBegin : CaseExpression);
+                }
+                else if (OpensBlock(tokens, index)
+                         // `case when a then begin end`: in a CASE expression, a value — a column called begin.
+                         && !(inCaseExpression && IsWordAt(tokens, index - 1, "THEN", "ELSE"))
+                         && (atStart || OwnsBody(tokens, lastStart, index)))
+                {
+                    blocks.Add(BlockBegin);
+                    openedBlock[index] = true;
+                }
+                else if (atStart && OpensCompound(tokens, index))
+                {
+                    blocks.Add(t.Text.ToUpperInvariant());
+                }
+                else if (tokens[index].Text.Equals("END", StringComparison.OrdinalIgnoreCase))
+                {
+                    Close(blocks, tokens, index);
                 }
             }
 
@@ -334,17 +379,251 @@ public static class MySqlScanner
         return statements;
     }
 
+    /// <summary>What a <c>BEGIN</c> or a <c>CASE</c> pushes: both are closed by a plain <c>END</c> (a CASE
+    /// statement's <c>END CASE</c> too).</summary>
+    private const string BlockBegin = "BEGIN";
+
+    /// <summary>What a CASE <em>expression</em> pushes — a CASE outside statement position. Closed by a plain
+    /// <c>END</c> like a block, but its <c>THEN</c> / <c>ELSE</c> lead to a value, never a body: <c>case when a
+    /// then begin end</c> reads a column called begin.</summary>
+    private const string CaseExpression = "CASE";
+
     /// <summary>
-    /// <c>CASE</c> always opens (its <c>END</c> / <c>END CASE</c> closes it). <c>BEGIN</c> opens a block
+    /// <c>END IF</c> / <c>END WHILE</c> / … closes the compound on top when it is that compound, and nothing
+    /// otherwise — an opener this scan did not count must not take an outer block's closer with it. A plain
+    /// <c>END</c> (or <c>END CASE</c>) closes the innermost <c>BEGIN</c> / <c>CASE</c>, and any compound
+    /// still open above it, which can only be one this scan counted wrongly.
+    /// <para>
+    /// <c>END FOR UPDATE</c> / <c>END FOR SHARE</c> with no FOR loop on top is a CASE expression's END before
+    /// a locking clause (<c>… where id = case … end for update</c>): a plain END. Read as a FOR loop's closer
+    /// it left the CASE open, and every statement after it ran on as part of this one.
+    /// </para>
+    /// </summary>
+    private static void Close(List<string> blocks, IReadOnlyList<MySqlToken> tokens, int index)
+    {
+        var next = index + 1 < tokens.Count && tokens[index + 1].IsWord ? tokens[index + 1].Text.ToUpperInvariant() : "";
+        if (CompoundKeywords.Contains(next))
+        {
+            if (blocks.Count > 0 && blocks[^1] == next)
+            {
+                blocks.RemoveAt(blocks.Count - 1);
+                return;
+            }
+            if (!(next == "FOR" && IsLockingClause(tokens, index + 2)))
+            {
+                return;
+            }
+        }
+        while (blocks.Count > 0)
+        {
+            var top = blocks[^1];
+            blocks.RemoveAt(blocks.Count - 1);
+            if (top is BlockBegin or CaseExpression)
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>The compounds closed by <c>END</c> plus their own keyword — not counted by
+    /// <see cref="OpensBlock"/>, and opened only in statement position (<see cref="OpensCompound"/>).</summary>
+    private static readonly HashSet<string> CompoundKeywords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "IF", "LOOP", "WHILE", "REPEAT", "FOR",
+    };
+
+    /// <summary>
+    /// Whether the word at <paramref name="index"/> is where a statement begins: the statement's first token;
+    /// the first after a <c>;</c> kept inside a body; after a label (<c>lbl:</c> in statement position); or
+    /// the first of a body — after <c>THEN</c>, <c>ELSE</c>, <c>DO</c>, a block's <c>BEGIN</c> (or
+    /// <c>BEGIN NOT ATOMIC</c>), <c>LOOP</c> or <c>REPEAT</c>. A <c>THEN</c>/<c>ELSE</c> may also be a CASE
+    /// expression's, and <c>DO</c> the <c>DO expr</c> statement, which is why <see cref="OpensCompound"/>
+    /// asks more of an <c>IF</c> or <c>REPEAT</c> than the position.
+    /// </summary>
+    private static bool AtStatementStart(
+        IReadOnlyList<MySqlToken> tokens, int index, bool firstOfStatement, int lastStart, bool[] openedBlock,
+        List<string> blocks)
+    {
+        if (firstOfStatement)
+        {
+            return true;
+        }
+        var previous = tokens[index - 1];
+        if (previous.Kind == MySqlTokenKind.Delimiter)
+        {
+            return true;
+        }
+        if (previous.Kind == MySqlTokenKind.Punctuation && previous.Text == ":")
+        {
+            return index >= 2 && lastStart == index - 2 && tokens[index - 2].IsWord;
+        }
+        if (!previous.IsWord)
+        {
+            return false;
+        }
+        if (previous.Text.Equals("BEGIN", StringComparison.OrdinalIgnoreCase))
+        {
+            return openedBlock[index - 1];
+        }
+        // `DO` and `ATOMIC` are not reserved: `select * from do for update` names a table, and the FOR after it
+        // opening a loop swallowed every statement that followed. A body follows DO only as a WHILE's or a FOR
+        // loop's, or an event's (`… on schedule … do`) — never the `DO expr` statement's own — and ATOMIC only
+        // as `BEGIN NOT ATOMIC`.
+        if (previous.Text.Equals("DO", StringComparison.OrdinalIgnoreCase))
+        {
+            return lastStart != index - 1
+                && (blocks.Count > 0 && blocks[^1] is "WHILE" or "FOR" || DefinesEvent(tokens, lastStart, index));
+        }
+        if (previous.Text.Equals("ATOMIC", StringComparison.OrdinalIgnoreCase))
+        {
+            return index >= 3 && IsWordAt(tokens, index - 2, "NOT", "NOT") && openedBlock[index - 3];
+        }
+        return BodyOpeners.Contains(previous.Text);
+    }
+
+    /// <summary>
+    /// Whether a <c>BEGIN</c> that is not in statement position sits where a body can: after a stored program's
+    /// header (<c>create procedure p() …</c>, <c>… for each row</c>, <c>create function … returns int
+    /// deterministic</c>) or a handler's (<c>declare continue handler for sqlexception</c>). Those are the only
+    /// places MySQL puts a body other than statement position, so anywhere else a <c>begin</c> is a name — <c>lock
+    /// tables begin read</c>, <c>handler begin open</c>, <c>call begin()</c>, <c>with begin (n) as …</c>,
+    /// <c>update t begin set …</c> — and opening a block there swallowed every statement after it.
+    /// <paramref name="lead"/> is the first word of the statement the BEGIN is in (−1 when unknown).
+    /// </summary>
+    private static bool OwnsBody(IReadOnlyList<MySqlToken> tokens, int lead, int index)
+        => Defines(tokens, lead, index, "CREATE", RoutineKinds) || Defines(tokens, lead, index, "DECLARE", HandlerKind);
+
+    /// <summary>Whether the statement led by <paramref name="lead"/> is a <c>CREATE</c> / <c>ALTER EVENT</c>,
+    /// whose <c>DO</c> is followed by the event's body.</summary>
+    private static bool DefinesEvent(IReadOnlyList<MySqlToken> tokens, int lead, int index)
+        => Defines(tokens, lead, index, "CREATE", EventKind) || Defines(tokens, lead, index, "ALTER", EventKind);
+
+    /// <summary>Whether the statement whose first word, at <paramref name="lead"/>, is <paramref name="leadWord"/>
+    /// names one of <paramref name="kinds"/> before <paramref name="index"/> — as a bare word at the same depth,
+    /// not a qualified name's part.</summary>
+    private static bool Defines(
+        IReadOnlyList<MySqlToken> tokens, int lead, int index, string leadWord, IReadOnlySet<string> kinds)
+    {
+        if (lead < 0 || lead >= index || !IsWordAt(tokens, lead, leadWord, leadWord))
+        {
+            return false;
+        }
+        for (var i = lead + 1; i < index; i++)
+        {
+            var t = tokens[i];
+            if (t.IsWord && t.Depth == tokens[index].Depth && !IsPunctuation(tokens, i - 1, ".") && kinds.Contains(t.Text))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static readonly HashSet<string> HandlerKind = new(StringComparer.OrdinalIgnoreCase) { "HANDLER" };
+
+    private static readonly HashSet<string> EventKind = new(StringComparer.OrdinalIgnoreCase) { "EVENT" };
+
+    /// <summary>What a <c>CREATE</c> defines when its body may be a <c>BEGIN … END</c>.</summary>
+    private static readonly HashSet<string> RoutineKinds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "PROCEDURE", "FUNCTION", "TRIGGER", "EVENT", "PACKAGE",
+    };
+
+    /// <summary>Words a body's first statement follows. Shared with <see cref="MySqlWriteGuard"/>'s interior
+    /// read, which must start a statement exactly where this splitter does.</summary>
+    internal static readonly HashSet<string> BodyOpeners = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "THEN", "ELSE", "DO", "LOOP", "REPEAT", "ATOMIC",
+    };
+
+    /// <summary>
+    /// A compound statement's opener, in statement position. <c>WHILE</c>, <c>LOOP</c> and <c>FOR</c> are
+    /// reserved and cannot be anything else there. <c>REPEAT</c> followed by <c>(</c> is the
+    /// <c>repeat(str, n)</c> function (<c>then repeat('-', 3)</c> in a CASE expression). <c>IF</c> is the
+    /// compound only when its condition runs into a <c>THEN</c>: that is what separates <c>if (a &gt; 1) then
+    /// …</c> from the <c>if(a, b, c)</c> function after a CASE expression's <c>THEN</c>, and keeps
+    /// <c>if exists</c> / <c>if not exists</c> out wherever no <c>THEN</c> follows.
+    /// </summary>
+    private static bool OpensCompound(IReadOnlyList<MySqlToken> tokens, int index)
+    {
+        var word = tokens[index].Text.ToUpperInvariant();
+        switch (word)
+        {
+            case "WHILE" or "LOOP" or "FOR":
+                return true;
+            case "REPEAT":
+                return !IsPunctuation(tokens, index + 1, "(");
+            case "IF":
+                return ConditionRunsIntoThen(tokens, index);
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>The first of <c>THEN</c>, <c>WHEN</c>, <c>ELSE</c>, <c>END</c> or a delimiter at the IF's
+    /// own depth is <c>THEN</c>.</summary>
+    private static bool ConditionRunsIntoThen(IReadOnlyList<MySqlToken> tokens, int index)
+    {
+        var depth = tokens[index].Depth;
+        for (var i = index + 1; i < tokens.Count; i++)
+        {
+            var t = tokens[i];
+            if (t.Kind is MySqlTokenKind.Delimiter or MySqlTokenKind.Directive)
+            {
+                return false;
+            }
+            if (!t.IsWord || t.Depth != depth)
+            {
+                continue;
+            }
+            if (t.Text.Equals("THEN", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            if (ConditionStops.Contains(t.Text))
+            {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    private static readonly HashSet<string> ConditionStops = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "WHEN", "ELSE", "END",
+    };
+
+    /// <summary>The word after <c>FOR</c> in a locking clause: <c>FOR UPDATE</c>, <c>FOR SHARE</c>.</summary>
+    private static bool IsLockingClause(IReadOnlyList<MySqlToken> tokens, int index)
+        => index < tokens.Count && tokens[index].IsWord
+           && (tokens[index].Text.Equals("UPDATE", StringComparison.OrdinalIgnoreCase)
+               || tokens[index].Text.Equals("SHARE", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsPunctuation(IReadOnlyList<MySqlToken> tokens, int index, string text)
+        => index >= 0 && index < tokens.Count && tokens[index].Kind == MySqlTokenKind.Punctuation
+           && tokens[index].Text == text;
+
+    private static bool IsWordAt(IReadOnlyList<MySqlToken> tokens, int index, string a, string b)
+        => index >= 0 && index < tokens.Count && tokens[index].IsWord
+           && (tokens[index].Text.Equals(a, StringComparison.OrdinalIgnoreCase)
+               || tokens[index].Text.Equals(b, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// <c>CASE</c> opens (its <c>END</c> / <c>END CASE</c> closes it) — except the <c>CASE</c> of
+    /// <c>END CASE</c> itself. <c>BEGIN</c> opens a block
     /// unless it starts a transaction: <c>BEGIN;</c>, <c>BEGIN WORK</c>, a <c>BEGIN</c> at the very end, and
-    /// <c>XA BEGIN</c>. MariaDB's anonymous <c>BEGIN NOT ATOMIC</c> is a block.
+    /// <c>XA BEGIN</c> — or is a column (<see cref="IsColumnBegin"/>). MariaDB's anonymous
+    /// <c>BEGIN NOT ATOMIC</c> is a block.
     /// </summary>
     private static bool OpensBlock(IReadOnlyList<MySqlToken> tokens, int index)
     {
         var word = tokens[index].Text;
         if (word.Equals("CASE", StringComparison.OrdinalIgnoreCase))
         {
-            return true;
+            // The CASE of `END CASE` belongs to the END that just closed the block, and opens nothing.
+            var afterEnd = index > 0 && tokens[index - 1].IsWord
+                && tokens[index - 1].Text.Equals("END", StringComparison.OrdinalIgnoreCase);
+            return !afterEnd;
         }
         if (!word.Equals("BEGIN", StringComparison.OrdinalIgnoreCase))
         {
@@ -366,25 +645,76 @@ public static class MySqlScanner
         {
             return false;
         }
-        return !(next.IsWord && next.Text.Equals("WORK", StringComparison.OrdinalIgnoreCase));
-    }
-
-    /// <summary>An <c>END</c> that closes a <c>BEGIN</c> or a <c>CASE</c> — not the <c>END</c> of
-    /// <c>END IF</c> / <c>END LOOP</c> / <c>END WHILE</c> / <c>END REPEAT</c> / <c>END FOR</c>, whose openers
-    /// are not counted either.</summary>
-    private static bool ClosesBlock(IReadOnlyList<MySqlToken> tokens, int index)
-    {
-        if (!tokens[index].Text.Equals("END", StringComparison.OrdinalIgnoreCase))
+        if (next.IsWord && next.Text.Equals("WORK", StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
-        var next = index + 1 < tokens.Count && tokens[index + 1].IsWord ? tokens[index + 1].Text : "";
-        return !NonBlockEnds.Contains(next);
+        return !IsColumnBegin(tokens, index);
     }
 
-    private static readonly HashSet<string> NonBlockEnds = new(StringComparer.OrdinalIgnoreCase)
+    /// <summary>
+    /// <c>begin</c> is not reserved, so it is also a column name: <c>select begin, end from shifts</c>. Read as
+    /// a block it would swallow every statement after it into this one. A body follows a routine header, a
+    /// label, <c>THEN</c>/<c>ELSE</c>/<c>DO</c>/<c>ROW</c>/a handler — never a <c>.</c>, a comma or an
+    /// operator before it, nor a word that only an expression puts there (<see cref="ColumnPrecursors"/>);
+    /// and a body's first token is a statement's first word, a <c>(</c> or its <c>END</c> — never an
+    /// operator, a comma, or a word that only continues an expression or a query
+    /// (<see cref="ColumnFollowers"/>).
+    /// </summary>
+    private static bool IsColumnBegin(IReadOnlyList<MySqlToken> tokens, int index)
     {
-        "IF", "LOOP", "WHILE", "REPEAT", "FOR",
+        var next = tokens[index + 1];
+        if (next.Kind == MySqlTokenKind.Punctuation && next.Text != "(")
+        {
+            return true;
+        }
+        if (next.IsWord && ColumnFollowers.Contains(next.Text))
+        {
+            return true;
+        }
+        if (index == 0)
+        {
+            return false;
+        }
+        var previous = tokens[index - 1];
+        if (previous.Kind == MySqlTokenKind.Punctuation)
+        {
+            return previous.Text is not (")" or ":" or ";");
+        }
+        return previous.IsWord && ColumnPrecursors.Contains(previous.Text);
+    }
+
+    /// <summary>
+    /// Words that can follow a <c>begin</c> column but never open a body: none of them starts a statement.
+    /// <c>NOT</c> is absent (<c>BEGIN NOT ATOMIC</c>), and so are <c>END</c> (an empty body) and the
+    /// statement leads <c>DESC</c>, <c>FOR</c>, <c>VALUES</c>, <c>TABLE</c>.
+    /// </summary>
+    private static readonly HashSet<string> ColumnFollowers = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "FROM", "AS", "INTO",
+        "THEN", "WHEN", "ELSE",
+        "AND", "OR", "XOR", "IS", "IN", "LIKE", "BETWEEN", "REGEXP", "RLIKE", "SOUNDS", "DIV", "MOD", "COLLATE",
+        "WHERE", "GROUP", "ORDER", "HAVING", "LIMIT", "UNION", "EXCEPT", "INTERSECT", "WINDOW",
+        "JOIN", "INNER", "LEFT", "RIGHT", "CROSS", "NATURAL", "STRAIGHT_JOIN", "ON", "USING",
+    };
+
+    /// <summary>
+    /// Words after which <c>begin</c> can only be an operand or a name: a select list, a predicate, a join
+    /// condition, an ordering — and a column or variable being declared or altered (<c>alter table t add
+    /// column begin datetime</c>, <c>declare begin int</c>), where the word after it is a type, not a
+    /// statement, so the follower check cannot tell. <c>THEN</c>, <c>ELSE</c> and <c>DO</c> are absent — a body
+    /// follows those.
+    /// </summary>
+    private static readonly HashSet<string> ColumnPrecursors = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "SELECT", "DISTINCT", "ALL", "BY", "WHERE", "AND", "OR", "XOR", "NOT", "SET",
+        "WHEN", "HAVING", "ON", "IN", "IS", "LIKE", "BETWEEN", "REGEXP", "RLIKE", "DIV", "MOD",
+        "CASE", "FROM", "JOIN", "INTO", "UPDATE", "TABLE", "RETURNING", "PARTITION",
+        "ADD", "COLUMN", "MODIFY", "CHANGE", "DECLARE",
+        // A stored program named begin (`create procedure begin()`), and a trigger ordered after one.
+        "PROCEDURE", "FUNCTION", "TRIGGER", "EVENT", "PACKAGE", "FOLLOWS", "PRECEDES",
+        // A trigger whose body is a CALL of a routine called begin, and a handler for a condition called begin.
+        "CALL", "FOR",
     };
 
     /// <summary>
@@ -544,6 +874,23 @@ public static class MySqlScanner
         return words;
     }
 
+    /// <summary>Whether <paramref name="sql"/> holds a <c>DELIMITER</c> client directive anywhere.</summary>
+    public static bool HasDirective(string sql)
+    {
+        if (string.IsNullOrEmpty(sql) || sql.IndexOf("delimiter", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return false;
+        }
+        foreach (var t in Tokenize(sql))
+        {
+            if (t.Kind == MySqlTokenKind.Directive)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// <summary>The uppercased text of every bare word at any depth.</summary>
     public static IReadOnlyList<string> AllWords(IReadOnlyList<MySqlToken> tokens)
     {
@@ -557,4 +904,29 @@ public static class MySqlScanner
         }
         return words;
     }
+}
+
+/// <summary>
+/// Whether a backslash escapes the next character inside a <c>'…'</c> and a <c>"…"</c> token — the one
+/// lexical rule a server setting changes. The default (both) is MySQL's and MariaDB's out of the box.
+/// <c>NO_BACKSLASH_ESCAPES</c> turns it off for both, and <c>ANSI_QUOTES</c> makes <c>"</c> delimit an
+/// identifier, which never had the escape. Those are per-server (and per-session) facts this text-only layer
+/// cannot see, and they decide where a literal <em>ends</em>: <c>select 'a\'; drop table t; -- '</c> is one
+/// SELECT by default and a SELECT and a DROP under <c>NO_BACKSLASH_ESCAPES</c> (measured on MariaDB 11.4).
+/// The write guard therefore reads a batch under <see cref="Alternates"/> too (§1.2).
+/// </summary>
+internal readonly record struct MySqlQuoting(bool SingleQuoteBackslash, bool DoubleQuoteBackslash)
+{
+    public static MySqlQuoting Default { get; } = new(true, true);
+
+    /// <summary><c>NO_BACKSLASH_ESCAPES</c> (with or without <c>ANSI_QUOTES</c>), and <c>ANSI_QUOTES</c>
+    /// alone — the only other two readings a server can give the same text.</summary>
+    public static IReadOnlyList<MySqlQuoting> Alternates { get; } = [new(false, false), new(true, false)];
+
+    public bool Escapes(char quote) => quote switch
+    {
+        '\'' => SingleQuoteBackslash,
+        '"' => DoubleQuoteBackslash,
+        _ => false,
+    };
 }

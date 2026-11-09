@@ -1,4 +1,5 @@
 using Bearing.Core.Data;
+using Bearing.Sessions;
 
 namespace Bearing.App.Results;
 
@@ -24,6 +25,13 @@ internal static class QueryErrorText
     public const string ReadOnlyTransaction = "25006";
 
     /// <summary>
+    /// MySQL / MariaDB's read-only refusal (ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION). That executor records
+    /// the server's error <em>number</em> as <see cref="QueryError.SqlState"/>, as SQL Server's does, so the
+    /// number is only read as this on a <c>mysql</c> connection — on SQL Server 1792 means something else.
+    /// </summary>
+    public const string MySqlReadOnlyTransaction = "1792";
+
+    /// <summary>
     /// The sentence to show for a failed result, or null to leave the existing text alone. Null is the
     /// common case: this only speaks for the two states a connection setting explains.
     /// </summary>
@@ -34,22 +42,34 @@ internal static class QueryErrorText
     /// </param>
     public static string? Explain(QueryError? error, ConnectionInfo? connection, bool userCancelled = false)
     {
-        if (error?.SqlState is not { } state) return null;
+        if (error?.SqlState is not { } state)
+        {
+            return null;
+        }
 
-        if (state == ReadOnlyTransaction)
+        var readOnly = state == ReadOnlyTransaction
+            || (state == MySqlReadOnlyTransaction && ProviderTraits.For(connection) == ProviderTraits.MySql);
+        if (readOnly)
+        {
             return connection is not null && SessionPolicy.IsReadOnly(connection)
                 ? $"The server refused this write: {connection.Name} is marked read-only. "
                   + "Turn read-only off for this connection to write to it."
                 // Not our setting — the server, the role or an enclosing transaction is read-only. Report
                 // that without claiming which, since nothing here checked (§1.1).
                 : "The server refused this write: the transaction is read-only.";
+        }
 
-        if (state != Cancelled || userCancelled) return null;
+        if (state != Cancelled || userCancelled)
+        {
+            return null;
+        }
 
         if (connection is not null && SessionPolicy.TimeoutSeconds(connection) > SessionPolicy.NoTimeout)
+        {
             return $"The statement ran longer than {connection.Name}'s statement timeout "
                    + $"({SessionPolicy.TimeoutLabel(connection)}) and the server cancelled it. "
                    + "This is a server-side limit on the connection, not Bearing giving up waiting.";
+        }
 
         // No timeout configured and the user did not press Esc: something outside this app cancelled it —
         // pg_cancel_backend, or a timeout set on the server rather than by us. Say that and no more.

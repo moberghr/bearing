@@ -17,6 +17,10 @@ version (`MySqlServerFlavor`) where they matter — never a user setting.
 - A run of non-row statements comes back as one result with the batch total (measured; like SqlClient).
 - A killed `SLEEP()`/`BENCHMARK()` *returns* (1 / 0) instead of failing — use a real query in timeout tests.
 - `AllowUserVariables` on, `ConvertZeroDateTime` on, `AllowLoadLocalInfile`/`AllowPublicKeyRetrieval` reserved.
+- `ExecuteWriteAsync` **prepares** each parameterized command (binary binding): the driver inlines unprepared
+  values with escaping that ignores the server's `NO_BACKSLASH_ESCAPES`. `NoBackslashEscapes`/`IgnorePrepare` reserved.
+- Reads are lossless: `TreatTinyAsBoolean` **off** (`tinyint(1)` holding 2 reads 2, not True) and `GuidFormat=None`
+  (`char(36)` is text — a non-GUID value would fail the whole result). Both stay settable from the options bag.
 - Session time zone is **not** supported (named zones need the server's tz tables).
 
 ## §5.2 — SQLite (`Bearing.Persistence`)
