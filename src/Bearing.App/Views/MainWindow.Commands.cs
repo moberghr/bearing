@@ -8,7 +8,6 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
-using Bearing.App.Controls;
 using Bearing.App.Editing;
 using Bearing.App.Input;
 using Bearing.App.ViewModels;
@@ -177,19 +176,7 @@ public partial class MainWindow
     /// own handling of Enter / '/' / brackets. App-level shortcuts (Run, Save, …) stay in <see cref="OnKeyDown"/>.
     /// </summary>
     private void OnEditorKeyDown(object? sender, KeyEventArgs e)
-    {
-        // An inline zone sits inside the editor, so its keys tunnel through here first — they are the grid's
-        // (or its cell editor's), never the SQL text's (spec §8).
-        if (InlineZoneView.IsInside(e.Source))
-        {
-            return;
-        }
-        _dispatcher.TryHandle(e, KeyScope.Editor);
-    }
-
-    /// <summary>The caret is in the SQL text — focus within the editor, but not inside an inline zone.</summary>
-    private bool EditorTextHasFocus
-        => Editor.TextArea.IsKeyboardFocusWithin && !InlineZoneView.IsInside(FocusManager?.GetFocusedElement());
+        => InlineZoneFocus.EditorKey(e, () => _dispatcher.TryHandle(e, KeyScope.Editor));   // never a zone's keys
 
     // Tracks whether Alt was pressed on its own (no other key during the hold) → a "tap" toggles the menu.
     private bool _altAlone;
@@ -239,7 +226,7 @@ public partial class MainWindow
         // handler — which is why editor.zoomReset never saw Ctrl+0: focus.editor shares that gesture and
         // was swallowing it here. Focusing the editor is a no-op when the caret is already in it, so drop
         // that one claim in that case and let the editor's binding have the key.
-        var claimed = EditorTextHasFocus ? _navCommandsFromEditor : _navCommands;
+        var claimed = _zoneFocus.EditorTextHasFocus(FocusManager?.GetFocusedElement()) ? _navCommandsFromEditor : _navCommands;
         _dispatcher.TryHandle(e, KeyScope.Global, claimed);
     }
 
@@ -331,20 +318,10 @@ public partial class MainWindow
         if (_resultsPane.Toggle()) Editor.TextArea.Focus();
     }
 
-    /// <summary>focus.results: the results pane's grid — or, in inline mode, the zone of the statement under
-    /// the caret (else the nearest zone above it), spec §8.</summary>
+    /// <summary>focus.results: the results pane's grid — or, in inline mode, the caret's zone (spec §8).</summary>
     private void FocusResultsPane()
     {
-        if (_inline.IsInline && Vm is not null)
-        {
-            var caret = Editor.CaretOffset;
-            var statement = _text.StatementBounds(caret);
-            if (_inline.FocusZoneAt(caret, statement.Start, statement.End))
-            {
-                return;
-            }
-        }
-        if (_resultsPane.IsVisible) ResultsView.FocusableGrid?.Focus();
+        _zoneFocus.FocusResults(Vm is not null, _resultsPane.IsVisible ? ResultsView.FocusableGrid : null);
     }
 
     /// <summary>focus.cycle (F6): move keyboard focus editor → results grid → sidebar → editor, skipping
@@ -353,27 +330,10 @@ public partial class MainWindow
     private void CycleFocus()
     {
         var regions = new List<(Control Focus, Visual Container)> { (Editor.TextArea, Editor) };
-        // Inline: the caret's zone is the results region (it sits inside the editor; FocusRing classifies by
-        // the innermost container, so a focused zone is not mistaken for the editor).
-        if (_inline.IsInline && _inline.Controller.FocusedZone() is { } focused
-            && _inline.Controller.Views.FirstOrDefault(v => v.Zone == focused) is { } current
-            && current.Results.FocusableGrid is { } zoneGrid)
-        {
-            regions.Add((zoneGrid, current));
-        }
-        else if (_inline.IsInline && CaretZoneView() is { } zone && zone.Results.FocusableGrid is { } caretGrid)
-        {
-            regions.Add((caretGrid, zone));
-        }
+        regions.AddRange(_zoneFocus.Regions());   // inline: the focused or the caret's zone
         if (_resultsPane.IsVisible && ResultsView.FocusableGrid is { } grid) regions.Add((grid, ResultsView));
         if (Sidebar.FocusTarget is { } side) regions.Add((side, side));
         FocusRing.Cycle(TopLevel.GetTopLevel(this), regions);
-    }
-
-    private InlineZoneView? CaretZoneView()
-    {
-        var statement = _text.StatementBounds(Editor.CaretOffset);
-        return _inline.ZoneViewAt(Editor.CaretOffset, statement.Start, statement.End);
     }
 
     // select.project / connection / database: open a filterable quick-pick (type to filter, ↑/↓, Enter).
@@ -550,9 +510,7 @@ public partial class MainWindow
         // Capture the tab the run belongs to: execution is per-tab, so the user may switch tabs while it
         // runs. Only refresh the visible grid if that tab is still selected — otherwise its results are
         // stored on its own VM and render when the user switches back.
-        // Focus in an inline zone: re-run that zone's statement (spec §8), whatever the caret is on.
-        var scope = _inline.FocusedZone is { } zone ? _text.ScopeForZone(zone) : _text.ScopeToRun();
-        await _inline.RunAsync(scope, Vm.Execution.ExecuteAsync);
+        await _inline.RunAsync(_zoneFocus.ScopeToRun(), Vm.Execution.ExecuteAsync);   // in a zone: its statement
     }
 
     /// <summary>
@@ -568,7 +526,7 @@ public partial class MainWindow
     private async Task ExplainAsync(bool analyze)
     {
         if (Vm is null) return;
-        var sql = _inline.FocusedZone is { } zone ? _text.ScopeForZone(zone).Sql : _text.SqlToRun();
+        var sql = _zoneFocus.SqlToExplain();
         if (string.IsNullOrWhiteSpace(sql)) { Vm.StatusText = "Nothing to explain."; return; }
 
         var plan = await Vm.Execution.ExplainAsync(sql, analyze);
@@ -639,25 +597,7 @@ public partial class MainWindow
     /// <summary>Render the given tab's current result frame, plus the back-bar state (FK-nav history).</summary>
     internal void RebuildResults(EditorTabViewModel? tab)
     {
-        var visible = _inline.PaneVisibilityFor(tab);
-        // Built only when it will be seen: a collapsed pane is rendered when it is next shown.
-        _resultsPane.Render(
-            () =>
-            {
-                ResultsView.CanGoBack = tab?.CanGoBack ?? false;
-                ResultsView.Results = tab?.Results; // assignment triggers the rebuild (reads CanGoBack)
-            },
-            () =>
-            {
-                ResultsView.CanGoBack = false;
-                ResultsView.Results = null;
-            },
-            hasResults: tab?.Results is { Count: > 0 },
-            defer: visible != true);
-        if (visible is { } shown)
-        {
-            _resultsPane.SetVisible(shown);
-        }
+        _resultsPane.ShowTab(tab, _inline.PaneVisibilityFor(tab));
     }
 
     private void OnToggleInlineResultsClick(object? sender, RoutedEventArgs e) => _inline.Toggle();

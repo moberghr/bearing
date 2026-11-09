@@ -24,6 +24,9 @@ public interface IResultFrames
     /// <summary>Drop the current (navigated) results and show the previous frame.</summary>
     void GoBack();
 
+    /// <summary>The sets on the Back stack (every frame but the current one), oldest first.</summary>
+    IEnumerable<ResultSetViewModel> StashedSets { get; }
+
     /// <summary>Every frame held — the current one and the stashed ones — oldest first. What a replacement
     /// would throw away, pending edits included.</summary>
     IEnumerable<ResultSetViewModel> AllSets { get; }

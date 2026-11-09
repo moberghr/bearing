@@ -121,9 +121,23 @@ public sealed partial class EditorTabViewModel : ObservableObject, IResultFrames
     /// <summary>A run's results: <see cref="SetFreshResults"/>, and stamped as the run's own.</summary>
     public void SetRunResults(IReadOnlyList<ResultSetViewModel> results)
     {
+        ReplacedByRun = [.. _resultHistory.Frames, Results];
         RunResults = results;
         RunResultsStamp++;
         SetFreshResults(results);
+    }
+
+    /// <summary>Every frame the pane held when the latest run's results replaced them — its Back stack, oldest
+    /// first, then the frame shown — so edits made in any of them while the run was in flight can be kept.</summary>
+    public IReadOnlyList<IReadOnlyList<ResultSetViewModel>> ReplacedByRun { get; private set; } = [];
+
+    /// <summary><see cref="ReplacedByRun"/>, handed over once and forgotten — the dropped frames aren't kept
+    /// alive past the run that needed them.</summary>
+    internal IReadOnlyList<IReadOnlyList<ResultSetViewModel>> TakeReplacedByRun()
+    {
+        var frames = ReplacedByRun;
+        ReplacedByRun = [];
+        return frames;
     }
 
     /// <summary>Stash the current results and display the FK-navigated ones on top.</summary>
@@ -169,6 +183,9 @@ public sealed partial class EditorTabViewModel : ObservableObject, IResultFrames
 
     /// <summary>Every set the pane holds, its Back stack included.</summary>
     public IEnumerable<ResultSetViewModel> AllSets => System.Linq.Enumerable.Concat(_resultHistory.Sets, Results);
+
+    /// <summary>The sets on the pane's Back stack.</summary>
+    public IEnumerable<ResultSetViewModel> StashedSets => _resultHistory.Sets;
 
     /// <summary>Unsaved grid edits anywhere on this tab — the pane's frames and every inline zone's.</summary>
     public int PendingEditCount
@@ -288,13 +305,42 @@ public sealed partial class EditorTabViewModel : ObservableObject, IResultFrames
 
     /// <summary>Begin a run: publish the busy flag and a fresh cancellation source, returning its token.
     /// The caller has already ensured this tab isn't already running (one operation per tab).</summary>
-    internal CancellationToken BeginRun()
+    /// <param name="kind">What the run does — whether Back must wait for it.</param>
+    internal CancellationToken BeginRun(RunKind kind = RunKind.Query)
     {
         _runCts = new CancellationTokenSource();
         _runClock.Restart();
+        RunKind = kind;
         IsRunning = true;
         return _runCts.Token;
     }
+
+    /// <summary>
+    /// Why <paramref name="action"/> (Back, a zone's ✕) must wait now, or null when it needn't. An FK lookup in
+    /// flight will push a frame when it lands — popping or dropping the frame it lands on would lose it (A→B,
+    /// follow a key from B, Back: B gone, C on A). A save writes the frame's edits — going back or closing would
+    /// offer to discard, and revert, what is being written. A run that gave up unsaved edits: popping their frame
+    /// would lose them for good if the run then failed. Any other query run, Load more, Fetch all, a count or
+    /// EXPLAIN replace or change sets in place: nothing waits for them.
+    /// </summary>
+    /// <param name="action">What would wait, for the sentence ("going back", "closing these results").</param>
+    public string? BusyReason(string action) => (IsRunning ? RunKind : RunKind.Query) switch
+    {
+        RunKind.FkLookup => $"Wait for the foreign-key lookup to finish before {action}.",
+        RunKind.Save => $"Wait for the save to finish before {action}.",
+        // Not gated on IsRunning: the flag is set at the question, a moment before the run begins, and its
+        // whole lifetime is RunAsync's try/finally.
+        _ when RunGaveUpEdits => $"Wait for the run to finish before {action}.",
+        _ => null,
+    };
+
+    /// <summary>The run in flight gave up unsaved edits (Discard and run): Back and ✕ wait for it, so a run
+    /// that fails or is cancelled still has those edits to leave in place. Set and cleared by the one place that
+    /// asks (<see cref="Editing.InlineResultsCoordinator.RunAsync"/>).</summary>
+    public bool RunGaveUpEdits { get; set; }
+
+    /// <summary>What the run in flight (or the last one) does.</summary>
+    public RunKind RunKind { get; private set; }
 
     /// <summary>End the current run: dispose the cancellation source and lower the busy flag.</summary>
     internal void EndRun()
@@ -302,6 +348,7 @@ public sealed partial class EditorTabViewModel : ObservableObject, IResultFrames
         _runClock.Stop();
         _runCts?.Dispose();
         _runCts = null;
+        RunKind = RunKind.Query;
         IsRunning = false;
     }
 
@@ -423,4 +470,17 @@ public sealed partial class EditorTabViewModel : ObservableObject, IResultFrames
             ? scriptPath
             : relative;
     }
+}
+
+/// <summary>What a tab's run does, as far as Back is concerned (see <see cref="EditorTabViewModel.BusyReason"/>).</summary>
+public enum RunKind
+{
+    /// <summary>A query run, Load more, Fetch all, a count, EXPLAIN — Back works during it.</summary>
+    Query,
+
+    /// <summary>An FK lookup, which pushes a frame when it lands — Back waits.</summary>
+    FkLookup,
+
+    /// <summary>A save of grid edits — Back waits (it would offer to discard what is being written).</summary>
+    Save,
 }

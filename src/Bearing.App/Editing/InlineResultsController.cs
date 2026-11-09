@@ -53,7 +53,26 @@ public sealed class InlineResultsController
     private bool _steppingCaret;
     private TextDocument? _document;
     private int _bindGeneration;   // bumped on every Bind: a run that spans one cannot map its offsets
-    private int _lastChangeOffset;  // where the latest edit happened — where a kept zone lands (spec §3)
+    private readonly HashSet<Guid> _retiring = new();   // zones whose retirement is queued (it runs once each)
+    // Where each zone's anchor was last deleted — where a kept zone lands (spec §3). An anchor of its own at the
+    // start of the change that deleted it, so the rest of an edit group (a Format's other hunks, its redo) moves
+    // it along; frozen to an offset when the tab is unbound.
+    private readonly Dictionary<Guid, DeletionPoint> _deletedAt = new();
+
+    private sealed class DeletionPoint(TextAnchor of, TextAnchor at)
+    {
+        public TextAnchor Of { get; } = of;              // the zone anchor whose deletion this records
+        public TextAnchor? At { get; private set; } = at;
+        private int _frozen;
+
+        public int Offset => At?.Offset ?? _frozen;
+
+        public void Freeze()
+        {
+            _frozen = Offset;
+            At = null;
+        }
+    }
 
     /// <summary>A zone of the bound tab: its anchor always (the offset must follow edits in either mode), its
     /// control only once it is drawn — in Pane mode a run's zones are placed but never shown, and building
@@ -81,6 +100,9 @@ public sealed class InlineResultsController
 
     private TextView TextView => _editor.TextArea.TextView;
 
+    /// <summary>Whether the bound tab has zones (anchored in the buffer now).</summary>
+    public bool HasZones => _shown.Count > 0;
+
     /// <summary>The tab whose zones are shown, or null.</summary>
     public EditorTabViewModel? Tab => _tab;
 
@@ -107,7 +129,6 @@ public sealed class InlineResultsController
             return;
         }
         _document = _editor.Document;
-        _document.Changing += OnDocumentChanging;
         _document.Changed += OnDocumentChanged;
         tab.InlineZonesChanged += Sync;
         Sync();
@@ -123,8 +144,11 @@ public sealed class InlineResultsController
         }
         if (_document is not null)
         {
-            _document.Changing -= OnDocumentChanging;
             _document.Changed -= OnDocumentChanged;
+        }
+        foreach (var point in _deletedAt.Values)
+        {
+            point.Freeze();   // the buffer is about to hold another tab's text
         }
         foreach (var s in _shown.Values)
         {
@@ -254,8 +278,6 @@ public sealed class InlineResultsController
         return anchor;
     }
 
-    private void OnDocumentChanging(object? sender, DocumentChangeEventArgs e) => _lastChangeOffset = e.Offset;
-
     private void OnDocumentChanged(object? sender, DocumentChangeEventArgs e)
     {
         foreach (var s in _shown.Values)
@@ -263,6 +285,13 @@ public sealed class InlineResultsController
             if (!s.Anchor.IsDeleted)
             {
                 s.Zone.Offset = s.Anchor.Offset;
+            }
+            else if (!_deletedAt.TryGetValue(s.Zone.Id, out var point) || !ReferenceEquals(point.Of, s.Anchor))
+            {
+                var at = _document!.CreateAnchor(e.Offset);
+                at.MovementType = AnchorMovementType.BeforeInsertion;
+                at.SurviveDeletion = true;
+                _deletedAt[s.Zone.Id] = new DeletionPoint(s.Anchor, at);   // a later deletion replaces an earlier one
             }
         }
     }
@@ -272,79 +301,72 @@ public sealed class InlineResultsController
     /// and dropping the zone would lose the edits. Done after the document change has finished, not inside
     /// it: the text view is mid-update while anchors are being notified.</summary>
     private void OnAnchorDeleted(object? sender, EventArgs e)
-        => Retire(_shown.Values.Where(s => ReferenceEquals(s.Anchor, sender)).ToList(), _lastChangeOffset);
+        => Retire(_shown.Values.Where(s => ReferenceEquals(s.Anchor, sender)).ToList());
 
-    /// <summary>
-    /// Run <paramref name="edit"/>, a command that rewrites a span of the buffer in one replace (Ctrl+/, Format),
-    /// and carry the zones across it by what the text means rather than by anchor: such a replace covers text
-    /// that did not really change, and an anchor in it would read as deleted — every zone in the tab gone, or
-    /// moved to the top as "statement removed". <see cref="InlineZoneRemap"/> decides; a zone whose text really
-    /// went is retired as a deletion would.
-    /// </summary>
-    public void Rewrite(Action edit, ISqlDialect dialect)
+    /// <summary>Retire zones whose anchor was deleted, after the change: one without unsaved edits leaves its tab;
+    /// one with edits stays, marked "statement removed", at where its text was deleted (<see cref="_deletedAt"/>).
+    /// Queued once per zone.</summary>
+    private void Retire(IReadOnlyList<Shown> dead)
     {
-        if (_tab is null || _document is not { } document || _shown.Count == 0)
+        if (_tab is not { } tab)
         {
-            edit();
             return;
         }
-        var before = document.Text;
-        var shown = _shown.Values.ToList();
-        var offsets = shown.Select(s => s.Anchor.IsDeleted ? s.Zone.Offset : s.Anchor.Offset).ToList();
-        foreach (var s in shown)
-        {
-            s.Anchor.Deleted -= OnAnchorDeleted;
-        }
-        try
-        {
-            edit();
-        }
-        finally
-        {
-            var after = document.Text;
-            var mapped = ReferenceEquals(before, after) || string.Equals(before, after, StringComparison.Ordinal)
-                ? offsets.Select(o => (int?)o).ToList()
-                : InlineZoneRemap.Map(dialect, before, after, offsets);
-            var gone = new List<Shown>();
-            for (var i = 0; i < shown.Count; i++)
-            {
-                var s = shown[i];
-                s.Zone.Offset = mapped[i] ?? Math.Min(offsets[i], document.TextLength);
-                s.Anchor = Anchor(document, s.Zone);
-                if (mapped[i] is null)
-                {
-                    gone.Add(s);
-                }
-            }
-            Retire(gone, _lastChangeOffset);
-            TextView.Redraw();
-        }
-    }
-
-    private void Retire(IReadOnlyList<Shown> dead, int at)
-    {
-        var tab = _tab;
-        if (tab is null || dead.Count == 0)
+        var queued = dead.Where(s => _retiring.Add(s.Zone.Id)).ToList();
+        if (queued.Count == 0)
         {
             return;
         }
         Dispatcher.UIThread.Post(() =>
         {
-            foreach (var shown in dead)
+            // All released up front: a failure partway through must not leave the rest marked queued forever.
+            var lands = new Dictionary<Guid, int?>();
+            foreach (var shown in queued)
             {
-                if (shown.Zone.PendingCount == 0 || _document is not { } document || !ReferenceEquals(tab, _tab))
+                _retiring.Remove(shown.Zone.Id);
+                lands[shown.Zone.Id] = _deletedAt.Remove(shown.Zone.Id, out var point) ? point.Offset : null;
+            }
+            foreach (var shown in queued)
+            {
+                var zone = shown.Zone;
+                if (!tab.InlineZones.Contains(zone))
                 {
-                    tab.RemoveInlineZone(shown.Zone.Id);
+                    continue;   // already gone (✕, replaced by a run): nothing left to retire
+                }
+                if (zone.PendingCount == 0)
+                {
+                    tab.RemoveInlineZone(zone.Id);
                     continue;
                 }
-                shown.Anchor.Deleted -= OnAnchorDeleted;
-                shown.Zone.Offset = at;
-                shown.Anchor = Anchor(document, shown.Zone);
-                shown.Zone.StatementRemoved = true;
-                shown.Zone.NotifyChanged();
-                TextView.Redraw();
+                // Edits are never dropped here. Bound: its live entry (a fresh one if the tab was re-bound
+                // meanwhile) is re-anchored there. Unbound: the offset is set and the next Bind anchors it.
+                var document = ReferenceEquals(tab, _tab) ? _document : null;
+                var live = document is not null && _shown.TryGetValue(zone.Id, out var current) ? current : null;
+                MarkRemoved(zone, live, document, lands[zone.Id]);
             }
         }, DispatcherPriority.Normal);
+    }
+
+    /// <summary>Keep <paramref name="zone"/>, which holds edits, where its text was deleted
+    /// (<paramref name="landAt"/>, else where its live anchor is, else its offset), marked "statement removed".</summary>
+    private void MarkRemoved(InlineResultZone zone, Shown? live, TextDocument? document, int? landAt)
+    {
+        if (landAt is { } at)
+        {
+            zone.Offset = at;
+        }
+        else if (live is { Anchor.IsDeleted: false })
+        {
+            zone.Offset = live.Anchor.Offset;
+        }
+        if (live is not null && document is not null)
+        {
+            live.Anchor.Deleted -= OnAnchorDeleted;
+            live.Anchor = Anchor(document, zone);
+            TextView.Redraw();
+        }
+        zone.StatementRemoved = true;
+        zone.NotifyChanged();
     }
 
     /// <summary>Inline objects are measured with infinite space, so each zone is given an explicit width

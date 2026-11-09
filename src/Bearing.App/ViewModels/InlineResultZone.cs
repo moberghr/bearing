@@ -98,6 +98,8 @@ public sealed class InlineResultZone : IResultFrames
 
     public IEnumerable<ResultSetViewModel> AllSets => _history.Sets.Concat(Sets);
 
+    public IEnumerable<ResultSetViewModel> StashedSets => _history.Sets;
+
     /// <summary>The frames Back would return to, oldest first — carried to the pane by the placement toggle.</summary>
     public IReadOnlyList<IReadOnlyList<ResultSetViewModel>> StashedFrames => _history.Frames;
 

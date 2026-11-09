@@ -34,8 +34,9 @@ public sealed class ConfirmDiscardEditsDialog : Window
         };
         var body = new TextBlock
         {
-            Text = $"To {action}, these results are replaced and their edits discarded. Cancel to keep them — "
-                 + "Save (Ctrl+S in the grid) writes them first.",
+            // One sentence true for every caller (a run, ✕, the placement toggle, closing a tab, quitting): what
+            // the button does, not what happens to the results. No gesture: grid.save is rebindable.
+            Text = $"\u201CDiscard and {action}\u201D throws them away. Cancel keeps them, so you can save them first.",
             TextWrapping = TextWrapping.Wrap,
             Opacity = 0.85,
             Margin = new Thickness(0, 8, 0, 0),

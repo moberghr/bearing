@@ -35,6 +35,7 @@ public sealed partial class ResultView : UserControl
     public ResultView()
     {
         _selection = new GridSelectionController(this);
+        _inlineLayout.Watch(this, () => IsInline, () => ViewMode, () => _results, Rebuild);   // put-off mode changes
         _selection.Changed += SyncStatsBars;
         // The factory can't resolve these itself: the inspector is this view's pane, and the FK navigation
         // callback is assigned by the shell after construction (so it must be read at click time, not now).
@@ -64,7 +65,7 @@ public sealed partial class ResultView : UserControl
     public ResultsViewMode ViewMode
     {
         get => _viewMode;
-        set { if (_viewMode == value) return; _viewMode = value; Rebuild(); }
+        set => _inlineLayout.SetViewMode(ref _viewMode, value, this, IsInline, _results, Rebuild);   // a zone only when it must
     }
 
     /// <summary>Raised when the user flips the Stacked/Tabbed toggle (persist it on the VM).</summary>
@@ -128,56 +129,19 @@ public sealed partial class ResultView : UserControl
     /// </summary>
     public Action? CloseRequested { get; set; }
 
-    /// <summary>The header's inline toggle: show results under their statements instead of in this pane.
-    /// Null hides the button.</summary>
+    /// <summary>The pane header's inline toggle (null hides the button).</summary>
     public Action? ShowInlineRequested { get; set; }
 
-    // ---- inline zone mode (spec docs/specs/2026-11-06-inline-results.md §5–§6) ------------------------
-
-    /// <summary>
-    /// This view is an inline zone's, hosted in the editor: one header bar instead of the dock header and back
-    /// bar, stacked sets one under another rather than splitting a pane, and each grid given a definite height
-    /// (<see cref="InlineCap"/>) because the editor measures it with infinite space. Set before
-    /// <see cref="Results"/>.
-    /// </summary>
+    /// <summary>An inline zone's view (spec §5–§6): set before <see cref="Results"/>; its zone-only state is
+    /// <see cref="Inline"/>.</summary>
     public bool IsInline { get; init; }
 
-    /// <summary>Inline: the zone's caption ("3 result sets from this batch"), shown in its top bar.</summary>
-    public string? Caption { get; set; }
+    /// <summary>A zone's caption, notice, placement toggle and row cap (<see cref="InlineResultLayout"/>).</summary>
+    internal InlineResultLayout Inline => _inlineLayout;
+    private readonly InlineResultLayout _inlineLayout = new();
 
-    /// <summary>Inline: a warning shown in the zone's top bar (the statement it hung under was removed).</summary>
-    public string? Notice { get; set; }
-
-    /// <summary>Inline: the zone's placement toggle — show these results in the pane instead.</summary>
-    public Action? ShowInPaneRequested { get; set; }
-
-    /// <summary>Inline: the cap on each grid's rows, in pixels (<see cref="InlineGridSizing"/>). Assigning
-    /// re-sizes the grids in place (the grip drag) — no rebuild, so scroll and selection stay.</summary>
-    public double InlineCap
-    {
-        get => _inlineCap ?? InlineGridSizing.DefaultCap(ResultGridChrome.RowMinHeight);
-        set
-        {
-            _inlineCap = value;
-            foreach (var (grid, result) in _inlineSized)
-            {
-                SizeInlineGrid(grid, result);
-            }
-        }
-    }
-    private double? _inlineCap;
-
-    /// <summary>Inline: grids sized to their rows, re-sized as rows load (paging, an added row).</summary>
-    private readonly List<(DataGrid Grid, ResultSetViewModel Result)> _inlineSized = new();
-
-    private void SizeInlineGrid(DataGrid grid, ResultSetViewModel result)
-        => grid.Height = InlineGridSizing.GridHeight(result.Rows.Count, ResultGridChrome.RowMinHeight, InlineCap);
-
-    /// <summary>The grids this view shows (tests, and the zone's focus-in).</summary>
+    /// <summary>The grids shown (tests, a zone's focus-in), and whether one shows <paramref name="result"/>.</summary>
     internal IReadOnlyCollection<DataGrid> Grids => _gridsByResult.Values;
-
-    /// <summary>Whether this view has a grid on <paramref name="result"/> — a run's sets can be shown by the
-    /// pane and by their inline zone at once.</summary>
     internal bool Shows(ResultSetViewModel result) => _gridsByResult.ContainsKey(result);
 
     /// <summary>The shared keybinding pipeline (set once by the window), used to resolve a keystroke that
@@ -203,8 +167,7 @@ public sealed partial class ResultView : UserControl
     public Control? FocusableGrid => _firstGrid;
     private DataGrid? _firstGrid;
 
-    /// <summary>Which view the shared grid commands act on; created by <see cref="RegisterGridCommands"/> and
-    /// handed to every other view on the same registry (the inline zones').</summary>
+    /// <summary>Which view the shared grid commands act on (shared by every view on one registry).</summary>
     public GridCommandRouter? Router { get; set; }
 
     /// <summary>The grid + result a grid command should act on: the grid the current keystroke is
@@ -220,11 +183,7 @@ public sealed partial class ResultView : UserControl
 
     /// <summary>Register the grid's discrete commands into the shared registry, so the same matcher (and the
     /// command palette) drives them. Called by the window before the keymap is loaded; safe to call twice.
-    /// <para>
-    /// Registered once for every results view there is — the pane's and each inline zone's: each command acts
-    /// on <see cref="Router"/>'s current view, so a zone's keystroke works its own grid (spec §8). Views that
-    /// share this registry are given this view's <see cref="Router"/>.
-    /// </para></summary>
+    /// Once for every view: each command acts on <see cref="Router"/>'s current one (spec §8).</summary>
     public void RegisterGridCommands(CommandRegistry r)
     {
         var router = Router ??= new GridCommandRouter(this);

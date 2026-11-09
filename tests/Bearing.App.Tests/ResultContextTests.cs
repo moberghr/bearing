@@ -158,7 +158,7 @@ public class ResultContextTests
         Assert.Equal(1, PendingEditsGuard.ForZone(new EditorTabViewModel("t", ""), zone).Changes);
     }
 
-    /// <summary>Closing a zone whose sets the pane also shows loses nothing: the pane keeps them.</summary>
+    /// <summary>Closing a zone whose sets the pane also holds loses nothing: the pane keeps them.</summary>
     [Fact]
     public void Closing_a_zone_doesnt_count_sets_the_pane_still_holds()
     {
@@ -170,6 +170,93 @@ public class ResultContextTests
         tab.ApplyInlineRun(InlineResultPlacement.Scope(PostgresDialect.Instance, "select 1;", 0, false), [zone]);
 
         Assert.True(PendingEditsGuard.ForZone(tab, zone).IsEmpty);
+    }
+
+    /// <summary>A run that gave up unsaved edits holds Back and ✕ from the question until RunAsync is done with
+    /// it: popping their frame meanwhile would lose them for good if the run then failed. A run that gave nothing
+    /// up holds nothing.</summary>
+    [Fact]
+    public void A_run_that_gave_up_edits_holds_back_until_it_ends()
+    {
+        var tab = new EditorTabViewModel("t", "select 1;");
+        tab.BeginRun();
+        Assert.Null(tab.BusyReason("going back"));
+        tab.EndRun();
+
+        // Set at the question, a moment before the run begins: it holds from then, not only once running.
+        tab.RunGaveUpEdits = true;
+        Assert.Equal("Wait for the run to finish before going back.", tab.BusyReason("going back"));
+        tab.BeginRun();
+        Assert.Equal("Wait for the run to finish before going back.", tab.BusyReason("going back"));
+        tab.EndRun();
+
+        tab.RunGaveUpEdits = false;   // what RunAsync's finally does
+        Assert.Null(tab.BusyReason("going back"));
+    }
+
+    /// <summary>Back in the pane over a set only a zone also holds: kept while zones are shown, a loss in Pane mode
+    /// (the zone is hidden) — the same rule a run's guard follows.</summary>
+    [Fact]
+    public void Back_counts_a_set_only_a_hidden_zone_holds()
+    {
+        var tab = new EditorTabViewModel("t", "select 1;");
+        tab.SetRunResults([Editable()]);
+        var fk = Editable();
+        Edit(fk);
+        tab.PushResults([fk]);
+        var zone = new InlineResultZone(8, [fk], null);
+        tab.ApplyInlineRun(InlineResultPlacement.Scope(PostgresDialect.Instance, "select 1;", 0, false), [zone]);
+
+        Assert.True(PendingEditsGuard.ForBack(tab, tab, zonesShown: true).IsEmpty);
+        Assert.Equal(1, PendingEditsGuard.ForBack(tab, tab, zonesShown: false).Changes);
+    }
+
+    /// <summary>Collapsed or not, the pane still holds the set — in a frame on its Back stack here — so closing the
+    /// zone neither counts nor reverts it: edits made through the pane are never wiped by a zone's ✕.</summary>
+    [Fact]
+    public void Closing_a_zone_never_counts_or_reverts_what_the_pane_holds()
+    {
+        var tab = new EditorTabViewModel("t", "select 1;");
+        var set = Editable();
+        Edit(set);
+        tab.SetRunResults([set]);
+        tab.PushResults([Editable()]);   // the set now sits on the pane's Back stack
+        var zone = new InlineResultZone(8, [set], null);
+        tab.ApplyInlineRun(InlineResultPlacement.Scope(PostgresDialect.Instance, "select 1;", 0, false), [zone]);
+
+        var loss = PendingEditsGuard.ForZone(tab, zone);
+        Assert.True(loss.IsEmpty);
+        Assert.Equal(new PendingEditsGuard.Kept(Shown: 0, History: 1), PendingEditsGuard.KeptInPane(tab, zone));   // Back, not Ctrl+R, reaches it
+
+        tab.RemoveInlineZone(zone.Id);
+        loss.Discard();
+        Assert.True(set.HasPendingChanges);
+    }
+
+    /// <summary>Back pops the current frame: its edits are a loss unless something else holds the set.</summary>
+    [Fact]
+    public void Back_counts_the_current_frames_edits_nothing_else_holds()
+    {
+        var tab = new EditorTabViewModel("t", "select 1;");
+        tab.SetRunResults([Editable()]);
+        var fk = Editable();
+        tab.PushResults([fk]);
+        Assert.True(PendingEditsGuard.ForBack(tab, tab, zonesShown: true).IsEmpty);   // nothing pending
+
+        Edit(fk);
+        var pane = PendingEditsGuard.ForBack(tab, tab, zonesShown: true);
+        Assert.Equal(1, pane.Changes);
+        Assert.Same(fk, Assert.Single(pane.Sets));
+
+        var zone = new InlineResultZone(0, [Editable()], null);
+        var zoneFk = Editable();
+        Edit(zoneFk);
+        zone.Push([zoneFk]);
+        Assert.Equal(1, PendingEditsGuard.ForBack(tab, zone, zonesShown: true).Changes);
+
+        var shared = new InlineResultZone(0, [fk], null);   // the pane holds the same set: not lost
+        shared.Push([fk]);
+        Assert.True(PendingEditsGuard.ForBack(tab, shared, zonesShown: true).IsEmpty);
     }
 
     /// <summary>A zone's placement toggle replaces the pane's frames: edits only the pane holds (an FK frame

@@ -1,6 +1,7 @@
 using System;
 using Avalonia.Controls;
 using Bearing.App.Controls;
+using Bearing.App.ViewModels;
 
 namespace Bearing.App.Views;
 
@@ -49,6 +50,32 @@ public sealed class ResultsPaneController
         }
         _owed = null;
         render();
+    }
+
+    /// <summary>
+    /// Render <paramref name="tab"/>'s current result frame and back-bar state, then show or collapse the pane
+    /// as <paramref name="visible"/> says (null leaves it as it is). Built only when it will be seen: a collapsed
+    /// pane is rendered when it is next shown.
+    /// </summary>
+    public void ShowTab(EditorTabViewModel? tab, bool? visible)
+    {
+        Render(
+            () =>
+            {
+                _results.CanGoBack = tab?.CanGoBack ?? false;
+                _results.Results = tab?.Results;   // assignment triggers the rebuild (reads CanGoBack)
+            },
+            () =>
+            {
+                _results.CanGoBack = false;
+                _results.Results = null;
+            },
+            hasResults: tab?.Results is { Count: > 0 },
+            defer: visible != true);
+        if (visible is { } shown)
+        {
+            SetVisible(shown);
+        }
     }
 
     /// <summary>Whether the pane is currently shown.</summary>

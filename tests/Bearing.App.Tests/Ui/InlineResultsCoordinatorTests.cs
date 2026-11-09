@@ -32,6 +32,7 @@ public class InlineResultsCoordinatorTests
         public required SettingsService Settings { get; init; }
         public EditorTabViewModel? Selected { get; set; }
         public bool PaneVisible { get; set; }
+        public System.Collections.Generic.List<string> Statuses { get; } = new();
 
         /// <summary>What the window does on a tab switch: unbind, swap the buffer, bind, render results.</summary>
         public void Select(EditorTabViewModel tab)
@@ -61,7 +62,7 @@ public class InlineResultsCoordinatorTests
         var settings = SettingsService.InMemory(new AppSettings { ResultsPlacement = placement });
         Harness? h = null;
         var coordinator = new InlineResultsCoordinator(editor, () => settings, () => h!.Selected,
-            tab => h!.Rebuild(tab), visible => h!.PaneVisible = visible, _ => { }, () => { }, () => host);
+            tab => h!.Rebuild(tab), visible => h!.PaneVisible = visible, () => h!.PaneVisible, text => h!.Statuses.Add(text), () => { }, () => host);
         h = new Harness { Editor = editor, Coordinator = coordinator, Settings = settings };
         settings.Changed += coordinator.OnSettingsChanged;
         coordinator.SyncPlacement();
@@ -249,5 +250,139 @@ public class InlineResultsCoordinatorTests
         h.Settings.Update(s => s with { InspectorFontSize = 15 });
         Assert.True(h.PaneVisible);
         return Task.CompletedTask;
+    });
+
+    /// <summary>A zone edited while its statement re-runs: those edits were never asked about, so the zone stays
+    /// (edits and all) and the run's results go to the pane, which opens — the unplaceable-run path.</summary>
+    [Fact]
+    public Task Edits_made_in_a_zone_while_its_query_runs_keep_the_zone() => _ui.Run(async () =>
+    {
+        var h = Build(Asking([], answer: true));
+        var tab = new EditorTabViewModel("t", Buffer);
+        h.Select(tab);
+        var set = ResultContextTestsAccess.Editable();
+        tab.ApplyInlineRun(SecondStatement(), [new InlineResultZone(SecondStatement().End, [set], null)]);
+        var zone = Assert.Single(tab.InlineZones);
+
+        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm) =>
+        {
+            Assert.True(await confirm());                    // nothing pending yet: nothing asked
+            set.SetCell(set.Rows[0], 1, "typed meanwhile");  // the user edits while it runs
+            tab.SetRunResults([InlineResultsTests.OneSet()]);
+        });
+
+        Assert.Same(zone, Assert.Single(tab.InlineZones));
+        Assert.True(set.HasPendingChanges);
+        Assert.True(h.PaneVisible);
+        Assert.Contains(h.Statuses, s => s.Contains("made while the query ran kept"));
+    });
+
+    /// <summary>Pane mode: the pane's frame edited while a run is in flight comes back on top when the results
+    /// land, with the run's results one Back below it.</summary>
+    [Fact]
+    public Task Edits_made_in_the_pane_while_a_query_runs_are_put_back_on_top() => _ui.Run(async () =>
+    {
+        var h = Build(Asking([], answer: true), ResultsPlacement.Pane);
+        var tab = new EditorTabViewModel("t", Buffer);
+        var set = ResultContextTestsAccess.Editable();
+        tab.SetRunResults([set]);
+        h.Select(tab);
+        var before = tab.Results;
+        var fresh = InlineResultsTests.OneSet();
+
+        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm) =>
+        {
+            Assert.True(await confirm());
+            set.SetCell(set.Rows[0], 1, "typed meanwhile");
+            tab.SetRunResults([fresh]);
+        });
+
+        Assert.Same(before, tab.Results);
+        Assert.True(set.HasPendingChanges);
+        Assert.True(tab.CanGoBack);
+        Assert.Contains(h.Statuses, line => line.Contains("one Back below in the pane"));
+        tab.GoBack();
+        Assert.Same(fresh, Assert.Single(tab.Results));
+    });
+
+    /// <summary>A set given up at the question and then edited again before the results landed: the later edit
+    /// was never agreed to, so the zone is kept and nothing in it reverted.</summary>
+    [Fact]
+    public Task A_given_up_set_edited_again_during_the_run_is_kept() => _ui.Run(async () =>
+    {
+        var asked = new System.Collections.Generic.List<string>();
+        var h = Build(Asking(asked, answer: true));
+        var tab = new EditorTabViewModel("t", Buffer);
+        h.Select(tab);
+        var set = DirtyZoneOnSecond(tab);
+        var zone = Assert.Single(tab.InlineZones);
+
+        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm) =>
+        {
+            Assert.True(await confirm());                        // Discard and run
+            set.SetCell(set.Rows[1], 1, "typed after the question");
+            tab.SetRunResults([InlineResultsTests.OneSet()]);
+        });
+
+        Assert.Single(asked);
+        Assert.Same(zone, Assert.Single(tab.InlineZones));
+        Assert.True(set.HasPendingChanges);
+        Assert.Equal(2, set.PendingCount);
+    });
+
+    /// <summary>F0 → F1, run, Back to F0 while it runs, edit F0, results land: F0 was never asked about and
+    /// isn't the frame the question saw, yet its edit is kept — back on top, the results one Back below.</summary>
+    [Fact]
+    public Task An_edit_in_a_frame_Back_reached_during_the_run_is_kept() => _ui.Run(async () =>
+    {
+        var h = Build(Asking([], answer: true), ResultsPlacement.Pane);
+        var tab = new EditorTabViewModel("t", Buffer);
+        var f0 = ResultContextTestsAccess.Editable();
+        tab.SetRunResults([f0]);
+        var f0Frame = tab.Results;
+        tab.PushResults([InlineResultsTests.OneSet()]);   // F1
+        h.Select(tab);
+        var fresh = InlineResultsTests.OneSet();
+
+        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm) =>
+        {
+            Assert.True(await confirm());                  // nothing pending: nothing asked
+            tab.GoBack();                                   // back to F0 while it runs
+            f0.SetCell(f0.Rows[0], 1, "typed meanwhile");
+            tab.SetRunResults([fresh]);
+        });
+
+        Assert.Same(f0Frame, tab.Results);
+        Assert.True(f0.HasPendingChanges);
+        tab.GoBack();
+        Assert.Same(fresh, Assert.Single(tab.Results));
+        Assert.Contains(h.Statuses, line => line.Contains("one Back below in the pane"));
+    });
+
+    /// <summary>A second Run on a tab whose first run gave up edits (refused: the tab is busy) leaves the first
+    /// run's hold on Back in place — only the call that set it clears it.</summary>
+    [Fact]
+    public Task A_second_run_on_a_busy_tab_keeps_the_first_runs_hold() => _ui.Run(async () =>
+    {
+        var h = Build(Asking([], answer: true));
+        var tab = new EditorTabViewModel("t", Buffer);
+        h.Select(tab);
+        DirtyZoneOnSecond(tab);
+        var release = new TaskCompletionSource();
+        var first = h.Coordinator.RunAsync(SecondStatement(), async (_, confirm) =>
+        {
+            Assert.True(await confirm());   // gives the edits up: Back now waits
+            tab.BeginRun();
+            await release.Task;
+            tab.EndRun();
+        });
+        Assert.NotNull(tab.BusyReason("going back"));
+
+        await h.Coordinator.RunAsync(SecondStatement(), (_, _) => Task.CompletedTask);   // refused: busy
+
+        Assert.NotNull(tab.BusyReason("going back"));
+        release.SetResult();
+        await first;
+        Assert.Null(tab.BusyReason("going back"));
     });
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
@@ -36,12 +37,14 @@ public sealed class InlineResultsCoordinator
     /// guard counts includes a value still being typed (§9.15).</param>
     /// <param name="ZoneKeys">Offer a key to the zone's own commands (<see cref="CommandIds.GridLeaveInline"/>)
     /// ahead of the grid; true when one ran.</param>
+    /// <param name="DisplayGesture">The live keymap's gesture for a command id, or null when unbound.</param>
     public sealed record Host(
         Action<ResultView, IResultFrames, Action> Wire,
         Func<KeyEventArgs, bool> GlobalKeys,
         Func<string, string, Task<bool>> ConfirmDiscardEdits,
         Action CommitOpenEdits,
-        Func<KeyEventArgs, bool> ZoneKeys);
+        Func<KeyEventArgs, bool> ZoneKeys,
+        Func<string, string?>? DisplayGesture = null);
 
     /// <summary>The zones' own commands: <see cref="CommandIds.GridLeaveInline"/> (Escape) gives the keyboard
     /// back to the SQL text under the focused zone.</summary>
@@ -60,6 +63,7 @@ public sealed class InlineResultsCoordinator
     private readonly Func<EditorTabViewModel?> _selectedTab;
     private readonly Action<EditorTabViewModel?> _rebuildResults;
     private readonly Action<bool> _setPaneVisible;
+    private readonly Func<bool> _paneVisible;
     private readonly Action<string> _status;
     private readonly Action _focusEditor;
     private readonly Func<Host?> _host;
@@ -79,10 +83,14 @@ public sealed class InlineResultsCoordinator
     /// <param name="status">Put a line in the status bar.</param>
     /// <param name="focusEditor">Give the editor focus.</param>
     /// <param name="host">The window's side of a zone (read when a zone is first drawn).</param>
+    /// <param name="paneVisible">Whether the results pane is open now (what ✕ on a zone may count as still
+    /// showing its sets).</param>
     public InlineResultsCoordinator(TextEditor editor, Func<SettingsService?> settings,
         Func<EditorTabViewModel?> selectedTab, Action<EditorTabViewModel?> rebuildResults,
-        Action<bool> setPaneVisible, Action<string> status, Action focusEditor, Func<Host?> host)
+        Action<bool> setPaneVisible, Func<bool> paneVisible, Action<string> status, Action focusEditor,
+        Func<Host?> host)
     {
+        _paneVisible = paneVisible;
         _settings = settings;
         _selectedTab = selectedTab;
         _rebuildResults = rebuildResults;
@@ -121,6 +129,11 @@ public sealed class InlineResultsCoordinator
         var refocus = FocusedZone;
         var start = ran is null ? null : Controller.BeginRun(ran);
         PendingEditsGuard.Loss? givenUp = null;
+        // What the question saw, to tell edits made while the query runs from the ones given up for it: the
+        // pane's frame, the zones it would replace, and each given-up set's edit stamp at that moment.
+        List<InlineResultZone> zonesBefore = [];
+        Dictionary<ResultSetViewModel, int> stamps = [];
+        var flagged = false;   // whether this call set RunGaveUpEdits — a second Run on a busy tab must not clear it
 
         async Task<bool> ConfirmEditsAsync()
         {
@@ -136,20 +149,59 @@ public sealed class InlineResultsCoordinator
                 return false;
             }
             givenUp = loss;
+            zonesBefore = PendingEditsGuard.ZonesReplacedBy(ran, scope).ToList();
+            stamps = loss.Sets.ToDictionary(s => s, s => s.EditStamp);
+            // Back and ✕ wait for this run: popping the given-up edits' frame now would lose them for good if
+            // the run then failed or was cancelled.
+            flagged = !loss.IsEmpty;
+            if (flagged)
+            {
+                ran.RunGaveUpEdits = true;
+            }
             return true;
         }
 
-        await execute(scope.Sql, ConfirmEditsAsync);
+        try
+        {
+            await execute(scope.Sql, ConfirmEditsAsync);
+        }
+        finally
+        {
+            if (ran is not null && flagged)
+            {
+                ran.RunGaveUpEdits = false;   // only the call that set it clears it
+            }
+        }
         if (ran is null || start is null)
         {
             return;
         }
-        var placement = Controller.PlaceRun(scope, start);
+        var late = Late(ran, start, stamps, zonesBefore);
+        // Edits made in a zone while the query ran were never asked about: the zone stays, and the results go to
+        // the pane instead — the path a run that can't be placed inline already takes.
+        var placement = late.Zones > 0
+            ? InlineResultsController.Placement.Untraceable
+            : Controller.PlaceRun(scope, start);
+        foreach (var frame in late.PaneFrames)
+        {
+            // A pane frame was replaced under edits made meanwhile (any frame — Back may have reached it during
+            // the run): put it back on top, in order, the run's results one Back below.
+            ran.PushResults(frame);
+        }
+        if (late.Zones + late.Pane > 0)
+        {
+            var kept = $"{PendingEdits.Describe(late.Zones + late.Pane, 1)} made while the query ran kept";
+            var below = late.PaneFrames.Count == 1 ? "one Back" : $"{late.PaneFrames.Count} Backs";
+            _status(late.Pane > 0
+                ? $"{kept} — its results are {below} below in the pane."
+                : $"{kept} — its results are in the pane.");
+        }
         if (givenUp is not null && placement != InlineResultsController.Placement.Nothing)
         {
             // Whatever a zone still shows (shown zones only) was not replaced after all — an unplaceable run
-            // leaves every zone where it was.
-            givenUp.Discard(IsInline ? ran.InlineZones.SelectMany(z => z.AllSets) : null);
+            // leaves every zone where it was — and sets edited again since the question are kept, not reverted.
+            var shown = IsInline ? ran.InlineZones.SelectMany(z => z.AllSets) : [];
+            givenUp.Discard(shown.Concat(late.Sets));
         }
         switch (placement)
         {
@@ -172,6 +224,35 @@ public sealed class InlineResultsCoordinator
             }
         }
     }
+
+    /// <summary>Unsaved changes made while a run was in flight, in what its results replaced — the zones it
+    /// would replace (<see cref="LateEdits.Zones"/>) and any frame the pane held (<see cref="LateEdits.Pane"/>, only
+    /// sets no zone still shows). Edits the run's question gave up and left untouched (same edit stamp) don't
+    /// count; nothing counts when the run set no results.</summary>
+    private LateEdits Late(EditorTabViewModel ran, InlineResultsController.RunStart start,
+        Dictionary<ResultSetViewModel, int> stamps, List<InlineResultZone> zonesBefore)
+    {
+        var replaced = ran.TakeReplacedByRun();   // taken (and forgotten) on every path
+        if (ran.RunResultsStamp == start.RunResultsStamp || ran.RunResults.Count == 0)
+        {
+            return new LateEdits(0, 0, [], []);
+        }
+        // Edited since the question: never asked about, or asked about and edited again (its stamp moved).
+        bool New(ResultSetViewModel s) => s.HasPendingChanges && (!stamps.TryGetValue(s, out var at) || s.EditStamp != at);
+        var inZones = IsInline
+            ? zonesBefore.Where(ran.InlineZones.Contains).SelectMany(z => z.AllSets).Where(New).Distinct().ToList()
+            : [];
+        var shownInZones = IsInline ? ran.InlineZones.SelectMany(z => z.AllSets).ToHashSet() : [];
+        // Every frame the pane held right before the results replaced it — the shown one and its Back stack.
+        var paneFrames = replaced.Where(f => f.Any(s => New(s) && !shownInZones.Contains(s))).ToList();
+        var inPane = paneFrames.SelectMany(f => f).Where(s => New(s) && !shownInZones.Contains(s)).Distinct().ToList();
+        return new LateEdits(PendingEdits.Count(inZones), PendingEdits.Count(inPane), [.. inZones, .. inPane], paneFrames);
+    }
+
+    /// <summary>Changes made while a run was in flight: in zones it would replace, in the pane's frame, and the
+    /// sets holding them (kept, never reverted).</summary>
+    private readonly record struct LateEdits(int Zones, int Pane, IReadOnlyList<ResultSetViewModel> Sets,
+        IReadOnlyList<IReadOnlyList<ResultSetViewModel>> PaneFrames);
 
     private async Task<bool> ConfirmLossAsync(PendingEditsGuard.Loss loss, string action)
         => loss.IsEmpty || (_host() is { } host
@@ -273,32 +354,29 @@ public sealed class InlineResultsCoordinator
     private InlineZoneView CreateZoneView(EditorTabViewModel tab, InlineResultZone zone)
     {
         var results = new ResultView { IsInline = true };
+        var retired = false;
         void Render()
         {
-            results.Caption = zone.Caption;
-            results.Notice = zone.StatementRemoved
+            if (retired)
+            {
+                return;   // the zone left its tab (a run replaced it, ✕): nothing to draw, and its sets let go
+            }
+            results.Inline.Caption = zone.Caption;
+            results.Inline.Notice = zone.StatementRemoved
                 ? "The statement these results came from was removed — save or discard the edits"
                 : null;
             results.CanGoBack = zone.CanGoBack;
             results.Results = zone.Sets;
         }
-        _host()?.Wire(results, zone, Render);
-        results.GoBack = () =>
-        {
-            // Not mid-run: the run's results replace the tab's when it finishes (as the pane's Back refuses).
-            if (!tab.IsRunning)
-            {
-                zone.GoBack();
-                Render();
-            }
-        };
+        _host()?.Wire(results, zone, Render);   // Back included: it pops the zone's own frames (§4)
         results.CloseRequested = () => _ = CloseZoneAsync(tab, zone);
-        results.ShowInPaneRequested = () => _ = ShowZoneInPaneModeAsync(tab, zone);
+        results.Inline.ShowInPaneRequested = () => _ = ShowZoneInPaneModeAsync(tab, zone);
         zone.Changed += Render;
         // The zone left its tab: let go of its sets (they may live on in the pane, and their Rows would keep
         // this view's grids subscribed) and of the zone.
         void OnRetired()
         {
+            retired = true;
             zone.Changed -= Render;
             zone.Retired -= OnRetired;
             results.Results = null;
@@ -313,6 +391,14 @@ public sealed class InlineResultsCoordinator
     /// <summary>✕ on a zone — asks first when it holds unsaved edits (spec §7).</summary>
     private async Task CloseZoneAsync(EditorTabViewModel tab, InlineResultZone zone)
     {
+        // An FK lookup or save in flight lands on (or writes into) this tab's frames: closing would revert edits
+        // mid-save or orphan the lookup's result. Asked again after the question, which takes time.
+        string? Busy() => tab.BusyReason("closing these results");
+        if (Busy() is { } busy)
+        {
+            _status(busy);
+            return;
+        }
         var refocus = Controller.FocusedZone() == zone;
         _host()?.CommitOpenEdits();
         var loss = PendingEditsGuard.ForZone(tab, zone);
@@ -320,8 +406,19 @@ public sealed class InlineResultsCoordinator
         {
             return;
         }
+        if (Busy() is { } started)
+        {
+            _status(started);
+            return;
+        }
+        var kept = PendingEditsGuard.KeptInPane(tab, zone);
         tab.RemoveInlineZone(zone.Id);
-        loss.Discard();   // only the zone held them
+        loss.Discard();   // only what nothing else on the tab holds; the pane's edits are left alone
+        if (!_paneVisible()
+            && PendingEditsGuard.KeptMessage(kept, _host()?.DisplayGesture?.Invoke(CommandIds.ViewToggleResults)) is { } message)
+        {
+            _status(message);   // kept, but out of sight: say where, rather than leave them to surprise a run or quit
+        }
         if (refocus)
         {
             Controller.Leave(zone);

@@ -44,6 +44,22 @@ internal static class InlineResultPlacement
         // One split, shared with EnsureSeparated, and one lex per statement for where its code ends: this runs
         // on the UI thread before every Run, and a long script read four times over shows as input lag.
         var spans = StatementSplitter.Split(dialect, text);
+        var (ends, codeEnd) = Ends(dialect, spans, start);
+        var leading = text.Length - text.TrimStart().Length;
+        // Where the code ends, not the text: a statement's span may carry the comment lines after it, and its
+        // results belong under the statement, not under a comment heading the next section.
+        var trimmedEnd = codeEnd ?? start + text.TrimEnd().Length;
+        return new RunScope(StatementSplitter.EnsureSeparated(text, spans), ends,
+            Math.Min(start + leading, trimmedEnd), trimmedEnd, isWholeBuffer);
+    }
+
+    /// <summary>Where each sent statement of <paramref name="text"/> ends — <see cref="RunScope.StatementEnds"/>
+    /// of the whole buffer, without building the SQL a run would send.</summary>
+    public static IReadOnlyList<int> StatementEnds(ISqlDialect dialect, string text)
+        => Ends(dialect, StatementSplitter.Split(dialect, text), 0).Ends;
+
+    private static (List<int> Ends, int? CodeEnd) Ends(ISqlDialect dialect, IReadOnlyList<StatementSpan> spans, int start)
+    {
         var ends = new List<int>();
         int? codeEnd = null;
         foreach (var span in spans)
@@ -59,12 +75,7 @@ internal static class InlineResultPlacement
                 codeEnd = ends[^1];
             }
         }
-        var leading = text.Length - text.TrimStart().Length;
-        // Where the code ends, not the text: a statement's span may carry the comment lines after it, and its
-        // results belong under the statement, not under a comment heading the next section.
-        var trimmedEnd = codeEnd ?? start + text.TrimEnd().Length;
-        return new RunScope(StatementSplitter.EnsureSeparated(text, spans), ends,
-            Math.Min(start + leading, trimmedEnd), trimmedEnd, isWholeBuffer);
+        return (ends, codeEnd);
     }
 
     /// <summary>The inline results for <paramref name="sets"/> returned by a run over <paramref name="scope"/>.</summary>

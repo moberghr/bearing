@@ -116,23 +116,8 @@ public sealed partial class ResultView
 
         WireSelection(grid, result);
         if (result.IsEditable) WireEditing(grid, result);
-        if (IsInline)
-        {
-            SizeToRows(grid, result);
-        }
+        _inlineLayout.Track(grid, result, IsInline);   // inline: a definite height, fit to its rows (spec §6)
         return grid;
-    }
-
-    /// <summary>Inline: a definite height that follows the loaded rows up to the cap (spec §6) — the editor
-    /// measures a zone with infinite height, and a grid measured that way would realize every row.</summary>
-    private void SizeToRows(DataGrid grid, ResultSetViewModel result)
-    {
-        _inlineSized.Add((grid, result));
-        SizeInlineGrid(grid, result);
-        void OnRows(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
-            => SizeInlineGrid(grid, result);
-        result.Rows.CollectionChanged += OnRows;
-        _rowSubscriptions.Add((result.Rows, OnRows));
     }
 
     /// <summary>
@@ -216,12 +201,12 @@ public sealed partial class ResultView
         // focus is visible instead of the caller having to press an arrow first.
         grid.GotFocus += (_, _) =>
         {
-            Router?.Activate(this);   // palette-invoked grid commands now mean this view (spec §8)
             if (_selection.NeedsSeed(result))
             {
                 _selection.SeedActive(grid, result);
             }
         };
+        grid.GotFocus += (_, _) => Router?.Activate(this);   // palette-invoked grid commands mean this view (§8)
     }
 
     /// <summary>A press the cells didn't take: the row-number gutter selects the whole row, a column header
@@ -283,11 +268,10 @@ public sealed partial class ResultView
     private static void CommitOpenEdit(DataGrid grid)
         => grid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
 
-    /// <summary>Commit an open cell editor in any of this view's grids — before something outside the view
-    /// reads the pending set (a run's unsaved-edits guard, §9.15).</summary>
+    /// <summary>Commit an open cell editor in any of this view's grids before the pending set is read (§9.15).</summary>
     public void CommitOpenEdits()
     {
-        foreach (var grid in _gridsByResult.Values)
+        foreach (var grid in _gridsByResult.Values.ToArray())   // a snapshot: committing can re-render the view
         {
             CommitOpenEdit(grid);
         }

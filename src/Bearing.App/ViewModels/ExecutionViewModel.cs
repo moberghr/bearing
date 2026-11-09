@@ -763,10 +763,15 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// it while the tab is selected), pass its token to the body, and always tear the run down afterwards.
     /// Cancellation and errors become a status line ("<c>{cancelled}</c>" / "<c>{failed}: {message}</c>").
     /// Callers pre-check <c>tab.IsRunning</c>; this assumes the tab isn't already running.</summary>
+    /// <param name="kind">What the body does: <see cref="RunKind.FkLookup"/> pushes a result frame and
+    /// <see cref="RunKind.Save"/> writes grid edits — Back waits for both. Everything else is
+    /// <see cref="RunKind.Query"/>: a run replaces the results wholesale, and paging or a count change a set in
+    /// place, harmless after a Back.</param>
     private async Task RunExclusiveAsync(
-        EditorTabViewModel tab, Func<CancellationToken, Task> body, string cancelled, string failed)
+        EditorTabViewModel tab, Func<CancellationToken, Task> body, string cancelled, string failed,
+        RunKind kind = RunKind.Query)
     {
-        var ct = tab.BeginRun();
+        var ct = tab.BeginRun(kind);
         try { await body(ct); }
         // Cancellation only ever comes from the user (Esc, the Run/Cancel button, closing the tab, quitting),
         // so it reports through RunStatus, not RunFinished: telling someone their query stopped right after
@@ -1217,7 +1222,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // "nothing in Bearing asked for this" — a confident wrong answer about a limit we set (#105).
             RunFinished(tab, ResultSetBuilder.DescribeResults(
                 results, null, info, ct.IsCancellationRequested));
-        }, "Navigation cancelled.", "Navigation failed");
+        }, "Navigation cancelled.", "Navigation failed", RunKind.FkLookup);
     }
 
     // ---- Inline editing — connection/transaction/status concerns; pure DML lives in Results/ResultEditModel.
@@ -1282,7 +1287,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
             ResultEditModel.ApplySavedChanges(rs, target, changes, results);
             RunFinished(tab, $"Saved {changes.Count} change(s).");
-        }, "Save cancelled.", "Save failed");
+        }, "Save cancelled.", "Save failed", RunKind.Save);
     }
 
     /// <summary>Discard all pending changes in place (restore edited cells, drop new rows, un-mark deletes).</summary>

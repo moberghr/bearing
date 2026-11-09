@@ -24,6 +24,7 @@ public partial class MainWindow : Window
     private readonly EditorAutoClose _autoClose;            // paired quotes/brackets (#70)
     private readonly EditorTextCommands _text;              // statement-aware editor ops + Run's SQL
     private readonly InlineResultsCoordinator _inline;      // results under their statements, and when the pane opens
+    private readonly InlineZoneFocus _zoneFocus;            // focus.results / F6 / Run / Explain with zones
     private ResultViewWiring? _resultWiring;                  // the pane's and every zone's results-view callbacks
     private InlineResultsCoordinator.Host? _zoneHost;         // what a zone's view needs from this window
     private readonly EditorTextBehavior _editorText;        // editor <-> SelectedTab buffer/caret sync
@@ -81,9 +82,10 @@ public partial class MainWindow : Window
         _resultsPane = new ResultsPaneController(WorkspaceGrid, ResultsSplitter, ResultsView);
         // Results under their statements, when the setting says so; ⤢ on one puts its sets in the pane.
         _inline = new InlineResultsCoordinator(Editor, () => Vm?.SettingsService, () => Vm?.Workspace.SelectedTab,
-            RebuildResults, _resultsPane.SetVisible, text => { if (Vm is not null) { Vm.StatusText = text; } },
-            () => Editor.TextArea.Focus(), () => _zoneHost);
-        _text.AroundRewrite = _inline.Controller.Rewrite;
+            RebuildResults, _resultsPane.SetVisible, () => _resultsPane.IsVisible,
+            text => { if (Vm is not null) { Vm.StatusText = text; } }, () => Editor.TextArea.Focus(), () => _zoneHost);
+        _text.KeepsStatementEnds = () => _inline.Controller.HasZones;
+        _zoneFocus = new InlineZoneFocus(_inline, Editor, _text);
         _tabScroll = new TabStripScroller(TabScroll, TabStrip);
         _pinnedTabScroll = new TabStripScroller(PinnedTabScroll, PinnedTabStrip);
         // Dragging a tab to a new position, and across the rows to pin or unpin it. Both rows, because the
@@ -209,14 +211,16 @@ public partial class MainWindow : Window
     /// results view (<see cref="ResultViewWiring"/>), with FK navigation and Back landing in the zone.</summary>
     private void WireResultsView()
     {
-        _resultWiring = new ResultViewWiring(() => Vm, () => _dispatcher, () => ResultsView.Router, ShowPendingEditsSqlAsync);
+        _resultWiring = new ResultViewWiring(() => Vm, () => _dispatcher, () => ResultsView.Router, ShowPendingEditsSqlAsync,
+            () => _inline.IsInline, () => _resultsPane.IsVisible);
         _resultWiring.Apply(ResultsView, () => Vm?.Workspace.SelectedTab, () => RebuildResults(Vm?.Workspace.SelectedTab));
         _zoneHost = new InlineResultsCoordinator.Host(
             (view, frames, render) => _resultWiring.Apply(view, () => frames, render),
             HandleGlobalKey,
             (what, action) => Vm?.Dialogs?.ConfirmDiscardEditsAsync(what, action) ?? Task.FromResult(false),
             CommitOpenEdits,
-            e => !_palette.AnyOpen && _dispatcher.TryHandleCommand(e, KeyScope.Grid, CommandIds.GridLeaveInline));
+            e => !_palette.AnyOpen && _dispatcher.TryHandleCommand(e, KeyScope.Grid, CommandIds.GridLeaveInline),
+            id => _dispatcher?.Keymap.DisplayGesture(id));
 
         // The header's ✕. Collapse rather than toggle — the button is only reachable while the pane is open —
         // and take focus with it, or it stays parked in a grid that is no longer on screen.

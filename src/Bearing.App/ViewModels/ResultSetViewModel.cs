@@ -328,8 +328,13 @@ public sealed partial class ResultSetViewModel : ObservableObject
         RaisePending();
     }
 
+    /// <summary>Bumped on every change to the pending set (an edit, a new or deleted row, a revert, a save) — so
+    /// whoever asked about these edits can tell later whether they changed since (the run's unsaved-edits guard).</summary>
+    public int EditStamp { get; private set; }
+
     private void RaisePending()
     {
+        EditStamp++;
         OnPropertyChanged(nameof(HasPendingChanges));
         OnPropertyChanged(nameof(PendingCount));
         OnPropertyChanged(nameof(PendingText));

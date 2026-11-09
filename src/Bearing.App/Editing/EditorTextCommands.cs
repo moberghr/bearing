@@ -28,10 +28,9 @@ public sealed class EditorTextCommands
     private readonly Func<ISqlDialect> _dialect;
     private readonly StatementMargin _highlight = new();
 
-    /// <summary>Runs a one-replace rewrite of the buffer (Ctrl+/, Format) so whatever hangs on the text — the
-    /// inline result zones — can be carried across it by meaning rather than lost to the replace. Null runs
-    /// the edit as is.</summary>
-    public Action<Action, ISqlDialect>? AroundRewrite { get; set; }
+    /// <summary>Whether anything hangs on statement ends right now (inline zones). Format only keeps statement
+    /// ends as hunk boundaries — a lex of both texts — when it does. Null reads as no.</summary>
+    public Func<bool>? KeepsStatementEnds { get; set; }
 
     /// <summary>Wraps <paramref name="editor"/> and installs the statement-highlight margin in its own
     /// column, right of the line numbers. <paramref name="dialect"/> supplies the engine whose lexical
@@ -182,10 +181,17 @@ public sealed class EditorTextCommands
     public void ToggleLineComment()
     {
         var (start, end) = Span();
-        var result = LineCommenter.Toggle(_editor.Text, start, end);
-        if (result.Text == _editor.Text) return;
+        var old = _editor.Text;
+        var result = LineCommenter.Toggle(old, start, end);
+        if (result.Text == old)
+        {
+            return;
+        }
 
-        Rewrite(() => _editor.Document.Replace(0, _editor.Document.TextLength, result.Text));
+        // As the smallest edits, in one undo step: text that didn't change — and an inline zone hanging in it —
+        // is left alone, through Ctrl+Z and redo too.
+        // Line i stays line i, so the hunks come straight from the line pairs — no diff on the UI thread.
+        TextHunkApply.Apply(_editor.Document, 0, Results.TextHunks.LineByLine(old, result.Text));
         _editor.SelectionStart = result.SelectionStart;
         _editor.SelectionLength = result.SelectionLength;
         _editor.CaretOffset = result.SelectionStart + result.SelectionLength;
@@ -203,18 +209,6 @@ public sealed class EditorTextCommands
         _editor.Document.Remove(range.Start, range.Length);
         _editor.CaretOffset = range.Start;
         _editor.TextArea.Caret.BringCaretToView();
-    }
-
-    private void Rewrite(Action edit)
-    {
-        if (AroundRewrite is { } around)
-        {
-            around(edit, _dialect());
-        }
-        else
-        {
-            edit();
-        }
     }
 
     /// <summary>The editor's (start, end) offsets: the selection when there is one, else the caret twice.</summary>
@@ -254,29 +248,65 @@ public sealed class EditorTextCommands
 
         // The user can type while we are away, and applying an edit computed against text that has since
         // moved would corrupt the buffer — the offsets no longer mean what they meant. Decline instead, and
-        // say so rather than appearing to do nothing.
-        if (before is not null && _editor.Document.Version?.CompareAge(before) != 0)
-            return "Not formatted — the document changed while it was being formatted.";
+        // say so rather than appearing to do nothing. Asked again after the diff, which awaits too.
+        const string moved = "Not formatted — the document changed while it was being formatted.";
+        bool Moved() => before is not null && _editor.Document.Version?.CompareAge(before) != 0;
+        if (Moved())
+        {
+            return moved;
+        }
 
         if (result.Refused)
+        {
             return selected
                 ? $"Selection not formatted — {result.Refusal}."
                 : $"Not formatted — {result.Refusal}.";
-        if (!result.Changed) return null;
+        }
+        if (!result.Changed)
+        {
+            return null;
+        }
 
-        // One Replace, so the whole reformat is a single undo step rather than a stack of them.
+        // The smallest edits that lay it out, worked out off the UI thread (a line diff, then a character diff per
+        // changed run), so text it didn't change keeps its anchors through the edit, its undo and its redo — zones
+        // placed after a Format survive its Ctrl+Z too. With zones, statement ends are also kept as hunk
+        // boundaries (a lex of both texts, skipped without zones). Past MaxHunks edits it is one trimmed replace
+        // instead, as before inline results: the diff and the Replace calls stay bounded.
+        var dialect = _dialect();
+        Task<IReadOnlyList<Results.TextHunks.Hunk>> Diff(bool keepEnds)
+            => Task.Run(() =>
+            {
+                var diffed = Results.TextHunks.Diff(source, result.Text,
+                    keepEnds ? Results.TextHunks.StatementSync(dialect, source, result.Text) : null);
+                return diffed.Count > Results.TextHunks.MaxHunks ? Results.TextHunks.Whole(source, result.Text) : diffed;
+            });
+        var keepEnds = KeepsStatementEnds?.Invoke() == true;
+        var hunks = await Diff(keepEnds);
+        if (!keepEnds && KeepsStatementEnds?.Invoke() == true && !Moved())
+        {
+            // Zones appeared while it diffed (a run landed): their statement ends must be hunk boundaries too.
+            keepEnds = true;
+            hunks = await Diff(keepEnds);
+        }
+        if (Moved())
+        {
+            return moved;
+        }
+
+        // The smallest edits, in one update, so the whole reformat is a single undo step rather than a stack
+        // of them — and text it didn't change (an inline zone's anchor in it) is not replaced at all.
         var caret = _editor.CaretOffset;
-        Rewrite(() => _editor.Document.Replace(start, length, result.Text));
+        TextHunkApply.Apply(_editor.Document, start, hunks);
 
         if (selected)
         {
             _editor.SelectionStart = start;
             _editor.SelectionLength = result.Text.Length;   // keep what was formatted selected
         }
-        else
+        else if (hunks is [{ Length: > 0 } only] && caret > start + only.Offset && caret < start + only.Offset + only.Length)
         {
-            // The caret cannot be preserved meaningfully — every offset after the first change has moved —
-            // so it is clamped rather than guessed at. Landing near where you were beats landing at zero.
+            // One replace over the caret: it can't follow the text, so it is clamped rather than guessed at (as
+            // before inline results). Otherwise the minimal edits carry it — same statement.
             _editor.CaretOffset = Math.Min(caret, _editor.Document.TextLength);
         }
         return null;

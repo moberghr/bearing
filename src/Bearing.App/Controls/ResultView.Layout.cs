@@ -48,12 +48,7 @@ public sealed partial class ResultView
 
         _editableGrids.Clear();
         _gridsByResult.Clear();
-        _inlineSized.Clear();
-        foreach (var (rows, handler) in _rowSubscriptions)
-        {
-            rows.CollectionChanged -= handler;
-        }
-        _rowSubscriptions.Clear();
+        _inlineLayout.Clear(ViewMode);
         _statsBars.Clear();
         _firstGrid = null;                    // re-captured as grids are built below (region-focus target)
         _selection.DropRestyleListeners();    // old cells are being discarded; they re-subscribe as they rebuild
@@ -100,57 +95,13 @@ public sealed partial class ResultView
             ? $"Close results ({gesture})"
             : "Close results";
 
-    /// <summary>Row-count subscriptions of inline grids (they re-size as rows load), detached on rebuild.</summary>
-    private readonly List<(System.Collections.Specialized.INotifyCollectionChanged Rows,
-        System.Collections.Specialized.NotifyCollectionChangedEventHandler Handler)> _rowSubscriptions = new();
-
-    /// <summary>
-    /// An inline zone's layout (spec §5): one header bar — merged into the set's own meta row when there is a
-    /// single set and nothing to say above it — then the sets one under another (or as tabs). No splitter: the
-    /// editor gives a zone unlimited height, so each grid sizes itself (<see cref="InlineCap"/>).
-    /// </summary>
-    private Control BuildInline(IReadOnlyList<ResultSetViewModel> results)
-    {
-        var actions = ResultChrome.ZoneActions(
-            CanGoBack ? () => GoBack?.Invoke() : null,
-            results.Count > 1 ? ViewMode : null,
-            mode =>
-            {
-                ViewMode = mode;
-                ViewModeChanged?.Invoke(mode);
-            },
-            ShowInPaneRequested is null ? null : () => ShowInPaneRequested?.Invoke(),
-            CloseRequested is null ? null : () => CloseRequested?.Invoke());
-
-        var root = new DockPanel { LastChildFill = true };
-        var merged = results.Count == 1 && Caption is null && Notice is null;
-        if (!merged)
-        {
-            var header = ResultChrome.ZoneHeader(Notice ?? Caption, warn: Notice is not null, actions);
-            DockPanel.SetDock(header, Dock.Top);
-            root.Children.Add(header);
-        }
-
-        if (results.Count == 1)
-        {
-            root.Children.Add(BuildSetContainer(results[0], "Result", collapsible: false, capHeight: false,
-                trailing: merged ? actions : null));
-        }
-        else if (ViewMode == ResultsViewMode.Tabbed)
-        {
-            root.Children.Add(BuildBody(results));
-        }
-        else
-        {
-            var stack = new StackPanel { Orientation = Orientation.Vertical };
-            for (var i = 0; i < results.Count; i++)
-            {
-                stack.Children.Add(BuildSetContainer(results[i], $"Result {i + 1}", collapsible: true, capHeight: false));
-            }
-            root.Children.Add(stack);
-        }
-        return root;
-    }
+    /// <summary>An inline zone's layout (<see cref="InlineResultLayout.Build"/>).</summary>
+    private Control BuildInline(IReadOnlyList<ResultSetViewModel> results) => InlineResultLayout.Build(results,
+        new(CanGoBack ? () => GoBack?.Invoke() : null, ViewMode, mode => { ViewMode = mode; ViewModeChanged?.Invoke(mode); },
+            _inlineLayout.ShowInPaneRequested is { } toPane ? () => toPane() : null,
+            CloseRequested is null ? null : () => CloseRequested?.Invoke(), _inlineLayout.Caption, _inlineLayout.Notice),
+        (set, label, collapsible, trailing) => BuildSetContainer(set, label, collapsible, capHeight: false, trailing: trailing),
+        () => BuildBody(results));
 
     // ---- Body: single set, stacked, or tabbed ------------------------------------------------
 
@@ -233,17 +184,7 @@ public sealed partial class ResultView
         };
         Grid.SetColumn(left, 0);
         metaRow.Children.Add(left);
-        Control? right = BuildMetaActions(result, grid);
-        if (trailing is not null)
-        {
-            var both = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            if (right is not null)
-            {
-                both.Children.Add(right);
-            }
-            both.Children.Add(trailing);
-            right = both;
-        }
+        var right = InlineResultLayout.WithTrailing(BuildMetaActions(result, grid), trailing);
         if (right is not null)
         {
             Grid.SetColumn(right, 1);

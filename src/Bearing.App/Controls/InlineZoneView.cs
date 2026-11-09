@@ -47,7 +47,7 @@ public sealed class InlineZoneView : Border
         Cursor = new Cursor(StandardCursorType.Arrow);
 
         view.HorizontalAlignment = HorizontalAlignment.Left;
-        view.InlineCap = zone.TableHeight ?? InlineGridSizing.DefaultCap(ResultGridChrome.RowMinHeight);
+        view.Inline.Cap = zone.TableHeight ?? InlineGridSizing.DefaultCap(ResultGridChrome.RowMinHeight);
 
         ResizeGrip = Grip();
         var body = new DockPanel { LastChildFill = true };
@@ -67,13 +67,21 @@ public sealed class InlineZoneView : Border
             }
         }, RoutingStrategies.Tunnel);
 
-        // What the grid left: the window's global commands get it, then nothing above the zone does.
+        // What the grid left: the window's global commands get it, then nothing above the zone does — the zone
+        // sits inside the editor's TextArea, whose own key bindings (caret moves, Backspace, Enter…) would act
+        // on the SQL. The one exception is Alt with no other modifier, a menu access key (Alt+V, Alt+F): the
+        // window's AccessKeyHandler only sees it unhandled, and the text area binds no Alt+letter.
         AddHandler(KeyDownEvent, (_, e) =>
         {
-            if (!e.Handled)
+            if (e.Handled)
             {
-                globalKeys(e);
+                return;
             }
+            if (IsAccessKey(e) && !TypingInZone(e))
+            {
+                return;   // the window takes it from here, once: its own global keys, then the access keys
+            }
+            globalKeys(e);
             e.Handled = true;
         }, RoutingStrategies.Bubble);
         AddHandler(TextInputEvent, (_, e) => e.Handled = true, RoutingStrategies.Bubble);
@@ -102,16 +110,16 @@ public sealed class InlineZoneView : Border
     /// <summary>Whether <paramref name="source"/> (an event's source) is inside an inline zone — for the
     /// editor's own tunnel handlers, which see a zone's keys and presses before the zone does.</summary>
     public static bool IsInside(object? source)
-    {
-        for (var node = source as Visual; node is not null; node = node.GetVisualParent())
-        {
-            if (node is InlineZoneView)
-            {
-                return true;
-            }
-        }
-        return false;
-    }
+        => (source as Visual)?.FindAncestorOfType<InlineZoneView>(includeSelf: true) is not null;
+
+    /// <summary>A cell editor in the zone has the key: Alt+letter is text there (macOS Option composes
+    /// characters — Option+E is a dead key), never a menu access key.</summary>
+    private static bool TypingInZone(KeyEventArgs e) => e.Source is TextBox;
+
+    /// <summary>Alt + a letter or digit, nothing else held: what a menu's access key (<c>_View</c>) answers to.
+    /// Navigation keys stay stopped even with Alt (AvaloniaEdit's box selection is Alt+Shift+arrows).</summary>
+    private static bool IsAccessKey(KeyEventArgs e)
+        => e.KeyModifiers == KeyModifiers.Alt && e.Key is (>= Key.A and <= Key.Z) or (>= Key.D0 and <= Key.D9);
 
     /// <summary>
     /// The bottom-edge grip. Dragging sets <see cref="InlineResultZone.TableHeight"/> (clamped by
@@ -146,7 +154,7 @@ public sealed class InlineZoneView : Border
                 return;
             }
             startY = e.GetPosition(this).Y;
-            startCap = Results.InlineCap;
+            startCap = Results.Inline.Cap;
             e.Pointer.Capture(grip);
             e.Handled = true;
         };
@@ -157,10 +165,10 @@ public sealed class InlineZoneView : Border
                 return;
             }
             var cap = InlineGridSizing.ClampCap(startCap + e.GetPosition(this).Y - y0, ResultGridChrome.RowMinHeight);
-            if (Math.Abs(cap - Results.InlineCap) >= 1)
+            if (Math.Abs(cap - Results.Inline.Cap) >= 1)
             {
                 Zone.TableHeight = cap;
-                Results.InlineCap = cap;
+                Results.Inline.Cap = cap;
                 HeightChanged?.Invoke();
             }
             e.Handled = true;

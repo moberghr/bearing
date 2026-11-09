@@ -290,4 +290,95 @@ public class InlineZoneInputTests
 
         Assert.NotEqual(before, shell.Vm.IsMenuVisible);
     });
+
+    /// <summary>A menu access key (Alt+V) from a zone's grid opens its menu, as it does from the pane's grid: the
+    /// zone stops its keys from reaching the editor's text area, but not the window's access-key handler.</summary>
+    [Fact]
+    public Task Alt_access_keys_in_a_zone_reach_the_menu() => _ui.Run(async () =>
+    {
+        var (shell, _, _, zone, set) = await ZoneWithEditableGrid(nameof(Alt_access_keys_in_a_zone_reach_the_menu));
+        using var _ = shell;
+        ClickCell(shell, zone, set.Rows[0], 1);
+        Assert.True(zone.IsKeyboardFocusWithin);
+        shell.Vm.IsMenuVisible = true;   // after the click, which hides an unpinned menu bar
+        shell.Pump();
+        var view = shell.Window.GetVisualDescendants().OfType<MenuItem>().Single(m => Equals(m.Header, "_View"));
+        Assert.False(view.IsSubMenuOpen);
+
+        shell.Window.KeyPress(Key.LeftAlt, RawInputModifiers.None, PhysicalKey.AltLeft, null);
+        shell.Window.KeyPress(Key.V, RawInputModifiers.Alt, PhysicalKey.V, "v");
+        shell.Window.KeyRelease(Key.V, RawInputModifiers.Alt, PhysicalKey.V, "v");
+        shell.Window.KeyRelease(Key.LeftAlt, RawInputModifiers.None, PhysicalKey.AltLeft, null);
+        shell.Pump();
+
+        Assert.True(view.IsSubMenuOpen);
+    });
+
+    /// <summary>An Alt chord the window binds (Alt+P, tab.togglePin) runs once from a zone: the zone leaves
+    /// Alt+letter to the window rather than offering it to the global commands itself as well.</summary>
+    [Fact]
+    public Task An_alt_chord_in_a_zone_runs_its_global_command_once() => _ui.Run(async () =>
+    {
+        var (shell, _, tab, zone, set) = await ZoneWithEditableGrid(nameof(An_alt_chord_in_a_zone_runs_its_global_command_once));
+        using var _ = shell;
+        ClickCell(shell, zone, set.Rows[0], 1);
+        Assert.True(zone.IsKeyboardFocusWithin);
+        var pinned = tab.IsPinned;
+
+        Press(shell, Key.P, PhysicalKey.P, RawInputModifiers.Alt);
+
+        Assert.NotEqual(pinned, tab.IsPinned);
+    });
+
+    /// <summary>In a zone's cell editor Alt+letter is text (macOS Option composes characters), not a menu access
+    /// key: the menu stays shut.</summary>
+    [Fact]
+    public Task Alt_letter_in_a_zone_cell_editor_does_not_open_a_menu() => _ui.Run(async () =>
+    {
+        var (shell, _, _, zone, set) = await ZoneWithEditableGrid(nameof(Alt_letter_in_a_zone_cell_editor_does_not_open_a_menu));
+        using var _ = shell;
+        ClickCell(shell, zone, set.Rows[0], 1);
+        Press(shell, Key.Enter, PhysicalKey.Enter);   // opens the cell editor
+        Assert.IsType<TextBox>(shell.Window.FocusManager?.GetFocusedElement());
+        shell.Vm.IsMenuVisible = true;
+        shell.Pump();
+        var view = shell.Window.GetVisualDescendants().OfType<MenuItem>().Single(m => Equals(m.Header, "_View"));
+
+        shell.Window.KeyPress(Key.V, RawInputModifiers.Alt, PhysicalKey.V, "v");
+        shell.Window.KeyRelease(Key.V, RawInputModifiers.Alt, PhysicalKey.V, "v");
+        shell.Pump();
+
+        Assert.False(view.IsSubMenuOpen);
+        Press(shell, Key.Escape, PhysicalKey.Escape);   // cancel the cell edit
+    });
+
+    /// <summary>grid.back's key (Alt+Left) in a zone while the tab's frames are being changed is refused with the
+    /// same status line as the Back button — not silently passed on.</summary>
+    [Fact]
+    public Task Back_key_in_a_zone_says_why_it_waits() => _ui.Run(async () =>
+    {
+        var (shell, _, tab, zone, set) = await ZoneWithEditableGrid(nameof(Back_key_in_a_zone_says_why_it_waits));
+        using var _ = shell;
+        var navigated = InlineZoneGridTests.Editable();
+        zone.Zone.Push([navigated]);
+        zone.Zone.NotifyChanged();
+        shell.Pump();
+        ClickCell(shell, zone, navigated.Rows[0], 1);
+        Assert.True(zone.IsKeyboardFocusWithin);
+        shell.Vm.StatusText = "";
+        tab.BeginRun(RunKind.FkLookup);
+        try
+        {
+            Press(shell, Key.Left, PhysicalKey.ArrowLeft, RawInputModifiers.Alt);   // grid.back
+
+            Assert.Equal("Wait for the foreign-key lookup to finish before going back.", shell.Vm.StatusText);
+            Assert.Same(navigated, Assert.Single(zone.Zone.Sets));
+        }
+        finally
+        {
+            tab.EndRun();
+        }
+        Press(shell, Key.Left, PhysicalKey.ArrowLeft, RawInputModifiers.Alt);
+        Assert.Same(set, Assert.Single(zone.Zone.Sets));
+    });
 }

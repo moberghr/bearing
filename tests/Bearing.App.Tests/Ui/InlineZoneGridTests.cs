@@ -166,4 +166,71 @@ public class InlineZoneGridTests
         Assert.Same(zone, back);
         Assert.True(back.Results.Selection.HasSelection(set));
     });
+
+    /// <summary>Flipping Stacked / Tabs rebuilds only the zones whose layout depends on it, and only once they
+    /// are on screen: a single-set zone keeps its grid and selection, and a multi-set zone on another tab is
+    /// left alone until it is shown again (spec §10, "comes back as it was left").</summary>
+    [Fact]
+    public Task Stacked_or_tabs_rebuilds_only_multi_set_zones_and_only_on_screen() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(Stacked_or_tabs_rebuilds_only_multi_set_zones_and_only_on_screen));
+        var (editor, tab) = InlineResultsTests.Setup(shell);
+        shell.Vm.ResultsViewMode = ResultsViewMode.Stacked;
+        var set = Editable();
+        Place(shell, tab, set);
+        var single = Assert.Single(InlineResultsTests.Zones(editor));
+        var grid = Assert.Single(single.Results.Grids);
+        single.Results.Selection.SelectAll(set);
+
+        shell.Vm.ResultsViewMode = ResultsViewMode.Tabbed;
+        shell.Pump();
+
+        Assert.Same(grid, Assert.Single(single.Results.Grids));
+        Assert.True(single.Results.Selection.HasSelection(set));
+
+        Place(shell, tab, Editable(), Editable());
+        var multi = Assert.Single(InlineResultsTests.Zones(editor));
+        var content = multi.Results.Content;
+        shell.Vm.Workspace.NewTab("select 42;");
+        shell.Pump();
+
+        shell.Vm.ResultsViewMode = ResultsViewMode.Stacked;
+        shell.Pump();
+        Assert.Same(content, multi.Results.Content);       // off screen: not rebuilt
+
+        shell.Vm.Workspace.SelectedTab = tab;
+        shell.Pump();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();   // the rebuild is posted, not run inside the measure pass
+        shell.Pump();
+        Assert.Same(multi, Assert.Single(InlineResultsTests.Zones(editor)));
+        Assert.NotSame(content, multi.Results.Content);    // shown again: laid out in the new mode
+        Assert.Equal(ResultsViewMode.Stacked, multi.Results.ViewMode);
+    });
+
+    /// <summary>A Stacked / Tabs flip and flip back while a zone is off screen leaves nothing to redo: shown
+    /// again, it is the same content it was laid out with.</summary>
+    [Fact]
+    public Task A_mode_flipped_and_back_off_screen_does_not_rebuild_the_zone() => _ui.Run(async () =>
+    {
+        using var shell = await ShellHarness.ShowAsync(nameof(A_mode_flipped_and_back_off_screen_does_not_rebuild_the_zone));
+        var (editor, tab) = InlineResultsTests.Setup(shell);
+        shell.Vm.ResultsViewMode = ResultsViewMode.Stacked;
+        Place(shell, tab, Editable(), Editable());
+        var multi = Assert.Single(InlineResultsTests.Zones(editor));
+        var content = multi.Results.Content;
+        shell.Vm.Workspace.NewTab("select 42;");
+        shell.Pump();
+
+        shell.Vm.ResultsViewMode = ResultsViewMode.Tabbed;
+        shell.Pump();
+        shell.Vm.ResultsViewMode = ResultsViewMode.Stacked;
+        shell.Pump();
+        shell.Vm.Workspace.SelectedTab = tab;
+        shell.Pump();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        shell.Pump();
+
+        Assert.Same(multi, Assert.Single(InlineResultsTests.Zones(editor)));
+        Assert.Same(content, multi.Results.Content);
+    });
 }
