@@ -33,6 +33,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
         Message = result.Message;
         Error = result.Error;
         Success = result.Success;
+        StatementIndex = result.StatementIndex;
         IsPageable = pageable;
         SourceSql = pageable ? sourceSql : null;
         ExecutedSql = string.IsNullOrWhiteSpace(sourceSql) ? null : sourceSql.Trim();
@@ -63,6 +64,11 @@ public sealed partial class ResultSetViewModel : ObservableObject
     public string? Message { get; }
     public QueryError? Error { get; }
     public bool Success { get; }
+
+    /// <summary>Which statement of the executed batch produced this set (0-based), as the provider proved it —
+    /// <see cref="QueryResult.StatementIndex"/> verbatim. Null when the provider could not prove the mapping;
+    /// never filled in by guessing.</summary>
+    public int? StatementIndex { get; }
 
     /// <summary>A row-returning success renders a grid; everything else renders as text.</summary>
     public bool HasGrid => Success && Columns.Count > 0;
@@ -322,8 +328,13 @@ public sealed partial class ResultSetViewModel : ObservableObject
         RaisePending();
     }
 
+    /// <summary>Bumped on every change to the pending set (an edit, a new or deleted row, a revert, a save) — so
+    /// whoever asked about these edits can tell later whether they changed since (the run's unsaved-edits guard).</summary>
+    public int EditStamp { get; private set; }
+
     private void RaisePending()
     {
+        EditStamp++;
         OnPropertyChanged(nameof(HasPendingChanges));
         OnPropertyChanged(nameof(PendingCount));
         OnPropertyChanged(nameof(PendingText));

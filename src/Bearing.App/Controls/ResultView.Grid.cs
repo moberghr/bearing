@@ -116,6 +116,7 @@ public sealed partial class ResultView
 
         WireSelection(grid, result);
         if (result.IsEditable) WireEditing(grid, result);
+        _inlineLayout.Track(grid, result, IsInline);   // inline: a definite height, fit to its rows (spec §6)
         return grid;
     }
 
@@ -198,7 +199,14 @@ public sealed partial class ResultView
 
         // When the grid takes focus (e.g. via F6) with no active cell yet, seed the top-left cell so the
         // focus is visible instead of the caller having to press an arrow first.
-        grid.GotFocus += (_, _) => { if (_selection.NeedsSeed(result)) _selection.SeedActive(grid, result); };
+        grid.GotFocus += (_, _) =>
+        {
+            if (_selection.NeedsSeed(result))
+            {
+                _selection.SeedActive(grid, result);
+            }
+        };
+        grid.GotFocus += (_, _) => Router?.Activate(this);   // palette-invoked grid commands mean this view (§8)
     }
 
     /// <summary>A press the cells didn't take: the row-number gutter selects the whole row, a column header
@@ -260,6 +268,15 @@ public sealed partial class ResultView
     private static void CommitOpenEdit(DataGrid grid)
         => grid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
 
+    /// <summary>Commit an open cell editor in any of this view's grids before the pending set is read (§9.15).</summary>
+    public void CommitOpenEdits()
+    {
+        foreach (var grid in _gridsByResult.Values.ToArray())   // a snapshot: committing can re-render the view
+        {
+            CommitOpenEdit(grid);
+        }
+    }
+
     /// <summary>The same, for the routes that name a result rather than a grid (the toolbar's buttons, a
     /// palette-invoked command).</summary>
     private void CommitOpenEdit(ResultSetViewModel result)
@@ -314,6 +331,7 @@ public sealed partial class ResultView
         if (inCellEditor) CommitOpenEdit(grid);
 
         _keyStrokeTarget = (grid, result);
+        Router?.Activate(this);   // the shared grid commands act on this view for this keystroke (and after)
         bool handled;
         try { handled = _dispatcher?.TryHandle(e, KeyScope.Grid, inCellEditor ? CommitFirstCommands : null) == true; }
         finally { _keyStrokeTarget = null; }

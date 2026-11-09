@@ -153,6 +153,16 @@ public sealed partial class WorkspaceViewModel : ObservableObject
                 _ctx.Transactions, _dialogs, tab, $"close {tab.Header}"))
             return false;
 
+        // Unsaved grid edits — the pane's and every inline zone's — go with the tab (spec §7). Asked, never
+        // acted on: closing the tab is what discards them, and the prompts below can still keep it open. A
+        // value still in a cell editor is committed first, or it would be lost without being counted (§9.15).
+        _ctx.CommitOpenEdits?.Invoke();
+        if (Editing.PendingEditsGuard.ForTab(tab) is { IsEmpty: false } edits && _dialogs is { } editDialogs
+            && !await editDialogs.ConfirmDiscardEditsAsync(edits.Text, $"close {tab.Header}"))
+        {
+            return false;
+        }
+
         // Land any debounced write before deciding: a tab whose text already reached its file has nothing
         // to lose and must close without a prompt. FlushAsync itself respects the autosave mode, so this
         // can't quietly save a named script the user asked never to autosave.
@@ -411,6 +421,8 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         var text = await _ctx.ScriptStore.ReadTextAsync(absolutePath, CancellationToken.None);
         var tab = SelectedTab ?? NewTab();
         tab.Text = text;
+        _ctx.CommitOpenEdits?.Invoke();   // an edit still in a cell editor must be pending, so its zone is kept
+        tab.ClearInlineZones();   // another script in this tab: the old inline results describe nothing here
         tab.ScriptPath = absolutePath;
         SyncScratchFlag(tab);
         tab.MarkSaved(text);

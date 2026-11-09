@@ -48,12 +48,19 @@ public sealed partial class ResultView
 
         _editableGrids.Clear();
         _gridsByResult.Clear();
+        _inlineLayout.Clear(ViewMode);
         _statsBars.Clear();
         _firstGrid = null;                    // re-captured as grids are built below (region-focus target)
         _selection.DropRestyleListeners();    // old cells are being discarded; they re-subscribe as they rebuild
 
         var results = _results;
         if (results is null || results.Count == 0) { Content = null; return; }
+
+        if (IsInline)
+        {
+            Content = _inspector.Wrap(BuildInline(results));
+            return;
+        }
 
         var root = new DockPanel { LastChildFill = true };
         if (CanGoBack)
@@ -71,7 +78,8 @@ public sealed partial class ResultView
                 ViewModeChanged?.Invoke(mode); // persist on the VM
             },
             CloseRequested is null ? null : () => CloseRequested?.Invoke(),
-            CloseTip());
+            CloseTip(),
+            ShowInlineRequested is null ? null : () => ShowInlineRequested?.Invoke());
         DockPanel.SetDock(header, Dock.Top);
         root.Children.Add(header);
         root.Children.Add(BuildBody(results));
@@ -86,6 +94,14 @@ public sealed partial class ResultView
         => _dispatcher?.Keymap.DisplayGesture(CommandIds.ViewToggleResults) is { } gesture
             ? $"Close results ({gesture})"
             : "Close results";
+
+    /// <summary>An inline zone's layout (<see cref="InlineResultLayout.Build"/>).</summary>
+    private Control BuildInline(IReadOnlyList<ResultSetViewModel> results) => InlineResultLayout.Build(results,
+        new(CanGoBack ? () => GoBack?.Invoke() : null, ViewMode, mode => { ViewMode = mode; ViewModeChanged?.Invoke(mode); },
+            _inlineLayout.ShowInPaneRequested is { } toPane ? () => toPane() : null,
+            CloseRequested is null ? null : () => CloseRequested?.Invoke(), _inlineLayout.Caption, _inlineLayout.Notice),
+        (set, label, collapsible, trailing) => BuildSetContainer(set, label, collapsible, capHeight: false, trailing: trailing),
+        () => BuildBody(results));
 
     // ---- Body: single set, stacked, or tabbed ------------------------------------------------
 
@@ -131,9 +147,11 @@ public sealed partial class ResultView
     /// <summary>A result set = meta row (Result · N rows · ms, optional collapse chevron) + its body.</summary>
     /// <param name="onCollapsed">Told whenever the chevron flips, so the stacked layout can release the
     /// set's share of the pane (#81). Null where nothing needs to know — a single set or a tab.</param>
+    /// <param name="trailing">Inline: the zone's actions, put at the end of this meta row so a single-set zone
+    /// has one header bar, not two.</param>
     private Control BuildSetContainer(
         ResultSetViewModel result, string? label, bool collapsible, bool capHeight,
-        Action<bool>? onCollapsed = null)
+        Action<bool>? onCollapsed = null, Control? trailing = null)
     {
         var body = BuildResultSet(result, out var grid);
         if (capHeight)
@@ -166,7 +184,7 @@ public sealed partial class ResultView
         };
         Grid.SetColumn(left, 0);
         metaRow.Children.Add(left);
-        Control? right = BuildMetaActions(result, grid);
+        var right = InlineResultLayout.WithTrailing(BuildMetaActions(result, grid), trailing);
         if (right is not null)
         {
             Grid.SetColumn(right, 1);

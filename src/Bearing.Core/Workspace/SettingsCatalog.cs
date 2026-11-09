@@ -244,6 +244,27 @@ public static class SettingsCatalog
             Get = s => s.GroupNumbersInResults,
             Set = (s, v) => s with { GroupNumbersInResults = v },
         },
+        new EnumSetting
+        {
+            Key = "results.placement",
+            CategoryId = Results,
+            Title = "Show results",
+            Description = "In the results pane below the editor, or inline — directly under the statement that "
+                        + "produced them, each with everything the pane offers: editing, foreign keys, export. "
+                        + "Also switchable from View ▸ Toggle Inline Results.",
+            Keywords = "inline results editor notebook beneath statement pane placement table under query",
+            Options =
+            [
+                new(nameof(ResultsPlacement.Pane), "In the results pane",
+                    "Below the editor, stacked or tabbed."),
+                new(nameof(ResultsPlacement.Inline), "Inline, under the statement",
+                    "Results in the editor, beneath the statement that ran. Run All gives each "
+                    + "statement its own table only when the server says which result came from which "
+                    + "statement; otherwise the batch's results share one table under the last statement."),
+            ],
+            Get = s => s.ResultsPlacement.ToString(),
+            Set = (s, v) => s with { ResultsPlacement = Enum.Parse<ResultsPlacement>(v) },
+        },
         new StringSetting
         {
             Key = "results.displayTimeZone",

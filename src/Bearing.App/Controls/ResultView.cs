@@ -35,6 +35,7 @@ public sealed partial class ResultView : UserControl
     public ResultView()
     {
         _selection = new GridSelectionController(this);
+        _inlineLayout.Watch(this, () => IsInline, () => ViewMode, () => _results, Rebuild);   // put-off mode changes
         _selection.Changed += SyncStatsBars;
         // The factory can't resolve these itself: the inspector is this view's pane, and the FK navigation
         // callback is assigned by the shell after construction (so it must be read at click time, not now).
@@ -64,7 +65,7 @@ public sealed partial class ResultView : UserControl
     public ResultsViewMode ViewMode
     {
         get => _viewMode;
-        set { if (_viewMode == value) return; _viewMode = value; Rebuild(); }
+        set => _inlineLayout.SetViewMode(ref _viewMode, value, this, IsInline, _results, Rebuild);   // a zone only when it must
     }
 
     /// <summary>Raised when the user flips the Stacked/Tabbed toggle (persist it on the VM).</summary>
@@ -139,6 +140,21 @@ public sealed partial class ResultView : UserControl
     /// </summary>
     public Action? CloseRequested { get; set; }
 
+    /// <summary>The pane header's inline toggle (null hides the button).</summary>
+    public Action? ShowInlineRequested { get; set; }
+
+    /// <summary>An inline zone's view (spec §5–§6): set before <see cref="Results"/>; its zone-only state is
+    /// <see cref="Inline"/>.</summary>
+    public bool IsInline { get; init; }
+
+    /// <summary>A zone's caption, notice, placement toggle and row cap (<see cref="InlineResultLayout"/>).</summary>
+    internal InlineResultLayout Inline => _inlineLayout;
+    private readonly InlineResultLayout _inlineLayout = new();
+
+    /// <summary>The grids shown (tests, a zone's focus-in), and whether one shows <paramref name="result"/>.</summary>
+    internal IReadOnlyCollection<DataGrid> Grids => _gridsByResult.Values;
+    internal bool Shows(ResultSetViewModel result) => _gridsByResult.ContainsKey(result);
+
     /// <summary>The shared keybinding pipeline (set once by the window), used to resolve a keystroke that
     /// lands in a grid. Spatial cell navigation stays local (see <see cref="OnGridKey"/>).
     /// <para>
@@ -162,6 +178,9 @@ public sealed partial class ResultView : UserControl
     public Control? FocusableGrid => _firstGrid;
     private DataGrid? _firstGrid;
 
+    /// <summary>Which view the shared grid commands act on (shared by every view on one registry).</summary>
+    public GridCommandRouter? Router { get; set; }
+
     /// <summary>The grid + result a grid command should act on: the grid the current keystroke is
     /// dispatching into, or — when a command runs without a keystroke (the command palette) — the grid that
     /// owns the current cell selection. Null when neither applies (nothing is selected and no key is in
@@ -174,11 +193,14 @@ public sealed partial class ResultView : UserControl
     }
 
     /// <summary>Register the grid's discrete commands into the shared registry, so the same matcher (and the
-    /// command palette) drives them. Called by the window before the keymap is loaded; safe to call twice.</summary>
+    /// command palette) drives them. Called by the window before the keymap is loaded; safe to call twice.
+    /// Once for every view: each command acts on <see cref="Router"/>'s current one (spec §8).</summary>
     public void RegisterGridCommands(CommandRegistry r)
     {
+        var router = Router ??= new GridCommandRouter(this);
+        ResultView V() => router.Current;
         r.Register(KeyCommand.Sync(CommandIds.GridCopy, "Copy", KeyScope.Grid, "Grid",
-            () => { if (GridTarget() is { } t) _selection.Copy(t.Result); }));
+            () => { if (V().GridTarget() is { } t) V()._selection.Copy(t.Result); }));
         // Copy as ▸ — one command per format so each is bindable and palette-reachable on its own. They ship
         // unbound (the gesture space is crowded and TSV owns Ctrl+C); the context menu is the discoverable path.
         foreach (var format in CopyRenderer.Alternatives)
@@ -186,59 +208,59 @@ public sealed partial class ResultView : UserControl
             var captured = format;
             r.Register(KeyCommand.Sync(CommandIds.GridCopyAs(captured), $"Copy as {CopyRenderer.Label(captured)}",
                 KeyScope.Grid, "Grid",
-                () => { if (GridTarget() is { } t) _selection.CopyAs(t.Result, captured); },
-                canRun: () => GridTarget() is { } t && _selection.HasSelection(t.Result)));
+                () => { if (V().GridTarget() is { } t) V()._selection.CopyAs(t.Result, captured); },
+                canRun: () => V().GridTarget() is { } t && V()._selection.HasSelection(t.Result)));
         }
         // Paste is the one grid command with an await in it (the clipboard read), so it captures its target
         // before yielding — _keyStrokeTarget is cleared the moment TryHandle returns (see OnGridKey).
         r.Register(new KeyCommand(CommandIds.GridPaste, "Paste", KeyScope.Grid, "Grid",
-            async () => { if (GridTarget() is { } t) await PasteInto(t.Grid, t.Result); },
-            canRun: () => GridTarget() is { } t && _selection.CanPasteInto(t.Result)));
+            async () => { if (V().GridTarget() is { } t) await V().PasteInto(t.Grid, t.Result); },
+            canRun: () => V().GridTarget() is { } t && V()._selection.CanPasteInto(t.Result)));
         r.Register(new KeyCommand(CommandIds.GridFetchAll, "Fetch all rows", KeyScope.Grid, "Grid",
-            async () => { if (GridTarget() is { } t && FetchAll is { } f) await f(t.Result); },
-            canRun: () => GridTarget()?.Result is { IsPageable: true, HasMore: true }));
+            async () => { if (V().GridTarget() is { } t && V().FetchAll is { } f) await f(t.Result); },
+            canRun: () => V().GridTarget()?.Result is { IsPageable: true, HasMore: true }));
         foreach (var format in new[] { ExportFormat.Csv, ExportFormat.Xlsx })
         {
             var captured = format;
             r.Register(new KeyCommand(CommandIds.GridExport(captured), $"Export result to {ResultExport.Label(captured)}",
                 KeyScope.Grid, "Grid",
-                async () => { if (GridTarget() is { } t && Export is { } f) await f(t.Result, captured); },
-                canRun: () => GridTarget()?.Result.HasGrid == true));
+                async () => { if (V().GridTarget() is { } t && V().Export is { } f) await f(t.Result, captured); },
+                canRun: () => V().GridTarget()?.Result.HasGrid == true));
         }
         r.Register(KeyCommand.Sync(CommandIds.GridSelectAll, "Select all", KeyScope.Grid, "Grid",
-            () => { if (GridTarget() is { } t) _selection.SelectAll(t.Result); }));
+            () => { if (V().GridTarget() is { } t) V()._selection.SelectAll(t.Result); }));
         r.Register(KeyCommand.Sync(CommandIds.GridDelete, "Delete rows", KeyScope.Grid, "Grid",
-            () => { if (GridTarget() is { } t) _selection.DeleteSelectedRows(t.Grid, t.Result); },
-            canRun: () => GridTarget()?.Result.IsEditable == true));
+            () => { if (V().GridTarget() is { } t) V()._selection.DeleteSelectedRows(t.Grid, t.Result); },
+            canRun: () => V().GridTarget()?.Result.IsEditable == true));
         r.Register(KeyCommand.Sync(CommandIds.GridSetNull, "Set NULL", KeyScope.Grid, "Grid",
-            () => { if (GridTarget() is { } t) SetNullIn(t.Grid, t.Result); },
-            canRun: () => GridTarget() is { } t && t.Result.IsEditable && _selection.HasSelection(t.Result)));
+            () => { if (V().GridTarget() is { } t) V().SetNullIn(t.Grid, t.Result); },
+            canRun: () => V().GridTarget() is { } t && t.Result.IsEditable && V()._selection.HasSelection(t.Result)));
         r.Register(KeyCommand.Sync(CommandIds.GridBeginEdit, "Edit cell", KeyScope.Grid, "Grid",
-            () => { if (GridTarget() is { } t) _selection.BeginEditActive(t.Grid, t.Result); },
-            canRun: () => GridTarget()?.Result.IsEditable == true));
+            () => { if (V().GridTarget() is { } t) V()._selection.BeginEditActive(t.Grid, t.Result); },
+            canRun: () => V().GridTarget()?.Result.IsEditable == true));
         r.Register(KeyCommand.Sync(CommandIds.GridAddRow, "Add row", KeyScope.Grid, "Grid",
-            () => { if (GridTarget() is { } t) AddRowTo(t.Grid, t.Result); },
-            canRun: () => GridTarget()?.Result.IsEditable == true));
+            () => { if (V().GridTarget() is { } t) V().AddRowTo(t.Grid, t.Result); },
+            canRun: () => V().GridTarget()?.Result.IsEditable == true));
         // Save/Discard are guarded on pending changes as well as editability, which is what lets Ctrl+S fall
         // through to file.save on a grid with nothing of its own to commit.
         r.Register(new KeyCommand(CommandIds.GridSave, "Save changes", KeyScope.Grid, "Grid",
-            async () => { if (GridTarget() is { } t && SaveChanges is { } f) { CommitOpenEdit(t.Grid); await f(t.Result); } },
-            canRun: () => HasPendingEdits()));
+            async () => { if (V().GridTarget() is { } t && V().SaveChanges is { } f) { CommitOpenEdit(t.Grid); await f(t.Result); } },
+            canRun: () => V().HasPendingEdits()));
         r.Register(new KeyCommand(CommandIds.GridDiscard, "Discard changes", KeyScope.Grid, "Grid",
-            async () => { if (GridTarget() is { } t && DiscardChanges is { } f) { CommitOpenEdit(t.Grid); await f(t.Result); } },
-            canRun: () => HasPendingEdits()));
+            async () => { if (V().GridTarget() is { } t && V().DiscardChanges is { } f) { CommitOpenEdit(t.Grid); await f(t.Result); } },
+            canRun: () => V().HasPendingEdits()));
         r.Register(new KeyCommand(CommandIds.GridShowSql, "Show pending SQL", KeyScope.Grid, "Grid",
-            async () => { if (GridTarget() is { } t && ShowPendingSql is { } f) { CommitOpenEdit(t.Grid); await f(t.Result); } },
-            canRun: () => HasPendingEdits()));
+            async () => { if (V().GridTarget() is { } t && V().ShowPendingSql is { } f) { CommitOpenEdit(t.Grid); await f(t.Result); } },
+            canRun: () => V().HasPendingEdits()));
         r.Register(KeyCommand.Sync(CommandIds.GridClearSelection, "Clear selection", KeyScope.Grid, "Grid",
-            () => _selection.ClearAndNotify(),
-            canRun: () => _selection.Model.Cells.Count > 0));
+            () => V()._selection.ClearAndNotify(),
+            canRun: () => V()._selection.Model.Cells.Count > 0));
         r.Register(KeyCommand.Sync(CommandIds.GridInspect, "Inspect value", KeyScope.Grid, "Grid",
-            ToggleInspectActiveCell, canRun: () => InspectableActiveCell() is not null));
+            () => V().ToggleInspectActiveCell(), canRun: () => V().InspectableActiveCell() is not null));
         r.Register(KeyCommand.Sync(CommandIds.GridFollowFk, "Follow foreign key", KeyScope.Grid, "Grid",
-            FollowActiveFk, canRun: _selection.ActiveCellIsFk));
+            () => V().FollowActiveFk(), canRun: () => V()._selection.ActiveCellIsFk()));
         r.Register(KeyCommand.Sync(CommandIds.GridBack, "Back (foreign-key navigation)", KeyScope.Grid, "Grid",
-            () => GoBack?.Invoke(), canRun: () => CanGoBack));
+            () => V().GoBack?.Invoke(), canRun: () => V().CanGoBack));
     }
 
     /// <summary>Whether the grid a command would act on has unsaved row edits (guards grid.save/grid.discard,

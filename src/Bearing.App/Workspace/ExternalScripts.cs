@@ -144,7 +144,7 @@ public sealed class ExternalScripts
             _ctx.SetStatus(blocked);
             return false;
         }
-        if (tab.Results.Any(r => r.HasPendingChanges))
+        if (tab.PendingEditCount > 0)   // the pane's results and every inline zone's
         {
             _ctx.SetStatus("This tab has unsaved grid edits — save or discard them before moving it.");
             return false;
@@ -177,7 +177,12 @@ public sealed class ExternalScripts
         // carry over what was typed here, which the target's tab (same file, same disk baseline) never saw.
         if (_workspace.Tabs.FirstOrDefault(t => SamePath(t.ScriptPath, tab.ScriptPath)) is { } existing)
         {
-            if (tab.IsModified) existing.Text = tab.Text;
+            if (tab.IsModified && !string.Equals(existing.Text, tab.Text, StringComparison.Ordinal))
+            {
+                existing.Text = tab.Text;
+                _ctx.CommitOpenEdits?.Invoke();   // an edit still in a cell editor must be pending, so its zone is kept
+                existing.ClearInlineZones();   // its inline results hung under text that was just replaced
+            }
             _workspace.SelectedTab = existing;
             _ctx.SetStatus($"{Path.GetFileName(tab.ScriptPath)} was already open in '{target.Manifest.Name}'.");
             return true;
@@ -187,6 +192,9 @@ public sealed class ExternalScripts
         tab.ConnectionId = _ctx.DefaultConnectionId;
         tab.DatabaseName = null;
         tab.SetFreshResults(Array.Empty<ResultSetViewModel>());
+        // Its inline results too: they came from the old project's connection, and saving, paging or counting
+        // in them would now run against the new one. Nothing is pending (refused above), so none is kept.
+        tab.ClearInlineZones();
         _connections.ApplyConnectionDisplay(tab);
         _workspace.Adopt(tab);
         _scripts.RefreshScripts();

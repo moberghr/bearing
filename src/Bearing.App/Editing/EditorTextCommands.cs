@@ -28,6 +28,10 @@ public sealed class EditorTextCommands
     private readonly Func<ISqlDialect> _dialect;
     private readonly StatementMargin _highlight = new();
 
+    /// <summary>Whether anything hangs on statement ends right now (inline zones). Format only keeps statement
+    /// ends as hunk boundaries — a lex of both texts — when it does. Null reads as no.</summary>
+    public Func<bool>? KeepsStatementEnds { get; set; }
+
     /// <summary>Wraps <paramref name="editor"/> and installs the statement-highlight margin in its own
     /// column, right of the line numbers. <paramref name="dialect"/> supplies the engine whose lexical
     /// rules decide where the statements in the buffer are.</summary>
@@ -45,6 +49,7 @@ public sealed class EditorTextCommands
     /// a batch instead of one malformed command.</summary>
     public string SqlToRun()
     {
+        // Not ScopeToRun().Sql: Explain needs only the text, not where each statement ends in the buffer.
         var selected = _editor.SelectedText;
         var sql = string.IsNullOrWhiteSpace(selected)
             ? StatementSplitter.StatementAt(_dialect(), _editor.Text, _editor.CaretOffset)?.Text ?? _editor.Text
@@ -54,6 +59,64 @@ public sealed class EditorTextCommands
 
     /// <summary>query.runAll: the entire buffer as a batch, ignoring caret and selection.</summary>
     public string SqlToRunAll() => StatementSplitter.EnsureSeparated(_dialect(), _editor.Text);
+
+    /// <summary><see cref="SqlToRun"/> together with where that text sits in the buffer, so its results can
+    /// be placed under it (inline results).</summary>
+    public Results.RunScope ScopeToRun()
+    {
+        var text = _editor.Text;
+        if (!string.IsNullOrWhiteSpace(_editor.SelectedText))
+        {
+            return Results.InlineResultPlacement.Scope(_dialect(), _editor.SelectedText, _editor.SelectionStart,
+                isWholeBuffer: false);
+        }
+        if (StatementSplitter.StatementAt(_dialect(), text, _editor.CaretOffset) is { } stmt)
+        {
+            return Results.InlineResultPlacement.Scope(_dialect(), stmt.Text, stmt.Start, isWholeBuffer: false);
+        }
+        return Results.InlineResultPlacement.Scope(_dialect(), text, 0, isWholeBuffer: false);
+    }
+
+    /// <summary>
+    /// Run with focus in an inline zone (spec §8): the zone's own statements, wherever the caret is. One whose
+    /// statement was removed falls back to the caret, as there is nothing left to re-run.
+    /// <para>
+    /// A zone holding a whole batch's sets (an unattributed Run All — every multi-statement Run All on SQL
+    /// Server) does <b>not</b> re-run the batch: Run never escalates to running everything, the buffer as it is
+    /// now, possibly with writes typed since. It runs the caret's statement, and <paramref name="note"/> says so.
+    /// </para>
+    /// </summary>
+    /// <param name="note">A status line when the scope is not what the zone held, else null.</param>
+    public Results.RunScope ScopeForZone(ViewModels.InlineResultZone zone, out string? note)
+    {
+        note = null;
+        if (zone.StatementRemoved)
+        {
+            return ScopeToRun();
+        }
+        if (zone.FromWholeBuffer)
+        {
+            note = "Ran the statement at the caret — Run All re-runs the whole batch.";
+            return ScopeToRun();
+        }
+        var text = _editor.Text;
+        // As many statements as the run that made the zone: a multi-statement selection's zone re-runs them
+        // all, not just the last one, or the rest of its sets would vanish.
+        return Results.InlineResultPlacement.ZoneSpan(_dialect(), text, zone.Offset, zone.StatementCount) is { } span
+            ? Results.InlineResultPlacement.Scope(_dialect(), text[span.Start..span.End], span.Start, isWholeBuffer: false)
+            : ScopeToRun();
+    }
+
+    /// <summary>The bounds of the statement at <paramref name="caret"/> (raw span), or the caret itself when it
+    /// is on none — where focus.results looks for that statement's zone.</summary>
+    public (int Start, int End) StatementBounds(int caret)
+        => StatementSplitter.StatementAt(_dialect(), _editor.Text, caret) is { } stmt
+            ? (stmt.Start, stmt.End)
+            : (caret, caret);
+
+    /// <summary><see cref="SqlToRunAll"/> together with where each statement ends in the buffer.</summary>
+    public Results.RunScope ScopeToRunAll()
+        => Results.InlineResultPlacement.Scope(_dialect(), _editor.Text, 0, isWholeBuffer: true);
 
     // ---- statement highlight -----------------------------------------------------------------
 
@@ -125,10 +188,17 @@ public sealed class EditorTextCommands
     public void ToggleLineComment()
     {
         var (start, end) = Span();
-        var result = LineCommenter.Toggle(_editor.Text, start, end);
-        if (result.Text == _editor.Text) return;
+        var old = _editor.Text;
+        var result = LineCommenter.Toggle(old, start, end);
+        if (result.Text == old)
+        {
+            return;
+        }
 
-        _editor.Document.Replace(0, _editor.Document.TextLength, result.Text);
+        // As the smallest edits, in one undo step: text that didn't change — and an inline zone hanging in it —
+        // is left alone, through Ctrl+Z and redo too.
+        // Line i stays line i, so the hunks come straight from the line pairs — no diff on the UI thread.
+        TextHunkApply.Apply(_editor.Document, 0, Results.TextHunks.LineByLine(old, result.Text));
         _editor.SelectionStart = result.SelectionStart;
         _editor.SelectionLength = result.SelectionLength;
         _editor.CaretOffset = result.SelectionStart + result.SelectionLength;
@@ -185,29 +255,67 @@ public sealed class EditorTextCommands
 
         // The user can type while we are away, and applying an edit computed against text that has since
         // moved would corrupt the buffer — the offsets no longer mean what they meant. Decline instead, and
-        // say so rather than appearing to do nothing.
-        if (before is not null && _editor.Document.Version?.CompareAge(before) != 0)
-            return "Not formatted — the document changed while it was being formatted.";
+        // say so rather than appearing to do nothing. Asked again after the diff, which awaits too.
+        const string moved = "Not formatted — the document changed while it was being formatted.";
+        bool Moved() => before is not null && _editor.Document.Version?.CompareAge(before) != 0;
+        if (Moved())
+        {
+            return moved;
+        }
 
         if (result.Refused)
+        {
             return selected
                 ? $"Selection not formatted — {result.Refusal}."
                 : $"Not formatted — {result.Refusal}.";
-        if (!result.Changed) return null;
+        }
+        if (!result.Changed)
+        {
+            return null;
+        }
 
-        // One Replace, so the whole reformat is a single undo step rather than a stack of them.
+        // The smallest edits that lay it out, worked out off the UI thread (a line diff, then a character diff per
+        // changed run), so text it didn't change keeps its anchors through the edit, its undo and its redo — zones
+        // placed after a Format survive its Ctrl+Z too. With zones, statement ends are also kept as hunk
+        // boundaries (a lex of both texts, skipped without zones). Past MaxHunks edits it is one trimmed replace
+        // instead, as before inline results: the diff and the Replace calls stay bounded.
+        var dialect = _dialect();
+        Task<IReadOnlyList<Results.TextHunks.Hunk>> Diff(bool keepEnds)
+            => Task.Run(() =>
+            {
+                var sync = keepEnds ? Results.TextHunks.StatementSync(dialect, source, result.Text) : null;
+                var diffed = Results.TextHunks.Diff(source, result.Text, sync);
+                // Too many edits: one trimmed replace per stretch between statement ends (with zones, so their
+                // anchors stay on the boundaries), else one for the whole text.
+                return diffed.Count > Results.TextHunks.MaxHunks ? Results.TextHunks.PerStretch(source, result.Text, sync) : diffed;
+            });
+        var keepEnds = KeepsStatementEnds?.Invoke() == true;
+        var hunks = await Diff(keepEnds);
+        if (!keepEnds && KeepsStatementEnds?.Invoke() == true && !Moved())
+        {
+            // Zones appeared while it diffed (a run landed): their statement ends must be hunk boundaries too.
+            keepEnds = true;
+            hunks = await Diff(keepEnds);
+        }
+        if (Moved())
+        {
+            return moved;
+        }
+
+        // The smallest edits, in one update, so the whole reformat is a single undo step rather than a stack
+        // of them — and text it didn't change (an inline zone's anchor in it) is not replaced at all.
         var caret = _editor.CaretOffset;
-        _editor.Document.Replace(start, length, result.Text);
+        TextHunkApply.Apply(_editor.Document, start, hunks);
 
         if (selected)
         {
             _editor.SelectionStart = start;
             _editor.SelectionLength = result.Text.Length;   // keep what was formatted selected
         }
-        else
+        else if (hunks is [{ Length: > 0 } only] && caret > start + only.Offset && caret < start + only.Offset + only.Length)
         {
-            // The caret cannot be preserved meaningfully — every offset after the first change has moved —
-            // so it is clamped rather than guessed at. Landing near where you were beats landing at zero.
+            // One replace over the caret: it can't follow the text, so it is clamped rather than guessed at (as
+            // before inline results). Otherwise the minimal edits carry it — same statement.
             _editor.CaretOffset = Math.Min(caret, _editor.Document.TextLength);
         }
         return null;
