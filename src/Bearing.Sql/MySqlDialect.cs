@@ -296,6 +296,43 @@ public sealed class MySqlDialect : ISqlDialect
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Read with this engine's scanner, which drops <c>#</c>, <c>-- </c> and <c>/* */</c> comments — to the
+    /// PostgreSQL lexer <c>#</c> is an operator, so a trailing <c># note</c> would have counted as code. A
+    /// <c>DELIMITER</c> line is the client's, not the statement's, so it doesn't count. The contents of an
+    /// executable <c>/*! … */</c> are code; the scanner drops its closing <c>*/</c>, which is put back so
+    /// the end sits past the comment rather than inside it.
+    /// </remarks>
+    public int? CodeEnd(string sql)
+    {
+        MySqlToken? last = null;
+        foreach (var token in MySqlScanner.Tokenize(sql))
+        {
+            if (token.Kind != MySqlTokenKind.Directive)
+            {
+                last = token;
+            }
+        }
+        if (last is null)
+        {
+            return null;
+        }
+        var end = last.Start + last.Length;
+        // Nothing after the last token can be a bare "*/" except an executable comment's closer: an ordinary
+        // comment opens with "/*", and a "*" outside any comment would itself have been a token.
+        var rest = end;
+        while (rest < sql.Length && char.IsWhiteSpace(sql[rest]))
+        {
+            rest++;
+        }
+        if (string.CompareOrdinal(sql, rest, "*/", 0, 2) == 0)
+        {
+            end = rest + 2;
+        }
+        return end;
+    }
+
+    /// <inheritdoc/>
     public bool HasDelimiterDirective(string sql) => MySqlScanner.HasDirective(sql);
 
     /// <inheritdoc/>

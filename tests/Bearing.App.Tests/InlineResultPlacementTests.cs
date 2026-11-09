@@ -86,6 +86,21 @@ public class InlineResultPlacementTests
         Assert.Equal(2, LineOf(text, scope.StatementEnds[1]));
     }
 
+    /// <summary>MySQL's <c>#</c> comments after the last statement are not code, so the result hangs under the
+    /// statement — read with MySQL's scanner, to which <c>#</c> is a comment, not the PostgreSQL lexer's
+    /// operator.</summary>
+    [Fact]
+    public void My_sql_trailing_hash_comments_do_not_carry_the_result_down()
+    {
+        const string text = "select 1;\nselect 2; # trailing\n# footer\n";
+        var scope = InlineResultPlacement.Scope(MySqlDialect.Instance, text, 0, isWholeBuffer: true);
+
+        // The MySQL split leaves the delimiter out of the span, so code ends just before each ';'.
+        var second = text.IndexOf("select 2") + "select 2".Length;
+        Assert.Equal(["select 1".Length, second], scope.StatementEnds);
+        Assert.Equal(second, scope.End);
+    }
+
     [Fact]
     public void A_run_puts_every_set_in_one_zone_at_the_end_of_what_it_ran()
     {
