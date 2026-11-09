@@ -105,6 +105,7 @@ public class SqlFormatSafetyTests
     /// confirm what someone already remembered, and an omission stays invisible to it.
     /// </para>
     /// </summary>
+#pragma warning disable format // grouped operator rows read as a table; the formatter would split them one per line
     [Theory]
     // json / jsonb
     [InlineData("->")] [InlineData("->>")] [InlineData("#>")] [InlineData("#>>")] [InlineData("#-")]
@@ -116,6 +117,7 @@ public class SqlFormatSafetyTests
     [InlineData("<>")] [InlineData("!=")] [InlineData(">=")] [InlineData("<=")]
     [InlineData("<<")] [InlineData(">>")] [InlineData("||")] [InlineData("@@")]
     [InlineData("::")]
+#pragma warning restore format
     public void A_multi_character_operator_is_never_split(string op)
     {
         // Both spaced and unspaced in the source: the unspaced form is where a naive tokenizer breaks, and

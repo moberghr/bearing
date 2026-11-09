@@ -138,7 +138,7 @@
             <!-- No keychain: nothing is stored anywhere, so say what will happen instead — and why, which the
                  code-behind fills in from what the store actually reported (SecretStorageAdvice). -->
             <Border x:Name="NoStorageWarning" IsVisible="False"
-                    Background="#2F2B22" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
+                    Background="{DynamicResource Bg.Warn}" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
                     Padding="8,6" Margin="0,4,0,0">
               <TextBlock x:Name="NoStorageWarningText" TextWrapping="Wrap"
                          Foreground="{DynamicResource Warn.Amber}" FontSize="12"/>
@@ -161,7 +161,7 @@
                  surfaced, never silent (§1.1) — and it names *which* guarantee is missing, because "require" reads as
                  the secure choice while accepting any certificate at all. -->
             <Border x:Name="TlsWarning" IsVisible="False"
-                    Background="#2F2B22" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
+                    Background="{DynamicResource Bg.Warn}" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
                     Padding="8,6" Margin="0,4,0,0">
               <TextBlock x:Name="TlsWarningText" TextWrapping="Wrap"
                          Foreground="{DynamicResource Warn.Amber}" FontSize="12"/>
@@ -210,7 +210,7 @@
                  block above it (§1.1: the posture is surfaced, never silent). Absent when neither is set, rather than
                  saying something reassuring about a connection with no safety settings at all. -->
             <Border x:Name="SafetyNote" IsVisible="False"
-                    Background="#2F2B22" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
+                    Background="{DynamicResource Bg.Warn}" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
                     Padding="8,6" Margin="0,4,0,0">
               <TextBlock x:Name="SafetyNoteText" TextWrapping="Wrap"
                          Foreground="{DynamicResource Warn.Amber}" FontSize="12"/>

@@ -18,8 +18,8 @@ public sealed class MatchHighlightConverter : IValueConverter
     // Resolved from the theme token, falling back to the token's literal value.
     private static readonly Color Fallback = Color.FromRgb(0x35, 0xD0, 0xBE);
 
-    private static (Avalonia.Application? Owner, Avalonia.Media.IImmutableBrush Brush)? _fill;
-    private static (Avalonia.Application? Owner, Avalonia.Media.IImmutableBrush Brush)? _edge;
+    private static (Avalonia.Application? Owner, int Generation, Avalonia.Media.IImmutableBrush Brush)? _fill;
+    private static (Avalonia.Application? Owner, int Generation, Avalonia.Media.IImmutableBrush Brush)? _edge;
 
     /// <summary>The same 0x2A wash the grid's selection ring fills with, so a match reads as "picked out",
     /// not as a second selection colour.</summary>

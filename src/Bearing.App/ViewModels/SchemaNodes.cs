@@ -181,8 +181,9 @@ public abstract partial class SchemaNodeViewModel : ObservableObject
     /// <summary>Resource key of a vector icon (Icon.*) shown instead of the text <see cref="Glyph"/>; null = use the glyph.</summary>
     public virtual string? IconKey => null;
 
-    /// <summary>Hex stroke color for the vector icon.</summary>
-    public virtual string IconColorHex => "#8B95A1";
+    /// <summary>Token key (Themes/Tokens.axaml) of the vector icon's stroke, resolved through the TokenBrush
+    /// converter so the glyph follows a light/dark switch.</summary>
+    public virtual string IconColorKey => "Text.Muted";
 
     /// <summary>Relations and routines can render a definition; other nodes cannot.</summary>
     public virtual bool CanShowDefinition => false;
@@ -339,7 +340,7 @@ public sealed partial class ConnectionFolderNodeViewModel : SchemaNodeViewModel
 
     public override bool IsFolder => true;
     public override string? IconKey => "Icon.Folder";
-    public override string IconColorHex => "#E6C384";
+    public override string IconColorKey => "Tree.Folder";
 
     /// <summary>True while a dragged connection is over this folder, so the row says where the drop lands.
     /// The move worked before the Scripts tree grew this, it just gave no sign of its target (#37).</summary>
@@ -407,7 +408,7 @@ public sealed partial class ServerNodeViewModel : SchemaNodeViewModel
     public override string? RowAccentColor => Connection.EnvironmentColor;
     public override bool ShowsConnectionState => true;
     public override string? IconKey => "Icon.Connections"; // a server, whichever engine it runs
-    public override string IconColorHex => "#6FA6E2";
+    public override string IconColorKey => "Syntax.Func";
 
     protected override async Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync()
     {
@@ -546,7 +547,7 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
     private readonly Func<SchemaTreeMode>? _mode;
 
     public override string? IconKey => "Icon.Database";
-    public override string IconColorHex => "#5FC9AD";
+    public override string IconColorKey => "Syntax.TableSel";
 
     /// <summary>The database this row is for, so a server-level size read can match it by name.</summary>
     internal string Database => _database;
@@ -1418,7 +1419,7 @@ public sealed class SequenceNodeViewModel : SchemaNodeViewModel
         => $"{PgIdentifier.QuoteIfNeeded(Sequence.Schema)}.{PgIdentifier.QuoteIfNeeded(Sequence.Name)}";
 
     public override string? IconKey => "Icon.Sequence";
-    public override string IconColorHex => "#7FB4CA";
+    public override string IconColorKey => "Tree.Sequence";
 
     protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync() => Task.FromResult(None);
 }
@@ -1443,7 +1444,7 @@ public sealed class TypeNodeViewModel : SchemaNodeViewModel
         => _type = type;
 
     public override string? IconKey => "Icon.Type";
-    public override string IconColorHex => "#957FB8";
+    public override string IconColorKey => "Tree.Type";
 
     /// <summary>Its definition is already in hand, so showing it costs no round trip.</summary>
     public override bool CanShowDefinition => _type.Detail.Length > 0;
@@ -1461,7 +1462,7 @@ public sealed class ExtensionNodeViewModel : SchemaNodeViewModel
         : base("⊞", extension.Name, RelationDetailText.Extension(extension), hasChildren: false) { }
 
     public override string? IconKey => "Icon.Extension";
-    public override string IconColorHex => "#98BB6C";
+    public override string IconColorKey => "Ok.Green";
 
     protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync() => Task.FromResult(None);
 }
@@ -1483,7 +1484,7 @@ public sealed class PolicyNodeViewModel : SchemaNodeViewModel
 
     /// <summary>Restrictive policies are drawn in the warning colour: they can only ever <em>remove</em>
     /// access, so one appearing where you did not expect it is the more alarming find.</summary>
-    public override string IconColorHex => _policy.Permissive ? "#7E9CD8" : "#DCA561";
+    public override string IconColorKey => _policy.Permissive ? "Tree.Policy" : "Tree.Caution";
 
     /// <summary>The expressions, which are the whole content of a policy and too long for a detail line.</summary>
     public override bool CanShowDefinition => _policy.Using is not null || _policy.WithCheck is not null;
@@ -1520,7 +1521,7 @@ public sealed class RoleNodeViewModel : SchemaNodeViewModel
 
     /// <summary>A superuser is drawn in the warning colour: it is the one attribute on this list that makes
     /// every other privilege question moot, so it should not read like the rest.</summary>
-    public override string IconColorHex => _role.IsSuperuser ? "#DCA561" : "#8B95A1";
+    public override string IconColorKey => _role.IsSuperuser ? "Tree.Caution" : "Text.Muted";
 
     /// <summary>The role's own attributes as text, which is all a role "is" — there is no DDL to render and
     /// nothing to fetch.</summary>
@@ -1657,7 +1658,7 @@ public sealed class SchemaFolderNodeViewModel : SchemaNodeViewModel
     }
 
     public override string? IconKey => "Icon.Folder";
-    public override string IconColorHex => "#7AA89F";
+    public override string IconColorKey => "Tree.Schema";
 
     /// <summary>How much is in here, so a collapsed row says whether it is worth opening.</summary>
     private static string Describe(ISchemaSnapshot snapshot, IReadOnlyList<RoutineInfo> routines, string schema)
