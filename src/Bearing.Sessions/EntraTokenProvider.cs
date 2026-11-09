@@ -1,6 +1,4 @@
 using System;
-using System.ComponentModel;
-using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using System.Threading;
@@ -59,7 +57,9 @@ public sealed class EntraTokenProvider : IEntraTokenProvider
     {
         var (exit, stdout, stderr) = await RunAzAsync(ResourceFor(info), ct);
         if (exit != 0)
-            throw new InvalidOperationException(FormatAzError(exit, stderr));
+        {
+            throw new InvalidOperationException(AzCli.Describe(exit, stderr, "an Entra token"));
+        }
 
         Credential credential;
         try { credential = ParseTokenResponse(stdout); }
@@ -160,73 +160,14 @@ public sealed class EntraTokenProvider : IEntraTokenProvider
         return new Credential(token, expires);
     }
 
-    /// <summary>Where az's usual installers put it on macOS / Linux. An app started from Finder, Spotlight or the
-    /// dock inherits launchd's minimal PATH (<c>/usr/bin:/bin:/usr/sbin:/sbin</c>), which misses Homebrew (#167).</summary>
-    private static readonly string[] WellKnownAzDirs = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
-
     /// <summary>The az to start: the first <c>az</c> on <paramref name="path"/>, else in a well-known install
-    /// directory, else bare <c>az</c> so a miss still reports "not found". Windows is left to its own lookup
-    /// (az is <c>az.cmd</c> there). Pure over <paramref name="exists"/> so it is testable without az.</summary>
+    /// directory, else bare <c>az</c> so a miss still reports "not found". Windows is left to cmd.exe's own lookup
+    /// (az is <c>az.cmd</c> there, <see cref="AzCli.WindowsArguments"/>). Pure over <paramref name="exists"/> so it is testable without az.</summary>
     public static string ResolveAz(string? path, Func<string, bool> exists, bool isWindows)
-    {
-        if (isWindows) return "az";
-        // Literal ':' and '/', not Path.PathSeparator / Path.Combine: those follow the host, not isWindows.
-        var dirs = (path ?? "").Split(':', StringSplitOptions.RemoveEmptyEntries).Concat(WellKnownAzDirs);
-        return dirs.Select(dir => $"{dir.TrimEnd('/')}/az").FirstOrDefault(exists) ?? "az";
-    }
+        => AzCli.Resolve(path, exists, isWindows);
 
-    private static async Task<(int Exit, string Out, string Err)> RunAzAsync(string resource, CancellationToken ct)
-    {
-        var az = ResolveAz(Environment.GetEnvironmentVariable("PATH"), File.Exists, OperatingSystem.IsWindows());
-        var psi = new ProcessStartInfo(az)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        psi.ArgumentList.Add("account");
-        psi.ArgumentList.Add("get-access-token");
-        psi.ArgumentList.Add("--resource");
-        psi.ArgumentList.Add(resource);
-        psi.ArgumentList.Add("--output");
-        psi.ArgumentList.Add("json");
-
-        Process proc;
-        try { proc = Process.Start(psi) ?? throw new InvalidOperationException("az could not be started."); }
-        catch (Win32Exception ex)
-        {
-            throw new InvalidOperationException(
-                "Azure CLI (az) was not found. Install it and run `az login`.", ex);
-        }
-
-        using (proc)
-        using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct))
-        {
-            timeout.CancelAfter(RunTimeout);
-            var outTask = proc.StandardOutput.ReadToEndAsync(timeout.Token);
-            var errTask = proc.StandardError.ReadToEndAsync(timeout.Token);
-            try
-            {
-                await proc.WaitForExitAsync(timeout.Token);
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                try { proc.Kill(entireProcessTree: true); } catch { /* best-effort */ }
-                throw new InvalidOperationException("Timed out waiting for az to return an Entra token.");
-            }
-            return (proc.ExitCode, await outTask, await errTask);
-        }
-    }
-
-    private static string FormatAzError(int exit, string stderr)
-    {
-        var msg = string.IsNullOrWhiteSpace(stderr) ? $"az exited with code {exit}." : stderr.Trim();
-        if (msg.Contains("az login", StringComparison.OrdinalIgnoreCase)
-            || msg.Contains("not logged in", StringComparison.OrdinalIgnoreCase)
-            || msg.Contains("AADSTS", StringComparison.OrdinalIgnoreCase)
-            || msg.Contains("refresh token", StringComparison.OrdinalIgnoreCase))
-            return "Entra sign-in required — run `az login`. (" + msg + ")";
-        return "Could not obtain an Entra token from az: " + msg;
-    }
+    private static Task<(int Exit, string Out, string Err)> RunAzAsync(string resource, CancellationToken ct)
+        => AzCli.RunAsync(
+            ["account", "get-access-token", "--resource", resource, "--output", "json"],
+            RunTimeout, "an Entra token", ct);
 }

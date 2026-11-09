@@ -727,7 +727,8 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
     public Task<Bearing.App.Views.ConnectionDialogResult?> ShowConnectionDialogAsync(ConnectionInfo? existing, string? existingPassword,
         Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
         Bearing.App.Services.SecretStoragePosture storage,
-        IProviderRegistry providers)
+        IProviderRegistry providers,
+        IAzureCatalog? azure)
         => Task.FromResult<Bearing.App.Views.ConnectionDialogResult?>(null);
     public Task<string?> ShowTextPromptAsync(string prompt, string initial = "") => Task.FromResult<string?>(null);
     /// <summary>Where the folder picker was told to start, per call — the projects folder, not home.</summary>
@@ -969,5 +970,38 @@ internal sealed class FakeTransactionScope : ITransactionScope
             if (results.Any(r => !r.Success)) Failed();
             return results;
         }
+    }
+}
+
+/// <summary>Browse Azure's source with canned answers, counting what it was asked.</summary>
+internal sealed class FakeAzureCatalog : IAzureCatalog
+{
+    public IReadOnlyList<AzureServer> Servers = System.Array.Empty<AzureServer>();
+    public string? Tenant = "Contoso";
+    public bool ServersTruncated;
+    public Dictionary<string, IReadOnlyList<string>> Databases = new();
+    public Exception? ServersThrow;
+    /// <summary>When set, the server listing waits on this instead of answering — az still thinking.</summary>
+    public TaskCompletionSource<AzureServerList>? ServersPending;
+    public List<string> AskedFor = new();
+    public List<string> DatabasesAskedFor = new();
+
+    public Task<AzureServerList> ListServersAsync(string providerId, CancellationToken ct)
+    {
+        AskedFor.Add(providerId);
+        if (ServersPending is { } pending)
+        {
+            return pending.Task;
+        }
+        return ServersThrow is { } ex
+            ? Task.FromException<AzureServerList>(ex)
+            : Task.FromResult(new AzureServerList(Servers, Tenant, ServersTruncated));
+    }
+
+    public Task<AzureDatabaseList> ListDatabasesAsync(string providerId, AzureServer server, CancellationToken ct)
+    {
+        DatabasesAskedFor.Add(server.Name);
+        return Task.FromResult(new AzureDatabaseList(
+            Databases.TryGetValue(server.Name, out var names) ? names : System.Array.Empty<string>(), Truncated: false));
     }
 }

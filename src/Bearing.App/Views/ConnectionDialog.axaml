@@ -112,15 +112,21 @@
             <TextBlock x:Name="ValidationHint" IsVisible="False" TextWrapping="Wrap" FontSize="12"
                        Foreground="{DynamicResource Warn.Amber}" Margin="90,2,0,0"/>
 
-            <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto">
+            <Grid ColumnDefinitions="90,*,Auto" RowDefinitions="Auto,Auto">
               <TextBlock Grid.Row="0" Grid.Column="0" Text="Credential" VerticalAlignment="Center" Margin="0,6,0,0"/>
               <!-- Items come from Connections/CredentialKindOptions: Windows authentication and the Entra token are
                    each offered only by an engine whose driver can actually honour them. -->
               <ComboBox  Grid.Row="0" Grid.Column="1" x:Name="CredentialKindBox" Margin="0,6,0,0"
                          HorizontalAlignment="Stretch" SelectionChanged="OnCredentialKindChanged"/>
+              <!-- Browse Azure (AzureBrowseDialog): fills Host / Port / Database from what az can see. Beside the
+                   dropdown and only on the Entra kind, the one kind that already means "this is an Azure server
+                   and az is signed in"; hidden too when the caller handed over no catalog. -->
+              <Button Grid.Row="0" Grid.Column="2" x:Name="BrowseAzureButton" Content="…" Click="OnBrowseAzureClick"
+                      IsVisible="False" Margin="6,6,0,0" Padding="8,2" VerticalAlignment="Stretch"
+                      ToolTip.Tip="Browse Azure — pick a server and database your `az login` can see"/>
 
               <TextBlock Grid.Row="1" Grid.Column="0" x:Name="PasswordLabel" Text="Password" VerticalAlignment="Center" Margin="0,6,0,0"/>
-              <TextBox   Grid.Row="1" Grid.Column="1" x:Name="PasswordBox" PasswordChar="•" Margin="0,6,0,0"/>
+              <TextBox   Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" x:Name="PasswordBox" PasswordChar="•" Margin="0,6,0,0"/>
             </Grid>
 
             <!-- Only where the engine's Entra login takes a user name at all (ProviderTraits.EntraTakesUser): on

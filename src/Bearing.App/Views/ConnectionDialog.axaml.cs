@@ -50,6 +50,9 @@ public partial class ConnectionDialog : Window
     private readonly SecretStoragePosture _storage;
     private readonly List<IDbProvider> _providers;
 
+    /// <summary>What Browse Azure lists from, or null to hide the button (tests, the designer).</summary>
+    private readonly IAzureCatalog? _azure;
+
     /// <summary>The form's state for the currently selected engine. Replaced (not mutated) on a provider
     /// switch — <see cref="ConnectionFieldModel.SwitchTo"/> is what carries typed values across.</summary>
     private ConnectionFieldModel _model;
@@ -71,7 +74,8 @@ public partial class ConnectionDialog : Window
         string? existingPassword,
         Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
         SecretStoragePosture? storage = null,
-        IProviderRegistry? providers = null)
+        IProviderRegistry? providers = null,
+        IAzureCatalog? azure = null)
     {
         InitializeComponent();
         Opened += (_, _) => FitToScreen();
@@ -79,6 +83,7 @@ public partial class ConnectionDialog : Window
         _existing = existing;
         _id = existing?.Id ?? Guid.NewGuid();
         _storage = storage ?? SecretStoragePosture.Keychain;
+        _azure = azure;
         // The designer and the no-argument path get the default registry; every real caller passes the
         // app's own, so the picker lists exactly the engines this build composed.
         _providers = (providers ?? new ProviderRegistry()).All.ToList();
@@ -286,11 +291,26 @@ public partial class ConnectionDialog : Window
         {
             field.Value = box.Text ?? "";
             RefreshValidation();
-            // A new connection's encryption default follows the host as it is typed (#23). The host is a
-            // provider-declared field now, so this hangs off its editor rather than off a named HostBox.
-            if (isHost && _existing is null && !_tlsChosen) SelectTls(TlsPolicy.DefaultFor(field.Value));
+            // The host is a provider-declared field now, so this hangs off its editor rather than off a named HostBox.
+            if (isHost)
+            {
+                OnHostChanged(field.Value);
+            }
         };
         return box;
+    }
+
+    /// <summary>
+    /// A new connection's encryption default follows the host (#23) — however the host got there. Typing raises the
+    /// box's TextChanged; a value written through the model (Browse Azure) raises nothing, so every such writer calls
+    /// this too. One rule, not a copy per writer.
+    /// </summary>
+    private void OnHostChanged(string host)
+    {
+        if (_existing is null && !_tlsChosen)
+        {
+            SelectTls(TlsPolicy.DefaultFor(host));
+        }
     }
 
     /// <summary>Where <paramref name="value"/> sits in <paramref name="candidates"/>, or -1. Trimmed and
@@ -327,6 +347,29 @@ public partial class ConnectionDialog : Window
         var problems = _model.Validate(SelectedCredentialKind(), UserFromLogin());
         ValidationHint.Text = problems.Count > 0 ? "⚠ " + string.Join(" ", problems) : "";
         ValidationHint.IsVisible = problems.Count > 0;
+    }
+
+    // ---- Browse Azure -----------------------------------------------------------------------------
+
+    private async void OnBrowseAzureClick(object? sender, RoutedEventArgs e)
+    {
+        if (_azure is null)
+        {
+            return;
+        }
+        var pick = await new AzureBrowseDialog(_azure, _model.ProviderId, _model.Provider.DisplayName)
+            .ShowDialog<AzurePick?>(this);
+        if (pick is null)
+        {
+            return;
+        }
+
+        _model.UseAzureServer(pick.Server.Host, pick.Database);
+        RenderFields();
+        // RenderFields rebuilt the User box with the rows; it has to be re-disabled if az names the user.
+        UpdateCredentialVisibility();
+        // Written through the model, so no TextChanged moved the encryption default.
+        OnHostChanged(pick.Server.Host);
     }
 
     // ---- Credential kind -------------------------------------------------------------------------
@@ -375,6 +418,8 @@ public partial class ConnectionDialog : Window
         if (NoStorageWarning.IsVisible)
             NoStorageWarningText.Text = SecretStorageAdvice.NoStorageWarning(_storage.Reason);
         EntraHint.IsVisible = kind == CredentialKind.EntraToken;
+        // Entra is only offered where the engine supports it, so this also keeps it off engines with no Azure flavour.
+        BrowseAzureButton.IsVisible = _azure is not null && kind == CredentialKind.EntraToken;
         IntegratedHint.IsVisible = kind == CredentialKind.Integrated;
         UserFromLoginBox.IsVisible = UserFromLoginOffered();
         if (_userBox is not null)

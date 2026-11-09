@@ -13,6 +13,7 @@ using Bearing.App.Results;
 using Bearing.App.Services;
 using Bearing.Core.Data;
 using Bearing.Results;
+using Bearing.Sessions;
 
 namespace Bearing.App.Views;
 
@@ -84,9 +85,10 @@ public sealed class DialogService : IDialogService
         string? existingPassword,
         Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
         SecretStoragePosture storage,
-        IProviderRegistry providers)
+        IProviderRegistry providers,
+        IAzureCatalog? azure)
         => Owner is { } window
-            ? new ConnectionDialog(existing, existingPassword, test, storage, providers)
+            ? new ConnectionDialog(existing, existingPassword, test, storage, providers, azure)
                 .ShowDialog<ConnectionDialogResult?>(window)
             : Task.FromResult<ConnectionDialogResult?>(null);
 

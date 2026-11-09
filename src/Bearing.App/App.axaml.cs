@@ -124,7 +124,9 @@ public partial class App : Application
             var vm = new ShellViewModel(providers, projectStore, sessionStore, queryLog, recentProjects,
                 dialogs: new Views.DialogService(),
                 credentialPrompt: new Views.DialogCredentialPrompt(),
-                settings: settings);
+                settings: settings,
+                // Browse Azure lists the user's real Azure servers; a demo session touches nothing real (§9.7).
+                azureCatalog: _demo is null ? new AzureCatalog() : null);
             // A settings file that can't be written is a status-bar problem, not a crash (§5.2).
             settings.SaveFailed = message => vm.StatusText = message;
             LogStartup("vm created");

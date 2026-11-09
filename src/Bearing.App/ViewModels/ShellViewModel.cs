@@ -62,6 +62,10 @@ public sealed partial class ShellViewModel : ObservableObject
     /// the same service.</summary>
     public IDialogService? Dialogs => _dialogs;
 
+    /// <summary>Browse Azure's source in the connection editor, or null where it must not run (demo mode, tests):
+    /// it calls the user's real az.</summary>
+    public IAzureCatalog? AzureCatalog { get; }
+
     private IProviderRegistry _providers => _ctx.Providers;
     private IProjectStore _projectStore => _ctx.ProjectStore;
     private ISessionStore _sessionStore => _ctx.SessionStore;
@@ -82,11 +86,13 @@ public sealed partial class ShellViewModel : ObservableObject
         IDialogService? dialogs = null,
         ICredentialPrompt? credentialPrompt = null,
         IEntraTokenProvider? entraTokens = null,
-        Settings.SettingsService? settings = null)
+        Settings.SettingsService? settings = null,
+        IAzureCatalog? azureCatalog = null)
     {
         _ctx = new WorkspaceContext(providers, projectStore, sessionStore, queryLog, recentProjects, secretStore,
             credentialPrompt: credentialPrompt, entraTokens: entraTokens, settings: settings);
         _dialogs = dialogs;
+        AzureCatalog = azureCatalog;
         _ctx.Status = text => StatusText = text;
         EditorFontSize = _ctx.Settings.EditorFontSize;
         InspectorFontSize = _ctx.Settings.InspectorFontSize;

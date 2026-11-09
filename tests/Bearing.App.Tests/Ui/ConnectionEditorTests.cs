@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Headless;
+using Avalonia.Input;
 using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using Bearing.App.Views;
@@ -332,6 +333,233 @@ public class ConnectionEditorTests
         Assert.Contains(SessionTimeZonePolicy.Describe(SessionTimeZonePolicy.Local), hint.Text);
     });
 
+    // ---- Browse Azure ----------------------------------------------------------------------------
+
+    [Fact]
+    public Task Browse_azure_is_offered_only_on_the_entra_kind_and_only_with_a_catalog() => _ui.Run(() =>
+    {
+        const string entra = "Microsoft Entra token (az login)";
+        var without = ConnectionEditorProbe.Dialog();
+        ConnectionEditorProbe.Combo(without, "CredentialKindBox").SelectedIndex =
+            ConnectionEditorProbe.Items(without, "CredentialKindBox").ToList().IndexOf(entra);
+        Assert.False(without.FindControl<Button>("BrowseAzureButton")!.IsVisible);
+
+        var dialog = ConnectionEditorProbe.Dialog(azure: new FakeAzureCatalog());
+        var credentials = ConnectionEditorProbe.Combo(dialog, "CredentialKindBox");
+        var browse = dialog.FindControl<Button>("BrowseAzureButton")!;
+        Assert.False(browse.IsVisible);   // stored password: nothing says this is an Azure server
+
+        credentials.SelectedIndex = ConnectionEditorProbe.Items(dialog, "CredentialKindBox").ToList().IndexOf(entra);
+        Assert.True(browse.IsVisible);
+
+        // An engine switch rebuilds the credential list and keeps Entra where the engine offers it.
+        ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = 1;
+        Assert.Equal(CredentialKind.EntraToken, dialog.BuildConnection().CredentialKind);
+        Assert.True(browse.IsVisible);
+
+        credentials.SelectedIndex = 0;
+        Assert.False(browse.IsVisible);
+    });
+
+    [Fact]
+    public Task The_browser_lists_servers_filters_them_and_reads_the_picked_ones_databases() => _ui.Run(() =>
+    {
+        var catalog = new FakeAzureCatalog
+        {
+            Servers =
+            [
+                new("/s/1/pg-prod", "pg-prod", "pg-prod.postgres.database.azure.com", "rg-data", "Production", "westeurope", "pgadmin", "Ready"),
+                new("/s/2/pg-staging", "pg-staging", "pg-staging.postgres.database.azure.com", "rg-test", "Staging", "westeurope", null, "Stopped"),
+            ],
+            Databases = { ["pg-staging"] = ["orders", "postgres"] },
+        };
+        var browser = new AzureBrowseDialog(catalog, "postgres", "PostgreSQL") { Width = 640, Height = 600 };
+        browser.Show();
+        Pump(browser);
+
+        Assert.Equal(["postgres"], catalog.AskedFor);
+        var servers = Named<ListBox>(browser, "ServerList");
+        Assert.Equal(2, servers.ItemCount);
+        Assert.Equal("2 servers in the Contoso tenant", Named<TextBlock>(browser, "ServerStatus").Text);
+        Assert.False(Named<Button>(browser, "UseButton").IsEnabled);
+
+        var filter = Named<TextBox>(browser, "FilterBox");
+        filter.Focus();
+        Assert.True(filter.IsFocused, "The filter box never took focus, so nothing was typed into it.");
+        browser.KeyTextInput("staging");
+        Pump(browser);
+        Assert.Equal(1, servers.ItemCount);
+        Assert.Equal("1 of 2 servers in the Contoso tenant match", Named<TextBlock>(browser, "ServerStatus").Text);
+
+        servers.SelectedIndex = 0;
+        Pump(browser);
+        Assert.True(Named<Button>(browser, "UseButton").IsEnabled);
+        Assert.Equal(["orders", "postgres"], Named<ListBox>(browser, "DatabaseList").Items.Cast<ListBoxItem>().Select(i => i.Content as string));
+        browser.Close();
+    });
+
+    [Fact]
+    public Task Refining_the_filter_keeps_the_picked_server_and_database_without_asking_az_again() => _ui.Run(() =>
+    {
+        var catalog = new FakeAzureCatalog
+        {
+            Servers =
+            [
+                new("/s/1/pg-prod", "pg-prod", "pg-prod.postgres.database.azure.com", "rg-data", "Production", "westeurope", null, "Ready"),
+                new("/s/2/pg-staging", "pg-staging", "pg-staging.postgres.database.azure.com", "rg-test", "Staging", "westeurope", null, "Ready"),
+            ],
+            Databases = { ["pg-staging"] = ["orders", "postgres"] },
+        };
+        var browser = new AzureBrowseDialog(catalog, "postgres", "PostgreSQL") { Width = 640, Height = 600 };
+        browser.Show();
+        Pump(browser);
+
+        var servers = Named<ListBox>(browser, "ServerList");
+        var databases = Named<ListBox>(browser, "DatabaseList");
+        servers.SelectedIndex = 1;
+        Pump(browser);
+        databases.SelectedIndex = 0;
+        Assert.Equal(["pg-staging"], catalog.DatabasesAskedFor);
+
+        var filter = Named<TextBox>(browser, "FilterBox");
+        filter.Focus();
+        Assert.True(filter.IsFocused, "The filter box never took focus, so nothing was typed into it.");
+        browser.KeyTextInput("stag");
+        Pump(browser);
+        Assert.Equal("stag", filter.Text);
+
+        Assert.Equal(1, servers.ItemCount);
+        Assert.Equal("pg-staging", ((servers.SelectedItem as ListBoxItem)?.Tag as AzureServer)?.Name);
+        Assert.Equal("orders", (databases.SelectedItem as ListBoxItem)?.Tag);
+        Assert.Equal(["pg-staging"], catalog.DatabasesAskedFor);   // one read, not one per keystroke
+
+        // Filtering the pick away is a real pick change: its databases go with it.
+        Assert.True(filter.IsFocused);
+        browser.KeyTextInput("zzz");
+        Pump(browser);
+        Assert.Equal("stagzzz", filter.Text);
+        Assert.Null(servers.SelectedItem);
+        Assert.Equal(0, databases.ItemCount);
+        browser.Close();
+    });
+
+    [Fact]
+    public Task Down_in_the_filter_picks_a_server_while_typing_carries_on() => _ui.Run(() =>
+    {
+        var catalog = new FakeAzureCatalog
+        {
+            Servers =
+            [
+                new("/s/1/pg-a", "pg-a", "pg-a.postgres.database.azure.com", "rg", "Sub", "westeurope", null, null),
+                new("/s/2/pg-b", "pg-b", "pg-b.postgres.database.azure.com", "rg", "Sub", "westeurope", null, null),
+            ],
+        };
+        var browser = new AzureBrowseDialog(catalog, "postgres", "PostgreSQL") { Width = 640, Height = 600 };
+        browser.Show();
+        Pump(browser);
+        var filter = Named<TextBox>(browser, "FilterBox");
+        filter.Focus();
+        Assert.True(filter.IsFocused);
+
+        browser.KeyPress(Key.Down, RawInputModifiers.None, PhysicalKey.ArrowDown, null);
+        browser.KeyRelease(Key.Down, RawInputModifiers.None, PhysicalKey.ArrowDown, null);
+        browser.KeyPress(Key.Down, RawInputModifiers.None, PhysicalKey.ArrowDown, null);
+        browser.KeyRelease(Key.Down, RawInputModifiers.None, PhysicalKey.ArrowDown, null);
+        Pump(browser);
+
+        Assert.Equal(1, Named<ListBox>(browser, "ServerList").SelectedIndex);
+        Assert.True(filter.IsFocused);
+        browser.Close();
+    });
+
+    [Fact]
+    public Task Picks_in_quick_succession_ask_az_once_the_stepping_stops() => _ui.Run(() =>
+    {
+        var catalog = new FakeAzureCatalog
+        {
+            Servers =
+            [
+                new("/s/1/pg-a", "pg-a", "pg-a.postgres.database.azure.com", "rg", "Sub", "westeurope", null, null),
+                new("/s/2/pg-b", "pg-b", "pg-b.postgres.database.azure.com", "rg", "Sub", "westeurope", null, null),
+                new("/s/3/pg-c", "pg-c", "pg-c.postgres.database.azure.com", "rg", "Sub", "westeurope", null, null),
+            ],
+            Databases = { ["pg-c"] = ["orders"] },
+        };
+        var browser = new AzureBrowseDialog(catalog, "postgres", "PostgreSQL") { Width = 640, Height = 600 };
+        browser.Show();
+        Pump(browser);
+        var servers = Named<ListBox>(browser, "ServerList");
+
+        servers.SelectedIndex = 0;   // a lone pick asks at once
+        Pump(browser);
+        servers.SelectedIndex = 1;   // these two land within the settle window: neither asks yet
+        servers.SelectedIndex = 2;
+        Pump(browser);
+        Assert.Equal(["pg-a"], catalog.DatabasesAskedFor);
+
+        // Once the stepping stops, only the server it landed on is read.
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (catalog.DatabasesAskedFor.Count < 2 && DateTime.UtcNow < deadline)
+        {
+            System.Threading.Thread.Sleep(20);
+            Pump(browser);
+        }
+        Assert.Equal(["pg-a", "pg-c"], catalog.DatabasesAskedFor);
+        Assert.Equal(["orders"], Named<ListBox>(browser, "DatabaseList").Items.Cast<ListBoxItem>().Select(i => i.Content as string));
+        browser.Close();
+    });
+
+    [Fact]
+    public Task Typing_before_az_answers_leaves_the_asking_status() => _ui.Run(() =>
+    {
+        var catalog = new FakeAzureCatalog { ServersPending = new TaskCompletionSource<AzureServerList>() };
+        var browser = new AzureBrowseDialog(catalog, "postgres", "PostgreSQL") { Width = 640, Height = 600 };
+        browser.Show();
+        Pump(browser);
+        var filter = Named<TextBox>(browser, "FilterBox");
+        filter.Focus();
+        Assert.True(filter.IsFocused, "The filter box never took focus, so nothing was typed into it.");
+        browser.KeyTextInput("pg");
+        Pump(browser);
+        Assert.Equal("pg", filter.Text);   // the keystrokes arrived, so the filter did run
+
+        Assert.Equal("Asking az for servers…", Named<TextBlock>(browser, "ServerStatus").Text);
+        browser.Close();
+    });
+
+    [Fact]
+    public Task An_az_failure_is_said_in_the_server_status() => _ui.Run(() =>
+    {
+        var catalog = new FakeAzureCatalog { ServersThrow = new InvalidOperationException("Azure sign-in required — run `az login`.") };
+        var browser = new AzureBrowseDialog(catalog, "sqlserver", "Microsoft SQL Server");
+        browser.Show();
+        Pump(browser);
+
+        Assert.Equal("✗ Azure sign-in required — run `az login`.", Named<TextBlock>(browser, "ServerStatus").Text);
+
+        // Typing into the filter afterwards must not turn "az failed" into "az found none" (§1.1).
+        var filter = Named<TextBox>(browser, "FilterBox");
+        filter.Focus();
+        Assert.True(filter.IsFocused, "The filter box never took focus, so nothing was typed into it.");
+        browser.KeyTextInput("x");
+        Pump(browser);
+        Assert.Equal("x", filter.Text);   // the keystroke arrived, so the filter did run
+        Assert.Equal("✗ Azure sign-in required — run `az login`.", Named<TextBlock>(browser, "ServerStatus").Text);
+        browser.Close();
+    });
+
+    private static T Named<T>(Window window, string name) where T : Control
+        => Assert.IsType<T>(window.GetLogicalDescendants().OfType<Control>().Where(c => c.Name == name).Distinct().Single());
+
+    private static void Pump(Window window)
+    {
+        for (var i = 0; i < 3; i++)
+        {
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+        }
+    }
+
     private static ConnectionInfo Saved(string providerId, int port) => new()
     {
         Id = Guid.NewGuid(),
@@ -353,8 +581,8 @@ internal static class ConnectionEditorProbe
 {
     /// <summary>A dialog over the app's real registry, so the engine list under test is the one this build
     /// composed. The test delegate is never invoked from here: nothing presses Test.</summary>
-    public static ConnectionDialog Dialog(ConnectionInfo? existing = null)
-        => new(existing, null, (_, _, _) => Task.FromResult(false), providers: new ProviderRegistry());
+    public static ConnectionDialog Dialog(ConnectionInfo? existing = null, IAzureCatalog? azure = null)
+        => new(existing, null, (_, _, _) => Task.FromResult(false), providers: new ProviderRegistry(), azure: azure);
 
     /// <summary>
     /// The same dialog, shown and laid out — which only the tests that <see cref="Type"/> need, because
