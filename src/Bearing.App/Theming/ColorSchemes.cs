@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
@@ -51,14 +52,21 @@ public static class ColorSchemes
     /// colour and have to rebuild (the results grid) or carry their own theme (TextMate).</summary>
     public static event Action<Application>? Repainted;
 
+    /// <summary>The palette each application's token brushes were last painted with, by identity. Recorded
+    /// rather than inferred from a brush's colour, so two palettes sharing a colour still tell apart. Weak on
+    /// the application, because the headless tests build a fresh one per test.</summary>
+    private static readonly ConditionalWeakTable<Application, IReadOnlyDictionary<string, Color>> Applied = new();
+
     /// <summary>
     /// One-time wiring for an application: the rail mark alias, and repainting when the actual variant moves
     /// under a <see cref="ColorScheme.System"/> setting. Called from <c>App.Initialize</c>, so headless tests
-    /// get it too (§4.5).
+    /// get it too (§4.5). The brushes have just been loaded from <c>Tokens.axaml</c>, so they show the dark
+    /// palette.
     /// </summary>
     public static void Install(Application app)
     {
         app.Resources[RailMarkKey] = app.FindResource("BearingMark.Duo");
+        Applied.AddOrUpdate(app, Dark);
         app.ActualThemeVariantChanged += (_, _) => Repaint(app);
     }
 
@@ -88,16 +96,14 @@ public static class ColorSchemes
 
     /// <summary>
     /// Paint the token brushes for the application's actual variant. Returns false (and raises nothing) when
-    /// they already show it.
+    /// that palette is the one last applied. An application <see cref="Install"/> never saw has no record and
+    /// is painted.
     /// </summary>
     internal static bool Repaint(Application app)
     {
         var light = IsLight(app);
         var palette = light ? Light : Dark;
-        if (app.Resources.TryGetResource("Bg.Editor", null, out var probe)
-            && probe is ISolidColorBrush current
-            && palette.TryGetValue("Bg.Editor", out var wanted)
-            && current.Color == wanted)
+        if (Applied.TryGetValue(app, out var applied) && ReferenceEquals(applied, palette))
         {
             return false;
         }
@@ -110,6 +116,7 @@ public static class ColorSchemes
             }
         }
         app.Resources[RailMarkKey] = app.FindResource(light ? "BearingMark.Ink" : "BearingMark.Duo");
+        Applied.AddOrUpdate(app, palette);
 
         Generation++;
         Repainted?.Invoke(app);

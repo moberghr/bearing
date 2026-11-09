@@ -93,6 +93,20 @@ public class ColorSchemeTests
     });
 
     [Fact]
+    public Task A_switch_is_decided_by_the_palette_applied_not_by_a_brush_colour() => _ui.Run(() =>
+    {
+        // Two palettes may share a colour. Make the probe colour already match the light palette while the
+        // dark one is applied: the switch must still repaint every other token.
+        var app = Application.Current!;
+        ColorSchemes.Apply(app, ColorScheme.Dark);
+        ((SolidColorBrush)Tokens.Res("Bg.Editor")).Color = ColorSchemes.Light["Bg.Editor"];
+
+        ColorSchemes.Apply(app, ColorScheme.Light);
+
+        Assert.Equal(ColorSchemes.Light["Text.Primary"], ((ISolidColorBrush)Tokens.Res("Text.Primary")).Color);
+    });
+
+    [Fact]
     public Task Alpha_copies_of_a_token_are_retired_by_a_switch() => _ui.Run(() =>
     {
         // AtAlphaCached holds a copy of the colour, not the token brush, so it has to notice the switch.
