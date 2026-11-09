@@ -133,6 +133,15 @@ public interface IDialogService
     /// </summary>
     Task<bool> ConfirmDiscardTransactionsAsync(int count, string action);
 
+    /// <summary>
+    /// Confirm throwing away unsaved grid edits (spec docs/specs/2026-11-06-inline-results.md §7) before
+    /// <paramref name="action"/> ("run", "close these results", "close {tab}") replaces the results holding them.
+    /// <paramref name="what"/> names the loss ("3 unsaved changes in 2 results"). True = discard and proceed.
+    /// "Cancel" is the default and Esc: dismissing the prompt keeps the edits.
+    /// <para>Implementations with no window return <b>false</b> — an edit nobody saved needs a real answer.</para>
+    /// </summary>
+    Task<bool> ConfirmDiscardEditsAsync(string what, string action);
+
     /// <summary>Ask what to do with a project the user wants gone: forget it, or delete its folder too.
     /// <paramref name="directory"/> is shown, since that is what a delete would remove. Implementations with
     /// no window (headless/tests) return <see cref="ProjectRemoval.Cancel"/> — deliberately the opposite of

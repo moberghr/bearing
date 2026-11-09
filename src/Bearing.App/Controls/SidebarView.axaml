@@ -166,7 +166,7 @@
                       </ContextMenu>
                     </Border.ContextMenu>
                     <Grid ColumnDefinitions="Auto,*,Auto">
-                      <Path Grid.Column="0" Data="{StaticResource Icon.Folder}" Stroke="#E3B457"
+                      <Path Grid.Column="0" Data="{StaticResource Icon.Folder}" Stroke="{DynamicResource Warn.Amber}"
                             StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round" Stretch="Uniform"
                             Width="15" Height="15" VerticalAlignment="Center" Margin="0,0,6,0"/>
                       <!-- Renaming swaps the label for a box in place (#39): Enter commits, Esc cancels,
@@ -244,7 +244,7 @@
                          against a text line sits optically high against the letterforms. -->
                     <Path Data="{Binding IconKey, Converter={StaticResource ResourceGeometry}}"
                           IsVisible="{Binding IconKey, Converter={x:Static ObjectConverters.IsNotNull}}"
-                          Stroke="{Binding IconColorHex, Converter={StaticResource HexBrush}}" StrokeThickness="1.4"
+                          Stroke="{Binding IconColorKey, Converter={StaticResource TokenBrush}}" StrokeThickness="1.4"
                           StrokeLineCap="Round" StrokeJoin="Round" Stretch="Uniform" Width="15" Height="15"
                           VerticalAlignment="Center" Margin="0,2,0,0"/>
                     <TextBlock Text="{Binding Glyph}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Muted}"
@@ -317,7 +317,7 @@
                      beside it, because it's a holding pen and not something the user curated.
                      Stroke is set here, not on the Path, so these setters aren't beaten by a local value. -->
                 <Style Selector="Path.folderGlyph">
-                  <Setter Property="Stroke" Value="#E3B457"/>
+                  <Setter Property="Stroke" Value="{DynamicResource Warn.Amber}"/>
                 </Style>
                 <Style Selector="Path.folderGlyph.scratch">
                   <Setter Property="Stroke" Value="{DynamicResource Text.Dim}"/>
@@ -474,7 +474,7 @@
                               <TextBlock Grid.Column="1" Text="{Binding DisplayQuery}" TextTrimming="CharacterEllipsis"
                                          FontFamily="{StaticResource MonoFontFamily}" FontSize="{DynamicResource Font.Body}"
                                          VerticalAlignment="Center"
-                                         Foreground="{Binding QueryColorHex, Converter={StaticResource HexBrush}}"/>
+                                         Foreground="{Binding QueryColorKey, Converter={StaticResource TokenBrush}}"/>
                               <TextBlock Grid.Column="2" Text="{Binding Time}" FontSize="{DynamicResource Font.Small}" Margin="8,0,0,0"
                                          VerticalAlignment="Center" Foreground="{DynamicResource Text.Faint}"/>
                             </Grid>

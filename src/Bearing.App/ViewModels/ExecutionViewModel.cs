@@ -457,7 +457,10 @@ public sealed partial class ExecutionViewModel : ObservableObject
     }
 
     /// <summary>Execute SQL for the selected tab against that tab's connection; record it in the log.</summary>
-    public async Task ExecuteAsync(string sql)
+    /// <param name="beforeRun">Asked once every refusal and the write confirmation have passed, right before the
+    /// run starts; false stops it. The unsaved-grid-edits question goes here, so it is never asked — and edits
+    /// never given up — for a run that was going to be refused anyway.</param>
+    public async Task ExecuteAsync(string sql, Func<Task<bool>>? beforeRun = null)
     {
         if (string.IsNullOrWhiteSpace(sql)) return;
         var tab = Selected;
@@ -510,6 +513,11 @@ public sealed partial class ExecutionViewModel : ObservableObject
                     return;
                 }
             }
+        }
+
+        if (beforeRun is not null && !await beforeRun())
+        {
+            return;
         }
 
         // AutosaveMode.OnExecute writes the buffer at the moment it runs, so what's on disk is what was
@@ -699,7 +707,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // Results always route to the tab that started the run, never to whichever tab is focused now.
             // A tab that has since been closed (or dropped by a project switch) is dead but harmless to
             // assign to — RunFinished is what tells the user the run ended, with TabStillOpen false.
-            tab.SetFreshResults(ResultSetBuilder.BuildResultSets(
+            tab.SetRunResults(ResultSetBuilder.BuildResultSets(
                 results, sql, session.Snapshot, ProviderTraits.For(info), SessionPolicy.IsReadOnly(info)));
             LogExecution(info, sql, results, _ctx.Transactions.For(tab)?.Id);
             var summary = ResultSetBuilder.DescribeResults(
@@ -762,10 +770,15 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// it while the tab is selected), pass its token to the body, and always tear the run down afterwards.
     /// Cancellation and errors become a status line ("<c>{cancelled}</c>" / "<c>{failed}: {message}</c>").
     /// Callers pre-check <c>tab.IsRunning</c>; this assumes the tab isn't already running.</summary>
+    /// <param name="kind">What the body does: <see cref="RunKind.FkLookup"/> pushes a result frame and
+    /// <see cref="RunKind.Save"/> writes grid edits — Back waits for both. Everything else is
+    /// <see cref="RunKind.Query"/>: a run replaces the results wholesale, and paging or a count change a set in
+    /// place, harmless after a Back.</param>
     private async Task RunExclusiveAsync(
-        EditorTabViewModel tab, Func<CancellationToken, Task> body, string cancelled, string failed)
+        EditorTabViewModel tab, Func<CancellationToken, Task> body, string cancelled, string failed,
+        RunKind kind = RunKind.Query)
     {
-        var ct = tab.BeginRun();
+        var ct = tab.BeginRun(kind);
         try { await body(ct); }
         // Cancellation only ever comes from the user (Esc, the Run/Cancel button, closing the tab, quitting),
         // so it reports through RunStatus, not RunFinished: telling someone their query stopped right after
@@ -1187,7 +1200,10 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// <summary>Navigate a foreign-key cell in place: run the lookup on the current tab's connection and
     /// swap the displayed result for the referenced row, stacking the previous result so Back can return.
     /// The query is never surfaced in the editor.</summary>
-    public async Task NavigateForeignKeyAsync(ResultSetViewModel rs, int columnIndex, object?[] row)
+    /// <param name="into">Where the referenced row is shown: the results context the key was followed from —
+    /// an inline zone, or (null) the tab's own results, which the pane shows.</param>
+    public async Task NavigateForeignKeyAsync(ResultSetViewModel rs, int columnIndex, object?[] row,
+        IResultFrames? into = null)
     {
         if (Selected is not { } tab || tab.IsRunning) return;
         if (columnIndex < 0 || columnIndex >= row.Length) return;
@@ -1206,14 +1222,14 @@ public sealed partial class ExecutionViewModel : ObservableObject
             var results = await ExecutorFor(tab, session)
                 .ExecuteAsync(sql, new QueryOptions { MaxRows = PageSize }, ct);
             var info = _ctx.EffectiveConnection(tab);
-            tab.PushResults(ResultSetBuilder.BuildResultSets(
+            (into ?? tab).Push(ResultSetBuilder.BuildResultSets(
                 results, sql, session.Snapshot, ProviderTraits.For(session.Info),
                 info is not null && SessionPolicy.IsReadOnly(info)));
             // The connection has to travel here too, or a 57014 from its own statement timeout reads as
             // "nothing in Bearing asked for this" — a confident wrong answer about a limit we set (#105).
             RunFinished(tab, ResultSetBuilder.DescribeResults(
                 results, null, info, ct.IsCancellationRequested));
-        }, "Navigation cancelled.", "Navigation failed");
+        }, "Navigation cancelled.", "Navigation failed", RunKind.FkLookup);
     }
 
     // ---- Inline editing — connection/transaction/status concerns; pure DML lives in Results/ResultEditModel.
@@ -1278,7 +1294,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
             ResultEditModel.ApplySavedChanges(rs, target, changes, results);
             RunFinished(tab, $"Saved {changes.Count} change(s).");
-        }, "Save cancelled.", "Save failed");
+        }, "Save cancelled.", "Save failed", RunKind.Save);
     }
 
     /// <summary>Discard all pending changes in place (restore edited cells, drop new rows, un-mark deletes).</summary>

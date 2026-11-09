@@ -579,6 +579,23 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
         return Task.FromResult(DiscardTransactionsAnswer);
     }
 
+    /// <summary>What the discard-unsaved-edits prompt answers. False keeps the edits (and cancels the run /
+    /// close that asked).</summary>
+    public bool DiscardEditsAnswer { get; set; } = true;
+
+    /// <summary>The (what, action) pairs the discard-edits prompt was raised with, in order.</summary>
+    public List<(string What, string Action)> DiscardEditsPrompts { get; } = new();
+
+    /// <summary>Runs while the discard-edits prompt is "open" — what the user's world does meanwhile.</summary>
+    public Action? WhileDiscardEditsAsked { get; set; }
+
+    public Task<bool> ConfirmDiscardEditsAsync(string what, string action)
+    {
+        DiscardEditsPrompts.Add((what, action));
+        WhileDiscardEditsAsked?.Invoke();
+        return Task.FromResult(DiscardEditsAnswer);
+    }
+
     /// <summary>Tab names the close prompt was raised for, in order.</summary>
     public List<string> ClosePrompts { get; } = new();
 

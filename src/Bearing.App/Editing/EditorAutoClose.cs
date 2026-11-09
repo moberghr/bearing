@@ -100,6 +100,10 @@ internal sealed class EditorAutoClose
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
+        if (Controls.InlineZoneView.IsInside(e.Source))
+        {
+            return;   // a zone's cell editor, not the SQL text
+        }
         if (!_enabled()) return;
 
         if (e.Key == Key.Back && _editor.SelectionLength == 0
@@ -158,7 +162,7 @@ internal sealed class EditorAutoClose
     {
         private const double Width = 1.5;
 
-        private static (Avalonia.Application? Owner, IImmutableBrush Brush)? _brush;
+        private static (Avalonia.Application? Owner, int Generation, IImmutableBrush Brush)? _brush;
 
         private static IBrush Brush =>
             ThemeBrush.AtAlphaCached(ref _brush, "Syntax.Func", 0xAA, Color.FromRgb(0x6F, 0xA6, 0xE2));

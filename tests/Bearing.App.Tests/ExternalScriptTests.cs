@@ -224,6 +224,25 @@ public class ExternalScriptTests : IDisposable
         Assert.DoesNotContain(aSession!.OpenEditors, e => e.ScriptPath == file);
     }
 
+    /// <summary>Inline results came from the old project's connection: a moved tab must not keep them, or
+    /// saving, paging or counting in one would run against the new project's connection.</summary>
+    [Fact]
+    public async Task Moving_a_tab_drops_its_inline_results_with_its_pane_results()
+    {
+        var vm = NewVm();
+        await SeedAsync(vm, Dir("b"), "b");
+        await SeedAsync(vm, Dir("a"), "a");
+        await vm.OpenScriptFilesAsync([Outside("report.sql", "select 1")]);
+        var tab = vm.Workspace.SelectedTab!;
+        var all = new Bearing.App.Results.RunScope("select 1", [8], 0, 8, IsWholeBuffer: true);
+        tab.ApplyInlineRun(all, [new InlineResultZone(8, Array.Empty<ResultSetViewModel>(), null)]);
+
+        Assert.True(await vm.MoveTabToProjectAsync(tab, Dir("b")));
+
+        Assert.Empty(tab.Results);
+        Assert.Empty(tab.InlineZones);
+    }
+
     [Fact]
     public async Task A_tab_with_a_query_running_does_not_move()
     {
@@ -264,6 +283,28 @@ public class ExternalScriptTests : IDisposable
         Assert.Same(inB, vm.Workspace.SelectedTab);
         Assert.Single(vm.Workspace.AllTabs, t => t.ScriptPath == file);
         Assert.Equal("select 1 -- edited in a", inB.Text);
+    }
+
+    /// <summary>The kept tab's text is replaced by the moved tab's, so its inline results no longer hang under
+    /// what they described.</summary>
+    [Fact]
+    public async Task Moving_edits_onto_a_tab_drops_that_tabs_inline_results()
+    {
+        var vm = NewVm();
+        await SeedAsync(vm, Dir("b"), "b");
+        var file = Outside("report.sql", "select 1");
+        await vm.OpenScriptFilesAsync([file]);
+        var inB = vm.Workspace.SelectedTab!;
+        var all = new Bearing.App.Results.RunScope("select 1", [8], 0, 8, IsWholeBuffer: true);
+        inB.ApplyInlineRun(all, [new InlineResultZone(8, Array.Empty<ResultSetViewModel>(), null)]);
+        await SeedAsync(vm, Dir("a"), "a");
+        var inA = vm.Workspace.NewTab("select 1", file);
+        inA.Text = "select 1 -- edited in a";
+
+        Assert.True(await vm.MoveTabToProjectAsync(inA, Dir("b")));
+
+        Assert.Same(inB, vm.Workspace.SelectedTab);
+        Assert.Empty(inB.InlineZones);
     }
 
     [Fact]

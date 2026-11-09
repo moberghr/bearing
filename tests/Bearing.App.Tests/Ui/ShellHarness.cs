@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Threading;
 using Bearing.App.Services;
@@ -94,6 +95,15 @@ internal sealed class ShellHarness : IDisposable
 
     public void Dispose()
     {
+        // Closing with unsaved grid edits asks first (QuitGuard); a test that left some behind would otherwise
+        // have its close held — or, with an unanswerable prompt, hang the run. Revert them: closing is teardown.
+        foreach (var tab in Vm.Workspace.AllTabs)
+        {
+            foreach (var set in tab.AllSets.Concat(tab.InlineZones.SelectMany(z => z.AllSets)).Where(s => s.HasPendingChanges).ToList())
+            {
+                set.RevertPending();
+            }
+        }
         try { Window.Close(); } catch { /* already closing */ }
         try { if (Directory.Exists(_root)) Directory.Delete(_root, true); } catch { /* temp dir */ }
     }

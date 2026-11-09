@@ -82,6 +82,21 @@ public class ScriptFileSyncTests : IDisposable
         Assert.Contains("Reloaded report.sql", vm.StatusText);
     }
 
+    /// <summary>A reload replaces the text the tab's inline results hung under — for a tab in the background
+    /// too, which the window never sees reloaded — so they go with it.</summary>
+    [Fact]
+    public async Task A_reload_drops_the_tabs_inline_results()
+    {
+        var (vm, tab, path) = await Open(new FakeDialogs());
+        var scope = Bearing.App.Results.InlineResultPlacement.Scope(Bearing.Sql.PostgresDialect.Instance, "select 1;", 0, false);
+        tab.ApplyInlineRun(scope, [new InlineResultZone(9, Array.Empty<ResultSetViewModel>(), null)]);
+
+        File.WriteAllText(path, "select 2; -- from elsewhere");
+        await Sync(vm).CheckAllAsync();
+
+        Assert.Empty(tab.InlineZones);
+    }
+
     [Fact]
     public async Task A_check_after_our_own_save_finds_nothing()
     {

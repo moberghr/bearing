@@ -24,12 +24,17 @@ public sealed class Keymap
     /// wins over a logical one when both match — that's what keeps the layout-independent fold/comment
     /// keys working on non-US layouts.
     /// </summary>
-    public string? Resolve(KeyScope scope, KeyModifiers mods, Key key, PhysicalKey physical)
+    public string? Resolve(KeyScope scope, KeyModifiers mods, Key key, PhysicalKey physical,
+        Func<string, bool>? accept = null)
     {
         string? logicalHit = null;
         foreach (var b in _bindings)
         {
             if (b.Scope != scope || !b.Gesture.Matches(mods, key, physical)) continue;
+            if (accept is not null && !accept(b.CommandId))
+            {
+                continue;
+            }
             if (b.Gesture.IsPhysical) return b.CommandId;
             logicalHit ??= b.CommandId;
         }

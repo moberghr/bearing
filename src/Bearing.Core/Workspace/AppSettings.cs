@@ -122,6 +122,10 @@ public sealed record AppSettings
     /// </summary>
     public bool GroupNumbersInResults { get; init; } = true;
 
+    /// <summary>Where results are shown: the pane below the editor (default), or inline beneath the statement
+    /// that produced them (<see cref="Workspace.ResultsPlacement"/>).</summary>
+    public ResultsPlacement ResultsPlacement { get; init; } = ResultsPlacement.Pane;
+
     /// <summary>
     /// The zone <c>timestamptz</c> values are displayed in (#77). <c>UTC</c> by default, which keeps every
     /// existing display identical — the same instant, now with its offset shown — and <c>system</c> for the
@@ -153,6 +157,12 @@ public sealed record AppSettings
     /// or an unsaved buffer is never interrupted by one.
     /// </summary>
     public bool AutoUpdate { get; init; } = true;
+
+    /// <summary>
+    /// Light or dark palette for the whole app, or whichever the OS is set to. Dark by default: it is the
+    /// palette Bearing shipped with, so upgrading changes nobody's screen.
+    /// </summary>
+    public ColorScheme ColorScheme { get; init; } = ColorScheme.Dark;
 
     // ---- persisted state, not user-facing preferences (no catalog entry; see SettingsCatalogTests) ----
 
@@ -216,4 +226,17 @@ public enum AutosaveMode
 
     /// <summary>Never write automatically. Named scripts go dirty and are guarded by the close prompt.</summary>
     Off,
+}
+
+/// <summary>The app's palette (<see cref="AppSettings.ColorScheme"/>).</summary>
+public enum ColorScheme
+{
+    /// <summary>Graphite surfaces, steel text — the palette Bearing shipped with.</summary>
+    Dark,
+
+    /// <summary>Light surfaces, ink text; same semantics token for token.</summary>
+    Light,
+
+    /// <summary>Follow the operating system's light/dark preference, live.</summary>
+    System,
 }

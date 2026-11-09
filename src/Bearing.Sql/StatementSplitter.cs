@@ -290,8 +290,13 @@ public static class StatementSplitter
     /// </para>
     /// </summary>
     public static string EnsureSeparated(ISqlDialect dialect, string sql)
+        => EnsureSeparated(dialect, sql, Split(dialect, sql));
+
+    /// <summary><see cref="EnsureSeparated(ISqlDialect, string)"/> over a split the caller already has
+    /// (<paramref name="spans"/> must be <see cref="Split(ISqlDialect, string)"/> of <paramref name="sql"/>),
+    /// so a caller that needs the spans too lexes the text once.</summary>
+    public static string EnsureSeparated(ISqlDialect dialect, string sql, IReadOnlyList<StatementSpan> spans)
     {
-        var spans = Split(dialect, sql);
         // A lone MySQL statement wrapped in DELIMITER lines is still one statement, but the directive and the
         // custom delimiter are the client's, not SQL: sent as typed, the server rejects the whole run (1064).
         // The span's text is the statement without them.
@@ -304,8 +309,7 @@ public static class StatementSplitter
         var parts = new List<string>();
         foreach (var span in spans)
         {
-            var t = span.Text.Trim();
-            while (t.EndsWith(";", StringComparison.Ordinal)) t = t[..^1].TrimEnd();
+            var t = SentText(span.Text);
             if (t.Length > 0) parts.Add(t);
         }
         if (parts.Count == 0) return sql;
@@ -318,5 +322,18 @@ public static class StatementSplitter
             terminated.Add(dialect.EndsWithLineComment(p) ? p + "\n;" : p + ";");
         }
         return string.Join("\n", terminated);
+    }
+
+    /// <summary>What <see cref="EnsureSeparated(ISqlDialect, string, IReadOnlyList{StatementSpan})"/> sends of a span: its
+    /// text without surrounding whitespace and trailing semicolons. Empty means the span is not sent, so it
+    /// takes no statement number (<c>QueryResult.StatementIndex</c>).</summary>
+    public static string SentText(string spanText)
+    {
+        var t = spanText.Trim();
+        while (t.EndsWith(";", StringComparison.Ordinal))
+        {
+            t = t[..^1].TrimEnd();
+        }
+        return t;
     }
 }

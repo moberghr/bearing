@@ -113,7 +113,7 @@ public class RoleNodeTests
         var superuser = rows.Single(r => r.Title == "postgres");
         Assert.Contains("superuser", superuser.Detail);
         // It makes every other privilege question moot, so it should not read like the rest.
-        Assert.NotEqual(rows.Single(r => r.Title == "shop_app").IconColorHex, superuser.IconColorHex);
+        Assert.NotEqual(rows.Single(r => r.Title == "shop_app").IconColorKey, superuser.IconColorKey);
     }
 
     [Fact]

@@ -16,14 +16,14 @@ namespace Bearing.App.Controls;
 /// </summary>
 public static class ResultRowPainter
 {
-    /// <summary>Subtle in-grid cell separator (design §Results grid: 1px #232A33 row + column dividers).</summary>
-    public static readonly IBrush GridLine =
-        new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.FromRgb(0x23, 0x2A, 0x33));
+    /// <summary>Subtle in-grid cell separator (design §Results grid: 1px row + column dividers) — the
+    /// <c>Grid.Line</c> token, so it follows a light/dark switch.</summary>
+    public static IBrush GridLine => Res("Grid.Line");
 
     /// <summary>Design row striping: a subtle neutral lift on alternate rows over the flat Bg.Editor body
-    /// (the handoff's rgba(255,255,255,.022) zebra tint, flattened over ink-700).</summary>
-    private static readonly IBrush RowStripe =
-        new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.FromRgb(0x1E, 0x24, 0x2B));
+    /// (the handoff's rgba(255,255,255,.022) zebra tint, flattened over ink-700) — the <c>Grid.Stripe</c>
+    /// token.</summary>
+    private static IBrush RowStripe => Res("Grid.Stripe");
 
     /// <summary>Striped background per row parity — odd (0-based) rows lift, even rows stay transparent
     /// so the grid's flat Bg.Editor surface shows through.</summary>

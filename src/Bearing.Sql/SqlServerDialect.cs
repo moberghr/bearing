@@ -182,6 +182,10 @@ public sealed class SqlServerDialect : ISqlDialect
     public IReadOnlyList<StatementSpan> SplitStatements(string sql)
         => StatementSplitter.SplitWithTSqlScanner(sql);
 
+    /// <summary>The scanner drops comments and whitespace, so its last token is the last code.</summary>
+    public int? CodeEnd(string sql)
+        => TSqlScanner.Tokenize(sql) is { Count: > 0 } tokens ? tokens[^1].Start + tokens[^1].Length : null;
+
     /// <summary>
     /// The vendored T-SQL grammar, through <see cref="TSqlParseRules"/> — which is what closed the last
     /// two places this dialect was still being read as Postgres. A bracketed source

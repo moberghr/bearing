@@ -24,6 +24,7 @@ public partial class MainWindow
     /// Grid-scoped commands register themselves from <c>ResultView</c> into this same registry.</summary>
     private void RegisterCommands(CommandRegistry r)
     {
+        _inline.RegisterCommands(r);
         // ---- Global ----
         r.Register(new KeyCommand(CommandIds.Run, "Run", KeyScope.Global, "Query", async () => await RunAsync()));
         r.Register(KeyCommand.Sync(CommandIds.CompletionTrigger, "Trigger completion", KeyScope.Global, "Editor", () => _completion.TriggerExplicit()));
@@ -53,6 +54,7 @@ public partial class MainWindow
         r.Register(KeyCommand.Sync(CommandIds.ViewToggleSidePane, "Toggle side pane", KeyScope.Global, "View",
             () => { if (Vm is not null) Vm.SidePaneOpen = !Vm.SidePaneOpen; }));
         r.Register(KeyCommand.Sync(CommandIds.ViewToggleResults, "Toggle results", KeyScope.Global, "View", ToggleResultsVisible));
+        r.Register(KeyCommand.Sync(CommandIds.ViewToggleInlineResults, "Toggle inline results", KeyScope.Global, "View", () => _inline.Toggle()));
         r.Register(new KeyCommand(CommandIds.QueryExportRun, "Export run to Excel workbook", KeyScope.Global, "Query",
             async () => { if (Vm is { } vm) await vm.Execution.ExportRunAsync(); },
             canRun: () => Vm?.Workspace.SelectedTab?.Results.Any(rs => rs.HasGrid) == true));
@@ -125,6 +127,8 @@ public partial class MainWindow
             KeyScope.Global, "Query", async () => await ExplainAsync(analyze: true)));
         r.Register(new KeyCommand(CommandIds.SettingsKeybindings, "Keyboard shortcuts…", KeyScope.Global, "View", async () => await EditKeybindingsAsync()));
         r.Register(new KeyCommand(CommandIds.SettingsOpen, "Settings…", KeyScope.Global, "View", async () => await OpenSettingsAsync()));
+        r.Register(KeyCommand.Sync(CommandIds.ViewToggleColorScheme, "Toggle light/dark theme", KeyScope.Global, "View",
+            ToggleColorScheme));
 
         // ---- Editor ----
         r.Register(KeyCommand.Sync(CommandIds.EditorOpenLineBelow, "Open line below", KeyScope.Editor, "Editor", () => _text.OpenLine(below: true)));
@@ -173,7 +177,8 @@ public partial class MainWindow
     /// Editor-scoped editing shortcuts, handled in the tunnel phase so they win over AvaloniaEdit's
     /// own handling of Enter / '/' / brackets. App-level shortcuts (Run, Save, …) stay in <see cref="OnKeyDown"/>.
     /// </summary>
-    private void OnEditorKeyDown(object? sender, KeyEventArgs e) => _dispatcher.TryHandle(e, KeyScope.Editor);
+    private void OnEditorKeyDown(object? sender, KeyEventArgs e)
+        => InlineZoneFocus.EditorKey(e, () => _dispatcher.TryHandle(e, KeyScope.Editor));   // never a zone's keys
 
     // Tracks whether Alt was pressed on its own (no other key during the hold) → a "tap" toggles the menu.
     private bool _altAlone;
@@ -181,11 +186,21 @@ public partial class MainWindow
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+        HandleGlobalKey(e);
+    }
+
+    /// <summary>A key nothing below took: the Alt-tap tracking and the Global scope. Shared with the inline
+    /// zones, which stop their keys bubbling into the editor and hand them here instead.</summary>
+    private bool HandleGlobalKey(KeyEventArgs e)
+    {
         // While an overlay (palette / quick-pick) is up it owns the keyboard — don't fire globals under it.
-        if (_palette.AnyOpen) return;
+        if (_palette.AnyOpen)
+        {
+            return false;
+        }
         // Alt-tap tracking: a lone Alt press arms the menu toggle (fired on key-up); any other key cancels it.
         _altAlone = e.Key is Key.LeftAlt or Key.RightAlt;
-        _dispatcher.TryHandle(e, KeyScope.Global); // Global scope; Editor/Grid scopes are handled in their tunnels
+        return _dispatcher.TryHandle(e, KeyScope.Global); // Editor/Grid scopes are handled in their tunnels
     }
 
     protected override void OnKeyUp(KeyEventArgs e)
@@ -213,7 +228,7 @@ public partial class MainWindow
         // handler — which is why editor.zoomReset never saw Ctrl+0: focus.editor shares that gesture and
         // was swallowing it here. Focusing the editor is a no-op when the caret is already in it, so drop
         // that one claim in that case and let the editor's binding have the key.
-        var claimed = Editor.TextArea.IsKeyboardFocusWithin ? _navCommandsFromEditor : _navCommands;
+        var claimed = _zoneFocus.EditorTextHasFocus(FocusManager?.GetFocusedElement()) ? _navCommandsFromEditor : _navCommands;
         _dispatcher.TryHandle(e, KeyScope.Global, claimed);
     }
 
@@ -305,9 +320,10 @@ public partial class MainWindow
         if (_resultsPane.Toggle()) Editor.TextArea.Focus();
     }
 
+    /// <summary>focus.results: the results pane's grid — or, in inline mode, the caret's zone (spec §8).</summary>
     private void FocusResultsPane()
     {
-        if (_resultsPane.IsVisible) ResultsView.FocusableGrid?.Focus();
+        _zoneFocus.FocusResults(Vm is not null, _resultsPane.IsVisible ? ResultsView.FocusableGrid : null);
     }
 
     /// <summary>focus.cycle (F6): move keyboard focus editor → results grid → sidebar → editor, skipping
@@ -316,6 +332,7 @@ public partial class MainWindow
     private void CycleFocus()
     {
         var regions = new List<(Control Focus, Visual Container)> { (Editor.TextArea, Editor) };
+        regions.AddRange(_zoneFocus.Regions());   // inline: the focused or the caret's zone
         if (_resultsPane.IsVisible && ResultsView.FocusableGrid is { } grid) regions.Add((grid, ResultsView));
         if (Sidebar.FocusTarget is { } side) regions.Add((side, side));
         FocusRing.Cycle(TopLevel.GetTopLevel(this), regions);
@@ -495,9 +512,7 @@ public partial class MainWindow
         // Capture the tab the run belongs to: execution is per-tab, so the user may switch tabs while it
         // runs. Only refresh the visible grid if that tab is still selected — otherwise its results are
         // stored on its own VM and render when the user switches back.
-        var ran = Vm.Workspace.SelectedTab;
-        await Vm.Execution.ExecuteAsync(_text.SqlToRun());
-        if (ReferenceEquals(ran, Vm.Workspace.SelectedTab)) RebuildResults(ran);
+        await _inline.RunAsync(_zoneFocus.ScopeToRun(), Vm.Execution.ExecuteAsync);   // in a zone: its statement
     }
 
     /// <summary>
@@ -513,7 +528,7 @@ public partial class MainWindow
     private async Task ExplainAsync(bool analyze)
     {
         if (Vm is null) return;
-        var sql = _text.SqlToRun();
+        var sql = _zoneFocus.SqlToExplain();
         if (string.IsNullOrWhiteSpace(sql)) { Vm.StatusText = "Nothing to explain."; return; }
 
         var plan = await Vm.Execution.ExplainAsync(sql, analyze);
@@ -528,9 +543,7 @@ public partial class MainWindow
     private async Task RunAllAsync()
     {
         if (Vm is null) return;
-        var ran = Vm.Workspace.SelectedTab;
-        await Vm.Execution.ExecuteAsync(_text.SqlToRunAll());
-        if (ReferenceEquals(ran, Vm.Workspace.SelectedTab)) RebuildResults(ran);
+        await _inline.RunAsync(_text.ScopeToRunAll(), Vm.Execution.ExecuteAsync);
     }
 
     private async Task OpenAsync()
@@ -583,11 +596,19 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>view.toggleColorScheme: flip to the opposite of what is on screen, as an explicit Dark/Light
+    /// setting — under "Match system" that means leaving it, which is what pressing a toggle asks for. Goes
+    /// through settings so it persists and the settings window agrees; the repaint follows from Changed.</summary>
+    private void ToggleColorScheme()
+        => Vm?.SettingsService.Update(s => s with { ColorScheme = Theming.ColorSchemes.Toggled(Application.Current) });
+
+    private void OnToggleColorSchemeClick(object? sender, RoutedEventArgs e) => ToggleColorScheme();
+
     /// <summary>Render the given tab's current result frame, plus the back-bar state (FK-nav history).</summary>
     internal void RebuildResults(EditorTabViewModel? tab)
     {
-        ResultsView.CanGoBack = tab?.CanGoBack ?? false;
-        ResultsView.Results = tab?.Results; // assignment triggers the rebuild (reads CanGoBack)
-        _resultsPane.SetVisible(tab?.Results is { Count: > 0 }); // reveal on results, collapse when none
+        _resultsPane.ShowTab(tab, _inline.PaneVisibilityFor(tab));
     }
+
+    private void OnToggleInlineResultsClick(object? sender, RoutedEventArgs e) => _inline.Toggle();
 }
