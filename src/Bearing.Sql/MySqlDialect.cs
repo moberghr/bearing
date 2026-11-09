@@ -196,8 +196,9 @@ public sealed class MySqlDialect : ISqlDialect
     /// transaction</b> before they run. On a manual-commit connection that is exactly the "transaction ended
     /// behind the driver's back" case the refusal exists for (#131): the chip would keep counting into a
     /// transaction the server already committed, and Rollback would roll back nothing while saying it had.
-    /// Naming them here makes manual-commit mode refuse them by name instead. Temporary tables are the
-    /// documented exception and are not listed.
+    /// Naming them here makes manual-commit mode refuse them by name while a transaction is held, or while the
+    /// batch's other writes would open one (<c>WriteRefusal.ReasonForTransactionControl</c>). Temporary tables
+    /// are the documented exception and are not listed.
     /// </para>
     /// </summary>
     public string? TransactionControl(IReadOnlyList<string> words) => Control(words).Name;
@@ -253,7 +254,7 @@ public sealed class MySqlDialect : ISqlDialect
     }
 
     /// <summary>The manual-commit refusal lists these by name, so the name says why.</summary>
-    private static (string Name, bool Implicit) Implicit(string statement) => ($"{statement} (commits implicitly)", true);
+    private static (string Name, bool Implicit) Implicit(string statement) => ($"{statement} ({StatementRisk.ImplicitCommitNote})", true);
 
     /// <summary>The word after <c>ANALYZE</c> in MariaDB's statement form — never <c>TABLE</c>,
     /// <c>NO_WRITE_TO_BINLOG</c> or <c>LOCAL</c>, which lead ANALYZE TABLE.</summary>

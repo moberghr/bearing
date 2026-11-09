@@ -86,7 +86,7 @@ public static class MySqlWriteGuard
 
     private static string Verdict(StatementRisk s)
         => string.Join('\u0001', s.Text, s.Verb, string.Join(',', s.RiskyVerbs), s.TransactionControl ?? "",
-            s.FromConservativeDefault, s.CommitsImplicitly);
+            s.FromConservativeDefault, s.CommitsImplicitly, s.MixesWriteWithImplicitCommit);
 
     private static void Describe(string sql, ISqlDialect dialect, MySqlQuoting quoting, List<StatementRisk> described)
     {
@@ -159,11 +159,17 @@ public static class MySqlWriteGuard
             {
                 (control, commitsImplicitly) = InteriorControl(statement.Tokens, dialect);
             }
+            // A compound that runs as it is sent and holds both kinds: its implicit commit stops it opening a
+            // transaction, so its writes would commit on their own. A stored program's body (lead CREATE) is
+            // not a compound here and is not run at creation, so it never sets this.
+            var mixes = commitsImplicitly && !guessed && IsCompound(words, lead)
+                        && risky.Any(verb => !dialect.CommitsImplicitly([verb]));
             described.Add(new StatementRisk(
                 statement.Text, first, risky,
                 TransactionControl: control,
                 FromConservativeDefault: guessed,
-                CommitsImplicitly: commitsImplicitly));
+                CommitsImplicitly: commitsImplicitly,
+                MixesWriteWithImplicitCommit: mixes));
         }
     }
 
@@ -306,6 +312,7 @@ public static class MySqlWriteGuard
     /// </summary>
     private static (string? Name, bool Implicit) InteriorControl(IReadOnlyList<MySqlToken> tokens, ISqlDialect dialect)
     {
+        string? implicitFound = null;
         for (var i = 1; i < tokens.Count; i++)
         {
             if (!tokens[i].IsWord || !StartsInteriorStatement(tokens[i - 1]))
@@ -324,10 +331,16 @@ public static class MySqlWriteGuard
             }
             if (dialect.TransactionControl(words) is { } name)
             {
-                return (name, dialect.CommitsImplicitly(words));
+                // Explicit control outranks an implicit commit: manual-commit mode refuses the former
+                // whatever the transaction's state, the latter only while one is held or about to be.
+                if (!dialect.CommitsImplicitly(words))
+                {
+                    return (name, false);
+                }
+                implicitFound ??= name;
             }
         }
-        return (null, false);
+        return implicitFound is null ? (null, false) : (implicitFound, true);
     }
 
     private static bool StartsInteriorStatement(MySqlToken previous)

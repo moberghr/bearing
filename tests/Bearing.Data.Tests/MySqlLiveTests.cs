@@ -456,6 +456,8 @@ public class MySqlLiveTests
         Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(8));
         Assert.NotNull(result.Error);
         Assert.NotEqual(DbErrorKind.Canceled, Provider.Classify(result.Error!));
+        // MySqlConnector's CommandTimeoutExpired, the number QueryErrorText explains the timeout from.
+        Assert.Equal("-1", result.Error!.SqlState);
     }
 
     [SkippableTheory]

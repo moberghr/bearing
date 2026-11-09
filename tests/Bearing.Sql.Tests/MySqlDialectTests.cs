@@ -503,6 +503,7 @@ public class MySqlDialectTests
     [InlineData("/*!50000 drop table t */", "DROP")]
     [InlineData("insert into t values (1) on duplicate key update a = 1", "INSERT")]
     [InlineData("with c as (select id from t for update) update t2 set v = 1 where id in (select id from c)", "UPDATE")]
+    [InlineData("with c as (select id from t for update) update t join c using (id) set x = 1", "UPDATE")]  // PR #180 review
     [InlineData("(select 1 into dumpfile '/var/lib/mysql-files/x')", "SELECT INTO DUMPFILE")]   // MySQL 8.4 runs it
     [InlineData("with c as (select replace(name, 'a', 'b') n from t) replace into t2 select * from c", "REPLACE")]
     public void Writes_are_named(string sql, string verb)
@@ -578,12 +579,13 @@ public class MySqlDialectTests
     public void A_labelled_compound_is_described_by_its_statement_not_its_label()
         => Assert.Equal("BEGIN", WriteGuard.Describe(My, "lbl: begin not atomic select 1; end lbl").Single().Verb);
 
-    [Fact]
-    public void A_real_update_after_a_locking_clause_is_a_named_write()
+    [Theory]
+    [InlineData("with c as (select id from t for update) update t2 set v = 1 where id in (select id from c)")]
+    [InlineData("with c as (select id from t for update) update t join c using (id) set x = 1")]  // PR #180 review
+    public void A_real_update_after_a_locking_clause_is_a_named_write(string sql)
     {
         // Each UPDATE is judged by its own position: the first is FOR UPDATE, the second is the write.
-        var statement = WriteGuard.Describe(
-            My, "with c as (select id from t for update) update t2 set v = 1 where id in (select id from c)").Single();
+        var statement = WriteGuard.Describe(My, sql).Single();
         Assert.True(statement.NamesAWrite);
         Assert.Contains("UPDATE", statement.RiskyVerbs);
     }
@@ -817,6 +819,30 @@ public class MySqlDialectTests
     [InlineData("analyze local table t", true)]
     public void The_dialect_types_an_implicit_commit(string sql, bool expected)
         => Assert.Equal(expected, WriteGuard.Describe(My, sql).Single().CommitsImplicitly);
+
+    [Theory]
+    [InlineData("begin not atomic insert into t values (1); create table x (a int); end", true)]
+    [InlineData("lbl: begin not atomic update t set a = 1; drop table y; end", true)]
+    [InlineData("if 1 then insert into t values (1); create table x (a int); end if", true)]
+    [InlineData("repeat delete from t; truncate table u; until 1 end repeat", true)]
+    // Not run as it is sent: a stored program's body.
+    [InlineData("create procedure p() begin insert into t values (1); create table x (a int); end", false)]
+    // Only one kind in the block.
+    [InlineData("begin not atomic create table x (a int); drop table y; end", false)]
+    [InlineData("begin not atomic insert into t values (1); delete from t; end", false)]
+    // Explicit control outranks it, and is refused on its own terms.
+    [InlineData("begin not atomic insert into t values (1); commit; end", false)]
+    [InlineData("insert into t values (1); create table x (a int)", false)]
+    public void A_block_that_mixes_a_write_with_an_implicit_commit_is_flagged(string sql, bool expected)
+        => Assert.Equal(expected, WriteGuard.Describe(My, sql).Any(s => s.MixesWriteWithImplicitCommit));
+
+    [Fact]
+    public void Other_engines_never_flag_a_mixed_block()
+    {
+        const string sql = "begin; insert into t values (1); create table x (a int); commit;";
+        Assert.DoesNotContain(WriteGuard.Describe(PostgresDialect.Instance, sql), s => s.MixesWriteWithImplicitCommit);
+        Assert.DoesNotContain(WriteGuard.Describe(SqlServerDialect.Instance, sql), s => s.MixesWriteWithImplicitCommit);
+    }
 
     [Theory]
     [InlineData("analyze select * from t")]

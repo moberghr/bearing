@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Bearing.App.Results;
 using Bearing.App.Services;
 using Bearing.Core.Data;
@@ -152,16 +153,157 @@ public class WriteRefusalTests
         Assert.Contains("read-only", explained);
     }
 
+    private static string? ManualCommitRefusal(string providerId, ISqlDialect dialect, string sql, bool held)
+        => WriteRefusal.ReasonForTransactionControl(
+            Conn() with { ProviderId = providerId, ManualCommit = true }, WriteGuard.Describe(dialect, sql), held);
+
     [Fact]
-    public void Manual_commit_refuses_an_implicit_commit_and_says_it_commits()
+    public void Manual_commit_refuses_an_implicit_commit_while_a_transaction_is_held_and_says_why()
     {
-        var conn = Conn() with { ProviderId = "mysql", ManualCommit = true };
-        var reason = WriteRefusal.ReasonForTransactionControl(
-            conn, WriteGuard.Describe(MySqlDialect.Instance, "lock tables t read"));
+        var reason = ManualCommitRefusal("mysql", MySqlDialect.Instance, "lock tables t read", held: true);
 
         Assert.NotNull(reason);
-        Assert.Contains("LOCK (commits implicitly)", reason);
+        Assert.Contains("LOCK not run: it commits implicitly", reason);
+        Assert.Contains("would end the transaction Bearing holds", reason);
+        Assert.DoesNotContain("use Commit or Rollback to end it", reason);
     }
+
+    [Theory]
+    [InlineData("create table x (a int)")]
+    [InlineData("alter table t add column b int")]
+    [InlineData("lock tables t read")]
+    [InlineData("drop table t")]
+    public void Manual_commit_runs_an_implicit_commit_alone_with_nothing_held(string sql)
+        => Assert.Null(ManualCommitRefusal("mysql", MySqlDialect.Instance, sql, held: false));
+
+    [Theory]
+    [InlineData("insert into t values (1); create table x (a int)")]
+    [InlineData("create table x (a int); update t set a = 1")]
+    public void Manual_commit_refuses_an_implicit_commit_beside_a_write(string sql)
+    {
+        var reason = ManualCommitRefusal("mysql", MySqlDialect.Instance, sql, held: false);
+
+        Assert.NotNull(reason);
+        Assert.Contains("CREATE not run", reason);
+        Assert.Contains("other writes in this batch", reason);
+    }
+
+    /// <summary>
+    /// A block MariaDB runs as it is sent, holding a write and a statement that commits implicitly: it opens no
+    /// transaction (it commits implicitly), so its INSERT would commit without Commit. Refused with nothing held,
+    /// as the same two statements written separately are (PR #180 confirmation review).
+    /// </summary>
+    [Theory]
+    [InlineData("begin not atomic insert into t values (1); create table x (a int); end")]
+    [InlineData("lbl: begin not atomic update t set a = 1; drop table y; end")]
+    [InlineData("if 1 then insert into t values (1); create table x (a int); end if")]
+    [InlineData("while @n > 0 do delete from t; alter table t add column b int; set @n = 0; end while")]
+    public void Manual_commit_refuses_a_block_that_mixes_a_write_with_an_implicit_commit(string sql)
+    {
+        var reason = ManualCommitRefusal("mysql", MySqlDialect.Instance, sql, held: false);
+
+        Assert.NotNull(reason);
+        Assert.Contains("inside a block that also writes", reason);
+        Assert.DoesNotContain("use Commit or Rollback to end it", reason);
+    }
+
+    /// <summary>A stored program's body is not run when it is created, so its writes commit nothing then:
+    /// creating one with nothing held still runs (skajfes's PR #180 thread).</summary>
+    [Theory]
+    [InlineData("create procedure p() begin insert into t values (1); create table x (a int); end")]
+    [InlineData("create trigger tr after insert on t for each row begin insert into log values (1); end")]
+    public void Manual_commit_still_creates_a_stored_program_whose_body_writes(string sql)
+        => Assert.Null(ManualCommitRefusal("mysql", MySqlDialect.Instance, sql, held: false));
+
+    /// <summary>A block of DDL alone, or of writes alone, is not the mixed case: the first commits only itself,
+    /// the second opens a transaction like any write.</summary>
+    [Theory]
+    [InlineData("begin not atomic create table x (a int); drop table y; end")]
+    [InlineData("begin not atomic insert into t values (1); delete from t where a = 2; end")]
+    public void Manual_commit_runs_a_block_that_does_not_mix(string sql)
+        => Assert.Null(ManualCommitRefusal("mysql", MySqlDialect.Instance, sql, held: false));
+
+    [Theory]
+    [InlineData("commit", false)]
+    [InlineData("commit", true)]
+    [InlineData("start transaction", false)]
+    [InlineData("begin not atomic create table x (a int); commit; end", false)]
+    public void Manual_commit_still_refuses_typed_control_on_mysql_whatever_is_held(string sql, bool held)
+    {
+        var reason = ManualCommitRefusal("mysql", MySqlDialect.Instance, sql, held);
+
+        Assert.NotNull(reason);
+        Assert.Contains("use Commit or Rollback to end it", reason);
+    }
+
+    [Theory]
+    [InlineData("create table x (a int)")]
+    [InlineData("insert into t values (1)")]
+    public void Opening_a_transaction_skips_a_statement_that_commits_implicitly(string sql)
+    {
+        var statement = WriteGuard.Describe(MySqlDialect.Instance, sql).Single();
+        Assert.Equal(!statement.CommitsImplicitly, WriteRefusal.OpensTransaction(statement));
+        Assert.Equal(sql.StartsWith("insert", StringComparison.Ordinal), WriteRefusal.OpensTransaction(statement));
+    }
+
+    [Theory]
+    [InlineData("postgres", false)]
+    [InlineData("postgres", true)]
+    [InlineData("sqlserver", false)]
+    public void Postgres_and_sql_server_ddl_is_untouched_by_manual_commit(string providerId, bool held)
+    {
+        // Their DDL is transactional (or, on SQL Server, at least does not commit an open transaction), so
+        // nothing about it is transaction control.
+        ISqlDialect dialect = providerId == "postgres" ? PostgresDialect.Instance : SqlServerDialect.Instance;
+        Assert.Null(ManualCommitRefusal(providerId, dialect, "create table x (a int)", held));
+        Assert.NotNull(ManualCommitRefusal(providerId, dialect, "commit", held));
+    }
+
+    [Fact]
+    public void A_mysql_timeout_names_the_connections_own_setting()
+    {
+        var explained = QueryErrorText.Explain(Err("-1"), Conn(timeoutSeconds: 30) with { ProviderId = "mysql" });
+
+        Assert.NotNull(explained);
+        Assert.Contains("prod-eu", explained);
+        Assert.Contains("statement timeout", explained);
+        Assert.Contains("KILL QUERY", explained);
+        Assert.DoesNotContain("pg_cancel_backend", explained);
+    }
+
+    [Fact]
+    public void A_mysql_timeout_with_no_bearing_timeout_blames_the_options_not_us()
+    {
+        var explained = QueryErrorText.Explain(Err("-1"), Conn() with { ProviderId = "mysql" });
+
+        Assert.NotNull(explained);
+        Assert.DoesNotContain("prod-eu's statement timeout", explained);
+        Assert.Contains("options", explained);
+    }
+
+    [Theory]
+    [InlineData("1317", "KILL QUERY")]
+    [InlineData("3024", "max_execution_time")]
+    [InlineData("1969", "max_statement_time")]
+    public void A_mysql_server_side_stop_says_so_in_mysql_terms(string number, string expected)
+    {
+        var explained = QueryErrorText.Explain(Err(number), Conn(timeoutSeconds: 30) with { ProviderId = "mysql" });
+
+        Assert.NotNull(explained);
+        Assert.Contains(expected, explained);
+        Assert.DoesNotContain("pg_cancel_backend", explained);
+        Assert.DoesNotContain("prod-eu's statement timeout", explained);
+    }
+
+    [Fact]
+    public void A_mysql_users_own_cancel_is_not_explained()
+        => Assert.Null(QueryErrorText.Explain(Err("-1"), Conn(timeoutSeconds: 30) with { ProviderId = "mysql" }, userCancelled: true));
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("1317")]
+    public void Mysql_error_numbers_mean_nothing_on_postgres(string number)
+        => Assert.Null(QueryErrorText.Explain(Err(number), Conn(timeoutSeconds: 30)));
 
     [Fact]
     public void Error_number_1792_means_read_only_only_on_mysql()

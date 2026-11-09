@@ -35,13 +35,24 @@ namespace Bearing.Sql;
 /// True when <see cref="TransactionControl"/> names a statement that ends the open transaction only as a
 /// side effect of what it does — MySQL's DDL, <c>LOCK TABLES</c>, <c>ANALYZE</c>, <c>START REPLICA</c> —
 /// rather than a statement whose purpose is the transaction. Set by the dialect
-/// (<see cref="ISqlDialect.CommitsImplicitly"/>), never read off the label. Manual-commit mode refuses both
-/// kinds alike; an exposed connection refuses these as "not a read", because "it would make a read-only
-/// session writable" is not true of them (§1.1).
+/// (<see cref="ISqlDialect.CommitsImplicitly"/>), never read off the label. Manual-commit mode refuses these
+/// only while a transaction is held or the batch's other writes would open one, with a sentence of their own
+/// (<c>WriteRefusal.ReasonForTransactionControl</c>); an exposed connection refuses them as "not a read",
+/// because "it would make a read-only session writable" is not true of them (§1.1).
+/// </param>
+/// <param name="MixesWriteWithImplicitCommit">
+/// True for a compound statement that runs as soon as it is sent — MariaDB's <c>BEGIN NOT ATOMIC … END</c>, a
+/// top-level <c>IF</c>/<c>WHILE</c>/… — whose body holds both a write that would open a manual-commit
+/// transaction and a statement that <see cref="CommitsImplicitly"/>. Run with nothing held, such a block would
+/// open nothing (it commits implicitly) and its writes would commit without Commit, so manual-commit mode refuses
+/// it the way it refuses an implicit commit beside a write in the same batch. Never set for a stored program's
+/// body (<c>CREATE PROCEDURE … BEGIN … END</c>), which is not run when it is created. Set by
+/// <see cref="MySqlWriteGuard"/> only; false on every other engine.
 /// </param>
 public sealed record StatementRisk(
     string Text, string Verb, IReadOnlyList<string> RiskyVerbs, bool GuardIsDialectAware = true,
-    string? TransactionControl = null, bool FromConservativeDefault = false, bool CommitsImplicitly = false)
+    string? TransactionControl = null, bool FromConservativeDefault = false, bool CommitsImplicitly = false,
+    bool MixesWriteWithImplicitCommit = false)
 {
     /// <summary>
     /// Whether the scan actually <b>named a write</b> in this statement — as opposed to being unable to
@@ -70,6 +81,11 @@ public sealed record StatementRisk(
     /// <summary>Why a read is being confirmed, appended to its <see cref="Label"/> so the prompt can say
     /// what it is unsure of instead of implying the statement writes.</summary>
     public const string UnparsedDialectNote = "dialect not parsed";
+
+    /// <summary>The note a dialect appends, in parentheses, to the <see cref="TransactionControl"/> name of a
+    /// statement that <see cref="CommitsImplicitly"/> — one constant, so a refusal that strips it to name the
+    /// bare statement cannot drift from the dialect that wrote it.</summary>
+    public const string ImplicitCommitNote = "commits implicitly";
 
     /// <summary>True when this statement writes data or alters schema — or when the guard cannot read
     /// this dialect and therefore cannot say that it doesn't.</summary>

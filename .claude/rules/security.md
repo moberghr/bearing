@@ -103,7 +103,8 @@ holds before selecting `*` or an options bag.
   every new *and every reset* pooled connection (§1.9's "not a `SET`" rule, met another way). Server refuses with
   1792. Timeout = `DefaultCommandTimeout` (MySqlConnector issues `KILL QUERY`), applied after the options bag.
 - DDL, `LOCK TABLES` etc. **commit implicitly**: `MySqlDialect.TransactionControl` names them
-  ("CREATE (commits implicitly)") so manual-commit refuses them. Temporary tables excepted.
+  ("CREATE (commits implicitly)") so manual-commit refuses them while a transaction is held or would open (§1.10).
+  Temporary tables excepted.
 - `sql_mode` is unknown to the lexer: `MySqlWriteGuard.Describe` reads a batch with a backslash under the default
   **and** the `NO_BACKSLASH_ESCAPES`/`ANSI_QUOTES` readings, appending any statement only another reading sees
   (widening only). `StatementRisk.CommitsImplicitly` (from `ISqlDialect.CommitsImplicitly`, never the label)
@@ -127,6 +128,9 @@ not part of `SamePool`/`SameConnection`.
   `XACT_STATE()` without re-deciding).
 - Typed `BEGIN`/`COMMIT`/`ROLLBACK` refused on manual-commit connections only, via per-dialect
   `ISqlDialect.TransactionControl` (T-SQL `BEGIN`/`END` are blocks).
+- Implicit commits (`StatementRisk.CommitsImplicitly`, MySQL DDL / `LOCK` …) are refused only while a transaction
+  is held or another write in the batch would open one — own sentence, never the typed-`COMMIT` one — and never
+  open a transaction themselves (`WriteRefusal.OpensTransaction`).
 - Commit/Rollback refused while `tab.IsRunning`. Forced rollbacks cancel the statement first. Idle sweep
   skips running tabs, is not re-entrant, and activity is stamped at statement start and finish.
 - Per tab (`TabTransactions`), each holding a `SessionLease`; capped at `CommitPolicy.MaxOpenPerPool`.

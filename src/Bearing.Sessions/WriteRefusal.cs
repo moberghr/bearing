@@ -60,24 +60,81 @@ public static class WriteRefusal
     /// longer has, the chip counting statements into nothing, and Commit throwing when the user presses it.
     /// </para>
     /// <para>
-    /// Refused for the whole batch, and whether or not a transaction is open yet. "Who owns the transaction
-    /// on this connection" has one answer on a manual-commit connection, and making it conditional on
-    /// whether one happens to be open right now is the ambiguity the refusal exists to remove.
+    /// Explicit control is refused for the whole batch, and whether or not a transaction is open yet. "Who
+    /// owns the transaction on this connection" has one answer on a manual-commit connection, and making it
+    /// conditional on whether one happens to be open right now is the ambiguity the refusal exists to remove.
+    /// </para>
+    /// <para>
+    /// A statement that only <em>commits implicitly</em> (<see cref="StatementRisk.CommitsImplicitly"/>) is
+    /// different: it is not about the transaction at all, and with none held it commits nothing but itself.
+    /// It is refused only when <paramref name="transactionHeld"/>, when a block that runs as it is sent mixes it
+    /// with writes (<see cref="StatementRisk.MixesWriteWithImplicitCommit"/>), or when another write in the
+    /// batch would open one — each with a sentence saying which, never the typed-<c>COMMIT</c> one.
     /// </para>
     /// </summary>
     public static string? ReasonForTransactionControl(
-        ConnectionInfo connection, IReadOnlyList<StatementRisk> statements)
+        ConnectionInfo connection, IReadOnlyList<StatementRisk> statements, bool transactionHeld)
     {
-        if (!CommitPolicy.IsManualCommit(connection)) return null;
+        if (!CommitPolicy.IsManualCommit(connection))
+        {
+            return null;
+        }
 
-        var found = statements.Where(s => s.IsTransactionControl)
+        var explicitControl = statements.Where(s => s.IsTransactionControl && !s.CommitsImplicitly)
             .Select(s => s.TransactionControl!)
             .Distinct(StringComparer.Ordinal)
             .ToList();
-        if (found.Count == 0) return null;
+        if (explicitControl.Count > 0)
+        {
+            return $"{connection.Name} is in manual-commit mode — {string.Join(", ", explicitControl)} not run. "
+                   + "Bearing holds the transaction on this connection; use Commit or Rollback to end it.";
+        }
 
-        return $"{connection.Name} is in manual-commit mode — {string.Join(", ", found)} not run. "
-               + "Bearing holds the transaction on this connection; use Commit or Rollback to end it.";
+        // A statement that only commits implicitly (MySQL DDL, LOCK TABLES, …) is no business of the
+        // transaction's while there is none: run alone with nothing held, it opens nothing
+        // (OpensTransaction) and commits only itself. It is refused only where it would end one — a
+        // transaction this tab already holds, or the one the other writes in its batch would open.
+        var implicitCommits = statements.Where(s => s.CommitsImplicitly)
+            .Select(s => s.TransactionControl ?? s.Verb)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (implicitCommits.Count == 0)
+        {
+            return null;
+        }
+        var named = string.Join(", ", implicitCommits.Select(StripImplicitNote));
+        if (transactionHeld)
+        {
+            return $"{connection.Name} is in manual-commit mode — {named} not run: it commits implicitly and "
+                   + "would end the transaction Bearing holds. Commit or Rollback first, then run it.";
+        }
+        if (statements.Any(s => s.MixesWriteWithImplicitCommit))
+        {
+            return $"{connection.Name} is in manual-commit mode — {named} not run: it commits implicitly inside a "
+                   + "block that also writes, so the block's writes would commit at once instead of waiting for "
+                   + "Commit. Run the writes and the statement that commits implicitly separately.";
+        }
+        if (statements.Any(OpensTransaction))
+        {
+            return $"{connection.Name} is in manual-commit mode — {named} not run: it commits implicitly, so the "
+                   + "other writes in this batch would not stay in the transaction Bearing opens for them. "
+                   + "Run it on its own.";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Whether this statement, run on a manual-commit connection with no transaction held, makes Bearing open
+    /// one (#131): it names a write — and does not commit implicitly, since a transaction opened for a
+    /// statement that commits it straight away would leave Bearing holding one the server no longer has.
+    /// </summary>
+    public static bool OpensTransaction(StatementRisk statement)
+        => statement.NamesAWrite && !statement.CommitsImplicitly;
+
+    private static string StripImplicitNote(string label)
+    {
+        var note = $" ({StatementRisk.ImplicitCommitNote})";
+        return label.EndsWith(note, StringComparison.Ordinal) ? label[..^note.Length] : label;
     }
 
     /// <summary>The same refusal for an inline-grid save, whose statements are writes by construction so
