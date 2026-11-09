@@ -423,10 +423,8 @@ public class LiveExposureTests : IAsyncLifetime
         var host = await LiveHostAsync();
         var path = Path.Combine(_root, "book.xlsx");
 
-        var response = (ExportResponse)await host.QueryAsync(
-            Run("agent-reads", "select title from film order by title limit 3; select first_name from actor order by actor_id limit 2")
-                with { OutPath = path },
-            CancellationToken.None);
+        var request = Run("agent-reads", "select title from film order by title limit 3; select first_name from actor order by actor_id limit 2");
+        var response = (ExportResponse)await host.QueryAsync(request with { OutPath = path }, CancellationToken.None);
 
         Assert.Equal(2, response.Results);
         Assert.Equal(5, response.Rows);
@@ -464,10 +462,8 @@ public class LiveExposureTests : IAsyncLifetime
         var host = await LiveHostAsync();
         var path = Path.Combine(_root, "capped.xlsx");
 
-        var response = (ExportResponse)await host.QueryAsync(
-            Run("agent-reads", "select film_id from film order by film_id; select actor_id from actor order by actor_id", maxRows: 3)
-                with { OutPath = path },
-            CancellationToken.None);
+        var request = Run("agent-reads", "select film_id from film order by film_id; select actor_id from actor order by actor_id", maxRows: 3);
+        var response = (ExportResponse)await host.QueryAsync(request with { OutPath = path }, CancellationToken.None);
 
         Assert.Equal(2, response.Results);
         Assert.Equal(6, response.Rows);
