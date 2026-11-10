@@ -32,7 +32,8 @@ public sealed record ProviderTraits(
     SqlLiteralStyle Literals,
     string EntraResource,
     string? EndpointHint,
-    bool EntraTakesUser)
+    bool EntraTakesUser,
+    AzureServerKind AzureServers)
 {
     /// <summary>PostgreSQL — the behaviour every caller had when there was one engine, so it is also the
     /// fallback below.</summary>
@@ -45,7 +46,9 @@ public sealed record ProviderTraits(
         EntraResource: "https://ossrdbms-aad.database.windows.net",
         EndpointHint: null,
         // Azure Database for PostgreSQL wants the role name as the user, alongside the token as password.
-        EntraTakesUser: true);
+        EntraTakesUser: true,
+        // Flexible server only: single server was retired in March 2025, so nothing is left to list.
+        AzureServers: new("microsoft.dbforpostgresql/flexibleservers", DatabasesApiVersion: "2022-12-01"));
 
     /// <summary>Microsoft SQL Server.</summary>
     public static ProviderTraits SqlServer { get; } = new(
@@ -58,7 +61,9 @@ public sealed record ProviderTraits(
         EndpointHint: "A named instance (HOST\\INSTANCE) is resolved by the SQL Browser service, "
                     + "which ignores the port.",
         // SqlClient refuses a User ID next to an access token; the token is the identity.
-        EntraTakesUser: false);
+        EntraTakesUser: false,
+        // Azure SQL logical servers. Managed Instances are a different resource type and are not listed.
+        AzureServers: new("microsoft.sql/servers", DatabasesApiVersion: "2021-11-01"));
 
     /// <summary>MySQL and MariaDB — one engine id, one dialect, one set of traits.</summary>
     public static ProviderTraits MySql { get; } = new(
@@ -70,7 +75,10 @@ public sealed record ProviderTraits(
         EntraResource: "https://ossrdbms-aad.database.windows.net",
         EndpointHint: null,
         // The Entra user name goes in User, with the token as the password — the Postgres arrangement.
-        EntraTakesUser: true);
+        EntraTakesUser: true,
+        // Flexible server only: single server was retired in September 2024. Azure has no managed MariaDB
+        // any more (retired September 2025), so a MariaDB connection browses the MySQL list too.
+        AzureServers: new("microsoft.dbformysql/flexibleservers", DatabasesApiVersion: "2023-12-30"));
 
     /// <summary>
     /// The traits for a provider id, matched the way the registry matches it (case-insensitively).
@@ -100,3 +108,8 @@ public sealed record ProviderTraits(
     /// holding a connection should use.</summary>
     public static ProviderTraits For(ConnectionInfo? info) => For(info?.ProviderId);
 }
+
+/// <summary>Where an engine's servers live in Azure, for the connection editor's Browse Azure
+/// (<see cref="AzureCatalog"/>): the ARM resource type a Resource Graph query filters on, and the API version its
+/// <c>/databases</c> child collection is read with.</summary>
+public sealed record AzureServerKind(string ResourceType, string DatabasesApiVersion);

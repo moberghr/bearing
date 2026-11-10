@@ -233,6 +233,31 @@ public sealed class ConnectionFieldModel
     }
 
     /// <summary>
+    /// Point the form at a server picked in Browse Azure: its host, the engine's default port (Azure listens on
+    /// it — a port left over from a local server would be a closed one), and <paramref name="database"/> when one
+    /// was picked. A null database leaves the Database field as it is; nothing else is touched.
+    /// <para>
+    /// Re-picking the server the form already points at (to choose another database) keeps the port: that one was
+    /// chosen for this server — Azure Postgres' built-in PgBouncer on 6432, say — not left over from another.
+    /// </para>
+    /// </summary>
+    public void UseAzureServer(string host, string? database)
+    {
+        var sameServer = string.Equals(Get("Host")?.Trim(), host.Trim(), StringComparison.OrdinalIgnoreCase);
+        Set("Host", host);
+        if (!sameServer
+            && Fields.FirstOrDefault(f => string.Equals(f.Key, "Port", StringComparison.OrdinalIgnoreCase))
+                is { Field.Default: { } port })
+        {
+            Set("Port", port);
+        }
+        if (database is not null)
+        {
+            Set("Database", database);
+        }
+    }
+
+    /// <summary>
     /// The same form, re-shaped for a different engine. Per field of the <em>new</em> provider:
     /// <list type="bullet">
     ///   <item>a value the user typed (one that differs from the old provider's default for that key) is

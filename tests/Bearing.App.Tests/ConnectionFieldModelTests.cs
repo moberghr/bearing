@@ -586,4 +586,47 @@ public class ConnectionFieldModelTests
         public ITransactionScope CreateTransactionScope(IDbConnectionFactory factory)
             => throw new NotSupportedException();
     }
+
+    // ---- Browse Azure ----------------------------------------------------------------------------
+
+    [Fact]
+    public void An_azure_pick_sets_host_database_and_the_engines_default_port()
+    {
+        var model = ConnectionFieldModel.For(Pg);
+        model.Set("Port", "55434");
+        model.Set("User", "me");
+
+        model.UseAzureServer("pg-prod.postgres.database.azure.com", "sales");
+
+        Assert.Equal("pg-prod.postgres.database.azure.com", model.Get("Host"));
+        Assert.Equal("sales", model.Get("Database"));
+        // A local port left behind would point at a closed one; Azure listens on the engine's own.
+        Assert.Equal("5432", model.Get("Port"));
+        Assert.Equal("me", model.Get("User"));
+    }
+
+    [Fact]
+    public void Re_picking_the_same_server_keeps_its_port()
+    {
+        var model = ConnectionFieldModel.For(Pg);
+        model.Set("Host", "pg-prod.postgres.database.azure.com");
+        model.Set("Port", "6432");   // Azure Postgres' built-in PgBouncer, chosen on purpose
+
+        model.UseAzureServer("PG-PROD.postgres.database.azure.com", "orders");
+
+        Assert.Equal("6432", model.Get("Port"));
+        Assert.Equal("orders", model.Get("Database"));
+    }
+
+    [Fact]
+    public void An_azure_pick_without_a_database_keeps_the_typed_one()
+    {
+        var model = ConnectionFieldModel.For(Ms);
+        model.Set("Database", "orders");
+
+        model.UseAzureServer("sql-prod.database.windows.net", database: null);
+
+        Assert.Equal("orders", model.Get("Database"));
+        Assert.Equal("1433", model.Get("Port"));
+    }
 }

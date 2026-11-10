@@ -6,6 +6,7 @@ using Bearing.App.Results;
 using Bearing.App.Views;
 using Bearing.Core.Data;
 using Bearing.Results;
+using Bearing.Sessions;
 
 namespace Bearing.App.Services;
 
@@ -103,13 +104,14 @@ public interface IDialogService
     /// decides which credential kind a new connection starts on and what the dialog warns about;
     /// <paramref name="providers"/> is the engine picker and the source of every field the dialog renders,
     /// so it must be the app's own registry rather than a private one — the dialog can only offer the
-    /// engines this build actually composed.</summary>
+    /// engines this build actually composed. <paramref name="azure"/> backs Browse Azure; null hides it.</summary>
     Task<ConnectionDialogResult?> ShowConnectionDialogAsync(
         ConnectionInfo? existing,
         string? existingPassword,
         Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
         SecretStoragePosture storage,
-        IProviderRegistry providers);
+        IProviderRegistry providers,
+        IAzureCatalog? azure);
 
     /// <summary>A script changed on disk while its tab held unsaved edits: which copy wins? Implementations
     /// with no window answer <see cref="DiskConflictChoice.Decide"/> — neither copy is thrown away unasked.</summary>
