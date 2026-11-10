@@ -203,6 +203,11 @@ public partial class MainWindow : Window
         Sidebar.ImportConnectionsRequested = () => _ = ImportFromDBeaverAsync();
         Sidebar.ImportFromInstalledRequested = () => _ = ImportFromInstalledAsync();
         Sidebar.EditorSyncRequested = LoadEditorFromSelectedTab;
+        Sidebar.RunSelectedTabRequested = () =>
+        {
+            LoadEditorFromSelectedTab();
+            CrashReporter.Observe(RunAllAsync(), "sidebar.select-top-rows");
+        };
         Sidebar.SqlPreviewRequested = _dialogs.ShowSqlPreview;
     }
 
