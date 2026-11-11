@@ -60,6 +60,29 @@ public class ExternalSqlPolicyTests
     }
 
     /// <summary>
+    /// dblink runs its text argument on a <b>second</b> libpq connection, which the read-only startup packet
+    /// never reached — so it is a read to the allow-list, a function call to the write guard, and a write the
+    /// server never saw as one. Measured on a connection exposed read-only:
+    /// <c>select dblink_exec('dbname=beacon','update app.inventory set qty = 777 where id = 1')</c> returned
+    /// <c>UPDATE 1</c>, and the two-argument <c>dblink(…)</c> form created a table. The whole family is
+    /// denied — the plumbing calls (connect / send_query / open) included, because the write can ride a later
+    /// call on the same side connection. The durable fence is still a role that cannot write (§1.11); this
+    /// just makes the obvious reach for it fail loudly.
+    /// </summary>
+    [Theory]
+    [InlineData("select dblink_exec('dbname=app', 'update film set title = ''x''')")]
+    [InlineData("select dblink_exec('dbname=app', 'create table evil(x int)')")]
+    [InlineData("select * from dblink('dbname=app', 'delete from film returning film_id') as t(id int)")]
+    [InlineData("select dblink_connect('dbname=app')")]
+    [InlineData("select dblink_send_query('c', 'update film set title = ''x''')")]
+    [InlineData("select dblink_open('c', 'cur', 'select 1')")]
+    [InlineData("select DBLINK_EXEC('dbname=app', 'drop table film')")]
+    public void A_function_that_runs_sql_on_a_second_connection_is_refused(string sql)
+    {
+        Assert.NotNull(Pg(sql));
+    }
+
+    /// <summary>
     /// Measured on a superuser connection with read-only fully in force:
     /// <c>select pg_read_file('/etc/passwd')</c> returned the file, and <c>pg_ls_dir('/etc')</c> listed it.
     /// Read-only bounds writes; it never bounded these, because they are reads — just not of the data.

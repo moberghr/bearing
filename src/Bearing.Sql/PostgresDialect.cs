@@ -172,6 +172,17 @@ public sealed class PostgresDialect : ISqlDialect
         "set_config",
         // The server's configuration and log files.
         "pg_reload_conf", "pg_rotate_logfile", "pg_stat_reset",
+        // A *second* connection, which the read-only startup packet never reached. These run their text
+        // argument on a libpq connection of dblink's own making, so the session's read-only mode does not
+        // bound it: measured, `select dblink_exec('dbname=…','update … set …')` ran the UPDATE on a
+        // connection exposed read-only — a plain SELECT to the allow-list, a function call to the write
+        // guard, and a write the server never saw as one because it happened on a session of its own. It is
+        // the same axis as set_config (a read in shape, an escape in effect), not the data-reaching axis
+        // above. The durable fence is still a role that cannot write (§1.11) — dblink reconnects as the same
+        // role unless auth hands it a stronger one — but these are the obvious reach for it and fail loudly
+        // now. Deny the whole family: the plumbing calls (connect/send_query/open) are the escape channel
+        // even when the write rides a later call.
+        "dblink", "dblink_exec", "dblink_connect", "dblink_send_query", "dblink_open",
     };
 
     /// <inheritdoc/>

@@ -86,7 +86,8 @@ public static class ExternalAccessPolicy
 
         var refusal = serverEnforcesReadOnly
             ? "Only reads are sent, and the session is opened read-only, so the server refuses a write the "
-              + "client did not catch."
+              + "client did not catch — except one a function runs on a connection of its own (dblink and "
+              + "the like), which the session's read-only mode does not reach."
             : "Only reads are sent. This engine has no session read-only to ask the server for, so that "
               + "check is the whole of it — a write hidden inside a procedure or built as dynamic SQL would "
               + "still reach the server.";
