@@ -12,10 +12,11 @@ public class SqlVariablesTests
 {
     private static readonly ISqlDialect Ms = SqlServerDialect.Instance;
     private static readonly ISqlDialect Pg = PostgresDialect.Instance;
+    private static readonly ISqlDialect My = MySqlDialect.Instance;
 
-    public static TheoryData<string> Dialects => new() { "pg", "ms" };
+    public static TheoryData<string> Dialects => new() { "pg", "ms", "my" };
 
-    private static ISqlDialect For(string id) => id == "pg" ? Pg : Ms;
+    private static ISqlDialect For(string id) => id switch { "pg" => Pg, "my" => My, _ => Ms };
 
     [Theory]
     [MemberData(nameof(Dialects))]
@@ -56,49 +57,46 @@ public class SqlVariablesTests
     public void T_sql_colons_that_already_mean_something_are_not_variables(string sql)
         => Assert.Empty(SqlVariables.Find(Ms, sql));
 
+    [Theory]
+    [InlineData("select ':id' as x")]                               // in a string
+    [InlineData("select \":id\" as x")]                             // double quotes delimit a string too
+    [InlineData("select 'it\\'s :id'")]                             // backslash-escaped quote, still inside
+    [InlineData("select 1 # :id")]                                  // hash comment
+    [InlineData("select 1 -- :id")]
+    [InlineData("select 1 /* :id */")]
+    [InlineData("select `:id` from t")]                             // in a backticked name
+    [InlineData("select @id, @@sql_mode")]                          // MySQL's own variables
+    [InlineData("select @n := 1")]                                  // assignment
+    [InlineData("set @n:=1")]
+    [InlineData("create procedure p() begin l1:loop leave l1; end loop; end")]   // label flush to its loop
+    [InlineData("select a : b")]
+    public void MySql_colons_that_already_mean_something_are_not_variables(string sql)
+        => Assert.Empty(SqlVariables.Find(My, sql));
+
     [Fact]
     public void A_variable_next_to_a_cast_is_still_found()
         => Assert.Equal(["id"], SqlVariables.Names(Pg, "select :id::int"));
 
     [Theory]
     [MemberData(nameof(Dialects))]
-    public void Values_are_spliced_in_as_typed(string dialect)
+    public void References_become_named_driver_placeholders_and_values_never_enter_the_text(string dialect)
     {
-        var values = new Dictionary<string, string> { ["id"] = "42", ["tbl"] = "public.film" };
+        var p = SqlVariables.Parameterize(For(dialect), "select * from film where film_id = :ID and :id > 0 and t = :'title'");
 
-        Assert.Equal(
-            "select * from public.film where film_id = 42 and 42 > 0",
-            SqlVariables.Substitute(For(dialect), "select * from :tbl where film_id = :ID and :id > 0", values));
+        Assert.Equal("select * from film where film_id = @bearing_id and @bearing_id > 0 and t = @bearing_title", p.Sql);
+        Assert.Equal(["ID", "title"], p.Names);                  // as first written, once each
+        Assert.Contains("title", p.QuotedNames);
+        Assert.DoesNotContain("id", p.QuotedNames);
     }
 
-    [Fact]
-    public void The_quoted_form_becomes_a_string_literal_in_each_dialect()
+    [Theory]
+    [MemberData(nameof(Dialects))]
+    public void Sql_without_variables_is_returned_unchanged(string dialect)
     {
-        var values = new Dictionary<string, string> { ["name"] = "O'Brien" };
+        const string sql = "select ':id', 1 -- :id";
+        var p = SqlVariables.Parameterize(For(dialect), sql);
 
-        Assert.Equal("where n = 'O''Brien'", SqlVariables.Substitute(Pg, "where n = :'name'", values));
-        Assert.Equal("where n = N'O''Brien'", SqlVariables.Substitute(Ms, "where n = :'name'", values));
+        Assert.Same(sql, p.Sql);
+        Assert.Empty(p.Names);
     }
-
-    [Fact]
-    public void Plain_and_quoted_references_to_one_name_are_one_variable()
-    {
-        Assert.Equal(["name"], SqlVariables.Names(Pg, "select :name, :'name'"));
-        Assert.Equal(
-            "select x, 'x'",
-            SqlVariables.Substitute(Pg, "select :name, :'name'", new Dictionary<string, string> { ["name"] = "x" }));
-    }
-
-    [Fact]
-    public void A_reference_with_no_value_is_left_for_the_server_to_report()
-        => Assert.Equal(
-            "select 1, :b",
-            SqlVariables.Substitute(Pg, "select :a, :b", new Dictionary<string, string> { ["a"] = "1" }));
-
-    [Fact]
-    public void A_value_is_never_rescanned_for_variables()
-        => Assert.Equal(
-            "select ':b', 2",
-            SqlVariables.Substitute(
-                Pg, "select :a, :b", new Dictionary<string, string> { ["a"] = "':b'", ["b"] = "2" }));
 }

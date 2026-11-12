@@ -150,7 +150,7 @@ public sealed class SqlServerDialect : ISqlDialect
     public IReadOnlyList<SqlVariableRef> FindVariables(string sql) => SqlVariables.FindTSql(sql);
 
     /// <inheritdoc/>
-    public string TextLiteral(string value) => "N'" + value.Replace("'", "''") + "'";
+    public IReadOnlyList<ScriptDirective> FindDirectives(string sql) => ScriptDirectives.FindTSql(sql);
 
     /// <summary>Split and classify a batch with <see cref="TSqlWriteGuard"/> — T-SQL's own lexical
     /// rules, so a delimited name, a keyword inside a string literal and an @-prefixed variable

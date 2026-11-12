@@ -98,6 +98,10 @@ public sealed class InlineZoneFocus
     /// <summary>What Explain covers, by the same rule as <see cref="ScopeToRun"/>.</summary>
     public string SqlToExplain() => _inline.FocusedZone is { } zone ? ForZone(zone).Sql : _text.SqlToRun();
 
+    /// <summary>The buffer above what Explain covers, for its <c>@set</c> lines (#103).</summary>
+    public string PreambleToExplain()
+        => _inline.FocusedZone is { } zone ? _text.ScopeForZone(zone, out _).Preamble : _text.PreambleAtCaret();
+
     private RunScope ForZone(ViewModels.InlineResultZone zone)
     {
         var scope = _text.ScopeForZone(zone, out var note);

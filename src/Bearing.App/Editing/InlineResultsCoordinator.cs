@@ -126,7 +126,7 @@ public sealed class InlineResultsCoordinator
     /// leaves them as they were. A zone that had focus gets it back on its replacement.
     /// </para>
     /// </summary>
-    public async Task RunAsync(RunScope scope, Func<string, Func<Task<bool>>, Task> execute)
+    public async Task RunAsync(RunScope scope, Func<string, Func<Task<bool>>, string?, Task> execute)
     {
         var ran = _selectedTab();
         var refocus = FocusedZone;
@@ -166,7 +166,7 @@ public sealed class InlineResultsCoordinator
 
         try
         {
-            await execute(scope.Sql, ConfirmEditsAsync);
+            await execute(scope.Sql, ConfirmEditsAsync, scope.Preamble);
         }
         finally
         {

@@ -179,6 +179,12 @@ public sealed class MySqlDialect : ISqlDialect
 
     public string RedactLiterals(string? sql) => MySqlLiterals.RedactLiterals(sql);
 
+    /// <inheritdoc/>
+    public IReadOnlyList<SqlVariableRef> FindVariables(string sql) => SqlVariables.FindMySql(sql);
+
+    /// <inheritdoc/>
+    public IReadOnlyList<ScriptDirective> FindDirectives(string sql) => ScriptDirectives.FindMySql(sql);
+
     public IReadOnlyList<StatementRisk> DescribeStatements(string sql) => MySqlWriteGuard.Describe(sql, this);
 
     /// <summary>

@@ -142,7 +142,7 @@ public class DialectWriteGuardTests
         public ISqlParseRules ParseRules => Ss.ParseRules;
         public bool InStringLiteral(string sql, int offset) => Ss.InStringLiteral(sql, offset);
         public IReadOnlyList<SqlVariableRef> FindVariables(string sql) => Ss.FindVariables(sql);
-        public string TextLiteral(string value) => Ss.TextLiteral(value);
+        public IReadOnlyList<ScriptDirective> FindDirectives(string sql) => Ss.FindDirectives(sql);
         public string RedactLiterals(string? sql) => Ss.RedactLiterals(sql);
 
         public string Quote(string i) => Ss.Quote(i);

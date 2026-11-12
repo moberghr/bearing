@@ -97,11 +97,10 @@ public sealed class DialogService : IDialogService
             ? new TextPromptDialog(prompt, initial).ShowDialog<string?>(window)
             : Task.FromResult<string?>(null);
 
-    public Task<IReadOnlyDictionary<string, string>?> PromptVariablesAsync(
-        IReadOnlyList<string> names, IReadOnlyDictionary<string, string> remembered)
+    public Task<IReadOnlyList<string>?> PromptVariablesAsync(IReadOnlyList<VariableField> fields)
         => Owner is { } window
-            ? new VariablesDialog(names, remembered).ShowDialog<IReadOnlyDictionary<string, string>?>(window)
-            : Task.FromResult<IReadOnlyDictionary<string, string>?>(null); // no window → don't run half-filled SQL
+            ? new VariablesDialog(fields).ShowDialog<IReadOnlyList<string>?>(window)
+            : Task.FromResult<IReadOnlyList<string>?>(null); // no window → don't run half-filled SQL
 
     public async Task<string?> PickFolderAsync(string title, string? startDir = null)
     {

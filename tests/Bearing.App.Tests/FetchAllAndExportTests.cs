@@ -41,7 +41,7 @@ public class FetchAllAndExportTests : IDisposable
         Func<string> Status);
 
     /// <summary>A tab that has run one pageable query, with <paramref name="totalRows"/> rows behind it.</summary>
-    private async Task<Harness> RunOnce(int totalRows)
+    private async Task<Harness> RunOnce(int totalRows, string sql = "select n from t")
     {
         Directory.CreateDirectory(_root);
         var executor = new PageableExecutor { TotalRows = totalRows, PageSize = Page };
@@ -70,7 +70,7 @@ public class FetchAllAndExportTests : IDisposable
 
         var dialogs = new FakeDialogs();
         var exec = new ExecutionViewModel(ctx, dialogs);
-        await exec.ExecuteAsync("select n from t");
+        await exec.ExecuteAsync(sql);
         return new Harness(exec, tab.LastResult!, tab, executor, dialogs, settings, () => status);
     }
 
@@ -323,5 +323,27 @@ public class FetchAllAndExportTests : IDisposable
 
         Assert.Contains("Export failed", h.Status());
         Assert.Equal(0, raised);
+    }
+
+    /// <summary>
+    /// A run with <c>:name</c> variables (#103) sends placeholders and values; every later trip for the same
+    /// result — the next page, the total, fetch-all and so export — re-runs that text and has to carry the
+    /// same values, or it would fail (or, worse, match something else).
+    /// </summary>
+    [Fact]
+    public async Task Paging_counting_and_fetching_all_resend_the_values_the_run_had()
+    {
+        var h = await RunOnce(totalRows: 35, sql: "@set min = 5\nselect n from t where n > :min");
+        var expected = new Bearing.Core.Data.QueryParameter("bearing_min", "5", Bearing.Core.Data.QueryParameterKind.Number);
+
+        Assert.Contains("@bearing_min", h.Executor.LastExecuteSql);
+        Assert.DoesNotContain("@set", h.Executor.LastExecuteSql);
+        await h.Exec.LoadMoreAsync(h.Result);
+        await h.Exec.CountTotalAsync(h.Result);
+        await h.Exec.FetchAllAsync(h.Result);
+
+        Assert.Equal(4, h.Executor.ParametersSeen.Count);     // run, page, count, stream
+        Assert.All(h.Executor.ParametersSeen, seen => Assert.Equal([expected], seen));
+        Assert.Contains("@bearing_min", h.Executor.LastStreamSql);
     }
 }

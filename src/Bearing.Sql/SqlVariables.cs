@@ -14,18 +14,21 @@ namespace Bearing.Sql;
 /// typed.</param>
 public sealed record SqlVariableRef(string Name, int Start, int Length, bool Quoted);
 
+/// <summary>What <see cref="SqlVariables.Parameterize"/> made of a script.</summary>
+/// <param name="Sql">The script with each <c>:name</c> replaced by its <c>@bearing_name</c> placeholder.</param>
+/// <param name="Names">The variables, distinct, in order of first appearance, as first written.</param>
+/// <param name="QuotedNames">Those written <c>:'name'</c> at least once — bound as text whatever they look like.</param>
+public sealed record ParameterizedSql(string Sql, IReadOnlyList<string> Names, IReadOnlySet<string> QuotedNames);
+
 /// <summary>
-/// DBeaver-style script variables: <c>:name</c> in a script is a hole the user fills in before it runs.
-/// The value is spliced in <b>as typed</b> — <c>42</c>, <c>'abc'</c>, <c>now()</c> or a table name all
-/// work, which is the point of a text substitution — and <c>:'name'</c> (psql's spelling) splices it in
-/// as a quoted string literal instead, so text values need no quoting by hand.
+/// <c>:name</c> placeholders the user fills in before a script runs (#103, DBeaver style). The values are
+/// <b>bound as driver parameters</b>, never spliced into the text: <see cref="Parameterize"/> rewrites each
+/// reference to a named placeholder and the executor binds the value to it, so a value can never change what
+/// the statement says, and the query log keeps the text with its placeholders and the values beside it.
 /// <para>
-/// Text substitution rather than driver parameters, deliberately. A bound parameter would arrive at
-/// Postgres as an untyped value and break <c>where id = $1</c> on an integer column the moment it was
-/// sent as text; it could not stand in for an identifier at all; and every later trip to the server for
-/// the same result — the next page, the total count, an export — would have to carry the bindings along.
-/// Substituted text is just the SQL that ran: the write guard reads it (so a value of <c>1; delete …</c>
-/// is caught like any other write), the query log records it, and paging re-runs it unchanged.
+/// What that gives up, deliberately: a value can't stand in for a table or column name, only for a value.
+/// <c>:'name'</c> (psql's spelling) is still accepted and means "this one is text", even when it looks like a
+/// number.
 /// </para>
 /// <para>
 /// Lexer-based per dialect, for the same reason <see cref="SqlRedactor"/> is: a colon inside a string,
@@ -46,28 +49,39 @@ public static class SqlVariables
     public static IReadOnlyList<string> Names(ISqlDialect dialect, string? sql)
         => Find(dialect, sql).Select(r => r.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
+    /// <summary>The prefix on every placeholder <see cref="Parameterize"/> writes. Long enough not to meet a
+    /// T-SQL local variable or a MySQL user variable of the user's own (<c>@id</c>), which would otherwise be
+    /// bound in their place.</summary>
+    public const string PlaceholderPrefix = "bearing_";
+
+    /// <summary>The driver-side name of variable <paramref name="name"/>: <c>bearing_id</c>, written into the
+    /// SQL as <c>@bearing_id</c>. Lower-cased, because <c>:Id</c> and <c>:id</c> are one variable.</summary>
+    public static string PlaceholderName(string name) => PlaceholderPrefix + name.ToLowerInvariant();
+
     /// <summary>
-    /// <paramref name="sql"/> with every reference replaced by its value. A reference with no entry in
-    /// <paramref name="values"/> is left as written, so the server reports it rather than this guessing.
+    /// <paramref name="sql"/> with every reference rewritten to its driver placeholder (<c>@bearing_id</c> —
+    /// the spelling Npgsql, SqlClient and MySqlConnector all bind by name), the distinct names in order of
+    /// first appearance, and which of them were written <c>:'name'</c> somewhere (those bind as text).
     /// </summary>
-    public static string Substitute(
-        ISqlDialect dialect, string sql, IReadOnlyDictionary<string, string> values)
+    public static ParameterizedSql Parameterize(ISqlDialect dialect, string sql)
     {
         var refs = Find(dialect, sql);
-        if (refs.Count == 0) return sql;
+        if (refs.Count == 0) return new ParameterizedSql(sql, [], new HashSet<string>(StringComparer.OrdinalIgnoreCase));
 
-        var lookup = new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase);
+        var names = new List<string>();
+        var quoted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var sb = new StringBuilder(sql.Length);
         var copied = 0;
         foreach (var r in refs)
         {
-            if (!lookup.TryGetValue(r.Name, out var value)) continue;
+            if (!names.Contains(r.Name, StringComparer.OrdinalIgnoreCase)) names.Add(r.Name);
+            if (r.Quoted) quoted.Add(r.Name);
             sb.Append(sql, copied, r.Start - copied);
-            sb.Append(r.Quoted ? dialect.TextLiteral(value) : value);
+            sb.Append('@').Append(PlaceholderName(r.Name));
             copied = r.Start + r.Length;
         }
         sb.Append(sql, copied, sql.Length - copied);
-        return sb.ToString();
+        return new ParameterizedSql(sb.ToString(), names, quoted);
     }
 
     /// <summary>The Postgres reading, over the vendored lexer.</summary>
@@ -129,6 +143,35 @@ public static class SqlVariables
             if (next.Kind == TSqlTokenKind.Word && IsName(next.Text))
                 found.Add(new SqlVariableRef(next.Text, t.Start, next.Start + next.Length - t.Start, false));
             else if (next.Kind == TSqlTokenKind.Text && QuotedName(next.Text) is { } name)
+                found.Add(new SqlVariableRef(name, t.Start, next.Start + next.Length - t.Start, true));
+        }
+        return found;
+    }
+
+    /// <summary>
+    /// The MySQL / MariaDB reading, over <see cref="MySqlScanner"/>. The scanner already keeps strings,
+    /// comments, backticked names and <c>@user</c> variables out of the way; two colons are left to rule out
+    /// here: <c>:=</c> (its <c>=</c> isn't a name, so it never matches) and a label written flush against its
+    /// keyword, <c>l1:loop</c> — a colon straight after a word is a label's, never a variable's.
+    /// </summary>
+    internal static IReadOnlyList<SqlVariableRef> FindMySql(string sql)
+    {
+        var tokens = MySqlScanner.Tokenize(sql);
+        var found = new List<SqlVariableRef>();
+
+        for (var i = 0; i + 1 < tokens.Count; i++)
+        {
+            var t = tokens[i];
+            if (t.Kind != MySqlTokenKind.Punctuation || t.Text != ":") continue;
+            if (i > 0 && tokens[i - 1] is { Kind: MySqlTokenKind.Word } prev
+                && prev.Start + prev.Length == t.Start) continue;
+
+            var next = tokens[i + 1];
+            if (next.Start != t.Start + 1) continue;
+
+            if (next.Kind == MySqlTokenKind.Word && IsName(next.Text))
+                found.Add(new SqlVariableRef(next.Text, t.Start, next.Start + next.Length - t.Start, false));
+            else if (next.Kind == MySqlTokenKind.Text && QuotedName(next.Text) is { } name)
                 found.Add(new SqlVariableRef(name, t.Start, next.Start + next.Length - t.Start, true));
         }
         return found;

@@ -86,10 +86,10 @@ public sealed class DemoTransactionScope : ITransactionScope
             return results;
         }
 
-        public async Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
+        public async Task<QueryResult> ExecutePageAsync(string pageSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
         {
             _scope.Ran();
-            return await _scope._inner.ExecutePageAsync(pageSql, ct).ConfigureAwait(false);
+            return await _scope._inner.ExecutePageAsync(pageSql, parameters, ct).ConfigureAwait(false);
         }
 
         public async IAsyncEnumerable<RowBatch> StreamRowsAsync(
@@ -103,10 +103,10 @@ public sealed class DemoTransactionScope : ITransactionScope
         /// <summary>Touches without counting, exactly as <c>TrackedExecutor</c> does: a count is a probe
         /// Bearing runs on the user's behalf, and counting it would have every write confirmation and every
         /// press of <c>[Count]</c> claim a statement nobody wrote (#131).</summary>
-        public Task<long?> CountAsync(string countSql, CancellationToken ct)
+        public Task<long?> CountAsync(string countSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
         {
             _scope.Touched();
-            return _scope._inner.CountAsync(countSql, ct);
+            return _scope._inner.CountAsync(countSql, parameters, ct);
         }
 
         public async Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(

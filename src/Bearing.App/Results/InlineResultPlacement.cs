@@ -24,6 +24,10 @@ public sealed record RunScope(string Sql, IReadOnlyList<int> StatementEnds, int 
     /// there belongs to the statement before, whose end touches this one's start when nothing separates them
     /// (<c>select 1;select 2;</c>). The one rule — the run and the unsaved-edits guard both ask it.</summary>
     public bool Replaces(int offset) => IsWholeBuffer || (offset > Start && offset <= End);
+
+    /// <summary>The buffer above the run — where the <c>@set</c> lines that give its <c>:name</c> variables
+    /// their values may sit (#103). Empty for Run All, whose text is the whole buffer.</summary>
+    public string Preamble { get; init; } = "";
 }
 
 /// <summary>

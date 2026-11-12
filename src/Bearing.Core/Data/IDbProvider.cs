@@ -224,7 +224,12 @@ public interface IQueryExecutor
     /// as a single row-returning statement. One result set, uncapped; base-table origin isn't read
     /// (the columns come from the first page). The executor only runs the SQL — it doesn't shape it.
     /// </summary>
-    Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct);
+    Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
+        => ExecutePageAsync(pageSql, [], ct);
+
+    /// <summary><see cref="ExecutePageAsync(string, CancellationToken)"/> for a query with named placeholders:
+    /// the next page of a run with <c>:name</c> variables re-sends the values the first page had (#103).</summary>
+    Task<QueryResult> ExecutePageAsync(string pageSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct);
 
     /// <summary>
     /// Run one already-built row-returning query (the caller shaped any LIMIT/OFFSET — see <c>PageSql</c>)
@@ -257,7 +262,11 @@ public interface IQueryExecutor
     /// say the count failed instead of silently leaving the row count blank.
     /// </para>
     /// </summary>
-    Task<long?> CountAsync(string countSql, CancellationToken ct);
+    Task<long?> CountAsync(string countSql, CancellationToken ct) => CountAsync(countSql, [], ct);
+
+    /// <summary><see cref="CountAsync(string, CancellationToken)"/> for a query with named placeholders —
+    /// a run's total, or a write's row-impact count, carrying the values the run was given (#103).</summary>
+    Task<long?> CountAsync(string countSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct);
 
     /// <summary>
     /// Run one or more generated writes (UPDATE/DELETE/INSERT) in a single transaction. Returns one

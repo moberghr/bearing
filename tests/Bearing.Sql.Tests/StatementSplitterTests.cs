@@ -310,4 +310,26 @@ public class StatementSplitterTests
 
         Assert.DoesNotContain("-- COMMIT;", span.Text);
     }
+
+    /// <summary>
+    /// #103: <c>@set</c> lines belong to no statement. A statement with no <c>;</c> used to run on into the
+    /// <c>@set</c> lines under it, so the editor highlighted and folded them as one statement (the reported
+    /// screenshot: lines 1–11 marked, the query being 1–5).
+    /// </summary>
+    [Theory]
+    [InlineData("pg")]
+    [InlineData("ms")]
+    [InlineData("my")]
+    public void Set_lines_under_a_statement_are_not_part_of_it(string dialect)
+    {
+        ISqlDialect d = dialect switch { "pg" => PostgresDialect.Instance, "my" => MySqlDialect.Instance, _ => SqlServerDialect.Instance };
+        const string sql = "select *\nfrom film f\nwhere f.film_id = :id\n    and f.description ilike :'test'\n\n\n\n"
+                         + "@set id = 61\n@set test = '%display%'\n";
+
+        var stmt = StatementSplitter.StatementAt(d, sql, 0)!;
+
+        Assert.Equal("select *\nfrom film f\nwhere f.film_id = :id\n    and f.description ilike :'test'", stmt.Text.Trim());
+        Assert.Equal(sql.IndexOf(":'test'") + 7, stmt.TrimmedEnd);
+        Assert.Single(StatementSplitter.Split(d, sql));
+    }
 }

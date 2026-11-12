@@ -531,7 +531,7 @@ public partial class MainWindow
         var sql = _zoneFocus.SqlToExplain();
         if (string.IsNullOrWhiteSpace(sql)) { Vm.StatusText = "Nothing to explain."; return; }
 
-        var plan = await Vm.Execution.ExplainAsync(sql, analyze);
+        var plan = await Vm.Execution.ExplainAsync(sql, analyze, _zoneFocus.PreambleToExplain());
         if (plan is null) return;   // ExplainAsync has already put the reason in the status bar
 
         // Owned by this window so it centres on it and closes with it, like the other dialogs.

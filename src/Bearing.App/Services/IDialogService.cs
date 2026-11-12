@@ -162,12 +162,12 @@ public interface IDialogService
     Task<string?> ShowTextPromptAsync(string prompt, string initial = "");
 
     /// <summary>
-    /// Ask for the value of each <c>:name</c> variable in a script about to run, seeded from
-    /// <paramref name="remembered"/>. Null if cancelled — the run does not happen. Values are returned as
-    /// typed, empty ones included; what they mean is <c>SqlVariables</c>' business.
+    /// Show the values a run is about to bind (#103), one row per value, and let the user fill in or change
+    /// them. A row a <c>@set</c> line already gives is prefilled and says so (<see cref="VariableField.Note"/>);
+    /// changing it overrides that line for this run only. Returns the text of every row, in order, as typed —
+    /// what it means is <c>ScriptDirectives.ParseValue</c>'s business — or null if cancelled, and nothing runs.
     /// </summary>
-    Task<IReadOnlyDictionary<string, string>?> PromptVariablesAsync(
-        IReadOnlyList<string> names, IReadOnlyDictionary<string, string> remembered);
+    Task<IReadOnlyList<string>?> PromptVariablesAsync(IReadOnlyList<VariableField> fields);
 
     /// <summary>Pick an existing folder (project open/new). Returns its local path, or null if cancelled.
     /// <paramref name="startDir"/> seeds the initial location — projects live next to each other, so the
@@ -200,3 +200,9 @@ public interface IDialogService
     /// <summary>Show SQL in a read-only, monospace preview window (non-modal; selectable to copy).</summary>
     void ShowSqlPreview(string sql, string title = "SQL preview — changes to save");
 }
+
+/// <summary>One row of the variables prompt.</summary>
+/// <param name="Name">The variable, shown as <c>:name</c>.</param>
+/// <param name="Initial">The text the box starts with: a <c>@set</c> value, or what was typed last time.</param>
+/// <param name="Note">Where a preset value came from (<c>@set, line 3</c>); null for a value to fill in.</param>
+public sealed record VariableField(string Name, string Initial, string? Note);

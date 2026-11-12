@@ -80,7 +80,7 @@ public class QueryLogReportTests
 
         Assert.Equal(
             ["executed_at", "connection", "environment", "database", "statement",
-             "duration_ms", "rows", "outcome", "error", "script", "origin"],
+             "duration_ms", "rows", "outcome", "error", "script", "origin", "values"],
             report.Table.Columns.Select(c => c.Name));
         Assert.Equal(2, report.Table.Rows.Count);
         Assert.Equal(["ok", "error"], Column(report, "outcome"));
@@ -291,6 +291,25 @@ public class QueryLogReportTests
         var report = Build([Entry("select 1"), Entry("select 2", origin: "cli")]);
 
         Assert.Equal(["bearing", "cli"], Column(report, "origin"));
+    }
+
+    /// <summary>The values a <c>:name</c> run was given (#103), beside its placeholder text and written the way
+    /// a <c>@set</c> line writes them; empty for a statement without any.</summary>
+    [Fact]
+    public void The_values_column_holds_what_each_placeholder_was_given()
+    {
+        var withValues = Entry("select * from t where id = :id and email = :email") with
+        {
+            Parameters =
+            [
+                new QueryLogParameter("id", "42", Bearing.Core.Data.QueryParameterKind.Number),
+                new QueryLogParameter("email", "ada@example.com", Bearing.Core.Data.QueryParameterKind.Text),
+            ],
+        };
+
+        var report = Build([withValues, Entry("select 1")]);
+
+        Assert.Equal(["id = 42; email = 'ada@example.com'", ""], Column(report, "values"));
     }
 
     [Fact]

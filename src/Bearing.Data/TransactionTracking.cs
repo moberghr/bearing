@@ -63,12 +63,13 @@ internal sealed class TrackedExecutor : IQueryExecutor
         finally { _onTouch(); }
     }
 
-    public async Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
+    public async Task<QueryResult> ExecutePageAsync(
+        string pageSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
     {
         _onStatement();
         try
         {
-            var result = await _inner.ExecutePageAsync(pageSql, ct).ConfigureAwait(false);
+            var result = await _inner.ExecutePageAsync(pageSql, parameters, ct).ConfigureAwait(false);
             if (!result.Success) _onFailure();
             return result;
         }
@@ -97,10 +98,11 @@ internal sealed class TrackedExecutor : IQueryExecutor
     }
 
     /// <summary>Touches but does not count, and is exempt from the abort rule — see the class remarks.</summary>
-    public async Task<long?> CountAsync(string countSql, CancellationToken ct)
+    public async Task<long?> CountAsync(
+        string countSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
     {
         _onTouch();
-        try { return await _inner.CountAsync(countSql, ct).ConfigureAwait(false); }
+        try { return await _inner.CountAsync(countSql, parameters, ct).ConfigureAwait(false); }
         finally { _onTouch(); }
     }
 

@@ -21,10 +21,15 @@ internal static class ResultSetBuilder
     /// result off it is editable and the lock chip says so.</param>
     public static List<ResultSetViewModel> BuildResultSets(
         IReadOnlyList<QueryResult> results, string sql, ISchemaSnapshot? snapshot,
-        ProviderTraits? traits = null, bool connectionReadOnly = false)
+        ProviderTraits? traits = null, bool connectionReadOnly = false, PreparedRun? run = null)
     {
         var pageable = results.Count == 1 && results[0].Success && results[0].Columns.Count > 0;
-        var statements = StatementsBehind(results, sql);
+        // With variables the text sent has driver placeholders in it (`@bearing_id`), which is no answer to
+        // "what produced this": every set reports what the user wrote, with its values set above it.
+        var bound = run is { Parameters.Count: > 0 } ? run : null;
+        var statements = bound is null ? StatementsBehind(results, sql) : null;
+        var shown = bound is null ? null
+            : ScriptDirectives.Render(bound.LogParameters.Select(p => (p.Name, p.Value, p.Kind))) + bound.LogSql;
         return results
             .Select((r, i) =>
             {
@@ -32,14 +37,17 @@ internal static class ResultSetBuilder
                 var (target, reason) = snapshot is null || r.Columns.Count == 0
                     ? (null, null)
                     : EditabilityResolver.ResolveWithReason(snapshot, r.Columns, connectionReadOnly);
-                var vm = new ResultSetViewModel(r, statements?[i] ?? sql, pageable)
+                var source = statements?[i] ?? sql;
+                var vm = new ResultSetViewModel(r, source, pageable)
                 {
+                    ExecutedSql = shown ?? (string.IsNullOrWhiteSpace(source) ? null : source.Trim()),
                     // So Copy as ▸ SQL renders this engine's literals and quoting, not Postgres'.
                     Traits = traits ?? ProviderTraits.Postgres,
                     ForeignKeyColumns = DetectForeignKeyColumns(snapshot, r.Columns),
                     PrimaryKeyColumns = DetectPrimaryKeyColumns(snapshot, r.Columns),
                     EditTarget = target,
                     LockReason = target is null ? reason : null,
+                    SourceParameters = bound?.Parameters ?? [],
                 };
                 if (vm.IsEditable) vm.CaptureOriginals();
                 return vm;

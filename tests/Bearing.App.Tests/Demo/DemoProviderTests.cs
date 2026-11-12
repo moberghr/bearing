@@ -180,8 +180,8 @@ public class DemoProviderTests
         executor.Serve("shop.payment");
         executor.Fallback = [];
 
-        Assert.Empty((await executor.ExecutePageAsync("select * from shop.payment limit 1", default)).Rows);
-        Assert.Equal(0, await executor.CountAsync("select * from shop.payment", default));
+        Assert.Empty((await executor.ExecutePageAsync("select * from shop.payment limit 1", [], default)).Rows);
+        Assert.Equal(0, await executor.CountAsync("select * from shop.payment", [], default));
         await foreach (var _ in executor.StreamRowsAsync("select * from shop.payment", Options, default)) { }
     }
 
@@ -310,7 +310,7 @@ public class DemoProviderTests
         var executor = DemoExecutor.Default();
 
         var page = await executor.ExecutePageAsync(
-            "select * from (select * from shop.payment) t limit 10 offset 10", default);
+            "select * from (select * from shop.payment) t limit 10 offset 10", [], default);
 
         Assert.All(page.Columns, c => Assert.False(c.HasBaseColumn));
         Assert.True(DemoCatalog.Payments().Columns.All(c => c.HasBaseColumn));
@@ -321,15 +321,15 @@ public class DemoProviderTests
     {
         // Three distinct outcomes the UI renders differently, and all three have to be reachable.
         var executor = DemoExecutor.Default();
-        Assert.Equal(40, await executor.CountAsync("select * from shop.payment", default));
+        Assert.Equal(40, await executor.CountAsync("select * from shop.payment", [], default));
 
         executor.Uncountable = true;
-        Assert.Null(await executor.CountAsync("select * from shop.payment", default));
+        Assert.Null(await executor.CountAsync("select * from shop.payment", [], default));
 
         executor.Uncountable = false;
         executor.CountError = new InvalidOperationException("connection lost");
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => executor.CountAsync("select * from shop.payment", default));
+            () => executor.CountAsync("select * from shop.payment", [], default));
     }
 
     [Fact]

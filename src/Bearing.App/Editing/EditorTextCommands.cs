@@ -67,12 +67,12 @@ public sealed class EditorTextCommands
         var text = _editor.Text;
         if (!string.IsNullOrWhiteSpace(_editor.SelectedText))
         {
-            return Results.InlineResultPlacement.Scope(_dialect(), _editor.SelectedText, _editor.SelectionStart,
-                isWholeBuffer: false);
+            return WithPreamble(Results.InlineResultPlacement.Scope(_dialect(), _editor.SelectedText,
+                _editor.SelectionStart, isWholeBuffer: false));
         }
         if (StatementSplitter.StatementAt(_dialect(), text, _editor.CaretOffset) is { } stmt)
         {
-            return Results.InlineResultPlacement.Scope(_dialect(), stmt.Text, stmt.Start, isWholeBuffer: false);
+            return WithPreamble(Results.InlineResultPlacement.Scope(_dialect(), stmt.Text, stmt.Start, isWholeBuffer: false));
         }
         return Results.InlineResultPlacement.Scope(_dialect(), text, 0, isWholeBuffer: false);
     }
@@ -103,7 +103,7 @@ public sealed class EditorTextCommands
         // As many statements as the run that made the zone: a multi-statement selection's zone re-runs them
         // all, not just the last one, or the rest of its sets would vanish.
         return Results.InlineResultPlacement.ZoneSpan(_dialect(), text, zone.Offset, zone.StatementCount) is { } span
-            ? Results.InlineResultPlacement.Scope(_dialect(), text[span.Start..span.End], span.Start, isWholeBuffer: false)
+            ? WithPreamble(Results.InlineResultPlacement.Scope(_dialect(), text[span.Start..span.End], span.Start, isWholeBuffer: false))
             : ScopeToRun();
     }
 
@@ -115,6 +115,18 @@ public sealed class EditorTextCommands
             : (caret, caret);
 
     /// <summary><see cref="SqlToRunAll"/> together with where each statement ends in the buffer.</summary>
+    /// <summary>The scope with the buffer above it attached, so the run can read the <c>@set</c> lines there
+    /// (#103): a value set at the top of a script applies to a statement run on its own further down.</summary>
+    private Results.RunScope WithPreamble(Results.RunScope scope)
+        => scope with { Preamble = _editor.Text[..Math.Clamp(scope.Start, 0, _editor.Text.Length)] };
+
+    /// <summary>The buffer above the statement Explain would plan — its <c>@set</c> lines, as for a Run.</summary>
+    public string PreambleAtCaret() => string.IsNullOrWhiteSpace(_editor.SelectedText)
+        ? StatementSplitter.StatementAt(_dialect(), _editor.Text, _editor.CaretOffset) is { } stmt
+            ? _editor.Text[..stmt.Start]
+            : ""
+        : _editor.Text[.._editor.SelectionStart];
+
     public Results.RunScope ScopeToRunAll()
         => Results.InlineResultPlacement.Scope(_dialect(), _editor.Text, 0, isWholeBuffer: true);
 

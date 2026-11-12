@@ -21,6 +21,62 @@ public class QueryLogPrivacyTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch { /* best-effort */ }
     }
 
+    private static readonly QueryLogParameter[] Values =
+    [
+        new("email", "ada@example.com", Bearing.Core.Data.QueryParameterKind.Text),
+        new("id", "42", Bearing.Core.Data.QueryParameterKind.Number),
+        new("gone", null, Bearing.Core.Data.QueryParameterKind.Null),
+    ];
+
+    /// <summary>Append an entry carrying <c>:name</c> values and read it back once the writer stored it.</summary>
+    private static async Task<QueryLogEntry> RoundTripWithValuesAsync(SqliteQueryLog log, string sql)
+    {
+        log.Append(Entry(sql) with { Parameters = Values });
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            var rows = await log.SearchAsync(new QueryLogQuery(), CancellationToken.None);
+            if (rows.Count > 0) return rows[0];
+            await Task.Delay(20);
+        }
+        throw new InvalidOperationException("the entry was never written");
+    }
+
+    // ---- :name values (#103) --------------------------------------------------------------------
+
+    [Fact]
+    public async Task Without_redaction_values_are_stored_beside_the_placeholder_text()
+    {
+        await using var log = new SqliteQueryLog(DbPath);
+
+        var stored = await RoundTripWithValuesAsync(log, "select * from t where email = :email and id = :id and x = :gone");
+
+        Assert.Equal("select * from t where email = :email and id = :id and x = :gone", stored.SqlText);
+        Assert.Equal(Values, stored.Parameters);
+    }
+
+    [Fact]
+    public async Task With_redaction_values_are_dropped_like_literals_and_never_reach_the_file()
+    {
+        await using (var log = new SqliteQueryLog(DbPath, redactSql: (_, sql) => sql))
+        {
+            var stored = await RoundTripWithValuesAsync(log, "select * from t where email = :email");
+            Assert.Empty(stored.Parameters);
+            Assert.Equal("select * from t where email = :email", stored.SqlText);
+        }
+
+        Assert.DoesNotContain("ada@example.com", await ReadAllTextSharedAsync(DbPath));
+    }
+
+    [Fact]
+    public async Task A_redactor_that_throws_drops_the_values_too()
+    {
+        await using var log = new SqliteQueryLog(DbPath, redactSql: (_, _) => throw new InvalidOperationException("boom"));
+
+        var stored = await RoundTripWithValuesAsync(log, "select :email");
+
+        Assert.Empty(stored.Parameters);
+    }
+
     private static QueryLogEntry Entry(string sql) => new()
     {
         ExecutedAt = DateTimeOffset.UtcNow,

@@ -84,6 +84,10 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// <summary>The exact SELECT that produced this set (for paging/count); null unless pageable.</summary>
     public string? SourceSql { get; }
 
+    /// <summary>The values bound to <see cref="SourceSql"/>'s placeholders (#103) — re-sent with every page,
+    /// count and fetch-all, which run that same text. Empty for a query without <c>:name</c> variables.</summary>
+    public IReadOnlyList<QueryParameter> SourceParameters { get; init; } = [];
+
     /// <summary>
     /// The engine this set came from — its dialect and literal style. Carried on the result rather than
     /// looked up per use because the surfaces that need it (Copy as ▸ SQL, the IN list) reach it from the
@@ -109,7 +113,12 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// where the numbers came from.
     /// </para>
     /// </summary>
-    public string? ExecutedSql { get; }
+    /// <para>
+    /// A run with <c>:name</c> variables reports the text the user wrote, placeholders kept, with the
+    /// <c>@set</c> lines that give its values above it — the same shape history reopens it in, so what is
+    /// pasted can be run again as it is (#103).
+    /// </para>
+    public string? ExecutedSql { get; init; }
 
     /// <summary>Column indices that are foreign keys (rendered clickable → navigate to the referenced row).
     /// Computed by the shell from the schema snapshot; empty when the connection has no snapshot yet.</summary>

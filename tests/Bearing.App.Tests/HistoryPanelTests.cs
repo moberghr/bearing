@@ -214,4 +214,41 @@ public class HistoryPanelTests
 
         Assert.Equal("✕ [cli] select 1", row.DisplayQuery);
     }
+
+    /// <summary>
+    /// #103: a row that ran with <c>:name</c> values shows them beside the query, and opening it gives the
+    /// query as written with a <c>@set</c> line per value above it — so it runs again without a prompt.
+    /// </summary>
+    [Fact]
+    public void A_row_with_values_shows_them_and_opens_with_set_lines_above_the_query()
+    {
+        var entry = Entry(DateTimeOffset.Now, ok: true, sql: "select * from rental where customer_id = :id and d > :since") with
+        {
+            Parameters =
+            [
+                new QueryLogParameter("id", "42", Bearing.Core.Data.QueryParameterKind.Number),
+                new QueryLogParameter("since", "2005-06-01", Bearing.Core.Data.QueryParameterKind.Text),
+            ],
+        };
+
+        var row = new HistoryRowViewModel(entry, null);
+
+        Assert.Equal("id = 42 · since = '2005-06-01'", row.ParametersText);
+        Assert.True(row.HasParameters);
+        Assert.Equal(
+            "@set id = 42\n@set since = '2005-06-01'\nselect * from rental where customer_id = :id and d > :since",
+            row.OpenText);
+        Assert.Equal("select * from rental where customer_id = :id and d > :since", row.Query);   // the list line
+    }
+
+    /// <summary>Without stored values — none given, or dropped because literals are redacted — the row opens
+    /// as plain SQL, and running it asks.</summary>
+    [Fact]
+    public void A_row_without_values_opens_as_its_sql()
+    {
+        var row = new HistoryRowViewModel(Entry(DateTimeOffset.Now, ok: true, sql: "select :id"), null);
+
+        Assert.False(row.HasParameters);
+        Assert.Equal("select :id", row.OpenText);
+    }
 }

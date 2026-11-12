@@ -316,7 +316,7 @@ public sealed class DemoExecutor : IQueryExecutor
     /// from the real provider: the base table of a wrapped paging query is not read, so a fixture that kept
     /// them would make the UI look more capable on page two than it is.
     /// </summary>
-    public Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
+    public Task<QueryResult> ExecutePageAsync(string pageSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         Record(pageSql);
@@ -375,7 +375,7 @@ public sealed class DemoExecutor : IQueryExecutor
         yield return new RowBatch(result.Columns, batch, truncated);
     }
 
-    public Task<long?> CountAsync(string sql, CancellationToken ct)
+    public Task<long?> CountAsync(string sql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         if (CountError is not null) throw CountError;

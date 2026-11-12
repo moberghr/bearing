@@ -359,9 +359,10 @@ public interface ISqlDialect
     /// </summary>
     IReadOnlyList<SqlVariableRef> FindVariables(string sql);
 
-    /// <summary><paramref name="value"/> as this engine's string literal — what a <c>:'name'</c>
-    /// variable is replaced with. T-SQL's carries the <c>N</c> prefix so non-Latin text survives.</summary>
-    string TextLiteral(string value);
+    /// <summary>Every <c>@set name = value</c> line in <paramref name="sql"/>, read with this engine's lexer so
+    /// one inside a string or a comment is not taken for a directive. See <see cref="ScriptDirectives"/>;
+    /// callers go through it rather than here.</summary>
+    IReadOnlyList<ScriptDirective> FindDirectives(string sql);
 
     // ---- Completion ----
 

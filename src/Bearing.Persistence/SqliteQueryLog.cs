@@ -96,18 +96,20 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         if (version < 2) MigrateTo2(conn);
         if (version < 3) MigrateTo3(conn);
         if (version < 4) MigrateTo4(conn);
+        if (version < 5) MigrateTo5(conn);
     }
 
     /// <summary>
     /// The schema this build writes. 2 added the connection id and environment (#113); 3 added the
-    /// transaction id (#131); 4 added the origin, so a row can say which host ran it (§1.11).
+    /// transaction id (#131); 4 added the origin, so a row can say which host ran it (§1.11); 5 added the
+    /// values bound to a statement's <c>:name</c> placeholders (#103).
     /// <para>
     /// Internal rather than private so the tests that assert a migration ran can say "the log is at the
     /// current version" — which is the property worth holding — instead of repeating the number and
     /// needing three edits at the next bump.
     /// </para>
     /// </summary>
-    internal const long SchemaVersion = 4;
+    internal const long SchemaVersion = 5;
 
     private static void MigrateTo1(SqliteConnection conn)
     {
@@ -219,6 +221,20 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         transaction.Commit();
     }
 
+    /// <summary>
+    /// v5 adds <c>parameters</c>: the values a run bound to its <c>:name</c> placeholders (#103), as a JSON
+    /// array, null when it had none. The SQL column keeps the placeholders; this keeps what filled them, so
+    /// history can show the values and reopen the query with them set. Same two defences as v2–v4.
+    /// </summary>
+    private static void MigrateTo5(SqliteConnection conn)
+    {
+        using var transaction = conn.BeginTransaction(deferred: false);
+        if (!HasColumn(conn, "query_log", "parameters"))
+            Execute(conn, "ALTER TABLE query_log ADD COLUMN parameters TEXT;");
+        Execute(conn, "PRAGMA user_version = 5;");
+        transaction.Commit();
+    }
+
     /// <summary>Whether a table already has a column, from <c>pragma table_info</c>.</summary>
     private static bool HasColumn(SqliteConnection conn, string table, string column)
     {
@@ -256,10 +272,12 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
     /// </summary>
     private QueryLogEntry Redacted(QueryLogEntry entry)
     {
-        try { return entry with { SqlText = _redact!(entry.ProviderId, entry.SqlText) }; }
+        // The values go with the literals (#103): a parameter is a literal the user typed into a prompt
+        // instead of into the statement, and is personal data exactly as often.
+        try { return entry with { SqlText = _redact!(entry.ProviderId, entry.SqlText), Parameters = [] }; }
         // A redactor that throws must not put the verbatim SQL in the log instead — that is the one outcome
         // this feature exists to prevent. Store the shape of the statement and nothing else.
-        catch (Exception) { return entry with { SqlText = "(redaction failed)" }; }
+        catch (Exception) { return entry with { SqlText = "(redaction failed)", Parameters = [] }; }
     }
 
     /// <inheritdoc />
@@ -301,9 +319,9 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         cmd.CommandText = """
             INSERT INTO query_log
                 (executed_at, provider_id, connection, connection_id, environment, db, sql_text,
-                 duration_ms, row_count, success, error_message, script_path, transaction_id, origin)
+                 duration_ms, row_count, success, error_message, script_path, transaction_id, origin, parameters)
             VALUES ($at, $provider, $conn, $connId, $env, $db, $sql, $dur, $rows, $ok, $err, $script, $txId,
-                    $origin);
+                    $origin, $params);
             """;
         cmd.Parameters.AddWithValue("$at", e.ExecutedAt.ToString("o", CultureInfo.InvariantCulture));
         cmd.Parameters.AddWithValue("$provider", e.ProviderId);
@@ -319,6 +337,9 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         cmd.Parameters.AddWithValue("$script", (object?)e.ScriptPath ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$txId", (object?)e.TransactionId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$origin", (object?)e.Origin ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$params", e.Parameters.Count == 0
+            ? DBNull.Value
+            : System.Text.Json.JsonSerializer.Serialize(e.Parameters, BearingJson.Options));
         cmd.ExecuteNonQuery();
     }
 
@@ -364,7 +385,7 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         cmd.CommandText =
             "SELECT q.id, q.executed_at, q.provider_id, q.connection, q.db, q.sql_text, q.duration_ms, " +
             "q.row_count, q.success, q.error_message, q.script_path, q.connection_id, q.environment, " +
-            "q.transaction_id, q.origin " +
+            "q.transaction_id, q.origin, q.parameters " +
             "FROM query_log q" +
             (where.Count > 0 ? " WHERE " + string.Join(" AND ", where) : "") +
             " ORDER BY q.id DESC" + limit + ";";
@@ -394,9 +415,22 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
                 Environment = reader.IsDBNull(12) ? null : reader.GetString(12),
                 TransactionId = reader.IsDBNull(13) ? null : reader.GetString(13),
                 Origin = reader.IsDBNull(14) ? null : reader.GetString(14),
+                Parameters = reader.IsDBNull(15) ? [] : ReadParameters(reader.GetString(15)),
             });
         }
         return results;
+    }
+
+    /// <summary>A row's stored values, or none when they can't be read — one unreadable historical row must
+    /// not fail the read every history view and report goes through (the connection id's rule).</summary>
+    private static IReadOnlyList<QueryLogParameter> ReadParameters(string json)
+    {
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<List<QueryLogParameter>>(json, BearingJson.Options)
+                   ?? [];
+        }
+        catch (System.Text.Json.JsonException) { return []; }
     }
 
     /// <summary>

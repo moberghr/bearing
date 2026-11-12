@@ -72,7 +72,15 @@ public static class QueryLogReport
         new("error", "text", typeof(string)),
         new("script", "text", typeof(string)),
         new("origin", "text", typeof(string)),
+        // Last, so every column before it keeps the position earlier reports had (#103).
+        new("values", "text", typeof(string)),
     ];
+
+    /// <summary>The values a statement's <c>:name</c> placeholders were bound to (#103), written the way a
+    /// <c>@set</c> line would write them — <c>id = 42; email = 'a@b.c'</c> — or empty.</summary>
+    private static string Values(QueryLogEntry entry)
+        => string.Join("; ", entry.Parameters.Select(p =>
+            $"{p.Name} = {Bearing.Sql.ScriptDirectives.FormatValue(p.Value, p.Kind) ?? "'" + p.Value + "'"}"));
 
     /// <summary>What an entry with no recorded origin is called in the report — the app itself (§1.11d).
     /// Spelled out rather than left blank, because a blank cell beside "cli" reads as a missing value
@@ -121,6 +129,7 @@ public static class QueryLogReport
                 entry.ErrorMessage ?? "",
                 entry.ScriptPath ?? "",
                 entry.Origin ?? BearingOrigin,
+                Values(entry),
             ]);
         }
 
@@ -217,9 +226,10 @@ public static class QueryLogReport
             ? "Literal redaction is currently ON: statements recorded while it was on have their string and "
             + "numeric literals replaced with placeholders. What was replaced was never stored, so it cannot "
             + "be recovered — here or anywhere else. Rows recorded while the setting was off hold the "
-            + "statement as written."
-            : "Literal redaction is currently OFF: statements are recorded as written, values included. Rows "
-            + "recorded while the setting was on remain redacted, and cannot be un-redacted.");
+            + "statement as written. The values given to :name placeholders are not recorded while it is on."
+            : "Literal redaction is currently OFF: statements are recorded as written, values included, and "
+            + "the values column holds what each :name placeholder was given. Rows recorded while the setting "
+            + "was on remain redacted, and cannot be un-redacted.");
 
         var unidentified = kept.Count(e => e.ConnectionId is null);
         if (unidentified > 0)

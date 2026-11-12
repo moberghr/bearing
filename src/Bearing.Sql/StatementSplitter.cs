@@ -36,8 +36,17 @@ public static class StatementSplitter
     /// <summary>Top-level statements of <paramref name="sql"/>, read in <paramref name="dialect"/>'s own
     /// lexical rules. Spans are ordered and never overlap, but they do not necessarily tile the buffer —
     /// see <see cref="SplitWithTSqlScanner"/>.</summary>
+    /// <remarks>
+    /// <c>@set</c> lines (#103) are blanked first, offsets kept: they are Bearing's, not SQL, and belong to no
+    /// statement. Otherwise a statement with no <c>;</c> ran on into the <c>@set</c> lines under it and the editor
+    /// highlighted, folded and ran them as one. A <c>@set</c> above a statement still reaches it — a run reads the
+    /// buffer above its statement for them.
+    /// </remarks>
     public static IReadOnlyList<StatementSpan> Split(ISqlDialect dialect, string sql)
-        => dialect.SplitStatements(sql);
+    {
+        var directives = ScriptDirectives.Find(dialect, sql);
+        return dialect.SplitStatements(directives.Count == 0 ? sql : ScriptDirectives.Blank(sql, directives));
+    }
 
     /// <summary>
     /// The PostgreSQL split: semicolons and blank lines read with the vendored PostgreSQL lexer, so a

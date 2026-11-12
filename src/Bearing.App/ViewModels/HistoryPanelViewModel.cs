@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Bearing.Core.Logging;
+using Bearing.Sql;
 
 namespace Bearing.App.ViewModels;
 
@@ -130,6 +131,9 @@ public sealed class HistoryRowViewModel
     {
         Entry = entry;
         Sql = entry.SqlText;
+        OpenText = ScriptDirectives.Render(entry.Parameters.Select(p => (p.Name, p.Value, p.Kind))) + entry.SqlText;
+        ParametersText = string.Join(" · ", entry.Parameters.Select(p =>
+            $"{p.Name} = {ScriptDirectives.FormatValue(p.Value, p.Kind) ?? "(multi-line text)"}"));
         ConnectionColor = connectionColor;
         IsError = !entry.Success;
         Time = entry.ExecutedAt.LocalDateTime.ToString("HH:mm");
@@ -157,6 +161,20 @@ public sealed class HistoryRowViewModel
     public QueryLogEntry Entry { get; }
 
     public string Sql { get; }
+
+    /// <summary>
+    /// What opening this row puts in a new tab, and what the preview shows (#103): the SQL as it was written,
+    /// placeholders kept, with a <c>@set</c> line per value it ran with above it — so running it again needs
+    /// no prompt, and changing a value is editing a line. Just the SQL when it had no values, or when the log
+    /// dropped them because literals are redacted (that run then asks again).
+    /// </summary>
+    public string OpenText { get; }
+
+    /// <summary>The values beside the query in the list — <c>id = 42 · since = '2005-06-01'</c> — or empty.</summary>
+    public string ParametersText { get; }
+
+    public bool HasParameters => ParametersText.Length > 0;
+
     public string? ConnectionColor { get; }
     public bool IsError { get; }
     public string Time { get; }

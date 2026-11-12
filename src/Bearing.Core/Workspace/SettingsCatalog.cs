@@ -156,9 +156,9 @@ public static class SettingsCatalog
             Key = "editor.scriptVariables",
             CategoryId = Editor,
             Title = "Ask for :variables before running",
-            Description = "A :name in the SQL you run is a variable: Bearing asks for its value and splices it "
-                        + "in as typed, so quote text yourself ('abc') or write :'name' to have it quoted. "
-                        + "Colons in strings, comments and :: casts are left alone.",
+            Description = "A :name in the SQL you run is a variable: its value comes from a line like "
+                        + "@set name = 42 above it, or Bearing asks. Values are sent as parameters, never "
+                        + "pasted into the SQL. Colons in strings, comments and :: casts are left alone.",
             Keywords = "variable parameter bind placeholder prompt colon dbeaver substitute",
             Get = s => s.ScriptVariables,
             Set = (s, v) => s with { ScriptVariables = v },

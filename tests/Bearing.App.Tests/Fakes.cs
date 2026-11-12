@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using Bearing.App.Services;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -236,9 +238,13 @@ internal sealed class FakeExecutor : IQueryExecutor
     /// <summary>The SQL each <see cref="ExecuteAsync"/> was handed, in order.</summary>
     public List<string> Executed { get; } = new();
 
+    /// <summary>The values bound with each <see cref="ExecuteAsync"/>, in the same order as <see cref="Executed"/>.</summary>
+    public List<IReadOnlyList<QueryParameter>> ExecutedParameters { get; } = new();
+
     public Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
     {
         Executed.Add(sql);
+        ExecutedParameters.Add(options.Parameters);
         return Task.FromResult<IReadOnlyList<QueryResult>>(new[]
         {
             FailWith is { } message
@@ -247,7 +253,7 @@ internal sealed class FakeExecutor : IQueryExecutor
         });
     }
 
-    public Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
+    public Task<QueryResult> ExecutePageAsync(string pageSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
         => Task.FromResult(Empty);
 
     public async IAsyncEnumerable<RowBatch> StreamRowsAsync(
@@ -257,7 +263,7 @@ internal sealed class FakeExecutor : IQueryExecutor
         yield break;
     }
 
-    public Task<long?> CountAsync(string sql, CancellationToken ct)
+    public Task<long?> CountAsync(string sql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
         => Task.FromResult<long?>(0);
 
     public Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct)
@@ -333,6 +339,7 @@ internal sealed class PageableExecutor : IQueryExecutor
 
     public Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
     {
+        ParametersSeen.Add(options.Parameters);
         LastExecuteSql = sql;
         _served = 0; // a re-run starts the source query over
         return Task.FromResult<IReadOnlyList<QueryResult>>(new[] { NextPage() });
@@ -343,8 +350,13 @@ internal sealed class PageableExecutor : IQueryExecutor
     /// recognise instead of reading it as "no more rows".</summary>
     public QueryError? PageError { get; set; }
 
-    public async Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
+    /// <summary>The values every call was handed, in call order — a page, a count and a fetch-all must each
+    /// carry the run's values (#103).</summary>
+    public List<IReadOnlyList<QueryParameter>> ParametersSeen { get; } = new();
+
+    public async Task<QueryResult> ExecutePageAsync(string pageSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
     {
+        ParametersSeen.Add(parameters);
         LastPageSql = pageSql;
         PageCalls++;
         BeforePage?.Invoke(PageCalls);
@@ -376,6 +388,7 @@ internal sealed class PageableExecutor : IQueryExecutor
     public async IAsyncEnumerable<RowBatch> StreamRowsAsync(
         string sql, QueryOptions options, [EnumeratorCancellation] CancellationToken ct)
     {
+        ParametersSeen.Add(options.Parameters);
         StreamCalls++;
         LastStreamSql = sql;
 
@@ -412,8 +425,11 @@ internal sealed class PageableExecutor : IQueryExecutor
         yield return new RowBatch(columns, batch, Truncated: false);
     }
 
-    public Task<long?> CountAsync(string sql, CancellationToken ct)
-        => CountError is not null ? Task.FromException<long?>(CountError) : Task.FromResult(CountValue);
+    public Task<long?> CountAsync(string sql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
+    {
+        ParametersSeen.Add(parameters);
+        return CountError is not null ? Task.FromException<long?>(CountError) : Task.FromResult(CountValue);
+    }
 
     public Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct)
         => Task.FromResult<IReadOnlyList<QueryResult>>(
@@ -461,7 +477,7 @@ internal sealed class GatedExecutor : IQueryExecutor
                 if (key.Contains(sqlFragment)) gate.TrySetResult();
     }
 
-    public Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct) => Task.FromResult(Empty);
+    public Task<QueryResult> ExecutePageAsync(string pageSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct) => Task.FromResult(Empty);
 
     public async IAsyncEnumerable<RowBatch> StreamRowsAsync(
         string sql, QueryOptions options, [EnumeratorCancellation] CancellationToken ct)
@@ -470,7 +486,7 @@ internal sealed class GatedExecutor : IQueryExecutor
         yield break;
     }
 
-    public Task<long?> CountAsync(string sql, CancellationToken ct) => Task.FromResult<long?>(0);
+    public Task<long?> CountAsync(string sql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct) => Task.FromResult<long?>(0);
     public Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct)
         => Task.FromResult<IReadOnlyList<QueryResult>>(new[] { Empty });
 }
@@ -669,16 +685,23 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
 
     /// <summary>What the variables prompt answers: a value per name, or null to cancel. Null by default, so a
     /// test that runs SQL with a :name in it has to say what was typed.</summary>
-    public IReadOnlyDictionary<string, string>? VariablesAnswer { get; set; }
+    public IReadOnlyDictionary<string, string>? VariablesAnswer { get; set; } = new Dictionary<string, string>();
 
-    /// <summary>Each variables prompt raised: the names asked for, and what was offered as remembered.</summary>
-    public List<(IReadOnlyList<string> Names, IReadOnlyDictionary<string, string> Remembered)> VariablePrompts { get; } = new();
+    /// <summary>Cancel the variables prompt instead of answering it.</summary>
+    public bool CancelVariables { get; set; }
 
-    public Task<IReadOnlyDictionary<string, string>?> PromptVariablesAsync(
-        IReadOnlyList<string> names, IReadOnlyDictionary<string, string> remembered)
+    /// <summary>Each variables prompt raised, with the rows it showed.</summary>
+    public List<IReadOnlyList<VariableField>> VariablePrompts { get; } = new();
+
+    /// <summary>Answers like a user who only touches the rows named in <see cref="VariablesAnswer"/>: every other
+    /// row keeps the text it was shown with (a <c>@set</c> value, or the remembered one).</summary>
+    public Task<IReadOnlyList<string>?> PromptVariablesAsync(IReadOnlyList<VariableField> fields)
     {
-        VariablePrompts.Add((names, new Dictionary<string, string>(remembered)));
-        return Task.FromResult(VariablesAnswer);
+        VariablePrompts.Add(fields);
+        if (CancelVariables || VariablesAnswer is null) return Task.FromResult<IReadOnlyList<string>?>(null);
+        var answer = new Dictionary<string, string>(VariablesAnswer, System.StringComparer.OrdinalIgnoreCase);
+        return Task.FromResult<IReadOnlyList<string>?>(
+            fields.Select(f => answer.TryGetValue(f.Name, out var typed) ? typed : f.Initial).ToList());
     }
 
     public Task<string?> PickSaveScriptAsync(string suggestedName, string? startDir)
@@ -964,10 +987,10 @@ internal sealed class FakeTransactionScope : ITransactionScope
             return results;
         }
 
-        public Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
+        public Task<QueryResult> ExecutePageAsync(string pageSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
         {
             Ran();
-            return _scope._inner.ExecutePageAsync(pageSql, ct);
+            return _scope._inner.ExecutePageAsync(pageSql, parameters, ct);
         }
 
         public IAsyncEnumerable<RowBatch> StreamRowsAsync(string sql, QueryOptions options, CancellationToken ct)
@@ -976,10 +999,10 @@ internal sealed class FakeTransactionScope : ITransactionScope
             return _scope._inner.StreamRowsAsync(sql, options, ct);
         }
 
-        public Task<long?> CountAsync(string countSql, CancellationToken ct)
+        public Task<long?> CountAsync(string countSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
         {
             Touched();   // a probe, not a statement the user wrote — see the real tracker
-            return _scope._inner.CountAsync(countSql, ct);
+            return _scope._inner.CountAsync(countSql, parameters, ct);
         }
 
         public async Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(

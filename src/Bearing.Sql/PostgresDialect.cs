@@ -70,7 +70,7 @@ public sealed class PostgresDialect : ISqlDialect
     public IReadOnlyList<SqlVariableRef> FindVariables(string sql) => SqlVariables.FindPostgres(sql);
 
     /// <inheritdoc/>
-    public string TextLiteral(string value) => "'" + value.Replace("'", "''") + "'";
+    public IReadOnlyList<ScriptDirective> FindDirectives(string sql) => ScriptDirectives.FindPostgres(sql);
 
     /// <summary>The vendored PostgreSQL lexer, which reads this engine for real — unchanged from
     /// before a second dialect existed.</summary>

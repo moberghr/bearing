@@ -35,8 +35,9 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         try
         {
             await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
-            await using var cmd = new NpgsqlCommand(sql, rent.Connection, rent.Transaction);
-            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            var (cmd, reader) = await OpenReaderAsync(rent, sql, options.Parameters, ct).ConfigureAwait(false);
+            await using var command = cmd;
+            await using var rows = reader;
 
             // One QueryResult per statement's result set — NextResult walks a multi-statement batch.
             // withBaseTables: capture column origin (schema/table/column) for FK-nav + inline edit.
@@ -52,7 +53,7 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         {
             sw.Stop();
             var pos = pg.Position > 0 ? pg.Position : (int?)null;
-            return new[] { Failure(sw.Elapsed, new QueryError(pg.MessageText, pg.SqlState, pos)) };
+            return new[] { Failure(sw.Elapsed, new QueryError(MessageFor(pg, options.Parameters), pg.SqlState, pos)) };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -61,22 +62,24 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         }
     }
 
-    public async Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
+    public async Task<QueryResult> ExecutePageAsync(
+        string pageSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
     {
         // The caller (PageSql) already shaped the paging; we just run it as one uncapped result set.
         var sw = Stopwatch.StartNew();
         try
         {
             await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
-            await using var cmd = new NpgsqlCommand(pageSql, rent.Connection, rent.Transaction);
-            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            var (cmd, reader) = await OpenReaderAsync(rent, pageSql, parameters, ct).ConfigureAwait(false);
+            await using var command = cmd;
+            await using var rows = reader;
             return await ReadResultSetAsync(reader, new QueryOptions { MaxRows = null }, sw, ct).ConfigureAwait(false);
         }
         catch (PostgresException pg)
         {
             sw.Stop();
             var pos = pg.Position > 0 ? pg.Position : (int?)null;
-            return Failure(sw.Elapsed, new QueryError(pg.MessageText, pg.SqlState, pos));
+            return Failure(sw.Elapsed, new QueryError(MessageFor(pg, parameters), pg.SqlState, pos));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -95,8 +98,9 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
     {
         var batchSize = Math.Max(1, options.BatchRows);
         await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
-        await using var cmd = new NpgsqlCommand(sql, rent.Connection, rent.Transaction);
-        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        var (cmd, reader) = await OpenReaderAsync(rent, sql, options.Parameters, ct).ConfigureAwait(false);
+        await using var command = cmd;
+        await using var rows = reader;
 
         if (reader.FieldCount == 0) yield break; // not row-returning — nothing to stream
 
@@ -136,7 +140,8 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         yield return new RowBatch(columns, batch, truncated);
     }
 
-    public async Task<long?> CountAsync(string countSql, CancellationToken ct)
+    public async Task<long?> CountAsync(
+        string countSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
     {
         // The caller (PageSql.CountWrap, through the connection's dialect) already shaped the wrapper; we
         // just run it, exactly as ExecutePageAsync runs a page the caller shaped.
@@ -159,8 +164,11 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
                 await ExecNonQueryAsync(rent, "savepoint " + CountSavepoint, ct).ConfigureAwait(false);
                 guarded = true;
             }
-            await using var cmd = new NpgsqlCommand(countSql, rent.Connection, rent.Transaction);
-            var scalar = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+            object? scalar;
+            var (cmd, reader) = await OpenReaderAsync(rent, countSql, parameters, ct).ConfigureAwait(false);
+            await using (cmd)
+            await using (reader)
+                scalar = await reader.ReadAsync(ct).ConfigureAwait(false) && !reader.IsDBNull(0) ? reader.GetValue(0) : null;
             if (guarded) await ExecNonQueryAsync(rent, "release savepoint " + CountSavepoint, ct).ConfigureAwait(false);
             return scalar is null or DBNull ? null : Convert.ToInt64(scalar);
         }
@@ -231,6 +239,82 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
     /// <c>text</c>, every edit of such a column failed with "is of type jsonb but expression is of type text".
     /// A text column is unaffected — <c>unknown</c> resolves to <c>text</c> there.
     /// </summary>
+    /// <summary>
+    /// Open a reader over <paramref name="sql"/> with a run's <c>:name</c> values (#103) bound to the named
+    /// placeholders the caller wrote. Nothing is bound when there are none, so a run without variables sends
+    /// its text exactly as before. Named, so Npgsql rewrites the placeholders and still splits a run of
+    /// several statements.
+    /// <para>
+    /// <b>Untyped first.</b> Every value goes as <c>unknown</c>, numbers included, so the server types it from
+    /// where it stands — <c>where film_id = $1</c> as the column's type, <c>limit $1</c> as bigint — exactly
+    /// as it would the same value written as a quoted literal. Where nothing around the value says what it is
+    /// (<c>select $1</c>, <c>$1 is null</c>) Postgres refuses with 42P18 rather than guess, and only then is the
+    /// command sent again with the types the values were written as: text, or numeric for a number. Safe to
+    /// resend: 42P18 is raised while the statement is parsed, before anything runs, and outside a held
+    /// transaction the batch was its own. Inside one (#131) the refusal has already aborted it, so there is no
+    /// second try — the error says how to cast instead (<see cref="MessageFor"/>).
+    /// </para>
+    /// </summary>
+    private static async Task<(NpgsqlCommand Command, NpgsqlDataReader Reader)> OpenReaderAsync(
+        PgRent rent, string sql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
+    {
+        var cmd = Command(rent, sql, parameters, typed: false);
+        try
+        {
+            return (cmd, await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false));
+        }
+        catch (PostgresException pg) when (pg.SqlState == IndeterminateDatatype && parameters.Count > 0
+                                           && rent.Transaction is null)
+        {
+            await cmd.DisposeAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            await cmd.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+
+        var typed = Command(rent, sql, parameters, typed: true);
+        try
+        {
+            return (typed, await typed.ExecuteReaderAsync(ct).ConfigureAwait(false));
+        }
+        catch
+        {
+            await typed.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <summary>42P18 — "could not determine data type of parameter".</summary>
+    private const string IndeterminateDatatype = "42P18";
+
+    private static NpgsqlCommand Command(PgRent rent, string sql, IReadOnlyList<QueryParameter> parameters, bool typed)
+    {
+        var cmd = new NpgsqlCommand(sql, rent.Connection, rent.Transaction);
+        foreach (var p in parameters)
+            cmd.Parameters.Add(typed ? Typed(p) : new NpgsqlParameter(p.Name, NpgsqlTypes.NpgsqlDbType.Unknown)
+            {
+                Value = (object?)p.Value ?? DBNull.Value,
+            });
+        return cmd;
+    }
+
+    /// <summary>A value with the type it was written as: a number as numeric, everything else as text.</summary>
+    private static NpgsqlParameter Typed(QueryParameter p)
+        => p.Kind == QueryParameterKind.Number && decimal.TryParse(p.Value,
+               System.Globalization.NumberStyles.AllowLeadingSign | System.Globalization.NumberStyles.AllowDecimalPoint,
+               System.Globalization.CultureInfo.InvariantCulture, out var number)
+            ? new NpgsqlParameter(p.Name, NpgsqlTypes.NpgsqlDbType.Numeric) { Value = number }
+            : new NpgsqlParameter(p.Name, NpgsqlTypes.NpgsqlDbType.Text) { Value = (object?)p.Value ?? DBNull.Value };
+
+    /// <summary>The server's message, plus what to do about a 42P18 that a variable caused — the user wrote
+    /// <c>:name</c>, and "parameter $1" names something they never typed.</summary>
+    private static string MessageFor(PostgresException pg, IReadOnlyList<QueryParameter> parameters)
+        => pg.SqlState == IndeterminateDatatype && parameters.Count > 0
+            ? pg.MessageText + " — nothing around a :name value says what type it is; add a cast, e.g. :name::int"
+            : pg.MessageText;
+
     private static NpgsqlParameter WriteParameter(SqlParameter p) => p.Value is string s
         ? new NpgsqlParameter(p.Name, NpgsqlTypes.NpgsqlDbType.Unknown) { Value = s }
         : new NpgsqlParameter(p.Name, p.Value ?? DBNull.Value);

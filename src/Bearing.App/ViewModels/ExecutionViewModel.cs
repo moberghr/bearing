@@ -460,7 +460,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// <param name="beforeRun">Asked once every refusal and the write confirmation have passed, right before the
     /// run starts; false stops it. The unsaved-grid-edits question goes here, so it is never asked — and edits
     /// never given up — for a run that was going to be refused anyway.</param>
-    public async Task ExecuteAsync(string sql, Func<Task<bool>>? beforeRun = null)
+    /// <param name="preamble">The buffer above the run, whose <c>@set</c> lines give its <c>:name</c> variables
+    /// their values (#103) — a <c>@set</c> applies to everything below it, not only to a run that includes it.</param>
+    public async Task ExecuteAsync(string sql, Func<Task<bool>>? beforeRun = null, string? preamble = null)
     {
         if (string.IsNullOrWhiteSpace(sql)) return;
         var tab = Selected;
@@ -474,11 +476,12 @@ public sealed partial class ExecutionViewModel : ObservableObject
         // Postgres' `limit/offset` is the bug this resolution exists to make impossible.
         var traits = ProviderTraits.For(info);
 
-        // :name script variables are filled in first, so everything below — the guard, the refusal, the
-        // confirmation, the log, the result's SourceSql that paging re-runs — reads the SQL that will
-        // actually reach the server, values included. A value of `1; delete from t` is a write like any other.
-        if (await FillVariablesAsync(tab, traits.Dialect, sql) is not { } filled) return;
-        sql = filled;
+        // :name variables first (#103): every one gets its value — from a @set line, or asked for — and the
+        // text becomes the one that reaches the server, with driver placeholders the values are bound to.
+        // Everything below reads that text: the guard, the refusal, the page limit, the SourceSql paging
+        // re-runs. A value is only ever a value, so none of it can change what the guard sees.
+        if (await PrepareVariablesAsync(tab, traits.Dialect, sql, preamble) is not { } run) return;
+        sql = run.Sql;
 
         // Describe (not FindRiskyStatements) so the prompt below can list the statements it is about to run —
         // the verbs alone can't answer "what exactly lands on prod". Computed once and shared with both the
@@ -560,41 +563,60 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // and on an auth failure refresh the credential and retry exactly once. A stored password that
             // didn't change can't be helped by a retry, so it surfaces the error on the first pass.
             var canRefresh = CanRefreshCredential(info);
-            var outcome = await RunFetchAsync(info, tab, sql, fetchSql, opensTransaction, final: !canRefresh, ct);
+            var outcome = await RunFetchAsync(info, tab, run, fetchSql, opensTransaction, final: !canRefresh, ct);
             if (outcome == RunOutcome.AuthFailed && canRefresh && !ct.IsCancellationRequested)
             {
                 _ctx.Credentials.Invalidate(info.Id);
                 await _ctx.Sessions.EvictAsync(SessionKey.For(info));
                 RunStatus(tab, "Reauthenticating…");
-                await RunFetchAsync(info, tab, sql, fetchSql, opensTransaction, final: true, ct);
+                await RunFetchAsync(info, tab, run, fetchSql, opensTransaction, final: true, ct);
             }
         }, "Query cancelled by user.", "Execution error");
     }
 
     /// <summary>
-    /// <paramref name="sql"/> with its <c>:name</c> variables replaced by what the user types for them, or
-    /// null when the run should not happen (the prompt was cancelled, or there is no window to ask in).
-    /// Unchanged when the script has none or the setting is off. The answers are remembered on the tab so
-    /// the next run offers them again.
+    /// <paramref name="sql"/> made ready to send: each <c>:name</c> bound to the value governing it (#103).
+    /// Before running, every value is shown: those a <c>@set</c> line gives are filled in and marked, and can be
+    /// overridden for this run; the rest are asked for, seeded with what was typed last time on this tab. Null
+    /// when the run should not happen — cancelled, or values to ask for with no window to ask in. Without a
+    /// window, a run whose values are all set runs as set. With the setting off, the SQL goes as written.
     /// </summary>
-    private async Task<string?> FillVariablesAsync(EditorTabViewModel tab, ISqlDialect dialect, string sql)
+    private async Task<PreparedRun?> PrepareVariablesAsync(
+        EditorTabViewModel tab, ISqlDialect dialect, string sql, string? preamble)
     {
-        if (!_ctx.Settings.ScriptVariables) return sql;
-        var names = SqlVariables.Names(dialect, sql);
-        if (names.Count == 0) return sql;
+        if (!_ctx.Settings.ScriptVariables) return new PreparedRun(sql, [], sql, []);
+        var plan = VariableRun.Plan(dialect, sql, preamble);
+        // Nothing to bind and no @set line to take out: the text runs exactly as typed.
+        if (plan.Slots.Count == 0 && plan.Directives.Count == 0) return new PreparedRun(sql, [], sql, []);
+        if (string.IsNullOrWhiteSpace(plan.Sql)) { _ctx.SetStatus("Nothing to run — @set lines only give values."); return null; }
 
-        if (_dialogs is not { } dialogs)
+        IReadOnlyList<string>? texts = null;
+        if (plan.Slots.Count > 0 && _dialogs is { } dialogs)
         {
-            _ctx.SetStatus($"This SQL has variables ({string.Join(", ", names.Select(n => ":" + n))}) "
+            var fields = plan.Slots.Select(s => s.IsPreset
+                ? new VariableField(s.Name, ScriptDirectives.FormatValue(s.Value, s.Kind) ?? "", $"@set, line {s.Line}")
+                : new VariableField(s.Name, tab.VariableValues.GetValueOrDefault(s.Name, ""), null)).ToList();
+            texts = await dialogs.PromptVariablesAsync(fields);
+            if (texts is null) { _ctx.SetStatus("Cancelled — variables not filled in."); return null; }
+            // The dialog won't accept a blank row; this is the same rule for any other caller. A value left out is
+            // never taken for empty text — '' is empty text, null is NULL.
+            if (VariableRun.FirstMissing(plan, texts) is { } blank)
+            {
+                _ctx.SetStatus($"No value for :{blank} — nothing ran. Write '' for empty text, null for NULL.");
+                return null;
+            }
+            // Only what was asked for is remembered: a @set value is the script's, and is in the script.
+            for (var i = 0; i < plan.Slots.Count; i++)
+                if (!plan.Slots[i].IsPreset) tab.VariableValues[plan.Slots[i].Name] = texts[i];
+        }
+        else if (plan.HasMissing)
+        {
+            var missing = plan.Slots.Where(s => !s.IsPreset).Select(s => ":" + s.Name).Distinct();
+            _ctx.SetStatus($"This SQL has variables ({string.Join(", ", missing)}) "
                            + "and there is no window to ask for their values in.");
             return null;
         }
-
-        var values = await dialogs.PromptVariablesAsync(names, tab.VariableValues);
-        if (values is null) { _ctx.SetStatus("Cancelled — variables not filled in."); return null; }
-
-        foreach (var (name, value) in values) tab.VariableValues[name] = value;
-        return SqlVariables.Substitute(dialect, sql, values);
+        return VariableRun.Bind(dialect, plan, texts);
     }
 
     private enum RunOutcome { Success, AuthFailed, Failed }
@@ -690,9 +712,10 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// binding/logging on a non-final attempt so the caller can refresh the credential and retry once; on the
     /// final attempt any error (auth included) is surfaced normally.</summary>
     private async Task<RunOutcome> RunFetchAsync(
-        ConnectionInfo info, EditorTabViewModel tab, string sql, string fetchSql, bool opensTransaction,
+        ConnectionInfo info, EditorTabViewModel tab, PreparedRun run, string fetchSql, bool opensTransaction,
         bool final, CancellationToken ct)
     {
+        var sql = run.Sql;
         var wall = Stopwatch.StartNew();
         // Acquire a lease so an idle sweep / evict / database switch can't dispose the pool from
         // under this query while it runs (the lease is held for the whole read).
@@ -724,7 +747,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
             RunStatus(tab, "Running…");
             var results = await ExecutorFor(tab, session)
-                .ExecuteAsync(fetchSql, new QueryOptions { MaxRows = PageSize }, ct);
+                .ExecuteAsync(fetchSql, new QueryOptions { MaxRows = PageSize, Parameters = run.Parameters }, ct);
             wall.Stop();
 
             // Auth rejected on open (stale token) comes back as a QueryError; retry before binding/logging.
@@ -740,8 +763,8 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // A tab that has since been closed (or dropped by a project switch) is dead but harmless to
             // assign to — RunFinished is what tells the user the run ended, with TabStillOpen false.
             tab.SetRunResults(ResultSetBuilder.BuildResultSets(
-                results, sql, session.Snapshot, ProviderTraits.For(info), SessionPolicy.IsReadOnly(info)));
-            LogExecution(info, sql, results, _ctx.Transactions.For(tab)?.Id);
+                results, sql, session.Snapshot, ProviderTraits.For(info), SessionPolicy.IsReadOnly(info), run));
+            LogExecution(info, run.LogSql, results, _ctx.Transactions.For(tab)?.Id, run.LogParameters);
             var summary = ResultSetBuilder.DescribeResults(
                 results, wall.Elapsed, info, ct.IsCancellationRequested);
             // On success, lead with the connection so the status bar reads e.g. "pagila (local) · 88 ms".
@@ -853,7 +876,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
                 RunStatus(tab, "Paging unavailable for this query on this engine — the rows already loaded are all of them shown.");
                 return;
             }
-            var page = await ExecutorFor(tab, session).ExecutePageAsync(pageSql, ct);
+            var page = await ExecutorFor(tab, session).ExecutePageAsync(pageSql, rs.SourceParameters, ct);
 
             // A failed page arrives as an error result, not a throw, so it has to be checked for. Appending
             // it would append nothing and clear HasMore: the result would silently look complete — auto-load
@@ -911,7 +934,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// Plain EXPLAIN executes nothing and is never confirmed.
     /// </para>
     /// </summary>
-    public async Task<ExplainPlan?> ExplainAsync(string sql, bool analyze)
+    public async Task<ExplainPlan?> ExplainAsync(string sql, bool analyze, string? preamble = null)
     {
         if (string.IsNullOrWhiteSpace(sql)) return null;
         var tab = Selected;
@@ -930,8 +953,8 @@ public sealed partial class ExecutionViewModel : ObservableObject
         }
 
         // Before the wrap and the guard, for the reason ExecuteAsync gives.
-        if (await FillVariablesAsync(tab, ProviderTraits.For(info).Dialect, sql) is not { } filled) return null;
-        sql = filled;
+        if (await PrepareVariablesAsync(tab, ProviderTraits.For(info).Dialect, sql, preamble) is not { } run) return null;
+        sql = run.Sql;
 
         var request = analyze ? ExplainSql.Measured(sql) : ExplainSql.Plan(sql);
 
@@ -996,7 +1019,8 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // The plan-only form joins the tab's transaction like any other read, so the plan describes
             // the state the user is actually looking at. The measured form never gets here — it carries its
             // own transaction control and was refused above.
-            var results = await ExecutorFor(tab, session).ExecuteAsync(request.Sql, new QueryOptions(), ct);
+            var results = await ExecutorFor(tab, session).ExecuteAsync(
+                request.Sql, new QueryOptions { Parameters = run.Parameters }, ct);
 
             // BEGIN and ROLLBACK produce no rows, so the one result that has any is the plan. An error
             // anywhere in the batch arrives as a failed result rather than a throw, and its message is worth
@@ -1050,7 +1074,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
                 RunStatus(tab, "Fetch all unavailable for this query on this engine.");
                 return;
             }
-            var options = new QueryOptions { MaxRows = room, BatchRows = PageSize };
+            var options = new QueryOptions { MaxRows = room, BatchRows = PageSize, Parameters = rs.SourceParameters };
             var truncated = false;
 
             // No ConfigureAwait(false) here, deliberately: each batch is appended to Rows, which the grid is
@@ -1107,7 +1131,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // Null means the query can't be counted at all (shape), so "unavailable" is the honest report.
             // A *failed* count throws instead and lands in RunExclusiveAsync's "Count failed: …" — TotalCount
             // stays null, so CanCount stays true and the [Count] action is still there to retry.
-            rs.TotalCount = await ExecutorFor(tab, session).CountAsync(countSql, ct);
+            rs.TotalCount = await ExecutorFor(tab, session).CountAsync(countSql, rs.SourceParameters, ct);
             RunFinished(tab, rs.TotalCount is not null ? "Counted total." : "Count unavailable for this query.");
         }, "Count cancelled.", "Count failed");
     }
@@ -1403,7 +1427,8 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
     // History logs one entry per submitted run; a multi-statement run aggregates its sets.
     private void LogExecution(
-        ConnectionInfo info, string sql, IReadOnlyList<QueryResult> results, string? transactionId)
+        ConnectionInfo info, string sql, IReadOnlyList<QueryResult> results, string? transactionId,
+        IReadOnlyList<QueryLogParameter>? parameters = null)
         => _ctx.QueryLog.Append(new QueryLogEntry
         {
             ExecutedAt = DateTimeOffset.UtcNow,
@@ -1421,5 +1446,8 @@ public sealed partial class ExecutionViewModel : ObservableObject
             ErrorMessage = results.FirstOrDefault(r => !r.Success)?.Error?.Message,
             // Null when the statement committed itself, which is every run on an ordinary connection (#131).
             TransactionId = transactionId,
+            // The values beside the placeholder text (#103) — dropped by the log itself when literals are
+            // redacted, exactly as the literals would be.
+            Parameters = parameters ?? [],
         });
 }

@@ -31,6 +31,23 @@ absences typed.
 - Files (incl. `-wal`/`-shm`) are narrowed to the owner on start (`LocalFilePermissions.HardenDatabase`),
   best-effort. No encryption at rest (it would need a user-supplied key — a new design, see §1.1).
 
+### §1.3a — `:name` variables are bound, and their values follow redaction (#103)
+- Values are **driver parameters** (`@bearing_<name>`, `SqlVariables.Parameterize`), never spliced into the
+  text. DO NOT reintroduce substitution: a value must never change what the statement says.
+- `@set name = value` lines (`ScriptDirectives`) are client-side, found by each dialect's lexer, and removed
+  before sending. A `@set` governs only references **below** it: nearest line in the run, else the last one above
+  the run (`RunScope.Preamble`), else the prompt. One name can bind several values in a run, one slot and
+  placeholder each (`VariableRun.Plan`, `@bearing_id__2`).
+- Every run with variables shows all its values (`VariablesDialog`); `@set` ones are prefilled and marked, and an
+  edit overrides for that run only.
+- A blank value is **missing**, never empty text: nothing runs (`ScriptDirectives.IsGiven`,
+  `VariableRun.FirstMissing`). `''` is empty text, `null` is NULL. `@set x =` is removed but governs nothing.
+- `StatementSplitter.Split(dialect, …)` blanks `@set` lines first, so they belong to no statement.
+- The log stores the SQL **with placeholders**, its own `@set` lines rewritten to the values used, and the values
+  from outside the run in `parameters` (v5). With redaction on, the log drops `parameters` at its boundary like
+  literals (`SqliteQueryLog.Redacted`) — keep the two together.
+- Every later trip for a result (page, count, fetch-all, export) re-sends `ResultSetViewModel.SourceParameters`.
+
 ## §1.4 — Connections / TLS
 - Transport security is `ConnectionInfo.Tls` (`TlsMode`); `sslmode` is **reserved** in
   `PostgresConnectionString` so the options bag can't outrank the field. `TlsPolicy` resolves it (legacy bag
@@ -54,7 +71,7 @@ removed:
 
 ## §1.6 — Query log schema and audit export (#113)
 - Migrations are **stepwise and additive** (`MigrateToN`), never rebuild. Each runs under
-  `BEGIN IMMEDIATE` and is idempotent per column (`HasColumn` before each `ALTER`). Current: v4 (§1.11d).
+  `BEGIN IMMEDIATE` and is idempotent per column (`HasColumn` before each `ALTER`). Current: v5 (§1.3a).
 - `connection_id` is null on pre-v2 rows — reports say how many, never imply an id match. `environment` is
   stored at write time, never resolved later; `ResolveEnvironment` prefers recorded value, then id, never
   name.

@@ -94,6 +94,7 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
 
         await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
         await using var cmd = new SqlCommand(sql, rent.Connection, rent.Transaction);
+        Bind(cmd, options.Parameters);
 
         // The per-statement row counts, in statement order. This event is the only place they exist — see
         // DescribeBatch for what the reader does and does not expose.
@@ -125,7 +126,8 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
         return results;
     }
 
-    public async Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
+    public async Task<QueryResult> ExecutePageAsync(
+        string pageSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
     {
         // The caller (PageSql, through the connection's dialect) already shaped the paging; we just run it
         // as one uncapped result set. No KeyInfo: the columns belong to the wrapper's derived table, so there is
@@ -135,6 +137,7 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
         {
             await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
             await using var cmd = new SqlCommand(pageSql, rent.Connection, rent.Transaction);
+            Bind(cmd, parameters);
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             return await ReadResultSetAsync(
                 reader, new QueryOptions { MaxRows = null }, sw, ct).ConfigureAwait(false);
@@ -162,6 +165,7 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
         var batchSize = Math.Max(1, options.BatchRows);
         await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
         await using var cmd = new SqlCommand(sql, rent.Connection, rent.Transaction);
+        Bind(cmd, options.Parameters);
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         if (reader.FieldCount == 0) yield break; // not row-returning — nothing to stream
@@ -202,7 +206,8 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
         yield return new RowBatch(columns, batch, truncated);
     }
 
-    public async Task<long?> CountAsync(string countSql, CancellationToken ct)
+    public async Task<long?> CountAsync(
+        string countSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
     {
         // The caller (SqlServerDialect.CountWrap, reached through the connection's traits) already shaped
         // the wrapper — including the OFFSET 0 ROWS repair a derived table needs before it may carry an
@@ -225,6 +230,7 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
                 guarded = true;
             }
             await using var cmd = new SqlCommand(countSql, rent.Connection, rent.Transaction);
+            Bind(cmd, parameters);
             var scalar = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
             return scalar is null or DBNull ? null : Convert.ToInt64(scalar);
         }
@@ -251,6 +257,37 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
                 .ConfigureAwait(false);
         }
         catch { /* the transaction is past saving either way */ }
+    }
+
+    /// <summary>
+    /// Bind a run's <c>:name</c> values (#103). SqlClient sends a parameterized command through
+    /// <c>sp_executesql</c>, so every parameter needs a type, and the server converts to the column's type by
+    /// precedence: a number goes as <c>bigint</c> or <c>decimal</c> (so <c>top (@n)</c> works and an integer
+    /// key is compared as one), anything else as <c>nvarchar</c> — 4000 for a value that fits, the common
+    /// plan-cache size, and <c>max</c> beyond it. A number too big for either type goes as text.
+    /// </summary>
+    private static void Bind(SqlCommand cmd, IReadOnlyList<QueryParameter> parameters)
+    {
+        foreach (var p in parameters)
+            cmd.Parameters.Add(ParameterFor(p));
+    }
+
+    private static DriverParameter ParameterFor(QueryParameter p)
+    {
+        var name = "@" + p.Name;
+        if (p.Kind == QueryParameterKind.Number && p.Value is { } number)
+        {
+            if (long.TryParse(number, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var whole))
+                return new DriverParameter(name, SqlDbType.BigInt) { Value = whole };
+            if (decimal.TryParse(number, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
+                    CultureInfo.InvariantCulture, out var fraction))
+                return new DriverParameter(name, SqlDbType.Decimal) { Value = fraction };
+        }
+        var text = p.Value;
+        return new DriverParameter(name, SqlDbType.NVarChar, text is { Length: > 4000 } ? -1 : 4000)
+        {
+            Value = (object?)text ?? DBNull.Value,
+        };
     }
 
     /// <summary>Named so the rollback can aim at it. Re-used across counts in one transaction: T-SQL has no

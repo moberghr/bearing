@@ -57,7 +57,25 @@ public sealed record QueryLogEntry
     /// </para>
     /// </summary>
     public string? TransactionId { get; init; }
+
+    /// <summary>
+    /// The values bound to <see cref="SqlText"/>'s <c>:name</c> placeholders (#103), or empty. The SQL is
+    /// always stored with its placeholders; the values are kept beside it so history can show them and open
+    /// the query with them set.
+    /// <para>
+    /// Values are personal data exactly as often as literals are, so they follow the same switch: with
+    /// literal redaction on, the log drops them at its boundary just as it replaces literals with
+    /// <c>'?'</c> (§1.3).
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<QueryLogParameter> Parameters { get; init; } = [];
 }
+
+/// <summary>One logged <c>:name</c> value, by the name the user wrote rather than the driver's.</summary>
+/// <param name="Name">The variable as written, without the colon.</param>
+/// <param name="Value">Its text, or null for SQL NULL.</param>
+/// <param name="Kind">Text, number or null — what decides how it is written back as <c>@set</c>.</param>
+public sealed record QueryLogParameter(string Name, string? Value, Data.QueryParameterKind Kind);
 
 /// <summary>Free-text + structured search over the history.</summary>
 public sealed record QueryLogQuery

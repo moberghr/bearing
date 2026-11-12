@@ -478,10 +478,17 @@
                               <Border Grid.Column="0" Width="8" Height="8" CornerRadius="4"
                                       VerticalAlignment="Center" Margin="0,0,6,0"
                                       Background="{Binding ConnectionColor, Converter={StaticResource HexBrush}}"/>
-                              <TextBlock Grid.Column="1" Text="{Binding DisplayQuery}" TextTrimming="CharacterEllipsis"
-                                         FontFamily="{StaticResource MonoFontFamily}" FontSize="{DynamicResource Font.Body}"
-                                         VerticalAlignment="Center"
-                                         Foreground="{Binding QueryColorKey, Converter={StaticResource TokenBrush}}"/>
+                              <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding DisplayQuery}" TextTrimming="CharacterEllipsis"
+                                           FontFamily="{StaticResource MonoFontFamily}" FontSize="{DynamicResource Font.Body}"
+                                           Foreground="{Binding QueryColorKey, Converter={StaticResource TokenBrush}}"/>
+                                <!-- The values a :name query ran with (#103), beside it rather than in it: the
+                                     query line stays the text that was written. -->
+                                <TextBlock Text="{Binding ParametersText}" IsVisible="{Binding HasParameters}"
+                                           TextTrimming="CharacterEllipsis"
+                                           FontFamily="{StaticResource MonoFontFamily}" FontSize="{DynamicResource Font.Small}"
+                                           Foreground="{DynamicResource Text.Dim}"/>
+                              </StackPanel>
                               <TextBlock Grid.Column="2" Text="{Binding Time}" FontSize="{DynamicResource Font.Small}" Margin="8,0,0,0"
                                          VerticalAlignment="Center" Foreground="{DynamicResource Text.Faint}"/>
                             </Grid>

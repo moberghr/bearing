@@ -904,12 +904,13 @@ public partial class SidebarView : UserControl
         if (Vm is not null) await Vm.ExportHistoryAsync();
     }
 
-    // Double-click a history row → open its SQL in a new tab (non-destructive; inherits the connection).
+    // Double-click a history row → open its SQL in a new tab (non-destructive; inherits the connection), with
+    // @set lines giving the values it ran with (#103).
     private void OnHistoryRowActivated(object? sender, TappedEventArgs e)
     {
         if (Vm is not null && (sender as Control)?.DataContext is HistoryRowViewModel row && row.Sql.Length > 0)
         {
-            Vm.Workspace.NewTab(row.Sql);
+            Vm.Workspace.NewTab(row.OpenText);
             EditorSyncRequested?.Invoke();
         }
     }
@@ -940,7 +941,7 @@ public partial class SidebarView : UserControl
         var row = HistoryGrid.RowDefinitions[2];
         if (Vm?.History.SelectedRow is { } selected)
         {
-            ShowHistoryPreview(selected.Sql);
+            ShowHistoryPreview(selected.OpenText);
             row.Height = new GridLength(_historyPreviewHeight);
         }
         else

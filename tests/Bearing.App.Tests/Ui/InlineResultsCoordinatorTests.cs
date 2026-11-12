@@ -86,7 +86,7 @@ public class InlineResultsCoordinatorTests
         var tab = new EditorTabViewModel("t", Buffer);
         h.Select(tab);
 
-        await h.Coordinator.RunAsync(SecondStatement(), (_, _) =>
+        await h.Coordinator.RunAsync(SecondStatement(), (_, _, _) =>
         {
             tab.SetRunResults([InlineResultsTests.OneSet()]);
             return Task.CompletedTask;
@@ -106,7 +106,7 @@ public class InlineResultsCoordinatorTests
         var other = new EditorTabViewModel("o", "select 42;");
         h.Select(tab);
 
-        await h.Coordinator.RunAsync(SecondStatement(), (_, _) =>
+        await h.Coordinator.RunAsync(SecondStatement(), (_, _, _) =>
         {
             tab.Text = Buffer + "-- typed while it ran\n";
             h.Select(other);                       // switched away; the run lands there
@@ -129,7 +129,7 @@ public class InlineResultsCoordinatorTests
         var tab = new EditorTabViewModel("t", Buffer);
         var other = new EditorTabViewModel("o", "select 42;");
         h.Select(tab);
-        await h.Coordinator.RunAsync(SecondStatement(), (_, _) =>
+        await h.Coordinator.RunAsync(SecondStatement(), (_, _, _) =>
         {
             tab.Text = Buffer + "-- typed while it ran\n";
             h.Select(other);
@@ -165,7 +165,7 @@ public class InlineResultsCoordinatorTests
         h.Select(tab);
         var set = DirtyZoneOnSecond(tab);
 
-        await h.Coordinator.RunAsync(SecondStatement(), (_, _) => Task.CompletedTask);   // refused: never asks
+        await h.Coordinator.RunAsync(SecondStatement(), (_, _, _) => Task.CompletedTask);   // refused: never asks
 
         Assert.Empty(asked);
         Assert.True(set.HasPendingChanges);
@@ -183,7 +183,7 @@ public class InlineResultsCoordinatorTests
         h.Select(tab);
         var set = DirtyZoneOnSecond(tab);
 
-        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm) => Assert.True(await confirm()));
+        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm, _) => Assert.True(await confirm()));
 
         Assert.Single(asked);
         Assert.True(set.HasPendingChanges);
@@ -198,7 +198,7 @@ public class InlineResultsCoordinatorTests
         h.Select(tab);
         var set = DirtyZoneOnSecond(tab);
 
-        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm) =>
+        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm, _) =>
         {
             Assert.True(await confirm());
             tab.SetRunResults([InlineResultsTests.OneSet()]);
@@ -222,7 +222,7 @@ public class InlineResultsCoordinatorTests
         tab.ApplyInlineRun(SecondStatement(), [new InlineResultZone(SecondStatement().End, [set], null)]);
         var ran = false;
 
-        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm) => ran = await confirm());
+        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm, _) => ran = await confirm());
 
         Assert.Equal("1 unsaved change", Assert.Single(asked));
         Assert.False(ran);
@@ -264,7 +264,7 @@ public class InlineResultsCoordinatorTests
         tab.ApplyInlineRun(SecondStatement(), [new InlineResultZone(SecondStatement().End, [set], null)]);
         var zone = Assert.Single(tab.InlineZones);
 
-        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm) =>
+        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm, _) =>
         {
             Assert.True(await confirm());                    // nothing pending yet: nothing asked
             set.SetCell(set.Rows[0], 1, "typed meanwhile");  // the user edits while it runs
@@ -290,7 +290,7 @@ public class InlineResultsCoordinatorTests
         var before = tab.Results;
         var fresh = InlineResultsTests.OneSet();
 
-        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm) =>
+        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm, _) =>
         {
             Assert.True(await confirm());
             set.SetCell(set.Rows[0], 1, "typed meanwhile");
@@ -317,7 +317,7 @@ public class InlineResultsCoordinatorTests
         var set = DirtyZoneOnSecond(tab);
         var zone = Assert.Single(tab.InlineZones);
 
-        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm) =>
+        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm, _) =>
         {
             Assert.True(await confirm());                        // Discard and run
             set.SetCell(set.Rows[1], 1, "typed after the question");
@@ -344,7 +344,7 @@ public class InlineResultsCoordinatorTests
         h.Select(tab);
         var fresh = InlineResultsTests.OneSet();
 
-        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm) =>
+        await h.Coordinator.RunAsync(SecondStatement(), async (_, confirm, _) =>
         {
             Assert.True(await confirm());                  // nothing pending: nothing asked
             tab.GoBack();                                   // back to F0 while it runs
@@ -369,7 +369,7 @@ public class InlineResultsCoordinatorTests
         h.Select(tab);
         DirtyZoneOnSecond(tab);
         var release = new TaskCompletionSource();
-        var first = h.Coordinator.RunAsync(SecondStatement(), async (_, confirm) =>
+        var first = h.Coordinator.RunAsync(SecondStatement(), async (_, confirm, _) =>
         {
             Assert.True(await confirm());   // gives the edits up: Back now waits
             tab.BeginRun();
@@ -378,7 +378,7 @@ public class InlineResultsCoordinatorTests
         });
         Assert.NotNull(tab.BusyReason("going back"));
 
-        await h.Coordinator.RunAsync(SecondStatement(), (_, _) => Task.CompletedTask);   // refused: busy
+        await h.Coordinator.RunAsync(SecondStatement(), (_, _, _) => Task.CompletedTask);   // refused: busy
 
         Assert.NotNull(tab.BusyReason("going back"));
         release.SetResult();

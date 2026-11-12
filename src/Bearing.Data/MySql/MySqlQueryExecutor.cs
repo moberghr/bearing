@@ -37,6 +37,7 @@ public sealed class MySqlQueryExecutor : IQueryExecutor
             var results = new List<QueryResult>();
             await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
             await using var cmd = new MySqlCommand(sql, rent.Connection, rent.Transaction);
+            await BindAsync(cmd, options.Parameters, ct).ConfigureAwait(false);
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
             // RecordsAffected is the running total across the reader (the ADO.NET convention), so each
@@ -71,13 +72,15 @@ public sealed class MySqlQueryExecutor : IQueryExecutor
         }
     }
 
-    public async Task<QueryResult> ExecutePageAsync(string pageSql, CancellationToken ct)
+    public async Task<QueryResult> ExecutePageAsync(
+        string pageSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
         try
         {
             await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
             await using var cmd = new MySqlCommand(pageSql, rent.Connection, rent.Transaction);
+            await BindAsync(cmd, parameters, ct).ConfigureAwait(false);
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             return await ReadResultSetAsync(reader, new QueryOptions { MaxRows = null }, sw, ct).ConfigureAwait(false);
         }
@@ -101,6 +104,7 @@ public sealed class MySqlQueryExecutor : IQueryExecutor
         var batchSize = Math.Max(1, options.BatchRows);
         await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
         await using var cmd = new MySqlCommand(sql, rent.Connection, rent.Transaction);
+        await BindAsync(cmd, options.Parameters, ct).ConfigureAwait(false);
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         if (reader.FieldCount == 0)
@@ -135,7 +139,8 @@ public sealed class MySqlQueryExecutor : IQueryExecutor
         yield return new RowBatch(columns, batch, truncated);
     }
 
-    public async Task<long?> CountAsync(string countSql, CancellationToken ct)
+    public async Task<long?> CountAsync(
+        string countSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
     {
         await using var rent = await _source.RentAsync(ct).ConfigureAwait(false);
 
@@ -151,6 +156,7 @@ public sealed class MySqlQueryExecutor : IQueryExecutor
                 guarded = true;
             }
             await using var cmd = new MySqlCommand(countSql, rent.Connection, rent.Transaction);
+            await BindAsync(cmd, parameters, ct).ConfigureAwait(false);
             var scalar = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
             if (guarded)
             {
@@ -184,6 +190,36 @@ public sealed class MySqlQueryExecutor : IQueryExecutor
     /// </summary>
     private static bool IsUncountableShape(MySqlException ex)
         => (int)ex.ErrorCode is 1064 or 1060;
+
+    /// <summary>
+    /// Bind a run's <c>:name</c> values (#103) and prepare the command, as <see cref="ExecuteWriteAsync"/>
+    /// does for the same reason (§5.1a): unprepared, MySqlConnector inlines a value as an escaped literal
+    /// whose backslash escaping ignores the server's <c>NO_BACKSLASH_ESCAPES</c>, so the value could arrive
+    /// changed. A number goes as one (<c>limit ?</c> refuses a string); text as a string, which MySQL
+    /// converts where the context asks. Nothing bound, nothing prepared: a run without variables is sent as
+    /// it always was — the prepared protocol refuses some statement kinds, and those keep working there.
+    /// </summary>
+    private static async Task BindAsync(MySqlCommand cmd, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
+    {
+        if (parameters.Count == 0) return;
+        foreach (var p in parameters)
+            cmd.Parameters.Add(new DriverParameter("@" + p.Name, ValueOf(p)));
+        await cmd.PrepareAsync(ct).ConfigureAwait(false);
+    }
+
+    private static object ValueOf(QueryParameter p)
+    {
+        if (p.Value is null) return DBNull.Value;
+        if (p.Kind == QueryParameterKind.Number)
+        {
+            if (long.TryParse(p.Value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var whole))
+                return whole;
+            if (decimal.TryParse(p.Value, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
+                    CultureInfo.InvariantCulture, out var fraction))
+                return fraction;
+        }
+        return p.Value;
+    }
 
     public async Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(
         IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct)

@@ -107,4 +107,8 @@ public sealed record QueryOptions
     /// <summary>Rows per batch when streaming (<see cref="IQueryExecutor.StreamRowsAsync"/>); ignored by the
     /// materializing paths. Sets how often a long read reports progress, nothing else.</summary>
     public int BatchRows { get; init; } = 1_000;
+
+    /// <summary>Values for the named placeholders in the SQL (#103). Empty for SQL that has none, which is
+    /// every run without <c>:name</c> variables — the executor then sends the text exactly as before.</summary>
+    public IReadOnlyList<QueryParameter> Parameters { get; init; } = [];
 }
