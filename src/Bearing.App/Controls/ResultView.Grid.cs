@@ -210,9 +210,9 @@ public sealed partial class ResultView
     }
 
     /// <summary>A press the cells didn't take: the row-number gutter selects the whole row, a column header
-    /// its whole column (#6), and the corner above the gutter the whole result (#55); anything else — the
-    /// scrollbar, empty space below the last row — clears the selection, which is the click-away this
-    /// handler replaced.
+    /// its whole column (#6), and the corner above the gutter the whole result (#55); a scroll bar is
+    /// scrolling and leaves the selection alone (#183); anything else — empty space below the last row —
+    /// clears the selection, which is the click-away this handler replaced.
     /// <para>
     /// A cell press has already selected itself by now (this runs after the cell's own handler, being further
     /// up the tree), so the one thing left to do for it is the checkbox gesture: a click that landed on a bool
@@ -231,6 +231,7 @@ public sealed partial class ResultView
                 return;
             case GridPressTarget.RowHeader:
             case GridPressTarget.Corner:
+            case GridPressTarget.ScrollBar:
                 return;
             case GridPressTarget.ColumnHeader:
                 if (result is { IsPageable: true, HasMore: true })

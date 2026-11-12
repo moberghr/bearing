@@ -22,9 +22,13 @@ namespace Bearing.App.Controls;
 /// being partial without re-doing the hit test.</summary>
 public enum GridPressTarget
 {
-    /// <summary>Grid chrome with no meaning for the selection — the scrollbar, empty space below the last
-    /// row. The caller clears the selection on this one.</summary>
+    /// <summary>Grid chrome with no meaning for the selection — empty space below the last row. The caller
+    /// clears the selection on this one.</summary>
     None,
+
+    /// <summary>A scroll bar. Scrolling is not a click-away: dragging the thumb to look along a highlighted
+    /// row must leave the highlight alone (#183).</summary>
+    ScrollBar,
 
     /// <summary>The corner above the row-number gutter: the whole result is now selected, as the same
     /// corner does in every spreadsheet.</summary>
@@ -210,6 +214,7 @@ public sealed class GridSelectionController
         foreach (var visual in source.GetSelfAndVisualAncestors())
         {
             if (visual is Border { Tag: ValueTuple<object?[], int> }) return GridPressTarget.Cell;
+            if (visual is ScrollBar) return GridPressTarget.ScrollBar;
             // Tested before the DataGridColumnHeader case below, because in the DataGrid's template the
             // corner *is* one — it just has no column, so it fell through to "chrome" and cleared the
             // selection instead of selecting everything (#55).
