@@ -408,6 +408,15 @@ public static class DemoCatalog
             [1, "{\"channel\": \"web\", \"retries\": 0}", true, LongText],
             [2, "{\"channel\": \"till\", \"retries\": 2}", false, "Settled."],
             [3, null, true, null],
+            // The inspector's pointer work: links to Ctrl+click, a line too long for the pane to drag-select
+            // across, and nested tokens to triple-click.
+            [4, "{\"channel\": \"api\", \"retries\": 1, "
+                + "\"receipt_url\": \"https://example.com/receipts/2019/04/7f3a\", "
+                + "\"note\": \"Disputed; see https://example.com/help/chargebacks. Settled by the issuer.\", "
+                + "\"not_a_link\": \"file:///etc/passwd\", "
+                + "\"trace\": \"" + string.Concat(Enumerable.Repeat("gw-eu-1>auth>risk>ledger>", 12)) + "END\", "
+                + "\"customer\": {\"id\": 42, \"vip\": true, \"tags\": [\"returning\", \"high value\"]}}",
+                false, "Disputed, then settled."],
         ],
         DocumentId,
         ("id", "int4", typeof(int), 1),

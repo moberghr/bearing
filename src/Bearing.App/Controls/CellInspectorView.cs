@@ -71,6 +71,9 @@ public sealed class CellInspectorView : UserControl
         FontFamily = MonoFont,
         TextWrapping = TextWrapping.NoWrap,   // structure over reflow; Raw wraps if that's what you want
         VerticalAlignment = VerticalAlignment.Top,
+        // Hit-testable over its whole box, not just its glyphs: a drag can start in the indentation or
+        // past the end of a short line.
+        Background = Brushes.Transparent,
         Foreground = Res(ColorKeyForSpan(JsonSpanKind.Punctuation)),
     };
 
@@ -121,6 +124,7 @@ public sealed class CellInspectorView : UserControl
             Brush = Tint("Accent.Brand", 0x40),
             CurrentBrush = Tint("Accent.Brand", 0xA0),
         };
+        _jsonText.LinkActivated += OpenLink;
 
         var panel = new DockPanel { LastChildFill = true };
         panel.Children.Add(BuildHeader(title, typeName, onClose));
@@ -153,6 +157,20 @@ public sealed class CellInspectorView : UserControl
         _fontSize = next;
         RenderBody();          // in-place: folds and scroll position survive a zoom
         _onFontSize?.Invoke(next);
+    }
+
+    /// <summary>Ctrl+click on a link in the value: hand it to the OS. <see cref="JsonTextTokens.Links"/>
+    /// only ever yields http/https, so nothing local or scripted gets launched from a database value.</summary>
+    private async void OpenLink(Uri uri)
+    {
+        try
+        {
+            if (TopLevel.GetTopLevel(this)?.Launcher is { } launcher) await launcher.LaunchUriAsync(uri);
+        }
+        catch (Exception)
+        {
+            // Best-effort: no browser registered is not worth crashing the inspector over.
+        }
     }
 
     /// <summary>Header: <c>film[42].description</c> + a type badge, then copy and close.</summary>
