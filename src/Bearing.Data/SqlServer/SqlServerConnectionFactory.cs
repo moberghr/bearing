@@ -157,10 +157,15 @@ public sealed class SqlServerConnectionFactory : IDbConnectionFactory
             if (!string.IsNullOrEmpty(password)) csb.Password = password;
         }
 
+        var bagSetsMultiSubnetFailover = false;
         foreach (var (key, value) in info.Options)
         {
             switch (key.ToLowerInvariant())
             {
+                case var k when MultiSubnetFailoverKeywords.Contains(k):
+                    bagSetsMultiSubnetFailover = true;
+                    csb[key] = value;
+                    break;
                 case var k when Reserved.Contains(k):
                     // Identity, credentials and the target come from ConnectionInfo + the secret store. An
                     // Options entry must never override them — a stray "Password" key would beat the
@@ -181,6 +186,9 @@ public sealed class SqlServerConnectionFactory : IDbConnectionFactory
                     break;
             }
         }
+
+        if (!bagSetsMultiSubnetFailover && TriesEveryAddress(info))
+            csb.MultiSubnetFailover = true;
 
         // §1.9's statement timeout, applied *after* the bag so the typed field is the single source of
         // truth for it — the same precedence Tls gets, and for the same reason: a "Command Timeout" entry in
@@ -254,6 +262,39 @@ public sealed class SqlServerConnectionFactory : IDbConnectionFactory
                 csb.TrustServerCertificate = false;
                 break;
         }
+    }
+
+    /// <summary>Every spelling SqlClient accepts for <c>MultiSubnetFailover</c>, so a value the user set in
+    /// Options is recognised whichever one they wrote.</summary>
+    private static readonly HashSet<string> MultiSubnetFailoverKeywords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "multisubnetfailover", "multi subnet failover",
+    };
+
+    /// <summary>
+    /// Whether to set <c>MultiSubnetFailover</c>, so SqlClient tries <b>every</b> address a host name
+    /// resolves to, in parallel, and keeps the first that answers (#169).
+    /// <para>
+    /// Without it a dual-stack name such as <c>localhost</c> (<c>::1</c> and <c>127.0.0.1</c>) could spend
+    /// the whole connect timeout on an address nothing listens on — an SSM port forward binds IPv4 only — and
+    /// fail with SqlClient's "server was not found" text, which points at everything except the cause.
+    /// Reported on Windows; not reproduced on Linux, where the managed network layer runs and a dead
+    /// <c>::1</c> port refuses at once, so this is SqlClient's documented answer for multi-address hosts
+    /// rather than a measured fix of the Windows path.
+    /// </para>
+    /// <para>
+    /// Only for a host <em>name</em>: an IP literal is one address, so there is nothing to try in parallel.
+    /// Not for a named instance, whose port comes from SQL Browser — that path is unmeasured with the flag.
+    /// Rewriting <c>localhost</c> to <c>127.0.0.1</c> was rejected: it breaks IPv6-only listeners and changes
+    /// the name <c>VerifyFull</c> checks the certificate against (§1.4). A value set in Options always wins.
+    /// </para>
+    /// </summary>
+    internal static bool TriesEveryAddress(ConnectionInfo info)
+    {
+        var host = info.Host.Trim();
+        if (host.Length == 0 || host.Contains('\\')) return false;
+        // A literal IPv6 address may arrive bracketed.
+        return !System.Net.IPAddress.TryParse(host.Trim('[', ']'), out _);
     }
 
     internal static string DataSourceFor(ConnectionInfo info)

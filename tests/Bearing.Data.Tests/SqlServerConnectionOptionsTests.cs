@@ -249,4 +249,53 @@ public class SqlServerConnectionOptionsTests
         using var tunedConn = tuned.CreateConnection();
         Assert.Equal(45, tunedConn.CommandTimeout);
     }
+
+    /// <summary>
+    /// #169: a host name may resolve to several addresses (<c>localhost</c> is <c>::1</c> and
+    /// <c>127.0.0.1</c>), and SqlClient spent the whole connect timeout on the one an IPv4-only listener
+    /// doesn't answer. <c>MultiSubnetFailover</c> makes it try them all in parallel. Not for an IP literal,
+    /// which is one address, nor a named instance, whose port SQL Browser supplies.
+    /// </summary>
+    [Theory]
+    [InlineData("localhost", true)]
+    [InlineData("db.example.com", true)]
+    [InlineData("127.0.0.1", false)]
+    [InlineData("::1", false)]
+    [InlineData("[::1]", false)]
+    [InlineData(@"HOST\SQLEXPRESS", false)]
+    public void A_host_name_tries_every_address_it_resolves_to(string host, bool expected)
+    {
+        var factory = new SqlServerConnectionFactory(MsSqlTestServer.Info() with { Host = host }, Password);
+        using var conn = factory.CreateConnection();
+        Assert.Equal(expected, new SqlConnectionStringBuilder(conn.ConnectionString).MultiSubnetFailover);
+    }
+
+    /// <summary>A value the user wrote in Options wins, in either spelling SqlClient accepts — the flag is
+    /// deliberately not reserved, and a default must not override a choice.</summary>
+    [Theory]
+    [InlineData("MultiSubnetFailover")]
+    [InlineData("Multi Subnet Failover")]
+    public void An_options_entry_turns_multi_subnet_failover_off(string key)
+    {
+        var factory = new SqlServerConnectionFactory(
+            MsSqlTestServer.Info() with
+            {
+                Host = "localhost",
+                Options = new Dictionary<string, string> { [key] = "false" },
+            },
+            Password);
+        using var conn = factory.CreateConnection();
+        Assert.False(new SqlConnectionStringBuilder(conn.ConnectionString).MultiSubnetFailover);
+    }
+
+    /// <summary>The flag must not cost a plain server anything: the live suite connects to <c>localhost</c>,
+    /// and this pins that it still does with the flag on.</summary>
+    [SkippableFact]
+    public async Task A_localhost_connection_still_opens_with_every_address_tried()
+    {
+        var info = MsSqlTestServer.Info() with { Host = "localhost" };
+        await using var factory = new SqlServerConnectionFactory(info, Password);
+        await MsSqlTestServer.RequireAsync(factory);
+        Assert.True(await factory.TestConnectionAsync(CancellationToken.None));
+    }
 }
