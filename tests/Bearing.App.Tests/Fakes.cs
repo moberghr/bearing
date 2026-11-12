@@ -978,7 +978,6 @@ internal sealed class FakeAzureCatalog : IAzureCatalog
 {
     public IReadOnlyList<AzureServer> Servers = System.Array.Empty<AzureServer>();
     public string? Tenant = "Contoso";
-    public bool ServersTruncated;
     public Dictionary<string, IReadOnlyList<string>> Databases = new();
     public Exception? ServersThrow;
     /// <summary>When set, the server listing waits on this instead of answering — az still thinking.</summary>
@@ -995,7 +994,7 @@ internal sealed class FakeAzureCatalog : IAzureCatalog
         }
         return ServersThrow is { } ex
             ? Task.FromException<AzureServerList>(ex)
-            : Task.FromResult(new AzureServerList(Servers, Tenant, ServersTruncated));
+            : Task.FromResult(new AzureServerList(Servers, Tenant, Truncated: false));
     }
 
     public Task<AzureDatabaseList> ListDatabasesAsync(string providerId, AzureServer server, CancellationToken ct)

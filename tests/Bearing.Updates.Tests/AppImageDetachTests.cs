@@ -19,6 +19,14 @@ public class AppImageDetachTests : IDisposable
 
     public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
 
+    /// <summary>The tests calling this already skip on Windows; the guard is here because the platform
+    /// analyzer can't see through <c>Skip.If</c>.</summary>
+    private static void MakeExecutable(string path)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
     [Fact]
     public void From_a_terminal_inside_the_image_it_detaches()
         => Assert.True(AppImageDetach.ShouldDetach(Image, terminalAttached: true, marker: null));
@@ -56,7 +64,7 @@ public class AppImageDetachTests : IDisposable
         File.WriteAllText(image,
             "#!/bin/sh\nprintf '%s|' \"$BEARING_DETACHED\" \"$@\" > \"" + output + ".tmp\"\n"
             + "mv \"" + output + ".tmp\" \"" + output + "\"\nsleep 5\n");
-        File.SetUnixFileMode(image, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        MakeExecutable(image);
 
         var clock = Stopwatch.StartNew();
         Assert.True(AppImageDetach.Relaunch(image, ["/tmp/a b.sql", "--demo"], TextWriter.Null));
@@ -79,7 +87,7 @@ public class AppImageDetachTests : IDisposable
         var image = Path.Combine(_dir, "broken.AppImage");
         var log = Path.Combine(_dir, "detached.log");
         File.WriteAllText(image, "#!/bin/sh\necho 'cannot mount' >&2\nexit 1\n");
-        File.SetUnixFileMode(image, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        MakeExecutable(image);
 
         Assert.True(AppImageDetach.Relaunch(image, [], TextWriter.Null, log));
 
@@ -97,7 +105,7 @@ public class AppImageDetachTests : IDisposable
         var image = Path.Combine(_dir, "fake.AppImage");
         var output = Path.Combine(_dir, "started");
         File.WriteAllText(image, "#!/bin/sh\ntouch \"" + output + "\"\n");
-        File.SetUnixFileMode(image, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        MakeExecutable(image);
 
         Assert.True(AppImageDetach.Relaunch(image, [], TextWriter.Null, Path.Combine(_dir, "no-such-dir", "detached.log")));
 
