@@ -113,6 +113,20 @@ internal static class TreeChrome
     /// number the test measures against, kept here so the intent and the check cannot drift.</summary>
     public const double RowHeightCeiling = 24;
 
+    /// <summary>
+    /// Room below the last row for the horizontal scroll bar (#170). Fluent lays its scroll bars <em>over</em>
+    /// the content, and an overlaid bar adds nothing to the scrollable height — so with the tree scrolled to
+    /// the bottom the bar sat on the last row, and no amount of scrolling uncovered it. Padding the items by
+    /// the bar's height lets the last row scroll clear. Horizontal scrolling itself is kept: §9.10b's
+    /// "a long name is still readable by dragging it" depends on it.
+    /// <para>
+    /// 16 is Fluent 12.1's bar at full (hovered) thickness, measured by
+    /// <c>TreeScrollTests.The_horizontal_scrollbar_does_not_cover_the_last_row</c> — the test reads the
+    /// live bar, so a theme that grows it fails there rather than here.
+    /// </para>
+    /// </summary>
+    public const double ScrollBarClearance = 16;
+
     /// <summary>Tighten one tree's rows. Safe to call before the tree has any items.
     /// <para>
     /// The per-level indent is deliberately left alone: it comes out of Fluent's <c>TreeViewItem</c>
@@ -129,5 +143,8 @@ internal static class TreeChrome
         row.Setters.Add(new Setter(Layoutable.MinHeightProperty, 0d));
         row.Setters.Add(new Setter(TemplatedControl.PaddingProperty, RowPadding));
         tree.Styles.Add(row);
+
+        var p = tree.Padding;
+        tree.Padding = new Thickness(p.Left, p.Top, p.Right, Math.Max(p.Bottom, ScrollBarClearance));
     }
 }

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
 using Avalonia.Headless;
 using Avalonia.Input;
@@ -108,6 +109,34 @@ public class TreeScrollTests
 
         Assert.True(scroller.Offset.Y > 0, "a row below the fold did not scroll into view");
         Assert.Equal(0, scroller.Offset.X);   // and it got there without going sideways
+        window.Close();
+    });
+
+    /// <summary>
+    /// #170. Fluent's scroll bars are laid over the content, so with the tree scrolled all the way down the
+    /// horizontal bar sat on the last row — the label unreadable through it and the row hard to click.
+    /// Scrolled to the bottom, the last row must end above the bar.
+    /// </summary>
+    [Fact]
+    public Task The_horizontal_scrollbar_does_not_cover_the_last_row() => _ui.Run(() =>
+    {
+        var (window, tree) = Tree(rows: 40, height: 220);
+        var scroller = Scroller(tree);
+        Assert.True(scroller.Extent.Width > scroller.Viewport.Width, "fixture must overflow horizontally");
+        Assert.True(scroller.Extent.Height > scroller.Viewport.Height, "fixture must overflow vertically");
+
+        scroller.Offset = new Vector(0, scroller.Extent.Height - scroller.Viewport.Height);
+        window.UpdateLayout();
+
+        var bar = scroller.GetVisualDescendants().OfType<ScrollBar>()
+            .Single(b => b.Orientation == Avalonia.Layout.Orientation.Horizontal);
+        Assert.True(bar.IsVisible && bar.Bounds.Height > 0, "the horizontal bar must be showing");
+        var barTop = bar.TranslatePoint(default, window)!.Value.Y;
+
+        var last = Rows(tree).Last();
+        var lastBottom = last.TranslatePoint(new Point(0, last.Bounds.Height), window)!.Value.Y;
+        Assert.True(lastBottom <= barTop,
+            $"the last row ends at {lastBottom}, under the horizontal bar starting at {barTop} (height {bar.Bounds.Height})");
         window.Close();
     });
 
