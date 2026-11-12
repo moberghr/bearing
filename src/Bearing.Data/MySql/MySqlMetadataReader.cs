@@ -643,11 +643,17 @@ public sealed class MySqlMetadataReader : IMetadataReader
         var list = new List<DatabaseSize>();
         while (await r.ReadAsync(ct).ConfigureAwait(false))
         {
-            list.Add(new DatabaseSize(r.GetString(0),
-                r.IsDBNull(1) ? null : Convert.ToInt64(r.GetValue(1), CultureInfo.InvariantCulture)));
+            list.Add(r.IsDBNull(1)
+                ? new DatabaseSize(r.GetString(0), null, NoVisibleTablesReason)
+                : new DatabaseSize(r.GetString(0), Convert.ToInt64(r.GetValue(1), CultureInfo.InvariantCulture)));
         }
         return list;
     }
+
+    /// <summary>Why a size is null here: it is a sum over the tables this account can see, and there were
+    /// none. An empty database reads the same, so the sentence claims no more than that.</summary>
+    internal const string NoVisibleTablesReason =
+        "This account can see no tables in this database, so there is no size to add up.";
 
     /// <summary>
     /// MariaDB's sequences (10.3+) — the one long-tail kind either engine has that the explorer models.

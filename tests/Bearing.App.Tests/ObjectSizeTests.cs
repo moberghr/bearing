@@ -305,6 +305,28 @@ public class ObjectSizeTests
     }
 
     [Fact]
+    public async Task The_tooltip_for_an_unknown_size_is_the_reason_the_engine_gave()
+    {
+        // #171. The tip was one Postgres sentence for every engine, so a SQL Server row named a CONNECT check
+        // that was never made. The reader knows what it checked; the row shows that and nothing of its own.
+        const string reason = "This login has no access to this database, so its size can't be read.";
+        var browser = new SizeBrowser
+        {
+            DatabaseSizes = [new DatabaseSize(DemoCatalog.Database, 1024), new DatabaseSize("postgres", null, reason)],
+        };
+        var server = new ServerNodeViewModel(Conn(), browser);
+        var landed = new TaskCompletionSource();
+        server.DatabaseSizesLoaded = landed.SetResult;
+
+        await server.EnsureChildrenAsync();
+        await landed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var other = server.Children.OfType<DatabaseNodeViewModel>().Single(d => d.Database == "postgres");
+        Assert.Contains("not visible", other.Detail);
+        Assert.Equal(reason, other.DetailTip);
+    }
+
+    [Fact]
     public async Task A_database_that_does_report_a_size_carries_no_tooltip()
     {
         // The tip exists for the absence. A row whose detail already explains itself must not grow one, or
@@ -464,8 +486,11 @@ public class ObjectSizeTests
             return DemoCatalog.Sizes();
         }
 
+        /// <summary>What the database size read answers; the demo's own unless a test needs another engine's.</summary>
+        public IReadOnlyList<DatabaseSize>? DatabaseSizes { get; init; }
+
         public Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(ConnectionInfo connection, CancellationToken ct)
-            => Task.FromResult(DemoCatalog.DatabaseSizes());
+            => Task.FromResult(DatabaseSizes ?? DemoCatalog.DatabaseSizes());
 
         /// <summary>#119's per-database kinds. Empty here: these fixtures exist for other questions, and a
         /// group they never assert on would only add noise to the trees they build.</summary>

@@ -633,37 +633,103 @@ public sealed class SqlServerMetadataReader : IMetadataReader
     }
 
     /// <summary>
-    /// Every database's size on the server, from <c>sys.master_files</c> — data and log files summed, which
-    /// is the space the database occupies.
+    /// Every database's size on the server — data and log files summed, in 8 KB pages, which is the space
+    /// the database occupies.
     /// <para>
-    /// A size that cannot be read comes back null rather than throwing, as the interface requires:
-    /// <c>sys.master_files</c> shows a row only for a database the login owns or can see (it needs
-    /// CREATE DATABASE / ALTER ANY DATABASE / VIEW ANY DEFINITION), so on a least-privilege login most rows
-    /// are simply absent. Listing those with a null size is the honest report — one invisible database must
-    /// not cost the sizes of the rest.
+    /// <c>sys.master_files</c> first, which answers for every database in one query — but it shows a
+    /// database's rows only to a login holding CREATE DATABASE, ALTER ANY DATABASE or VIEW ANY DEFINITION.
+    /// A least-privilege login sees none, so for each database it can still enter (<c>has_dbaccess</c>) the
+    /// size comes from that database's own <c>sys.database_files</c>, which needs only <c>public</c> (#171).
+    /// Both views count the same files in the same unit, so a size doesn't depend on which one supplied it.
+    /// </para>
+    /// <para>
+    /// Best-effort and per database, as the interface requires: a fallback read that fails leaves that one
+    /// database null and the rest keep theirs. Each null carries the reason that matches what was checked.
     /// </para>
     /// </summary>
     public async Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(CancellationToken ct)
     {
+        await using var conn = await _factory.OpenConnectionAsync(ct).ConfigureAwait(false);
+        var rows = await ReadMasterFileSizesAsync(conn, ct).ConfigureAwait(false);
+
+        var list = new List<DatabaseSize>(rows.Count);
+        foreach (var (name, pages, canAccess) in rows)
+        {
+            if (pages is { } known)
+                list.Add(new DatabaseSize(name, known * PageBytes));
+            else if (!canAccess)
+                list.Add(new DatabaseSize(name, null, NoAccessReason));
+            else
+            {
+                var own = await ReadOwnFilesPagesAsync(conn, name, ct).ConfigureAwait(false);
+                list.Add(own is { } fallback
+                    ? new DatabaseSize(name, fallback * PageBytes)
+                    : new DatabaseSize(name, null, NoFilesReason));
+            }
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// The one-query read: each online database, its <c>sys.master_files</c> page count (null where the view
+    /// shows the login nothing — the #171 bug, on its own) and whether the login can enter it. Internal so a
+    /// live test can pin what this path alone answers for a least-privilege login.
+    /// </summary>
+    internal static async Task<List<(string Name, long? Pages, bool CanAccess)>> ReadMasterFileSizesAsync(
+        SqlConnection conn, CancellationToken ct)
+    {
         const string sql = """
             select d.name,
                    (select sum(cast(mf.size as bigint)) from sys.master_files mf
-                     where mf.database_id = d.database_id) as pages
+                     where mf.database_id = d.database_id) as pages,
+                   cast(isnull(has_dbaccess(d.name), 0) as bit) as can_access
             from sys.databases d
             where d.state = 0
             order by d.name
             """;
-        await using var conn = await _factory.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var cmd = new SqlCommand(sql, conn);
         await using var r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-
-        var list = new List<DatabaseSize>();
+        var rows = new List<(string, long?, bool)>();
         while (await r.ReadAsync(ct).ConfigureAwait(false))
-            list.Add(new DatabaseSize(
-                r.GetString(0),
-                r.IsDBNull(1) ? null : r.GetInt64(1) * PageBytes));
-        return list;
+            rows.Add((r.GetString(0), r.IsDBNull(1) ? null : r.GetInt64(1), r.GetBoolean(2)));
+        return rows;
     }
+
+    /// <summary>
+    /// One database's page count from its own <c>sys.database_files</c>. A three-part name can't take a
+    /// variable, so the statement is built on the server and the name reaches it only through
+    /// <c>quotename</c> — never spliced in by the client. Null on any failure (§5.2) or when
+    /// <c>quotename</c> refuses the name; cancellation still propagates.
+    /// </summary>
+    private static async Task<long?> ReadOwnFilesPagesAsync(SqlConnection conn, string database, CancellationToken ct)
+    {
+        const string sql = """
+            declare @sql nvarchar(max) =
+                N'select sum(cast(size as bigint)) from ' + quotename(@db) + N'.sys.database_files';
+            if @sql is not null exec sys.sp_executesql @sql;
+            """;
+        try
+        {
+            await using var cmd = new SqlCommand(sql, conn);
+            cmd.Parameters.Add(new Microsoft.Data.SqlClient.SqlParameter("@db", System.Data.SqlDbType.NVarChar, 128) { Value = database });
+            var value = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+            return value is long pages ? pages : null;
+        }
+        catch (SqlException) when (!ct.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Why a size is null where <c>has_dbaccess</c> said no: neither view is readable without it.</summary>
+    internal const string NoAccessReason =
+        "This login has no access to this database, so its size can't be read.";
+
+    /// <summary>Why a size is null where the login could enter but neither read answered: exactly the two
+    /// checks made, no guessed cause.</summary>
+    internal const string NoFilesReason =
+        "Neither sys.master_files (needs VIEW ANY DEFINITION) nor this database's own sys.database_files " +
+        "gave this login a size.";
 
     /// <summary>
     /// Not read for SQL Server yet — the interface's documented "no answer for a kind" arm (§9.9), so the

@@ -34,8 +34,14 @@ public sealed record RelationSize(
 /// error: <c>pg_database_size</c> on a database the user cannot connect to raises instead of returning null,
 /// so an unprivileged user gets "unknown" for their colleagues' databases and a working tree for their own.
 /// </para>
+/// <para>
+/// <see cref="NotVisibleReason"/> is the engine's own sentence for a null <see cref="Bytes"/> — what the
+/// read checked and found missing (#171). Each engine checks something different (a CONNECT privilege, a
+/// server permission, visible tables), so the tree shows this rather than a sentence of its own. Null when
+/// <see cref="Bytes"/> has a value, and on a null size whose cause the reader cannot state.
+/// </para>
 /// </summary>
-public sealed record DatabaseSize(string Database, long? Bytes);
+public sealed record DatabaseSize(string Database, long? Bytes, string? NotVisibleReason = null);
 
 /// <summary>
 /// Formats a byte count for a tree row (#76).

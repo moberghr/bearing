@@ -189,7 +189,8 @@ public static class DemoCatalog
     [
         new DatabaseSize(Database, 11_182_080),
         // A database the demo user cannot connect to: its size is unknown, not zero (#76).
-        new DatabaseSize("postgres", null),
+        new DatabaseSize("postgres", null,
+            "The connected role has no CONNECT privilege on this database, so its size can't be read."),
     ];
 
     public static IReadOnlyList<RoutineInfo> Routines() =>

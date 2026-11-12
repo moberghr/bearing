@@ -514,7 +514,7 @@ public sealed partial class ServerNodeViewModel : SchemaNodeViewModel
         // that null is a fact about the role's privileges, not a gap to leave blank (#133).
         foreach (var database in children.OfType<DatabaseNodeViewModel>())
             if (byName.TryGetValue(database.Database, out var size))
-                database.ApplySize(size.Bytes);
+                database.ApplySize(size.Bytes, size.NotVisibleReason);
 
         DatabaseSizesLoaded?.Invoke();
     }
@@ -564,12 +564,14 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
     /// size for the same reason a relation row does — the panel ellipsizes, and a truncated number is worse
     /// than none.
     /// </summary>
-    internal void ApplySize(long? bytes)
+    /// <param name="notVisibleReason">The engine's sentence for a null size (#171) — shown as the tip, since
+    /// only the reader knows what it checked. A Postgres reason on a SQL Server row named a check never made.</param>
+    internal void ApplySize(long? bytes, string? notVisibleReason = null)
     {
         var rest = string.IsNullOrEmpty(_connectedLabel) ? null : _connectedLabel;
         var size = bytes is { } value ? ByteSize.Format(value) : NoSizeText;
         Detail = rest is null ? size : $"{size} · {rest}";
-        DetailTip = bytes is null ? NoSizeTip : null;
+        DetailTip = bytes is null ? notVisibleReason : null;
     }
 
     /// <summary>
@@ -577,17 +579,13 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
     /// size that has not arrived yet (the read is late by design, #76), from a read that failed, and from a
     /// database that genuinely has none.
     /// <para>
-    /// The wording says only what was checked. <c>pg_database_size</c> is called solely where
-    /// <c>has_database_privilege(datname, 'CONNECT')</c> says it will work, so a null means the role cannot
-    /// connect to that database — "not visible" is the honest reading of that and asserts no cause beyond it.
+    /// "Not visible" asserts no cause; the cause is the tip, and it comes from the engine that produced the
+    /// null (<see cref="DatabaseSize.NotVisibleReason"/>, #171) — each engine checks something different.
     /// Not <c>0 B</c>, which is a lie; not "unknown", which invites the reader to assume a failure; not a bare
     /// dash, which is as silent as the blank it replaces. §1.7's rule, one row type later: absences are typed.
     /// </para>
     /// </summary>
     private const string NoSizeText = "size not visible";
-
-    private const string NoSizeTip =
-        "The connected role has no CONNECT privilege on this database, so its size can't be read.";
 
     private readonly string? _connectedLabel;
 

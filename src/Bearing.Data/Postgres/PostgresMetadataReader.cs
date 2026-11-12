@@ -962,9 +962,15 @@ public sealed class PostgresMetadataReader : IMetadataReader
 
         var list = new List<DatabaseSize>();
         while (await r.ReadAsync(ct).ConfigureAwait(false))
-            list.Add(new DatabaseSize(r.GetString(0), r.IsDBNull(1) ? null : r.GetInt64(1)));
+            list.Add(r.IsDBNull(1)
+                ? new DatabaseSize(r.GetString(0), null, NoConnectReason)
+                : new DatabaseSize(r.GetString(0), r.GetInt64(1)));
         return list;
     }
+
+    /// <summary>Why a size is null here: the query reads it only where this privilege check passed.</summary>
+    internal const string NoConnectReason =
+        "The connected role has no CONNECT privilege on this database, so its size can't be read.";
 
     private static async Task<List<ConstraintInfo>> ReadConstraintsAsync(
         NpgsqlConnection conn, long tableId, CancellationToken ct)
