@@ -23,8 +23,38 @@ public static class ConnectionEndpoint
     /// fact.
     /// </para>
     /// </summary>
+    /// <para>
+    /// Through an SSH tunnel the configured host is where the <em>bastion</em> sends the traffic, so on its
+    /// own it describes the wrong machine: <c>127.0.0.1:3306</c> reads as this computer. A loopback target
+    /// means the database runs on the bastion itself, so the bastion is named in its place
+    /// (<c>db.example.com:3306 via ssh</c>). Any other target keeps its address and names the bastion after
+    /// it (<c>10.0.0.5:3306 via ssh bastion.example.com</c>).
+    /// </para>
     public static string HostPort(ConnectionInfo info)
-        => info.Port == 0 || IsNamedInstance(info.Host) ? info.Host : $"{info.Host}:{info.Port}";
+    {
+        var (where, via) = Split(info);
+        return where + via;
+    }
+
+    /// <summary>Where the server is, and the tunnel suffix (empty without one) that every form puts last, so
+    /// <see cref="Address"/> reads <c>host:port/db via ssh</c> rather than <c>host:port via ssh/db</c>.</summary>
+    private static (string Where, string Via) Split(ConnectionInfo info)
+    {
+        var target = info.Port == 0 || IsNamedInstance(info.Host) ? info.Host : $"{info.Host}:{info.Port}";
+        if (info.SshTunnel is not { } ssh || string.IsNullOrWhiteSpace(ssh.Host))
+        {
+            return (target, "");
+        }
+        if (IsLoopback(info.Host))
+        {
+            return (info.Port == 0 ? ssh.Host : $"{ssh.Host}:{info.Port}", " via ssh");
+        }
+        return (target, $" via ssh {ssh.Host}");
+    }
+
+    private static bool IsLoopback(string? host)
+        => host is "localhost" or "127.0.0.1" or "::1" or "[::1]"
+           || (host is not null && host.StartsWith("127.", System.StringComparison.Ordinal));
 
     /// <summary>
     /// True when <paramref name="host"/> names a SQL Server <em>instance</em> rather than just a machine
@@ -42,7 +72,14 @@ public static class ConnectionEndpoint
     /// <summary>The server and what it is pointed at: <c>host:port/database</c>. A connection with no
     /// database drops the slash rather than trailing one.</summary>
     public static string Address(ConnectionInfo info)
-        => string.IsNullOrWhiteSpace(info.Database) ? HostPort(info) : $"{HostPort(info)}/{info.Database}";
+    {
+        if (string.IsNullOrWhiteSpace(info.Database))
+        {
+            return HostPort(info);
+        }
+        var (where, via) = Split(info);
+        return $"{where}/{info.Database}{via}";
+    }
 
     /// <summary>The fullest form, <c>user@host:port/database</c> — what someone would paste into a bug
     /// report. A blank user drops the <c>@</c>; connections that prompt for their user leave it empty. One that
