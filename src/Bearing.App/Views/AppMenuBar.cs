@@ -269,10 +269,11 @@ internal sealed class AppMenuBar
     }
 
     /// <summary>The one entry point for every item: a key equivalent is replayed as the keystroke it was,
-    /// a click runs <paramref name="click"/>.</summary>
+    /// anything else — a click, or the item chosen by keyboard without being its key equivalent (Help ▸
+    /// Search + Return, Full Keyboard Access, VoiceOver) — runs <paramref name="click"/>.</summary>
     private void Fire(NativeMenuItem item, Action click)
     {
-        if (item.Gesture is { } gesture && MacKeyEquivalent.IsFiring())
+        if (item.Gesture is { } gesture && MacKeyEquivalent.IsFiring(gesture))
         {
             KeyReplay.Raise(ActiveWindow(), gesture);
             return;
