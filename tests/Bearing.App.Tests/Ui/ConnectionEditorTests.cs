@@ -582,7 +582,7 @@ internal static class ConnectionEditorProbe
     /// <summary>A dialog over the app's real registry, so the engine list under test is the one this build
     /// composed. The test delegate is never invoked from here: nothing presses Test.</summary>
     public static ConnectionDialog Dialog(ConnectionInfo? existing = null, IAzureCatalog? azure = null)
-        => new(existing, null, (_, _, _) => Task.FromResult(false), providers: new ProviderRegistry(), azure: azure);
+        => new(existing, null, (_, _, _, _) => Task.FromResult(false), providers: new ProviderRegistry(), azure: azure);
 
     /// <summary>
     /// The same dialog, shown and laid out — which only the tests that <see cref="Type"/> need, because

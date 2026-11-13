@@ -55,6 +55,26 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         // either end: this toggle, or the same setting in the settings window.
         _schemaTreeMode = _ctx.Settings.SchemaTreeMode;
         _ctx.SettingsService.Changed += settings => SchemaTreeMode = settings.SchemaTreeMode;
+
+        // SSH accept-new: the first host key a tunnel sees is written into the connection, so the next one
+        // that differs is refused. Posted — the connect that saw it runs off the UI thread and need not wait.
+        _ctx.Credentials.Ssh.HostKeyPinned = (info, fingerprint) =>
+        {
+            Dispatcher.UIThread.Post(() => _ = PinHostKeyAsync(info, fingerprint), DispatcherPriority.Normal);
+            return Task.CompletedTask;
+        };
+    }
+
+    /// <summary>Record a first-seen SSH host key on the saved connection — only while the saved record still
+    /// has no pin and the same route the connect used, so an edit made meanwhile is never overwritten.</summary>
+    internal async Task PinHostKeyAsync(ConnectionInfo used, string fingerprint)
+    {
+        var saved = _ctx.Project?.Manifest.Connections.FirstOrDefault(c => c.Id == used.Id);
+        if (saved?.SshTunnel is not { } ssh || !string.IsNullOrWhiteSpace(ssh.HostKeyFingerprint)
+            || !SshTunnel.SameRoute(ssh, used.SshTunnel))
+            return;
+        await AddOrUpdateConnectionAsync(saved with { SshTunnel = ssh with { HostKeyFingerprint = fingerprint } }, password: null);
+        _ctx.SetStatus($"Trusted the SSH host key of {ssh.Host} for '{saved.Name}' ({fingerprint}). A different key will be refused.");
     }
 
     private readonly IDialogService? _dialogs;
@@ -671,6 +691,9 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     /// user can still edit the host or retype the password — so it opens with an empty password box and says
     /// why in the status bar. Silently showing an empty box is what this avoids: it looks like no password was
     /// ever stored, and saving over it would replace a good secret with nothing.</remarks>
+    /// <summary>The stored SSH password / key passphrase for a connection's tunnel, for the dialog.</summary>
+    public Task<string?> GetSshSecretAsync(Guid id) => GetConnectionPasswordAsync(SshSecretId.For(id));
+
     public async Task<string?> GetConnectionPasswordAsync(Guid id)
     {
         if (_ctx.Secrets is null) return null;
@@ -686,7 +709,9 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     }
 
     /// <summary>Add or replace a connection in the manifest and its password in the secret store.</summary>
-    public async Task AddOrUpdateConnectionAsync(ConnectionInfo conn, string? password)
+    /// <param name="sshSecret">The SSH password / key passphrase from the dialog: null leaves the stored one
+    /// alone, empty deletes it.</param>
+    public async Task AddOrUpdateConnectionAsync(ConnectionInfo conn, string? password, string? sshSecret = null)
     {
         if (_ctx.Project is null) return;
         var list = _ctx.Project.Manifest.Connections;
@@ -722,6 +747,22 @@ public sealed partial class ConnectionsViewModel : ObservableObject
             {
                 if (password.Length == 0) await _ctx.Secrets.DeleteAsync(conn.Id, CancellationToken.None);
                 else await _ctx.Secrets.SetPasswordAsync(conn.Id, password, CancellationToken.None);
+            }
+            if (sshSecret is not null)
+            {
+                // In memory first, so it works this session even where the keychain refuses it below.
+                _ctx.Credentials.Ssh.Remember(conn.Id, sshSecret);
+                if (_ctx.Secrets is not null)
+                {
+                    if (sshSecret.Length == 0)
+                    {
+                        await _ctx.Secrets.DeleteAsync(SshSecretId.For(conn.Id), CancellationToken.None);
+                    }
+                    else
+                    {
+                        await _ctx.Secrets.SetPasswordAsync(SshSecretId.For(conn.Id), sshSecret, CancellationToken.None);
+                    }
+                }
             }
             await _ctx.ProjectStore.SaveAsync(_ctx.Project, CancellationToken.None);
         }
@@ -944,7 +985,8 @@ public sealed partial class ConnectionsViewModel : ObservableObject
 
         var copy = source with { Id = Guid.NewGuid(), Name = UniqueName(source.Name) };
         var password = await GetConnectionPasswordAsync(id);
-        await AddOrUpdateConnectionAsync(copy, password);
+        var sshSecret = source.SshTunnel is null ? null : await GetSshSecretAsync(id);
+        await AddOrUpdateConnectionAsync(copy, password, sshSecret);
     }
 
     /// <summary>Clipboard text for the given connections, or null when none of them exist. Passwords and
@@ -1191,6 +1233,10 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         try
         {
             if (_ctx.Secrets is not null) await _ctx.Secrets.DeleteAsync(id, CancellationToken.None);
+            if (removed?.SshTunnel is not null)
+            {
+                await _ctx.Credentials.Ssh.ForgetAsync(id);
+            }
             await _ctx.ProjectStore.SaveAsync(_ctx.Project, CancellationToken.None);
         }
         catch (Exception ex) { _ctx.SetStatus($"Deleted connection but store failed: {ex.Message}"); }
@@ -1248,7 +1294,9 @@ public sealed partial class ConnectionsViewModel : ObservableObject
            && a.Database == b.Database && a.User == b.User
            // Who logs in, like User: switching to the az account is a different role, so a different tree.
            && a.UserFromEntraLogin == b.UserFromEntraLogin
-           && TlsPolicy.Resolve(a) == TlsPolicy.Resolve(b);
+           && TlsPolicy.Resolve(a) == TlsPolicy.Resolve(b)
+           // Another SSH route is another way to the server; pinning its host key is not.
+           && SshTunnel.SameRoute(a.SshTunnel, b.SshTunnel);
 
     /// <summary>
     /// Whether a live pool built from <paramref name="a"/> can go on serving <paramref name="b"/>.
@@ -1272,7 +1320,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     /// <summary>Build a throwaway connection and test it (for the dialog's Test button); nothing is persisted.
     /// For an Entra connection the token is minted through the resolver (ignoring the box); prompt / stored
     /// connections test with the value typed into the dialog.</summary>
-    public async Task<bool> TestConnectionAsync(ConnectionInfo info, string? password, CancellationToken ct)
+    public async Task<bool> TestConnectionAsync(ConnectionInfo info, string? password, CancellationToken ct, string? sshSecret = null)
     {
         var secret = password;
         if (info.CredentialKind == CredentialKind.EntraToken)
@@ -1283,9 +1331,20 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         }
 
         var provider = _ctx.Providers.Get(info.ProviderId);
-        var factory = provider.CreateConnectionFactory(info, secret);
-        try { return await factory.TestConnectionAsync(ct); }
-        finally { await factory.DisposeAsync(); }
+        var (target, tunnel) = await ConnectionFactoryBuilder.RouteAsync(_ctx.Credentials, info, ct, sshSecret);
+        try
+        {
+            var factory = provider.CreateConnectionFactory(target, secret);
+            try { return await factory.TestConnectionAsync(ct); }
+            finally { await factory.DisposeAsync(); }
+        }
+        finally
+        {
+            if (tunnel is not null)
+            {
+                await tunnel.DisposeAsync();
+            }
+        }
     }
 
     /// <summary>First-run convenience: seed a demo connection if the project has none, and target it.</summary>

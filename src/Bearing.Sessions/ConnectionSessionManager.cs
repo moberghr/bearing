@@ -437,7 +437,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             }
             if (stale is not null && disposeStale) await SafeDisposeAsync(stale);
 
-            var (provider, factory, credential) =
+            var (provider, factory, credential, tunnel) =
                 await ConnectionFactoryBuilder.BuildAsync(_providers, _credentials(), info, forceRefresh: false, ct);
 
             bool ok;
@@ -445,11 +445,13 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             catch (Exception ex)
             {
                 await SafeDisposeFactoryAsync(factory);
+                await SafeDisposeTunnelAsync(tunnel);
                 throw new ConnectionFailedException(Describe(info, Bearing.Core.Data.SafeErrorText.Of(ex)), ex);
             }
             if (!ok)
             {
                 await SafeDisposeFactoryAsync(factory);
+                await SafeDisposeTunnelAsync(tunnel);
                 throw new ConnectionFailedException(Describe(info, "connection test failed"));
             }
 
@@ -457,7 +459,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
                 info, factory, provider.CreateQueryExecutor(factory), provider.CreateMetadataReader(factory),
                 provider.CreateServerActivity(factory), credential.ExpiresAt,
                 provider.SupportsServerActivity)
-            { LastUsedUtc = _clock(), LoginUser = credential.ApplyTo(info).User };
+            { LastUsedUtc = _clock(), LoginUser = credential.ApplyTo(info).User, Tunnel = tunnel };
             bool disposedDuringConnect;
             bool newLink;
             lock (_gate)
@@ -555,6 +557,8 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
            // The session zone rides the same packet (#163). The *resolved* zone, so "local" on a machine
            // whose zone changed is a different pool, and an explicit id equal to this machine's is not.
            && SessionTimeZonePolicy.ZoneFor(a) == SessionTimeZonePolicy.ZoneFor(b)
+           // A different SSH route reaches the server another way; the pinned host key alone does not.
+           && SshTunnel.SameRoute(a.SshTunnel, b.SshTunnel)
            && SameOptions(a.Options, b.Options);
 
     private static bool SameOptions(IReadOnlyDictionary<string, string> a, IReadOnlyDictionary<string, string> b)
@@ -573,5 +577,14 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     private static async Task SafeDisposeFactoryAsync(IDbConnectionFactory factory)
     {
         try { await factory.DisposeAsync(); } catch { /* best-effort */ }
+    }
+
+    private static async Task SafeDisposeTunnelAsync(SshTunnelHandle? tunnel)
+    {
+        if (tunnel is null)
+        {
+            return;
+        }
+        try { await tunnel.DisposeAsync(); } catch { /* best-effort */ }
     }
 }

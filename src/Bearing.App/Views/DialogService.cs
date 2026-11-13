@@ -83,12 +83,13 @@ public sealed class DialogService : IDialogService
     public Task<ConnectionDialogResult?> ShowConnectionDialogAsync(
         ConnectionInfo? existing,
         string? existingPassword,
-        Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
+        Func<ConnectionInfo, string?, string?, CancellationToken, Task<bool>> test,
         SecretStoragePosture storage,
         IProviderRegistry providers,
-        IAzureCatalog? azure)
+        IAzureCatalog? azure,
+        string? existingSshSecret = null)
         => Owner is { } window
-            ? new ConnectionDialog(existing, existingPassword, test, storage, providers, azure)
+            ? new ConnectionDialog(existing, existingPassword, test, storage, providers, azure, existingSshSecret)
                 .ShowDialog<ConnectionDialogResult?>(window)
             : Task.FromResult<ConnectionDialogResult?>(null);
 

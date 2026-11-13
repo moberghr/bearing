@@ -18,7 +18,8 @@ using Bearing.Sessions;
 namespace Bearing.App.Views;
 
 /// <summary>Result of the connection editor: the edited connection + password, or a delete request.</summary>
-public sealed record ConnectionDialogResult(ConnectionInfo Connection, string Password, bool Delete);
+/// <param name="SshSecret">The SSH password or key passphrase to save under <c>SshSecretId</c>; empty deletes it.</param>
+public sealed record ConnectionDialogResult(ConnectionInfo Connection, string Password, bool Delete, string SshSecret = "");
 
 /// <summary>
 /// Add/edit a named connection. Returns a <see cref="ConnectionDialogResult"/> via
@@ -46,7 +47,7 @@ public partial class ConnectionDialog : Window
     /// a fresh record, so anything not re-stated is silently dropped on save.</summary>
     private readonly ConnectionInfo? _existing;
 
-    private readonly Func<ConnectionInfo, string?, CancellationToken, Task<bool>> _test;
+    private readonly Func<ConnectionInfo, string?, string?, CancellationToken, Task<bool>> _test;
     private readonly SecretStoragePosture _storage;
     private readonly List<IDbProvider> _providers;
 
@@ -67,15 +68,16 @@ public partial class ConnectionDialog : Window
     private bool _loading;
 
     // Parameterless ctor for the XAML designer/loader.
-    public ConnectionDialog() : this(null, null, (_, _, _) => Task.FromResult(false)) { }
+    public ConnectionDialog() : this(null, null, (_, _, _, _) => Task.FromResult(false)) { }
 
     public ConnectionDialog(
         ConnectionInfo? existing,
         string? existingPassword,
-        Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
+        Func<ConnectionInfo, string?, string?, CancellationToken, Task<bool>> test,
         SecretStoragePosture? storage = null,
         IProviderRegistry? providers = null,
-        IAzureCatalog? azure = null)
+        IAzureCatalog? azure = null,
+        string? existingSshSecret = null)
     {
         InitializeComponent();
         Opened += (_, _) => FitToScreen();
@@ -122,6 +124,7 @@ public partial class ConnectionDialog : Window
             Title = "New connection";
         }
 
+        InitSsh(existing?.SshTunnel, existingSshSecret);
         RenderFields();
         // Resolve rather than read the field: a project written before the field existed, or a DBeaver
         // import, still carries the mode in the options bag (#23). A new connection's default is computed
@@ -733,7 +736,72 @@ public partial class ConnectionDialog : Window
         // Not editable here, so carried rather than rebuilt: filing lives in the tree. Omitting it would
         // quietly discard it on every save.
         Folder = _existing?.Folder,
+        SshTunnel = BuildSshTunnel(),
     };
+
+    // ---- SSH tab ---------------------------------------------------------------------------------
+
+    /// <summary>Set by Forget host key: the saved pin is dropped so the next connect pins whatever it sees.</summary>
+    private bool _forgetHostKey;
+
+    private void InitSsh(SshTunnel? ssh, string? secret)
+    {
+        SshAuthBox.SelectedIndex = ssh?.UsesPrivateKey == true ? 1 : 0;
+        if (ssh?.UsesPrivateKey == true)
+        {
+            SshPassphraseBox.Text = secret ?? "";
+        }
+        else
+        {
+            SshPasswordBox.Text = secret ?? "";
+        }
+        SshEnabledBox.IsChecked = ssh is not null;
+        SshHostBox.Text = ssh?.Host ?? "";
+        SshPortBox.Text = ssh is null || ssh.Port == SshTunnelForm.DefaultPort ? "" : ssh.Port.ToString(CultureInfo.InvariantCulture);
+        SshUserBox.Text = ssh?.User ?? "";
+        SshKeyBox.Text = ssh?.PrivateKeyPath ?? "";
+        foreach (var box in new[] { SshHostBox, SshPortBox, SshUserBox })
+        {
+            box.TextChanged += (_, _) => UpdateSsh();
+        }
+        UpdateSsh();
+    }
+
+    private SshTunnel? BuildSshTunnel()
+        => SshTunnelForm.Build(SshEnabledBox.IsChecked == true, SshHostBox.Text, SshPortBox.Text, SshUserBox.Text,
+            SelectedSshAuth(), SshKeyBox.Text, _existing?.SshTunnel, _forgetHostKey);
+
+    private SshAuthKind SelectedSshAuth() => SshAuthBox.SelectedIndex == 1 ? SshAuthKind.PrivateKey : SshAuthKind.Password;
+
+    private string SshSecretToStore()
+        => SshTunnelForm.SecretToStore(BuildSshTunnel(), SshPasswordBox.Text, SshPassphraseBox.Text);
+
+    private void OnSshAuthChanged(object? sender, SelectionChangedEventArgs e) => UpdateSsh();
+
+    private void OnSshToggled(object? sender, RoutedEventArgs e) => UpdateSsh();
+
+    private void OnSshForgetClick(object? sender, RoutedEventArgs e)
+    {
+        _forgetHostKey = true;
+        UpdateSsh();
+    }
+
+    private void UpdateSsh()
+    {
+        var on = SshEnabledBox.IsChecked == true;
+        SshFields.IsEnabled = on;
+        var key = SelectedSshAuth() == SshAuthKind.PrivateKey;
+        SshPasswordLabel.IsVisible = SshPasswordBox.IsVisible = !key;
+        SshKeyLabel.IsVisible = SshKeyBox.IsVisible = key;
+        SshPassphraseLabel.IsVisible = SshPassphraseBox.IsVisible = key;
+        var tunnel = BuildSshTunnel();
+        var pin = tunnel?.HostKeyFingerprint;
+        SshHostKeyText.Text = !on ? "" : pin ?? "Not seen yet — pinned on first connect.";
+        SshForgetButton.IsEnabled = pin is not null;
+        var problem = SshTunnelForm.Problem(tunnel);
+        SshProblem.Text = problem ?? "";
+        SshProblem.IsVisible = problem is not null;
+    }
 
     /// <summary>The password to persist: the typed value for a stored-password connection, or empty for
     /// prompt / Entra / integrated (nothing is stored — an empty value deletes any existing secret on
@@ -755,7 +823,7 @@ public partial class ConnectionDialog : Window
         TestResult.Text = "Testing…";
         try
         {
-            var ok = await _test(BuildConnection(), PasswordBox.Text ?? "", CancellationToken.None);
+            var ok = await _test(BuildConnection(), PasswordBox.Text ?? "", SshSecretToStore(), CancellationToken.None);
             TestResult.Text = ok ? "✓ Connection succeeded." : "✗ Connection failed.";
         }
         catch (Exception ex)
@@ -768,7 +836,7 @@ public partial class ConnectionDialog : Window
     }
 
     private void OnSaveClick(object? sender, RoutedEventArgs e)
-        => Close(new ConnectionDialogResult(BuildConnection(), SecretToStore(), Delete: false));
+        => Close(new ConnectionDialogResult(BuildConnection(), SecretToStore(), Delete: false, SshSecretToStore()));
 
     private void OnDeleteClick(object? sender, RoutedEventArgs e)
         => Close(new ConnectionDialogResult(BuildConnection(), SecretToStore(), Delete: true));

@@ -15,4 +15,8 @@
     <ProjectReference Include="..\Bearing.Data\Bearing.Data.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="SSH.NET" />
+  </ItemGroup>
+
 </Project>
