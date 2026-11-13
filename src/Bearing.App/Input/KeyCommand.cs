@@ -39,4 +39,21 @@ public sealed class KeyCommand
     public bool CanRun() => _canRun?.Invoke() ?? true;
 
     public ValueTask Run() => _run();
+
+    /// <summary>Run it from a UI event, observed: a faulting async command is reported through
+    /// <see cref="CrashReporter"/> rather than thrown unhandled on the UI thread. The caller has already
+    /// checked <see cref="CanRun"/> (the dispatcher must mark the key handled in between).</summary>
+    public void Invoke() => CrashReporter.Observe(Run(), $"command '{Id}'");
+
+    /// <summary><see cref="Invoke"/> if the command can run now; false (nothing run) otherwise. What every
+    /// keystroke-less path uses — a menu item, a palette pick.</summary>
+    public bool TryInvoke()
+    {
+        if (!CanRun())
+        {
+            return false;
+        }
+        Invoke();
+        return true;
+    }
 }

@@ -7,6 +7,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 using AvaloniaEdit;
+using Bearing.App.Input;
 using Xunit;
 
 namespace Bearing.App.Tests.Ui;
@@ -44,9 +45,9 @@ public class EditorContextMenuTests
 
         // The gesture is resolved from the keymap on open, not written into the menu — the failure the menu
         // bar's own gesture sync exists to prevent.
-        Assert.Equal(KeyGesture.Parse("Ctrl+Enter"), items.First(i => Header(i) == "Run").InputGesture);
-        Assert.Equal(KeyGesture.Parse("Ctrl+Shift+E"), items.First(i => Header(i) == "Explain statement").InputGesture);
-        Assert.Equal(KeyGesture.Parse("Ctrl+Shift+F"), items.First(i => Header(i) == "Format SQL").InputGesture);
+        Assert.Equal(MenuGestures.Parse("Ctrl+Enter"), items.First(i => Header(i) == "Run").InputGesture);
+        Assert.Equal(MenuGestures.Parse("Ctrl+Shift+E"), items.First(i => Header(i) == "Explain statement").InputGesture);
+        Assert.Equal(MenuGestures.Parse("Ctrl+Shift+F"), items.First(i => Header(i) == "Format SQL").InputGesture);
 
         flyout.Hide();
     });

@@ -33,7 +33,7 @@ public sealed class KeyDispatcher
             return false;
         }
         e.Handled = true;
-        CrashReporter.Observe(command.Run(), $"command '{command.Id}'");
+        command.Invoke();
         return true;
     }
 
@@ -52,7 +52,7 @@ public sealed class KeyDispatcher
         // Mark handled synchronously BEFORE awaiting anything — the async command body may yield, and
         // Avalonia reads Handled the moment this returns.
         e.Handled = true;
-        CrashReporter.Observe(command.Run(), $"command '{command.Id}'");
+        command.Invoke();
         return true;
     }
 }

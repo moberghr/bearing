@@ -209,7 +209,8 @@ public partial class MainWindow
         // Releasing the modifier the MRU binding holds ends the cycle and commits the landed tab as
         // most-recent. Which modifier that is comes from the keymap (tab.mruNext is rebindable).
         if (Vm is not null && _tabs.EndsCycle(e.Key)) _tabs.EndCycle(Vm.Workspace);
-        if (e.Key is Key.LeftAlt or Key.RightAlt && _altAlone && Vm is not null)
+        // No Alt reveal under the macOS native bar: the in-window bar it would show is gone (see AppMenuBar).
+        if (e.Key is Key.LeftAlt or Key.RightAlt && _altAlone && Vm is not null && _menuBar is null)
         {
             _altAlone = false;
             // Pinned, there is nothing to toggle — Alt just moves the keyboard into the bar that's already
@@ -288,12 +289,7 @@ public partial class MainWindow
         MenuExportRun.InputGesture = MenuGesture(CommandIds.QueryExportRun);
     }
 
-    private KeyGesture? MenuGesture(string commandId)
-    {
-        var text = _dispatcher.Keymap.DisplayGesture(commandId);
-        if (text is null) return null;
-        try { return KeyGesture.Parse(text); } catch { return null; } // display-only; a physical-key binding has no KeyGesture form
-    }
+    private KeyGesture? MenuGesture(string commandId) => MenuGestures.For(_dispatcher.Keymap, commandId);
 
     // ---- focus & panes -----------------------------------------------------------------------
 
