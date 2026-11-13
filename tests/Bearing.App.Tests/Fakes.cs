@@ -768,10 +768,11 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
     }
 
     public Task<Bearing.App.Views.ConnectionDialogResult?> ShowConnectionDialogAsync(ConnectionInfo? existing, string? existingPassword,
-        Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
+        Func<ConnectionInfo, string?, string?, CancellationToken, Task<bool>> test,
         Bearing.App.Services.SecretStoragePosture storage,
         IProviderRegistry providers,
-        IAzureCatalog? azure)
+        IAzureCatalog? azure,
+        string? existingSshSecret = null)
         => Task.FromResult<Bearing.App.Views.ConnectionDialogResult?>(null);
     public Task<string?> ShowTextPromptAsync(string prompt, string initial = "") => Task.FromResult<string?>(null);
     /// <summary>Where the folder picker was told to start, per call — the projects folder, not home.</summary>

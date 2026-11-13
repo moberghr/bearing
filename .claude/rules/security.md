@@ -241,3 +241,16 @@ Velopack hooks add/remove the install dir in the per-user PATH (`WindowsPath` / 
   install dir, has the stale name, and the fix differs.
 - WHEN a release renames anything the installer wrote, decide what happens to existing copies. Best-effort
   (§5.2).
+
+## §1.12 — SSH tunnel (`ConnectionInfo.SshTunnel`)
+SSH.NET in-process, opened in the connect recipe (`ConnectionFactoryBuilder.RouteAsync`); only the factory sees
+`127.0.0.1:<forwarded port>` — sessions, messages and pool identity keep the real host. One tunnel per factory,
+disposed after it (`ConnectionSession.Tunnel`, `SchemaBrowser.Reader`).
+- Host key is **accept-new**: first key pinned into the connection via `SshTunnels.HostKeyPinned`; a different
+  key is refused, never trusted from the failure. No callback (CLI) → an unpinned key is refused. DO NOT add a
+  "trust anyway" path or disable the check.
+- SSH password / key passphrase: `ISecretStore` under `SshSecretId.For(connectionId)`, prompted when missing or
+  refused, saved only after it worked; deleted with the connection. Never in a message or log.
+- Forward binds `127.0.0.1` only. Pin is not part of `SameRoute` / `SameConnection` / `SameNetwork`.
+- Not supported (stated in the dialog): ssh-agent, `~/.ssh/config`, ProxyJump. Verify Full TLS through a tunnel
+  checks `127.0.0.1`. Live tests: `./build/test-ssh.sh` (bastion → MariaDB), `LiveSshTunnelTests`.

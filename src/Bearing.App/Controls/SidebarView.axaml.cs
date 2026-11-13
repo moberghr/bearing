@@ -220,13 +220,14 @@ public partial class SidebarView : UserControl
         if (Vm is null || NodeOf(sender) is not ServerNodeViewModel server) return;
         var existing = server.Connection;
         var password = await Vm.Connections.GetConnectionPasswordAsync(existing.Id);
+        var sshSecret = existing.SshTunnel is null ? null : await Vm.Connections.GetSshSecretAsync(existing.Id);
         // Re-check for a keychain first: the dialog's warnings and its default credential kind are decided by
         // the posture passed in, and a startup probe that ran too early must not pin them for the session.
         await Vm.RefreshSecretStorageAsync();
-        var result = await _dialogs.ShowConnectionDialogAsync(existing, password, (i, p, ct) => Vm.Connections.TestConnectionAsync(i, p, ct), Vm.SecretStorage, Vm.Connections.Providers, Vm.AzureCatalog);
+        var result = await _dialogs.ShowConnectionDialogAsync(existing, password, (i, p, s, ct) => Vm.Connections.TestConnectionAsync(i, p, ct, s), Vm.SecretStorage, Vm.Connections.Providers, Vm.AzureCatalog, sshSecret);
         if (result is null) return;
         if (result.Delete) await Vm.Connections.DeleteConnectionAsync(existing.Id);
-        else await Vm.Connections.AddOrUpdateConnectionAsync(result.Connection, result.Password);
+        else await Vm.Connections.AddOrUpdateConnectionAsync(result.Connection, result.Password, result.SshSecret);
     }
 
     private void OnSortRelationsBySize(object? sender, RoutedEventArgs e)

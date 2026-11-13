@@ -228,6 +228,52 @@
 
       <!-- What the connection looks like and what its session computes in: neither restricts anything. The
            Production preset here also switches on the Safety tab's settings (it never switches them off). -->
+      <TabItem Header="SSH">
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+          <StackPanel Spacing="8" Margin="0,0,12,0">
+            <CheckBox x:Name="SshEnabledBox" Content="Connect through an SSH tunnel" IsCheckedChanged="OnSshToggled"/>
+            <Grid x:Name="SshFields" ColumnDefinitions="90,*,Auto,70" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" IsEnabled="False">
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="SSH host" VerticalAlignment="Center"/>
+              <TextBox   Grid.Row="0" Grid.Column="1" x:Name="SshHostBox" PlaceholderText="bastion.example.com"/>
+              <TextBlock Grid.Row="0" Grid.Column="2" Text="Port" VerticalAlignment="Center" Margin="8,0,6,0"/>
+              <TextBox   Grid.Row="0" Grid.Column="3" x:Name="SshPortBox" PlaceholderText="22"/>
+
+              <TextBlock Grid.Row="1" Grid.Column="0" Text="SSH user" VerticalAlignment="Center" Margin="0,6,0,0"/>
+              <TextBox   Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="3" x:Name="SshUserBox" Margin="0,6,0,0"/>
+
+              <TextBlock Grid.Row="2" Grid.Column="0" Text="Login with" VerticalAlignment="Center" Margin="0,6,0,0"/>
+              <ComboBox  Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" x:Name="SshAuthBox" Margin="0,6,0,0"
+                         HorizontalAlignment="Stretch" SelectionChanged="OnSshAuthChanged">
+                <ComboBoxItem Content="Password"/>
+                <ComboBoxItem Content="Private key"/>
+              </ComboBox>
+
+              <TextBlock Grid.Row="3" Grid.Column="0" x:Name="SshPasswordLabel" Text="SSH password" VerticalAlignment="Center" Margin="0,6,0,0"/>
+              <TextBox   Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="3" x:Name="SshPasswordBox" PasswordChar="•" Margin="0,6,0,0"/>
+
+              <TextBlock Grid.Row="4" Grid.Column="0" x:Name="SshKeyLabel" Text="Key file" VerticalAlignment="Center" Margin="0,6,0,0"/>
+              <TextBox   Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="3" x:Name="SshKeyBox" Margin="0,6,0,0"
+                         PlaceholderText="empty = ~/.ssh/id_ed25519, id_ecdsa or id_rsa"/>
+
+              <TextBlock Grid.Row="5" Grid.Column="0" x:Name="SshPassphraseLabel" Text="Passphrase" VerticalAlignment="Center" Margin="0,6,0,0"/>
+              <TextBox   Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="3" x:Name="SshPassphraseBox" PasswordChar="•" Margin="0,6,0,0"
+                         PlaceholderText="only if the key is encrypted"/>
+            </Grid>
+            <TextBlock TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,0,0,0"
+                       Text="Host and Port on the Connection tab are the database as the SSH server sees it (often localhost). The SSH password or passphrase is kept in the keychain. ssh-agent and ~/.ssh/config are not used."/>
+            <Grid ColumnDefinitions="90,*,Auto" Margin="0,4,0,0">
+              <TextBlock Grid.Column="0" Text="Host key" VerticalAlignment="Center"/>
+              <SelectableTextBlock Grid.Column="1" x:Name="SshHostKeyText" VerticalAlignment="Center" TextWrapping="Wrap"
+                                   FontSize="12" Opacity="0.8"/>
+              <Button Grid.Column="2" x:Name="SshForgetButton" Content="Forget host key" Click="OnSshForgetClick"
+                      Margin="8,0,0,0" ToolTip.Tip="Trust the next key the SSH server presents (use after it was legitimately changed)"/>
+            </Grid>
+            <TextBlock x:Name="SshProblem" IsVisible="False" TextWrapping="Wrap" FontSize="12"
+                       Foreground="{DynamicResource Warn.Amber}" Margin="90,0,0,0"/>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
       <TabItem Header="Environment">
         <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
           <StackPanel Spacing="8" Margin="0,0,12,0">

@@ -888,7 +888,7 @@ public class WiringTests : IDisposable
     private static ConnectionDialog NewConnectionDialog()
     {
         var dialog = new ConnectionDialog(existing: null, existingPassword: null,
-            test: (_, _, _) => Task.FromResult(false));
+            test: (_, _, _, _) => Task.FromResult(false));
         dialog.Show();
         Pump(dialog);
         return dialog;

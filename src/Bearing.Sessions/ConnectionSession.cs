@@ -68,5 +68,19 @@ public sealed class ConnectionSession : IAsyncDisposable
     /// releases; disposed then. New requests build a fresh session rather than reuse a retired one.</summary>
     internal bool Retired;
 
-    public ValueTask DisposeAsync() => Factory.DisposeAsync();
+    /// <summary>The SSH tunnel the factory dials through, or null for a direct connection. Disposed after
+    /// the factory, so the pool's sockets close before the forward under them does.</summary>
+    public IAsyncDisposable? Tunnel { get; init; }
+
+    public async ValueTask DisposeAsync()
+    {
+        try { await Factory.DisposeAsync(); }
+        finally
+        {
+            if (Tunnel is not null)
+            {
+                await Tunnel.DisposeAsync();
+            }
+        }
+    }
 }

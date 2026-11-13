@@ -140,8 +140,8 @@ public sealed class SchemaBrowser : ISchemaBrowser
         // Eviction of a failed build is the caller's continuation (see GetReaderAsync), so that it can check
         // this task is still the cached one before removing it.
         var clone = connection with { Database = database };
-        var (provider, factory, _) = await ConnectionFactoryBuilder.BuildAsync(_providers, _credentials(), clone, forceRefresh: false, ct);
-        return new Reader(factory, provider.CreateMetadataReader(factory));
+        var (provider, factory, _, tunnel) = await ConnectionFactoryBuilder.BuildAsync(_providers, _credentials(), clone, forceRefresh: false, ct);
+        return new Reader(factory, provider.CreateMetadataReader(factory), tunnel);
     }
 
     public async Task InvalidateAsync(Guid connectionId)
@@ -173,9 +173,21 @@ public sealed class SchemaBrowser : ISchemaBrowser
     {
         foreach (var task in readers)
         {
-            try { await (await task).Factory.DisposeAsync(); } catch { /* best-effort */ }
+            try
+            {
+                var reader = await task;
+                try { await reader.Factory.DisposeAsync(); }
+                finally
+                {
+                    if (reader.Tunnel is not null)
+                    {
+                        await reader.Tunnel.DisposeAsync();
+                    }
+                }
+            }
+            catch { /* best-effort */ }
         }
     }
 
-    private sealed record Reader(IDbConnectionFactory Factory, IMetadataReader Metadata);
+    private sealed record Reader(IDbConnectionFactory Factory, IMetadataReader Metadata, SshTunnelHandle? Tunnel);
 }

@@ -193,7 +193,7 @@ public class LookProbe
         return _ui.Run(() =>
         {
             var dialog = new ConnectionDialog(existing: null, existingPassword: null,
-                test: (_, _, _) => Task.FromResult(false));
+                test: (_, _, _, _) => Task.FromResult(false));
             dialog.Show();
             ConnectionEditorProbe.Open(dialog, "Safety");
             Write(dialog, dir, "connection-safety-off.png");
@@ -351,7 +351,7 @@ public class LookProbe
         {
             var dialog = new Bearing.App.Views.ConnectionDialog(
                 existing: null, existingPassword: null,
-                test: (_, _, _) => Task.FromResult(false));
+                test: (_, _, _, _) => Task.FromResult(false));
             dialog.Show();
             Pump(dialog);
             // A remote host, so the default is Require and the warning says what Require leaves open.

@@ -12,9 +12,9 @@ namespace Bearing.Sessions;
 /// <see cref="Credential"/> carries an optional expiry the caller records for disconnect-before-expiry.
 /// Callers keep their own pooling/lifecycle.
 /// </summary>
-internal static class ConnectionFactoryBuilder
+public static class ConnectionFactoryBuilder
 {
-    public static async Task<(IDbProvider Provider, IDbConnectionFactory Factory, Credential Credential)> BuildAsync(
+    public static async Task<(IDbProvider Provider, IDbConnectionFactory Factory, Credential Credential, SshTunnelHandle? Tunnel)> BuildAsync(
         IProviderRegistry providers, CredentialResolver? credentials, ConnectionInfo info,
         bool forceRefresh, CancellationToken ct)
     {
@@ -22,7 +22,39 @@ internal static class ConnectionFactoryBuilder
             ? new Credential(null, null)
             : await credentials.ResolveAsync(info, forceRefresh, ct);
         var provider = providers.Get(info.ProviderId);
-        var factory = provider.CreateConnectionFactory(credential.ApplyTo(info), credential.Secret);
-        return (provider, factory, credential);
+        var (target, tunnel) = await RouteAsync(credentials, credential.ApplyTo(info), ct);
+        try
+        {
+            return (provider, provider.CreateConnectionFactory(target, credential.Secret), credential, tunnel);
+        }
+        catch
+        {
+            if (tunnel is not null)
+            {
+                await tunnel.DisposeAsync();
+            }
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// What the driver should dial: <paramref name="info"/> itself, or — for a connection with an
+    /// <see cref="ConnectionInfo.SshTunnel"/> — the same record pointed at a freshly opened tunnel's loopback
+    /// end. The caller owns the returned tunnel and disposes it after the factory built on it. Only the
+    /// factory sees the rewritten host; sessions, messages and pool identity keep the real one.
+    /// </summary>
+    public static async Task<(ConnectionInfo Target, SshTunnelHandle? Tunnel)> RouteAsync(
+        CredentialResolver? credentials, ConnectionInfo info, CancellationToken ct, string? typedSshSecret = null)
+    {
+        if (info.SshTunnel is null)
+        {
+            return (info, null);
+        }
+        if (credentials is null)
+        {
+            throw new ConnectionFailedException($"'{info.Name}' needs an SSH tunnel, and nothing here can open one.");
+        }
+        var tunnel = await credentials.Ssh.OpenAsync(info, ct, typedSshSecret);
+        return (tunnel.Route(info), tunnel);
     }
 }

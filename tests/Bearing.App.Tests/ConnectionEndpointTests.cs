@@ -27,6 +27,21 @@ public class ConnectionEndpointTests
         };
 
     [Fact]
+    public void A_tunnel_to_the_bastions_own_loopback_names_the_bastion_not_this_machine()
+    {
+        var info = Conn(host: "127.0.0.1", port: 3306) with { SshTunnel = new SshTunnel { Host = "db.example.com", User = "u" } };
+        Assert.Equal("db.example.com:3306 via ssh", ConnectionEndpoint.HostPort(info));
+        Assert.Equal("db.example.com:3306/app via ssh", ConnectionEndpoint.Address(info));
+    }
+
+    [Fact]
+    public void A_tunnel_to_another_host_keeps_the_target_and_names_the_bastion()
+    {
+        var info = Conn(host: "10.0.0.5", port: 3306) with { SshTunnel = new SshTunnel { Host = "bastion", User = "u" } };
+        Assert.Equal("10.0.0.5:3306 via ssh bastion", ConnectionEndpoint.HostPort(info));
+    }
+
+    [Fact]
     public void HostPort_always_shows_the_port_even_when_it_is_the_default()
         => Assert.Equal("localhost:5432", ConnectionEndpoint.HostPort(Conn()));
 
