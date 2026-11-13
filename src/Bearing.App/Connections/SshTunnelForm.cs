@@ -40,6 +40,19 @@ public static class SshTunnelForm
     public static string SecretToStore(SshTunnel? tunnel, string? password, string? passphrase)
         => tunnel is null ? "" : (tunnel.UsesPrivateKey ? passphrase : password) ?? "";
 
+    /// <summary>What Save hands on: <see cref="SecretToStore"/>, or null — leave the keychain alone — when it
+    /// would change nothing: the secret is the one the dialog opened with, or there was never a tunnel.</summary>
+    public static string? SecretToSave(SshTunnel? tunnel, SshTunnel? existingTunnel, string? existingSecret,
+        string? password, string? passphrase)
+    {
+        if (tunnel is null && existingTunnel is null)
+        {
+            return null;
+        }
+        var secret = SecretToStore(tunnel, password, passphrase);
+        return secret == (existingSecret ?? "") ? null : secret;
+    }
+
     /// <summary>What a ticked tab is missing, or null when it can connect.</summary>
     public static string? Problem(SshTunnel? tunnel)
         => tunnel is null ? null

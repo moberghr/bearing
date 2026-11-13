@@ -685,15 +685,15 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         catch { /* offline — keep the single current-DB entry */ }
     }
 
+    /// <summary>The stored SSH password / key passphrase for a connection's tunnel, for the dialog.</summary>
+    public Task<string?> GetSshSecretAsync(Guid id) => GetConnectionPasswordAsync(SshSecretId.For(id));
+
     /// <summary>Fetch the stored password for the connection editor's edit mode (null if none).</summary>
     /// <remarks>A keyring that <i>errors</i> now raises rather than reporting "no password" (see
     /// <c>SecretToolSecretStore.GetPasswordAsync</c>). Here that must not stop the dialog from opening — the
     /// user can still edit the host or retype the password — so it opens with an empty password box and says
     /// why in the status bar. Silently showing an empty box is what this avoids: it looks like no password was
     /// ever stored, and saving over it would replace a good secret with nothing.</remarks>
-    /// <summary>The stored SSH password / key passphrase for a connection's tunnel, for the dialog.</summary>
-    public Task<string?> GetSshSecretAsync(Guid id) => GetConnectionPasswordAsync(SshSecretId.For(id));
-
     public async Task<string?> GetConnectionPasswordAsync(Guid id)
     {
         if (_ctx.Secrets is null) return null;
@@ -743,26 +743,15 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         var refusedSecret = false;
         try
         {
-            if (_ctx.Secrets is not null && password is not null)
+            if (password is not null)
             {
-                if (password.Length == 0) await _ctx.Secrets.DeleteAsync(conn.Id, CancellationToken.None);
-                else await _ctx.Secrets.SetPasswordAsync(conn.Id, password, CancellationToken.None);
+                await PutSecretAsync(conn.Id, password);
             }
             if (sshSecret is not null)
             {
                 // In memory first, so it works this session even where the keychain refuses it below.
                 _ctx.Credentials.Ssh.Remember(conn.Id, sshSecret);
-                if (_ctx.Secrets is not null)
-                {
-                    if (sshSecret.Length == 0)
-                    {
-                        await _ctx.Secrets.DeleteAsync(SshSecretId.For(conn.Id), CancellationToken.None);
-                    }
-                    else
-                    {
-                        await _ctx.Secrets.SetPasswordAsync(SshSecretId.For(conn.Id), sshSecret, CancellationToken.None);
-                    }
-                }
+                await PutSecretAsync(SshSecretId.For(conn.Id), sshSecret);
             }
             await _ctx.ProjectStore.SaveAsync(_ctx.Project, CancellationToken.None);
         }
@@ -802,7 +791,19 @@ public sealed partial class ConnectionsViewModel : ObservableObject
             : $"Saved connection '{conn.Name}'.");
     }
 
-    // ---- import (#72) ----------------------------------------------------------------------------
+    /// <summary>Store a dialog-typed secret under <paramref name="secretId"/>; empty deletes it.</summary>
+    private Task PutSecretAsync(Guid secretId, string secret)
+    {
+        if (_ctx.Secrets is null)
+        {
+            return Task.CompletedTask;
+        }
+        return secret.Length == 0
+            ? _ctx.Secrets.DeleteAsync(secretId, CancellationToken.None)
+            : _ctx.Secrets.SetPasswordAsync(secretId, secret, CancellationToken.None);
+    }
+
+    // ---- import (#72)----------------------------------------------------------------------------
 
     /// <summary>What an import did, for the status line and the summary dialog.</summary>
     /// <param name="Landed">Where each imported connection ended up: the id it carried in the source, and the

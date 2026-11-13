@@ -18,8 +18,9 @@ using Bearing.Sessions;
 namespace Bearing.App.Views;
 
 /// <summary>Result of the connection editor: the edited connection + password, or a delete request.</summary>
-/// <param name="SshSecret">The SSH password or key passphrase to save under <c>SshSecretId</c>; empty deletes it.</param>
-public sealed record ConnectionDialogResult(ConnectionInfo Connection, string Password, bool Delete, string SshSecret = "");
+/// <param name="SshSecret">The SSH password or key passphrase to save under <c>SshSecretId</c>; empty deletes it,
+/// null leaves the stored one alone.</param>
+public sealed record ConnectionDialogResult(ConnectionInfo Connection, string Password, bool Delete, string? SshSecret = null);
 
 /// <summary>
 /// Add/edit a named connection. Returns a <see cref="ConnectionDialogResult"/> via
@@ -46,6 +47,7 @@ public partial class ConnectionDialog : Window
     /// can carry forward the fields this dialog does not show — the folder it is filed in (#80). It builds
     /// a fresh record, so anything not re-stated is silently dropped on save.</summary>
     private readonly ConnectionInfo? _existing;
+    private readonly string? _existingSshSecret;
 
     private readonly Func<ConnectionInfo, string?, string?, CancellationToken, Task<bool>> _test;
     private readonly SecretStoragePosture _storage;
@@ -124,6 +126,7 @@ public partial class ConnectionDialog : Window
             Title = "New connection";
         }
 
+        _existingSshSecret = existingSshSecret;
         InitSsh(existing?.SshTunnel, existingSshSecret);
         RenderFields();
         // Resolve rather than read the field: a project written before the field existed, or a DBeaver
@@ -836,7 +839,9 @@ public partial class ConnectionDialog : Window
     }
 
     private void OnSaveClick(object? sender, RoutedEventArgs e)
-        => Close(new ConnectionDialogResult(BuildConnection(), SecretToStore(), Delete: false, SshSecretToStore()));
+        => Close(new ConnectionDialogResult(BuildConnection(), SecretToStore(), Delete: false,
+            SshTunnelForm.SecretToSave(BuildSshTunnel(), _existing?.SshTunnel, _existingSshSecret,
+                SshPasswordBox.Text, SshPassphraseBox.Text)));
 
     private void OnDeleteClick(object? sender, RoutedEventArgs e)
         => Close(new ConnectionDialogResult(BuildConnection(), SecretToStore(), Delete: true));

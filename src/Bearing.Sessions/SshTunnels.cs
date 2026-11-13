@@ -85,9 +85,7 @@ public sealed class SshTunnels
                 secret = await AskAsync(info, $"{what} (the last one was refused)", ct);
                 prompted = true;
             }
-            catch (ConnectionFailedException) { throw; }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not (ConnectionFailedException or OperationCanceledException))
             {
                 throw new ConnectionFailedException($"SSH to {where} failed: {SafeErrorText.Of(ex)}", ex);
             }
@@ -141,20 +139,6 @@ public sealed class SshTunnels
         try
         {
             await client.ConnectAsync(ct);
-        }
-        catch (Exception) when (refusal is not null)
-        {
-            client.Dispose();
-            throw new ConnectionFailedException(refusal);
-        }
-        catch
-        {
-            client.Dispose();
-            throw;
-        }
-
-        try
-        {
             var forward = new ForwardedPortLocal("127.0.0.1", 0, info.Host.Trim(), (uint)info.Port);
             client.AddForwardedPort(forward);
             forward.Start();
@@ -163,6 +147,12 @@ public sealed class SshTunnels
                 try { await pin(info, seen); } catch { /* pinning is best-effort; the next connect re-pins */ }
             }
             return new SshTunnelHandle(client, forward);
+        }
+        // Only the handshake sets a refusal, so this names a refused host key rather than the socket error.
+        catch (Exception) when (refusal is not null)
+        {
+            client.Dispose();
+            throw new ConnectionFailedException(refusal);
         }
         catch
         {

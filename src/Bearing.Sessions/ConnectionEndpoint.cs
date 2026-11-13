@@ -22,7 +22,6 @@ public static class ConnectionEndpoint
     /// socket has (the demo provider, #64). Rendering it as <c>demo:0</c> reads as a bug rather than as a
     /// fact.
     /// </para>
-    /// </summary>
     /// <para>
     /// Through an SSH tunnel the configured host is where the <em>bastion</em> sends the traffic, so on its
     /// own it describes the wrong machine: <c>127.0.0.1:3306</c> reads as this computer. A loopback target
@@ -30,6 +29,7 @@ public static class ConnectionEndpoint
     /// (<c>db.example.com:3306 via ssh</c>). Any other target keeps its address and names the bastion after
     /// it (<c>10.0.0.5:3306 via ssh bastion.example.com</c>).
     /// </para>
+    /// </summary>
     public static string HostPort(ConnectionInfo info)
     {
         var (where, via) = Split(info);
@@ -40,21 +40,17 @@ public static class ConnectionEndpoint
     /// <see cref="Address"/> reads <c>host:port/db via ssh</c> rather than <c>host:port via ssh/db</c>.</summary>
     private static (string Where, string Via) Split(ConnectionInfo info)
     {
-        var target = info.Port == 0 || IsNamedInstance(info.Host) ? info.Host : $"{info.Host}:{info.Port}";
-        if (info.SshTunnel is not { } ssh || string.IsNullOrWhiteSpace(ssh.Host))
+        var host = info.Host;
+        var via = "";
+        if (info.SshTunnel is { } ssh && !string.IsNullOrWhiteSpace(ssh.Host))
         {
-            return (target, "");
+            // A loopback target is the bastion itself, so the bastion is named in its place.
+            var onBastion = TlsPolicy.IsLoopback(info.Host);
+            host = onBastion ? ssh.Host : info.Host;
+            via = onBastion ? " via ssh" : $" via ssh {ssh.Host}";
         }
-        if (IsLoopback(info.Host))
-        {
-            return (info.Port == 0 ? ssh.Host : $"{ssh.Host}:{info.Port}", " via ssh");
-        }
-        return (target, $" via ssh {ssh.Host}");
+        return (info.Port == 0 || IsNamedInstance(host) ? host : $"{host}:{info.Port}", via);
     }
-
-    private static bool IsLoopback(string? host)
-        => host is "localhost" or "127.0.0.1" or "::1" or "[::1]"
-           || (host is not null && host.StartsWith("127.", System.StringComparison.Ordinal));
 
     /// <summary>
     /// True when <paramref name="host"/> names a SQL Server <em>instance</em> rather than just a machine
@@ -73,12 +69,8 @@ public static class ConnectionEndpoint
     /// database drops the slash rather than trailing one.</summary>
     public static string Address(ConnectionInfo info)
     {
-        if (string.IsNullOrWhiteSpace(info.Database))
-        {
-            return HostPort(info);
-        }
         var (where, via) = Split(info);
-        return $"{where}/{info.Database}{via}";
+        return string.IsNullOrWhiteSpace(info.Database) ? where + via : $"{where}/{info.Database}{via}";
     }
 
     /// <summary>The fullest form, <c>user@host:port/database</c> — what someone would paste into a bug

@@ -82,6 +82,18 @@ public class SshTunnelTests
     }
 
     [Fact]
+    public void Save_leaves_the_keychain_alone_when_nothing_changed()
+    {
+        var tunnel = SshTunnelForm.Build(true, "h", "", "u", SshAuthKind.Password, null, null, false)!;
+
+        Assert.Null(SshTunnelForm.SecretToSave(null, null, null, "pw", "phrase"));          // never had a tunnel
+        Assert.Null(SshTunnelForm.SecretToSave(tunnel, tunnel, "pw", "pw", null));          // same secret as opened
+        Assert.Null(SshTunnelForm.SecretToSave(tunnel, tunnel, null, "", null));            // still nothing stored
+        Assert.Equal("new", SshTunnelForm.SecretToSave(tunnel, tunnel, "pw", "new", null)); // changed
+        Assert.Equal("", SshTunnelForm.SecretToSave(null, tunnel, "pw", "pw", null));       // tunnel removed: delete
+    }
+
+    [Fact]
     public void The_form_names_what_a_ticked_tab_is_missing()
     {
         Assert.Null(SshTunnelForm.Problem(null));
