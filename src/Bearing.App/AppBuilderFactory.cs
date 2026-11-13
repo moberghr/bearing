@@ -1,3 +1,4 @@
+using System;
 using Avalonia;
 
 namespace Bearing.App;
@@ -34,8 +35,13 @@ public static class AppBuilderFactory
     public const string WindowClass = "BearingSql";
 
     /// <summary>The desktop entry point's builder: the shared configuration on the real platform.</summary>
-    public static AppBuilder BuildAvaloniaApp() =>
-        Configure()
+    /// <para>The macOS native menu bar is switched on here, not in <see cref="Configure"/>: the headless tests
+    /// build the same window and keep the in-window bar they assert against.</para>
+    public static AppBuilder BuildAvaloniaApp()
+    {
+        Views.AppMenuBar.Enabled = OperatingSystem.IsMacOS();
+        return Configure()
             .UsePlatformDetect()
             .With(new X11PlatformOptions { WmClass = WindowClass });
+    }
 }

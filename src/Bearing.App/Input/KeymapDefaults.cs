@@ -35,6 +35,9 @@ public static class KeymapDefaults
         yield return G(CommandIds.StatementNext, "Alt+Down");
         yield return G(CommandIds.AppEscape, "Escape");
         yield return G(CommandIds.PaletteOpen, "Ctrl+Shift+P");
+        // Cmd+, on a Mac (Ctrl folds into Cmd) is the platform's Settings key; Ctrl+, is the same in VS Code.
+        // A binding rather than a menu-only key so it shows in the shortcuts editor and can be rebound.
+        yield return G(CommandIds.SettingsOpen, "Ctrl+,");
         // Ctrl+E, which is Eclipse's "quick switch editor" — the same chevron-and-list affordance, so DBeaver
         // users already have the reflex. Explicitly NOT Ctrl+Shift+Tab: that is the backwards MRU cycle below,
         // and taking it would have replaced a working gesture with a similar-looking one. The binding tests

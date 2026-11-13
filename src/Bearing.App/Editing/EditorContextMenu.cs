@@ -37,10 +37,10 @@ internal static class EditorContextMenu
         {
             if (commands.Get(commandId) is not { } command) return;
             var item = new MenuItem { Header = command.Title };
-            // Through CrashReporter.Observe, like the keyboard and palette paths — a bare `async void`
+            // Through TryInvoke (observed), like the keyboard and palette paths — a bare `async void`
             // handler would let a faulting command (Run against a connection that just dropped, Export)
             // throw unhandled on the UI thread, past the app's own reporting.
-            item.Click += (_, _) => CrashReporter.Observe(command.Run(), $"command '{command.Id}'");
+            item.Click += (_, _) => command.TryInvoke();
             flyout.Items.Add(item);
             wired.Add((item, command));
         }
@@ -52,9 +52,9 @@ internal static class EditorContextMenu
 
         // AvaloniaEdit's own clipboard, with the platform gestures it already handles — not keymap commands,
         // so nothing here can be rebound and nothing here should claim it can be.
-        var cut = ClipboardItem("Cut", "Ctrl+X", editor.Cut);
-        var copy = ClipboardItem("Copy", "Ctrl+C", editor.Copy);
-        var paste = ClipboardItem("Paste", "Ctrl+V", editor.Paste);
+        var cut = ClipboardItem("Cut", MenuGestures.Parse("Ctrl+X"), editor.Cut);
+        var copy = ClipboardItem("Copy", MenuGestures.Parse("Ctrl+C"), editor.Copy);
+        var paste = ClipboardItem("Paste", MenuGestures.Parse("Ctrl+V"), editor.Paste);
         flyout.Items.Add(cut);
         flyout.Items.Add(copy);
         flyout.Items.Add(paste);
@@ -72,7 +72,7 @@ internal static class EditorContextMenu
             var map = keymap();
             foreach (var (item, command) in wired)
             {
-                item.InputGesture = Gesture(map.DisplayGesture(command.Id));
+                item.InputGesture = MenuGestures.For(map, command.Id);
                 item.IsEnabled = command.CanRun();
             }
 
@@ -91,19 +91,11 @@ internal static class EditorContextMenu
             RoutingStrategies.Tunnel);
     }
 
-    private static MenuItem ClipboardItem(string header, string gesture, Action run)
+    private static MenuItem ClipboardItem(string header, KeyGesture? gesture, Action run)
     {
-        var item = new MenuItem { Header = header, InputGesture = Gesture(gesture) };
+        var item = new MenuItem { Header = header, InputGesture = gesture };
         item.Click += (_, _) => run();
         return item;
-    }
-
-    /// <summary>Display-only, so a binding with no <see cref="KeyGesture"/> form (a physical-key gesture)
-    /// shows nothing rather than throwing — the same tolerance the menu bar's sync applies.</summary>
-    private static KeyGesture? Gesture(string? text)
-    {
-        if (text is null) return null;
-        try { return KeyGesture.Parse(text); } catch { return null; }
     }
 
     /// <summary>

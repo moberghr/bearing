@@ -10,6 +10,7 @@ using AvaloniaEdit;
 using Bearing.App.Editing;
 using Bearing.Core.Workspace;
 using Bearing.Sql;
+using Bearing.App.Input;
 using Xunit;
 
 namespace Bearing.App.Tests.Ui;
@@ -230,7 +231,7 @@ public class FormatSqlTests
 
         var item = flyout.Items.OfType<MenuItem>().FirstOrDefault(i => (i.Header as string) == "Format SQL");
         Assert.NotNull(item);
-        Assert.Equal(KeyGesture.Parse("Ctrl+Shift+F"), item!.InputGesture);
+        Assert.Equal(MenuGestures.Parse("Ctrl+Shift+F"), item!.InputGesture);
 
         flyout.Hide();
     });

@@ -42,6 +42,7 @@ public partial class MainWindow
         KeymapLoader.SaveOverrides(KeymapDiff.ComputeOverrides(defaults, edited.Bindings));
         _dispatcher.Keymap = edited;   // ResultView shares this dispatcher, so the grid picks it up too
         SyncMenuGestures();
+        _menuBar?.SyncGestures();      // its key equivalents too, or a removed key would still reach its item
         if (Vm is not null) Vm.StatusText = "Keyboard shortcuts updated.";
     }
 

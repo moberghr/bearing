@@ -60,7 +60,7 @@ public sealed class CommandPaletteHost
             _owner, "Type a command…", 560,
             new FuncDataTemplate<PaletteRow>((row, _) => BuildPaletteRow(row), supportsRecycling: true),
             query: PaletteRows,
-            onPick: row => { if (row.Command.CanRun()) CrashReporter.Observe(row.Command.Run(), $"command '{row.Command.Id}'"); });
+            onPick: row => row.Command.TryInvoke());
         _palette.Show();
     }
 

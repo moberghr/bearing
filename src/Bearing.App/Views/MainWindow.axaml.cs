@@ -31,6 +31,7 @@ public partial class MainWindow : Window
     private readonly EditorZoomController _zoom;            // per-tab transient font zoom (Ctrl+= / - / 0)
     private readonly CommandRegistry _commands = new();
     private readonly KeyDispatcher _dispatcher;
+    private readonly AppMenuBar? _menuBar;                   // the macOS native bar; null elsewhere
     private readonly CommandPaletteHost _palette;           // command palette + quick-pick overlays
     private readonly TabNavigator _tabs;                    // visual / MRU / go-to-N tab switching
     private readonly ResultsPaneController _resultsPane;    // editor / results split visibility
@@ -137,6 +138,13 @@ public partial class MainWindow : Window
         // After the registry and the dispatcher, both of which the menu reads (labels from the commands,
         // gestures from the live keymap on open).
         EditorContextMenu.Install(Editor, _commands, () => _dispatcher!.Keymap);
+        // The macOS menu bar, from the same registry and keymap (null elsewhere). Where it exists it is the
+        // menu: the in-window bar would be a second one, with its own Alt-tap reveal, so it goes.
+        _menuBar = AppMenuBar.Install(this, Editor, _commands, () => _dispatcher!.Keymap, () => Vm?.Updates, () => AboutDialog.Open(this));
+        if (_menuBar is not null && MainMenu.Parent is Panel menuHost)
+        {
+            menuHost.Children.Remove(MainMenu);
+        }
 
         InstallWindowHandlers();
         WireSidebar();
