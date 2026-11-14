@@ -9,7 +9,8 @@ using Bearing.Results;
 namespace Bearing.App.Controls;
 
 /// <summary>
-/// The results grid's right-click menu: Copy, Copy as ▸, Paste, Set value ▸, Export ▸, and Fetch all rows.
+/// The results grid's right-click menu: Copy, Copy as ▸, Paste, Set value ▸, Delete rows, Export ▸, and Fetch
+/// all rows.
 /// Its
 /// own class rather than another slab of <see cref="ResultView"/> (§9.1) — the menu owns which actions it
 /// offers and when they're applicable, and gets the actions themselves as callbacks.
@@ -31,6 +32,9 @@ internal static class ResultContextMenu
     /// <param name="expressions">The expressions to offer, canonically spelled, in menu order — supplied by
     /// the caller rather than read here, because which ones exist is the connection's engine's business and
     /// this class knows nothing about engines.</param>
+    /// <param name="deleteRows">Marks every row owning a selected cell for deletion — the same action
+    /// grid.delete (Delete) and the toolbar's Delete rows run. Null for a read-only result (hidden, like
+    /// Paste): a read-only connection never yields an editable result.</param>
     /// <param name="fetchAll">Null when the host hasn't wired paging (then the item is hidden).</param>
     /// <param name="export">Null when the host hasn't wired export (then the submenu is hidden).</param>
     public static MenuFlyout Build(
@@ -43,6 +47,7 @@ internal static class ResultContextMenu
         Action? setNull,
         Action<string>? setExpression,
         IReadOnlyList<string> expressions,
+        Action? deleteRows,
         Func<Task>? fetchAll,
         Func<ExportFormat, Task>? export)
     {
@@ -98,6 +103,14 @@ internal static class ResultContextMenu
             menu.Items.Add(setValueItem);
         }
 
+        MenuItem? deleteItem = null;
+        if (deleteRows is not null)
+        {
+            deleteItem = new MenuItem { Header = "Delete rows" };
+            deleteItem.Click += (_, _) => deleteRows();
+            menu.Items.Add(deleteItem);
+        }
+
         MenuItem? fetchItem = null;
         if (fetchAll is not null)
         {
@@ -131,6 +144,11 @@ internal static class ResultContextMenu
             if (pasteItem is not null) pasteItem.IsEnabled = canPaste();
             // Set value writes over the selection, so it shares Copy's applicability test.
             if (setValueItem is not null) setValueItem.IsEnabled = selected;
+            // Delete marks the rows the selection touches, so it shares the same test too.
+            if (deleteItem is not null)
+            {
+                deleteItem.IsEnabled = selected;
+            }
             if (fetchItem is not null) fetchItem.IsEnabled = result.IsPageable && result.HasMore;
         };
         return menu;
