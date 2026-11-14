@@ -53,15 +53,18 @@ public sealed class ResultCellFactory
     private readonly GridSelectionController _selection;
     private readonly Action<ResultSetViewModel, int, object?[]> _inspect;
     private readonly Action<ResultSetViewModel, int, object?[]> _followForeignKey;
+    private readonly Action<ResultSetViewModel, int, SortDirection> _sort;
 
     public ResultCellFactory(
         GridSelectionController selection,
         Action<ResultSetViewModel, int, object?[]> inspect,
-        Action<ResultSetViewModel, int, object?[]> followForeignKey)
+        Action<ResultSetViewModel, int, object?[]> followForeignKey,
+        Action<ResultSetViewModel, int, SortDirection> sort)
     {
         _selection = selection;
         _inspect = inspect;
         _followForeignKey = followForeignKey;
+        _sort = sort;
     }
 
     /// <summary>The column for <paramref name="index"/>, picked by column kind, with its header and a
@@ -92,12 +95,13 @@ public sealed class ResultCellFactory
     }
 
     /// <summary>Column header = the name plus inline type badges: teal PK, violet FK, mint jsonb/json
-    /// (design RESULTS_GRID §3).</summary>
-    private static Control ColumnHeader(ResultSetViewModel result, int index)
+    /// (design RESULTS_GRID §3), then the sort glyph (#106).</summary>
+    private Control ColumnHeader(ResultSetViewModel result, int index)
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         row.Children.Add(new TextBlock { Text = result.Columns[index].Name, VerticalAlignment = VerticalAlignment.Center });
         foreach (var (text, color) in Badges(result, index)) row.Children.Add(ResultChrome.Badge(text, color));
+        row.Children.Add(new SortGlyph(result, index, direction => _sort(result, index, direction)));
         return row;
     }
 

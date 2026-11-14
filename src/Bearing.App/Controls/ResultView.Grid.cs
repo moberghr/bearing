@@ -8,6 +8,7 @@ using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 using Avalonia.Media;
 using Bearing.App.Input;
+using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using static Bearing.App.Controls.Tokens;
 
@@ -161,7 +162,8 @@ public sealed partial class ResultView
         // A count of leading *visible* columns in display order — see ResultColumnMenu.FreezeThrough,
         // which owns the arithmetic because it is the arithmetic behind its own menu item.
         var through = ResultColumnMenu.FreezeThrough(grid, index);
-        ResultColumnMenu.Build(result, index, through).ShowAt(header);
+        ResultColumnMenu.Build(result, index, through, direction => SortResult(result, index, direction))
+            .ShowAt(header);
         e.Handled = true;
     }
 
@@ -232,6 +234,7 @@ public sealed partial class ResultView
             case GridPressTarget.RowHeader:
             case GridPressTarget.Corner:
             case GridPressTarget.ScrollBar:
+            case GridPressTarget.SortGlyph:
                 return;
             case GridPressTarget.ColumnHeader:
                 if (result is { IsPageable: true, HasMore: true })
@@ -240,6 +243,22 @@ public sealed partial class ResultView
             default:
                 if (_selection.Model.Cells.Count > 0) _selection.ClearAndNotify();
                 return;
+        }
+    }
+
+    /// <summary>
+    /// Sort a result's loaded rows on a column (#106) — from the header glyph or the column menu. An open cell
+    /// editor is committed first, so the value being typed is sorted with its row rather than lost to the
+    /// re-order. On a part-fetched result the status line says the sort covers the loaded rows only, the rule
+    /// a column selection already follows.
+    /// </summary>
+    private void SortResult(ResultSetViewModel result, int column, SortDirection direction)
+    {
+        CommitOpenEdit(result);
+        result.SortBy(column, direction);
+        if (ResultSort.PartialNotice(result) is { } notice)
+        {
+            Status?.Invoke(notice);
         }
     }
 

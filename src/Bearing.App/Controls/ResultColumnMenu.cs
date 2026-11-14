@@ -7,16 +7,13 @@ using Bearing.App.ViewModels;
 namespace Bearing.App.Controls;
 
 /// <summary>
-/// A result grid's <b>column header</b> menu (#118): freeze up to here, hide this column, show all.
+/// A result grid's <b>column header</b> menu: sort on this column (#106), freeze up to here, hide this column,
+/// show all (#118).
 /// <para>
 /// Separate from <see cref="ResultContextMenu"/>, which is the cell menu, because the two act on different
 /// things — that one on the selection, this one on the column being pointed at. The header's left-click is
-/// already taken by column selection (#6), so these live on its right-click.
-/// </para>
-/// <para>
-/// Built once for both this and the proposed client-side sort (#106): a sort belongs on exactly this menu,
-/// on exactly this column, so the place for it to go should exist before it lands rather than being
-/// retrofitted around a menu shaped only for freezing.
+/// already taken by column selection (#6), so these live on its right-click — and sorting also has its own
+/// glyph in the header (<see cref="SortGlyph"/>), which takes the same route.
 /// </para>
 /// </summary>
 public static class ResultColumnMenu
@@ -30,12 +27,27 @@ public static class ResultColumnMenu
     /// changed which columns are to the left of this one, and the frozen pane is defined by that, not by the
     /// source order (<see cref="ColumnLayout.FrozenCount"/>).
     /// </param>
-    public static MenuFlyout Build(ResultSetViewModel result, int index, int frozenThroughHere)
+    /// <param name="sort">Sorts the loaded rows on this column — the same route the header's sort glyph takes,
+    /// so the status line about a part-fetched result is said either way. Null leaves the Sort items out.</param>
+    public static MenuFlyout Build(
+        ResultSetViewModel result, int index, int frozenThroughHere, Action<SortDirection>? sort = null)
     {
         var layout = result.ColumnLayout;
         var menu = new MenuFlyout();
 
         var name = index >= 0 && index < result.Columns.Count ? result.Columns[index].Name : "column";
+
+        if (sort is not null)
+        {
+            var current = result.Sort.DirectionOf(index);
+            menu.Items.Add(Item("Sort ascending", () => sort(SortDirection.Ascending),
+                enabled: current != SortDirection.Ascending));
+            menu.Items.Add(Item("Sort descending", () => sort(SortDirection.Descending),
+                enabled: current != SortDirection.Descending));
+            // Clears whichever column is sorted, not only this one: there is one sort per result.
+            menu.Items.Add(Item("Clear sort", () => sort(SortDirection.None), enabled: result.Sort.IsSorted));
+            menu.Items.Add(new Separator());
+        }
 
         var freeze = Item(
             $"Freeze through “{name}”",

@@ -144,11 +144,12 @@ public static class ResultGridChrome
         return Math.Ceiling(double.IsFinite(measured) && measured > 0 ? measured : text.Length * fontSize * 0.6);
     }
 
-    /// <summary>Pixels a header costs beyond its text: our padding, the divider, and each inline type badge
-    /// (9px bold text in a padded chip with a 5px gap — see <see cref="ResultChrome.Badge"/>).</summary>
+    /// <summary>Pixels a header costs beyond its text: our padding, the divider, each inline type badge
+    /// (9px bold text in a padded chip with a 5px gap — see <see cref="ResultChrome.Badge"/>), and the sort
+    /// glyph, which every header carries (<see cref="SortGlyph.Reserve"/>).</summary>
     public static double HeaderChromeFor(IEnumerable<string> badges)
     {
-        var extra = HeaderExtra;
+        var extra = HeaderExtra + SortGlyph.Reserve;
         foreach (var badge in badges) extra += badge.Length * 6 + 13;
         return extra;
     }
@@ -242,6 +243,11 @@ public static class ResultGridChrome
     {
         if ((e.Source as Visual)?.GetSelfAndVisualAncestors().OfType<DataGridColumnHeader>().FirstOrDefault() is not { } header)
             return;
+        // Two quick clicks on the sort glyph are two sorts, not a request to fit the column.
+        if ((e.Source as Visual)?.GetSelfAndVisualAncestors().OfType<SortGlyph>().Any() == true)
+        {
+            return;
+        }
         var col = grid.Columns.FirstOrDefault(c => ReferenceEquals(c.Header, header.Content));
         if (col is not null) col.Width = DataGridLength.Auto; // recomputes to fit content
     }

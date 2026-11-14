@@ -42,7 +42,8 @@ public sealed partial class ResultView : UserControl
         _cells = new ResultCellFactory(
             _selection,
             inspect: ShowInspector,
-            followForeignKey: (rs, col, row) => _ = NavigateForeignKey?.Invoke(rs, col, row));
+            followForeignKey: (rs, col, row) => _ = NavigateForeignKey?.Invoke(rs, col, row),
+            sort: SortResult);
     }
 
     /// <summary>The cell selection this dock drives. Exposed for tests to assert against — the app itself

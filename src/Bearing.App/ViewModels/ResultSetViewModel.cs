@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Bearing.App.Results;
@@ -27,7 +26,11 @@ public sealed partial class ResultSetViewModel : ObservableObject
     public ResultSetViewModel(QueryResult result, string? sourceSql, bool pageable)
     {
         Columns = result.Columns;
-        Rows = new ObservableCollection<object?[]>(result.Rows);
+        Rows = new RowCollection(result.Rows);
+        foreach (var row in Rows)
+        {
+            Sort.Arrived(row);
+        }
         RowCount = result.RowCount;
         Duration = result.Duration;
         Message = result.Message;
@@ -56,8 +59,27 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// column is never a silent omission from what an export contains.</summary>
     public string? HiddenColumnsText => ColumnLayout.HiddenText;
 
-    /// <summary>Rows shown in the grid; grows as pages are appended (bound as the grid ItemsSource).</summary>
-    public ObservableCollection<object?[]> Rows { get; }
+    /// <summary>Rows shown in the grid, in the order shown; grows as pages are appended (bound as the grid
+    /// ItemsSource).</summary>
+    public RowCollection Rows { get; }
+
+    /// <summary>The client-side sort over the loaded rows (#106), and each row's place in the query's own
+    /// order. Owned per result set, like <see cref="ColumnLayout"/>.</summary>
+    public ResultSort Sort { get; } = new();
+
+    /// <summary>
+    /// Re-order the loaded rows on <paramref name="column"/>, or back to the query's order for
+    /// <see cref="SortDirection.None"/>. Pending edits, new rows and the selection are keyed by row, so they
+    /// travel with their rows. On a part-fetched result this sorts only what is loaded — the caller says so.
+    /// </summary>
+    public void SortBy(int column, SortDirection direction)
+    {
+        if (column < 0 || column >= Columns.Count)
+        {
+            return;
+        }
+        Rows.ResetTo(Sort.Apply(column, direction, Rows));
+    }
 
     public long RowCount { get; }
     public TimeSpan Duration { get; }
@@ -173,9 +195,12 @@ public sealed partial class ResultSetViewModel : ObservableObject
     {
         foreach (var row in rows)
         {
-            Rows.Add(row);
+            Sort.Arrived(row);
             if (IsEditable) _originals[row] = (object?[])row.Clone();
         }
+        // In place when sorted (#106): a page fetched under a sort lands where the sort puts it, not at the
+        // bottom of a list the header claims is ordered.
+        Sort.Place(Rows, rows);
         HasMore = hasMore;
         RaiseRowCount();
     }
@@ -258,6 +283,8 @@ public sealed partial class ResultSetViewModel : ObservableObject
     public object?[] AddRow()
     {
         var row = new object?[Columns.Count];
+        // At the bottom even under a sort, where the user is looking for it; a later sort places it.
+        Sort.Arrived(row);
         Rows.Add(row);
         _newRows.Add(row);
         RaiseRowCount();
@@ -273,6 +300,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
         {
             _newRows.Remove(row);
             Rows.Remove(row);
+            Sort.Forget(row);
             RaiseRowCount();
             RaisePending();
             return;
@@ -300,6 +328,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
         if (i >= 0) Rows[i] = newRow; else Rows.Add(newRow);
         _originals.Remove(oldRow);
         _originals[newRow] = (object?[])newRow.Clone();
+        Sort.Succeeds(oldRow, newRow);
     }
 
     /// <summary>Remove a saved-as-deleted row from the grid.</summary>
@@ -307,6 +336,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
     {
         Rows.Remove(row);
         _originals.Remove(row);
+        Sort.Forget(row);
         RaiseRowCount();
     }
 
@@ -322,6 +352,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
         {
             Rows.Remove(row);
             _originals.Remove(row);
+            Sort.Forget(row);
         }
         ClearPending();
         RaiseRowCount();

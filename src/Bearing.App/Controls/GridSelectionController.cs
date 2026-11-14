@@ -42,6 +42,9 @@ public enum GridPressTarget
 
     /// <summary>A column header: that column is now selected, over the loaded rows.</summary>
     ColumnHeader,
+
+    /// <summary>A column header's sort glyph (#106). It sorts; the selection is left alone.</summary>
+    SortGlyph,
 }
 
 /// <summary>
@@ -215,6 +218,7 @@ public sealed class GridSelectionController
         {
             if (visual is Border { Tag: ValueTuple<object?[], int> }) return GridPressTarget.Cell;
             if (visual is ScrollBar) return GridPressTarget.ScrollBar;
+            if (visual is SortGlyph) return GridPressTarget.SortGlyph;
             // Tested before the DataGridColumnHeader case below, because in the DataGrid's template the
             // corner *is* one — it just has no column, so it fell through to "chrome" and cleared the
             // selection instead of selecting everything (#55).
