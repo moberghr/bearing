@@ -1080,13 +1080,22 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // No ConfigureAwait(false) here, deliberately: each batch is appended to Rows, which the grid is
             // bound to, so the loop body must resume on the UI thread. The reader itself drains off it — that
             // is what the Bearing.Data ConfigureAwait pass is for.
-            await foreach (var batch in ExecutorFor(tab, session).StreamRowsAsync(sql, options, ct))
+            try
             {
-                // hasMore stays true for the duration (the honest value while a read is in flight) and is
-                // settled once below. Nothing can act on it meanwhile — the tab is running.
-                rs.AppendPage(batch.Rows, hasMore: true);
-                truncated = batch.Truncated;
-                RunStatus(tab, $"Fetching all rows… {rs.Loaded:N0} so far (Esc to stop)");
+                await foreach (var batch in ExecutorFor(tab, session).StreamRowsAsync(sql, options, ct))
+                {
+                    // hasMore stays true for the duration (the honest value while a read is in flight) and is
+                    // settled once below. Nothing can act on it meanwhile — the tab is running.
+                    // Appended, not placed: a sorted result is sorted once below, not re-placed per batch (#106).
+                    rs.AppendPage(batch.Rows, hasMore: true, inOrder: false);
+                    truncated = batch.Truncated;
+                    RunStatus(tab, $"Fetching all rows… {rs.Loaded:N0} so far (Esc to stop)");
+                }
+            }
+            finally
+            {
+                // Cancelled or failed too: whatever arrived is on screen, under a header that says it is sorted.
+                rs.ReapplySort();
             }
 
             rs.HasMore = truncated;

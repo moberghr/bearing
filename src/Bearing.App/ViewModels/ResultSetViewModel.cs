@@ -27,10 +27,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
     {
         Columns = result.Columns;
         Rows = new RowCollection(result.Rows);
-        foreach (var row in Rows)
-        {
-            Sort.Arrived(row);
-        }
+        Sort = new ResultSort(Rows);
         RowCount = result.RowCount;
         Duration = result.Duration;
         Message = result.Message;
@@ -65,7 +62,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
 
     /// <summary>The client-side sort over the loaded rows (#106), and each row's place in the query's own
     /// order. Owned per result set, like <see cref="ColumnLayout"/>.</summary>
-    public ResultSort Sort { get; } = new();
+    public ResultSort Sort { get; }
 
     /// <summary>
     /// Re-order the loaded rows on <paramref name="column"/>, or back to the query's order for
@@ -78,8 +75,29 @@ public sealed partial class ResultSetViewModel : ObservableObject
         {
             return;
         }
-        Rows.ResetTo(Sort.Apply(column, direction, Rows));
+        Sort.Apply(column, direction);
     }
+
+    /// <summary>Re-sort after <see cref="AppendPage"/> was told to append out of order (a bulk load).</summary>
+    public void ReapplySort() => Sort.Reapply();
+
+    /// <summary>Only part of the result is loaded — more rows exist than a sort or a selection can see.</summary>
+    public bool IsPartlyLoaded => IsPageable && HasMore;
+
+    /// <summary>The status line for something that acts on the loaded rows of a part-fetched result: "<paramref
+    /// name="what"/> over the loaded rows only (200 rows) — ⤓ all fetches the rest." One sentence for the
+    /// column selection and the sort, so the two never describe the same limit differently.</summary>
+    public string LoadedOnlyNotice(string what) =>
+        $"{what} over the loaded rows only ({RowCountText}) — ⤓ all fetches the rest.";
+
+    /// <summary>
+    /// What to say after a sort, or null when there is nothing to warn about: every row is loaded, or the rows
+    /// are back in the query's order. Sorting 200 of 50,000 rows and presenting it as sorted would be a lie.
+    /// </summary>
+    public string? SortNotice => IsPartlyLoaded && Sort.Column is { } column
+        ? LoadedOnlyNotice(
+            $"Sorted by “{Columns[column].Name}” {(Sort.Direction == SortDirection.Descending ? "descending" : "ascending")}")
+        : null;
 
     public long RowCount { get; }
     public TimeSpan Duration { get; }
@@ -191,16 +209,29 @@ public sealed partial class ResultSetViewModel : ObservableObject
     }
 
     /// <summary>Append a freshly-fetched page and update whether more remain.</summary>
-    public void AppendPage(IReadOnlyList<object?[]> rows, bool hasMore)
+    /// <param name="inOrder">Place the rows where the sort puts them (#106) — a page fetched under a sort must
+    /// not land at the bottom of a list the header claims is ordered. A bulk load passes false, appending each
+    /// batch, and calls <see cref="ReapplySort"/> once at the end: one sort instead of a re-placement per batch.</param>
+    public void AppendPage(IReadOnlyList<object?[]> rows, bool hasMore, bool inOrder = true)
     {
-        foreach (var row in rows)
+        if (IsEditable)
         {
-            Sort.Arrived(row);
-            if (IsEditable) _originals[row] = (object?[])row.Clone();
+            foreach (var row in rows)
+            {
+                _originals[row] = (object?[])row.Clone();
+            }
         }
-        // In place when sorted (#106): a page fetched under a sort lands where the sort puts it, not at the
-        // bottom of a list the header claims is ordered.
-        Sort.Place(Rows, rows);
+        if (inOrder)
+        {
+            Sort.Place(rows);
+        }
+        else
+        {
+            foreach (var row in rows)
+            {
+                Rows.Add(row);
+            }
+        }
         HasMore = hasMore;
         RaiseRowCount();
     }
@@ -284,7 +315,6 @@ public sealed partial class ResultSetViewModel : ObservableObject
     {
         var row = new object?[Columns.Count];
         // At the bottom even under a sort, where the user is looking for it; a later sort places it.
-        Sort.Arrived(row);
         Rows.Add(row);
         _newRows.Add(row);
         RaiseRowCount();
@@ -300,7 +330,6 @@ public sealed partial class ResultSetViewModel : ObservableObject
         {
             _newRows.Remove(row);
             Rows.Remove(row);
-            Sort.Forget(row);
             RaiseRowCount();
             RaisePending();
             return;
@@ -328,7 +357,6 @@ public sealed partial class ResultSetViewModel : ObservableObject
         if (i >= 0) Rows[i] = newRow; else Rows.Add(newRow);
         _originals.Remove(oldRow);
         _originals[newRow] = (object?[])newRow.Clone();
-        Sort.Succeeds(oldRow, newRow);
     }
 
     /// <summary>Remove a saved-as-deleted row from the grid.</summary>
@@ -336,7 +364,6 @@ public sealed partial class ResultSetViewModel : ObservableObject
     {
         Rows.Remove(row);
         _originals.Remove(row);
-        Sort.Forget(row);
         RaiseRowCount();
     }
 
@@ -352,7 +379,6 @@ public sealed partial class ResultSetViewModel : ObservableObject
         {
             Rows.Remove(row);
             _originals.Remove(row);
-            Sort.Forget(row);
         }
         ClearPending();
         RaiseRowCount();

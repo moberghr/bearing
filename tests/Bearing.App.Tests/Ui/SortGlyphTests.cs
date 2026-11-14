@@ -78,6 +78,24 @@ public class SortGlyphTests
         window.Close();
     });
 
+    /// <summary>Shown by style: out of sight on an unsorted, unhovered header; opaque for the sorted column only.
+    /// (Hover itself is the user's eyeball check — the headless pointer-over is not what this asserts.)</summary>
+    [Fact]
+    public Task Only_the_sorted_columns_glyph_shows_without_a_hover() => _ui.Run(() =>
+    {
+        var (result, _) = ResultsHarness.WideEditableResult(columns: 3, rows: 4);
+        var (window, view) = ResultsHarness.Show(result);
+        Assert.All(Glyphs(view), g => Assert.Equal(0, g.Opacity));
+
+        result.SortBy(2, SortDirection.Ascending);
+        ResultsHarness.Pump(window);
+
+        var glyphs = Glyphs(view);
+        Assert.Equal(1, glyphs[2].Opacity);
+        Assert.Equal(0, glyphs[1].Opacity);
+        window.Close();
+    });
+
     /// <summary>The glyph subscribes to the result's sort while attached; a closed window must leave the
     /// result with no handler pinning a discarded header (§9.9b).</summary>
     [Fact]

@@ -28,26 +28,23 @@ public static class ResultColumnMenu
     /// source order (<see cref="ColumnLayout.FrozenCount"/>).
     /// </param>
     /// <param name="sort">Sorts the loaded rows on this column — the same route the header's sort glyph takes,
-    /// so the status line about a part-fetched result is said either way. Null leaves the Sort items out.</param>
+    /// so the status line about a part-fetched result is said either way.</param>
     public static MenuFlyout Build(
-        ResultSetViewModel result, int index, int frozenThroughHere, Action<SortDirection>? sort = null)
+        ResultSetViewModel result, int index, int frozenThroughHere, Action<SortDirection> sort)
     {
         var layout = result.ColumnLayout;
         var menu = new MenuFlyout();
 
         var name = index >= 0 && index < result.Columns.Count ? result.Columns[index].Name : "column";
 
-        if (sort is not null)
-        {
-            var current = result.Sort.DirectionOf(index);
-            menu.Items.Add(Item("Sort ascending", () => sort(SortDirection.Ascending),
-                enabled: current != SortDirection.Ascending));
-            menu.Items.Add(Item("Sort descending", () => sort(SortDirection.Descending),
-                enabled: current != SortDirection.Descending));
-            // Clears whichever column is sorted, not only this one: there is one sort per result.
-            menu.Items.Add(Item("Clear sort", () => sort(SortDirection.None), enabled: result.Sort.IsSorted));
-            menu.Items.Add(new Separator());
-        }
+        var current = result.Sort.DirectionOf(index);
+        menu.Items.Add(Item("Sort ascending", () => sort(SortDirection.Ascending),
+            enabled: current != SortDirection.Ascending));
+        menu.Items.Add(Item("Sort descending", () => sort(SortDirection.Descending),
+            enabled: current != SortDirection.Descending));
+        // Clears whichever column is sorted, not only this one: there is one sort per result.
+        menu.Items.Add(Item("Clear sort", () => sort(SortDirection.None), enabled: result.Sort.IsSorted));
+        menu.Items.Add(new Separator());
 
         var freeze = Item(
             $"Freeze through “{name}”",

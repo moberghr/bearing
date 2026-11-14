@@ -162,22 +162,44 @@ public class ResultSortTests
         Assert.Equal([1, 2, 3, 4, 5], Ids(rs));
     }
 
-    /// <summary>The same placement through the merge path a large fetch-all takes, so the two can't disagree.</summary>
+    /// <summary>A bulk load (fetch-all) appends out of order and sorts once at the end; the result is the same
+    /// order page-by-page placement would have produced, so the two routes can't disagree.</summary>
     [Fact]
-    public void A_large_page_is_merged_into_the_same_order()
+    public void A_bulk_load_resorted_once_matches_placing_each_page()
     {
-        var first = Enumerable.Range(0, 2_000).Select(i => new object?[] { i, $"n{i}", (i * 7919) % 2_000 }).ToArray();
-        var rs = Result(true, first);
+        object?[][] Rows(int from) => Enumerable.Range(from, 500)
+            .Select(i => new object?[] { i, $"n{i}", (i * 7919) % 500 }).ToArray();
+
+        var placed = Result(true, Rows(0));
+        placed.SortBy(2, SortDirection.Ascending);
+        placed.AppendPage(Rows(500), hasMore: false);
+
+        var bulk = Result(true, Rows(0));
+        bulk.SortBy(2, SortDirection.Ascending);
+        bulk.AppendPage(Rows(500), hasMore: true, inOrder: false);
+        bulk.ReapplySort();
+
+        Assert.Equal(Ids(placed), Ids(bulk));
+        Assert.Equal(
+            Rows(0).Concat(Rows(500)).OrderBy(r => (int)r[2]!).ThenBy(r => (int)r[0]!).Select(r => (int)r[0]!),
+            Ids(bulk));
+    }
+
+    /// <summary>A result that is never sorted keeps no arrival stamps — its buffer is the arrival order — and
+    /// clearing a sort drops them again.</summary>
+    [Fact]
+    public void Stamps_exist_only_while_sorted()
+    {
+        var rs = Sample();
+        rs.AppendPage([[5, "kiwi", 1]], hasMore: false);
+        Assert.False(rs.Rows.IsStamping);
+
         rs.SortBy(2, SortDirection.Ascending);
+        Assert.True(rs.Rows.IsStamping);
 
-        var page = Enumerable.Range(2_000, 2_000).Select(i => new object?[] { i, $"n{i}", (i * 7919) % 2_000 }).ToArray();
-        Assert.True((long)page.Length * rs.Rows.Count > ResultSort.InsertBudget);
-        rs.AppendPage(page, hasMore: false);
-
-        var expected = first.Concat(page)
-            .OrderBy(r => (int)r[2]!).ThenBy(r => (int)r[0]!)
-            .Select(r => (int)r[0]!).ToArray();
-        Assert.Equal(expected, Ids(rs));
+        rs.SortBy(2, SortDirection.None);
+        Assert.False(rs.Rows.IsStamping);
+        Assert.Equal([1, 2, 3, 4, 5], Ids(rs));
     }
 
     /// <summary>A new row appears at the bottom, where the user is looking for it, even under a sort.</summary>
@@ -230,13 +252,13 @@ public class ResultSortTests
         partial.SortBy(1, SortDirection.Descending);
         Assert.Equal(
             "Sorted by “name” descending over the loaded rows only (2 rows) — ⤓ all fetches the rest.",
-            ResultSort.PartialNotice(partial));
+            partial.SortNotice);
 
         partial.SortBy(1, SortDirection.None);
-        Assert.Null(ResultSort.PartialNotice(partial));
+        Assert.Null(partial.SortNotice);
 
         var complete = Sample();
         complete.SortBy(1, SortDirection.Ascending);
-        Assert.Null(ResultSort.PartialNotice(complete));
+        Assert.Null(complete.SortNotice);
     }
 }

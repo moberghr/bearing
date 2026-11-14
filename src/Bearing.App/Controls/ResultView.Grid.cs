@@ -237,8 +237,8 @@ public sealed partial class ResultView
             case GridPressTarget.SortGlyph:
                 return;
             case GridPressTarget.ColumnHeader:
-                if (result is { IsPageable: true, HasMore: true })
-                    Status?.Invoke($"Column selected over the loaded rows only ({result.RowCountText}) — ⤓ all fetches the rest.");
+                if (result.IsPartlyLoaded)
+                    Status?.Invoke(result.LoadedOnlyNotice("Column selected"));
                 return;
             default:
                 if (_selection.Model.Cells.Count > 0) _selection.ClearAndNotify();
@@ -256,7 +256,7 @@ public sealed partial class ResultView
     {
         CommitOpenEdit(result);
         result.SortBy(column, direction);
-        if (ResultSort.PartialNotice(result) is { } notice)
+        if (result.SortNotice is { } notice)
         {
             Status?.Invoke(notice);
         }

@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Linq;
-using Bearing.App.ViewModels;
 using Bearing.Results;
 
 namespace Bearing.App.Results;
@@ -23,9 +21,9 @@ public enum SortDirection
 /// easy to get wrong are tested here without a window.
 /// </para>
 /// <list type="bullet">
-/// <item>The query's own order is always recoverable. Every row is stamped with the order it arrived in, and
-/// "clear sort" — and every tie — falls back to that, so the sort is stable and undoable. That order is often
-/// what the user asked for with an <c>ORDER BY</c>.</item>
+/// <item>The query's own order is always recoverable. The buffer stamps every row with the order it arrived in
+/// (<see cref="RowCollection"/>), and "clear sort" — and every tie — falls back to that, so the sort is stable
+/// and undoable. That order is often what the user asked for with an <c>ORDER BY</c>.</item>
 /// <item>Rows are tracked by reference, as the pending edits are (<c>ResultSetViewModel</c>), so a sort never
 /// detaches an edit or a selection from its row.</item>
 /// <item>NULLs sort last ascending and first descending — what Postgres does by default — so a sort here
@@ -37,15 +35,9 @@ public enum SortDirection
 /// </summary>
 public sealed class ResultSort
 {
-    /// <summary>
-    /// Above this many comparisons-worth of work (incoming × loaded), a page is merged in and the buffer reset
-    /// once, rather than inserted row by row. Inserting is kinder to the viewport — the grid sees each row land
-    /// — but every insert shifts the buffer, which turns a fetch-all of a large sorted result quadratic.
-    /// </summary>
-    internal const long InsertBudget = 2_000_000;
+    private readonly RowCollection _rows;
 
-    private readonly Dictionary<object?[], long> _arrival = new(ReferenceEqualityComparer.Instance);
-    private long _next;
+    public ResultSort(RowCollection rows) => _rows = rows;
 
     /// <summary>The sorted column (source index), or null when the rows are in the query's order.</summary>
     public int? Column { get; private set; }
@@ -73,126 +65,83 @@ public sealed class ResultSort
         _ => SortDirection.None,
     };
 
-    /// <summary>Stamp a row with its arrival order. A row already stamped keeps its stamp.</summary>
-    public void Arrived(object?[] row)
-    {
-        if (_arrival.TryAdd(row, _next))
-        {
-            _next++;
-        }
-    }
-
-    /// <summary>A saved row replaced by its committed array takes over the old one's place in the query's order.</summary>
-    public void Succeeds(object?[] oldRow, object?[] newRow)
-    {
-        if (_arrival.Remove(oldRow, out var stamp))
-        {
-            _arrival[newRow] = stamp;
-        }
-        else
-        {
-            Arrived(newRow);
-        }
-    }
-
-    /// <summary>A row that has left the buffer.</summary>
-    public void Forget(object?[] row) => _arrival.Remove(row);
-
     /// <summary>
-    /// Sort <paramref name="rows"/> on <paramref name="column"/> (or back to arrival order for
-    /// <see cref="SortDirection.None"/>), record it, and return the new order. The caller owns the buffer.
+    /// Sort the buffer on <paramref name="column"/>, or back to arrival order for <see cref="SortDirection.None"/>,
+    /// in one reset.
     /// </summary>
-    public List<object?[]> Apply(int column, SortDirection direction, IEnumerable<object?[]> rows)
+    public void Apply(int column, SortDirection direction)
     {
-        if (direction == SortDirection.None)
+        _rows.StartStamping();   // before Column changes: from unsorted, positions are still the arrival order
+        Column = direction == SortDirection.None ? null : column;
+        Direction = direction;
+        Reapply();
+        if (!IsSorted)
         {
-            Column = null;
-            Direction = SortDirection.None;
+            _rows.StopStamping();
         }
-        else
+        Changed?.Invoke();
+    }
+
+    /// <summary>Re-sort the whole buffer by the sort in force — after a bulk load that appended out of order.</summary>
+    public void Reapply()
+    {
+        if (!_rows.IsStamping)
         {
-            Column = column;
-            Direction = direction;
+            return;   // never sorted: the buffer is already in arrival order
         }
 
-        var ordered = rows.ToList();
-        ordered.Sort(Compare);   // not a stable sort, but Compare is total: ties fall to arrival order
-        Changed?.Invoke();
-        return ordered;
+        // Keyed once per row, so the comparison reads no dictionary and no row array.
+        var keyed = new Keyed[_rows.Count];
+        for (var i = 0; i < keyed.Length; i++)
+        {
+            var row = _rows[i];
+            keyed[i] = new Keyed(row, Column is { } c ? Cell(row, c) : null, _rows.ArrivalOf(row));
+        }
+        var sign = Direction == SortDirection.Descending ? -1 : 1;
+        var byValue = IsSorted;
+        Array.Sort(keyed, (a, b) =>
+        {
+            var v = byValue ? CompareValues(a.Value, b.Value) * sign : 0;
+            return v != 0 ? v : a.Arrival.CompareTo(b.Arrival);
+        });
+
+        var ordered = new List<object?[]>(keyed.Length);
+        foreach (var k in keyed)
+        {
+            ordered.Add(k.Row);
+        }
+        _rows.ResetTo(ordered);
     }
 
     /// <summary>
-    /// Put newly loaded rows into <paramref name="buffer"/> where the current sort says they belong — at the
-    /// end when unsorted. Each row must already be <see cref="Arrived"/>.
+    /// Put newly loaded rows where the current sort says they belong — at the end when unsorted.
     /// <para>
     /// "Where they belong" is a binary search over the buffer as it stands. Rows the user has edited or added
     /// since the sort are where the sort left them, not where their new values would put them — the same as a
     /// spreadsheet — so the buffer is only nearly sorted and a newcomer lands next to its nearest sorted
-    /// neighbours. Nothing is re-ordered to make room.
+    /// neighbours. A page is a few hundred rows; a bulk load (fetch-all) appends instead and calls
+    /// <see cref="Reapply"/> once at the end.
     /// </para>
     /// </summary>
-    public void Place(RowCollection buffer, IReadOnlyList<object?[]> incoming)
+    public void Place(IReadOnlyList<object?[]> incoming)
     {
-        if (!IsSorted)
+        foreach (var row in incoming)
         {
-            foreach (var row in incoming)
+            if (!IsSorted)
             {
-                buffer.Add(row);
+                _rows.Add(row);
+                continue;
             }
-            return;
+            _rows.Stamp(row);
+            _rows.Insert(InsertionIndex(row), row);
         }
-
-        if ((long)incoming.Count * buffer.Count <= InsertBudget)
-        {
-            foreach (var row in incoming)
-            {
-                buffer.Insert(InsertionIndex(buffer, row), row);
-            }
-            return;
-        }
-
-        buffer.ResetTo(Merge(buffer, incoming));
     }
 
     /// <summary>
-    /// The status line after sorting a result that is only partly fetched, or null when every row is loaded
-    /// or the rows are back in the query's order. Sorting 200 of 50,000 rows and presenting it as sorted would
-    /// be a lie, so it is said, in the words a part-loaded column selection already uses.
-    /// </summary>
-    public static string? PartialNotice(ResultSetViewModel result)
-    {
-        if (result is not { IsPageable: true, HasMore: true } || result.Sort.Column is not { } column)
-        {
-            return null;
-        }
-        var name = column < result.Columns.Count ? result.Columns[column].Name : "column";
-        var way = result.Sort.Direction == SortDirection.Descending ? "descending" : "ascending";
-        return $"Sorted by “{name}” {way} over the loaded rows only ({result.RowCountText}) — ⤓ all fetches the rest.";
-    }
-
-    /// <summary>Order two rows by the current sort, then by arrival.</summary>
-    public int Compare(object?[] a, object?[] b)
-    {
-        if (ReferenceEquals(a, b))
-        {
-            return 0;
-        }
-        if (Column is { } column)
-        {
-            var byValue = CompareValues(Cell(a, column), Cell(b, column));
-            if (byValue != 0)
-            {
-                return Direction == SortDirection.Descending ? -byValue : byValue;
-            }
-        }
-        return ArrivalOf(a).CompareTo(ArrivalOf(b));
-    }
-
-    /// <summary>
-    /// Ascending order of two cell values: NULLs last; numbers by value across CLR types (an <c>int4</c> and a
-    /// <c>numeric</c> compare as numbers); like-typed comparables by their own order; everything else by its
-    /// displayed text. Never throws — an edited cell holds the user's raw text in a numeric column, and a sort
-    /// must still finish.
+    /// Ascending order of two cell values: NULLs last; like-typed comparables by their own order (text
+    /// case-insensitively); numbers by value across CLR types (an <c>int4</c> and a <c>numeric</c> compare as
+    /// numbers); everything else by its displayed text. Never throws — an edited cell holds the user's raw text in
+    /// a numeric column, and a sort must still finish.
     /// </summary>
     public static int CompareValues(object? a, object? b)
     {
@@ -213,41 +162,55 @@ public sealed class ResultSort
             return -1;
         }
 
-        if (IsNumber(a) && IsNumber(b))
+        var type = a.GetType();
+        if (type == b.GetType())
+        {
+            switch (a)
+            {
+                case string sa:
+                    return CompareText(sa, (string)b);
+                case byte[] ba:
+                    return ba.AsSpan().SequenceCompareTo((byte[])b);
+                case IComparable comparable:
+                    try
+                    {
+                        return comparable.CompareTo(b);
+                    }
+                    catch (ArgumentException)
+                    {
+                        break;   // a comparable that refuses its own type: fall through to the text
+                    }
+            }
+        }
+        else if (CellFormat.IsNumeric(type) && CellFormat.IsNumeric(b.GetType()))
         {
             return CompareNumbers(a, b);
-        }
-        if (a is string sa && b is string sb)
-        {
-            return CompareText(sa, sb);
-        }
-        if (a is byte[] ba && b is byte[] bb)
-        {
-            return ba.AsSpan().SequenceCompareTo(bb);
-        }
-        if (a.GetType() == b.GetType() && a is IComparable comparable)
-        {
-            try
-            {
-                return comparable.CompareTo(b);
-            }
-            catch (ArgumentException)
-            {
-                // A comparable that refuses its own type: fall through to the text.
-            }
         }
         return CompareText(CellFormat.Display(a), CellFormat.Display(b));
     }
 
-    private int InsertionIndex(IReadOnlyList<object?[]> buffer, object?[] row)
+    private int Compare(object?[] a, object?[] b)
+    {
+        if (Column is { } column)
+        {
+            var byValue = CompareValues(Cell(a, column), Cell(b, column));
+            if (byValue != 0)
+            {
+                return Direction == SortDirection.Descending ? -byValue : byValue;
+            }
+        }
+        return _rows.ArrivalOf(a).CompareTo(_rows.ArrivalOf(b));
+    }
+
+    private int InsertionIndex(object?[] row)
     {
         // Upper bound: after every row that sorts at or before this one. A newcomer always arrived last, so
         // among equals it belongs after them.
-        int lo = 0, hi = buffer.Count;
+        int lo = 0, hi = _rows.Count;
         while (lo < hi)
         {
             var mid = lo + ((hi - lo) >> 1);
-            if (Compare(buffer[mid], row) <= 0)
+            if (Compare(_rows[mid], row) <= 0)
             {
                 lo = mid + 1;
             }
@@ -259,30 +222,6 @@ public sealed class ResultSort
         return lo;
     }
 
-    private List<object?[]> Merge(IReadOnlyList<object?[]> buffer, IReadOnlyList<object?[]> incoming)
-    {
-        var sorted = incoming.ToList();
-        sorted.Sort(Compare);
-        var merged = new List<object?[]>(buffer.Count + sorted.Count);
-        int i = 0, j = 0;
-        while (i < buffer.Count && j < sorted.Count)
-        {
-            merged.Add(Compare(buffer[i], sorted[j]) <= 0 ? buffer[i++] : sorted[j++]);
-        }
-        while (i < buffer.Count)
-        {
-            merged.Add(buffer[i++]);
-        }
-        while (j < sorted.Count)
-        {
-            merged.Add(sorted[j++]);
-        }
-        return merged;
-    }
-
-    // A row nobody stamped (should not happen) sorts after everything that was.
-    private long ArrivalOf(object?[] row) => _arrival.TryGetValue(row, out var stamp) ? stamp : long.MaxValue;
-
     private static object? Cell(object?[] row, int column) => column < row.Length ? row[column] : null;
 
     private static int CompareText(string a, string b)
@@ -290,9 +229,6 @@ public sealed class ResultSort
         var folded = string.Compare(a, b, CultureInfo.InvariantCulture, CompareOptions.IgnoreCase);
         return folded != 0 ? folded : string.CompareOrdinal(a, b);
     }
-
-    private static bool IsNumber(object value) => value is sbyte or byte or short or ushort or int or uint
-        or long or ulong or decimal or float or double;
 
     private static int CompareNumbers(object a, object b)
     {
@@ -304,4 +240,6 @@ public sealed class ResultSort
         return Convert.ToDecimal(a, CultureInfo.InvariantCulture)
             .CompareTo(Convert.ToDecimal(b, CultureInfo.InvariantCulture));
     }
+
+    private readonly record struct Keyed(object?[] Row, object? Value, long Arrival);
 }

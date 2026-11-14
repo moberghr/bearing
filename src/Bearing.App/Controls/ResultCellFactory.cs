@@ -101,7 +101,7 @@ public sealed class ResultCellFactory
         var row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         row.Children.Add(new TextBlock { Text = result.Columns[index].Name, VerticalAlignment = VerticalAlignment.Center });
         foreach (var (text, color) in Badges(result, index)) row.Children.Add(ResultChrome.Badge(text, color));
-        row.Children.Add(new SortGlyph(result, index, direction => _sort(result, index, direction)));
+        row.Children.Add(new SortGlyph(result, index, _sort));
         return row;
     }
 

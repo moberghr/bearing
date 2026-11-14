@@ -142,7 +142,7 @@ public class ColumnFreezeHideTests
         var (result, _) = ResultsHarness.WideEditableResult(columns: 4, rows: 3);
         var (window, _) = ResultsHarness.Show(result);
 
-        var fresh = Items(ResultColumnMenu.Build(result, 1, frozenThroughHere: 2));
+        var fresh = Items(ResultColumnMenu.Build(result, 1, frozenThroughHere: 2, sort: _ => { }));
         Assert.True(fresh["Freeze through “col1”"]);
         Assert.False(fresh["Unfreeze columns"]);         // nothing frozen yet
         Assert.True(fresh["Hide “col1”"]);
@@ -150,7 +150,7 @@ public class ColumnFreezeHideTests
 
         result.ColumnLayout.Freeze(2);
         result.ColumnLayout.Hide(3);
-        var after = Items(ResultColumnMenu.Build(result, 1, frozenThroughHere: 2));
+        var after = Items(ResultColumnMenu.Build(result, 1, frozenThroughHere: 2, sort: _ => { }));
 
         Assert.False(after["Freeze through “col1”"]);     // already frozen exactly this far
         Assert.True(after["Unfreeze columns"]);
@@ -165,7 +165,7 @@ public class ColumnFreezeHideTests
         var (window, _) = ResultsHarness.Show(result);
 
         result.ColumnLayout.Hide(0);
-        var items = Items(ResultColumnMenu.Build(result, 1, frozenThroughHere: 1));
+        var items = Items(ResultColumnMenu.Build(result, 1, frozenThroughHere: 1, sort: _ => { }));
 
         Assert.False(items["Hide “col1”"]);
         window.Close();

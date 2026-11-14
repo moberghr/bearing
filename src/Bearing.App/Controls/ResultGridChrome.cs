@@ -94,7 +94,7 @@ public static class ResultGridChrome
     /// same deliberate slack a value cell reserves (<c>ResultCellFactory.TextSlack</c>). A header measured to
     /// exactly its own width is arranged at exactly that width, with nothing left for a rounding difference
     /// or a differently-resolved mono face — the same knife edge the values were on before #73.</summary>
-    private const double HeaderExtra = HeaderPadding * 2 + 1 + ResultCellFactory.TextSlack;
+    private const double HeaderExtra = HeaderPadding * 2 + 1 + ResultCellFactory.TextSlack + SortGlyph.Reserve;
 
     /// <summary>Width of a row's left status bar (teal edited / green new / red deleted — see
     /// <see cref="ResultRowPainter"/>). Reserved on every row, dirty or not, as the row's
@@ -144,12 +144,12 @@ public static class ResultGridChrome
         return Math.Ceiling(double.IsFinite(measured) && measured > 0 ? measured : text.Length * fontSize * 0.6);
     }
 
-    /// <summary>Pixels a header costs beyond its text: our padding, the divider, each inline type badge
-    /// (9px bold text in a padded chip with a 5px gap — see <see cref="ResultChrome.Badge"/>), and the sort
-    /// glyph, which every header carries (<see cref="SortGlyph.Reserve"/>).</summary>
+    /// <summary>Pixels a header costs beyond its text: our padding, the divider, the sort glyph (in
+    /// <see cref="HeaderExtra"/>), and each inline type badge (9px bold text in a padded chip with a 5px gap —
+    /// see <see cref="ResultChrome.Badge"/>).</summary>
     public static double HeaderChromeFor(IEnumerable<string> badges)
     {
-        var extra = HeaderExtra + SortGlyph.Reserve;
+        var extra = HeaderExtra;
         foreach (var badge in badges) extra += badge.Length * 6 + 13;
         return extra;
     }
@@ -224,6 +224,16 @@ public static class ResultGridChrome
         colHeader.Setters.Add(new Setter(DataGridColumnHeader.SeparatorBrushProperty, SeparatorBrush));
         grid.Styles.Add(colHeader);
 
+        // The sort glyph (#106): out of sight until its header is hovered, or for good once its column is sorted.
+        var glyph = new Style(x => x.OfType<SortGlyph>());
+        glyph.Setters.Add(new Setter(Visual.OpacityProperty, 0.0));
+        grid.Styles.Add(glyph);
+        var glyphShown = new Style(x => Selectors.Or(
+            x.OfType<DataGridColumnHeader>().Class(":pointerover").Descendant().OfType<SortGlyph>(),
+            x.OfType<SortGlyph>().Class(":sorted")));
+        glyphShown.Setters.Add(new Setter(Visual.OpacityProperty, 1.0));
+        grid.Styles.Add(glyphShown);
+
         // Row-number gutter: same bg.window fill as the header row, dim digits, our separator colour.
         // Only these three setters do anything — the DataGridRowHeader template (12.1) hardcodes the rest:
         // its ContentPresenter carries HorizontalAlignment="Center" as a local value (which outranks a
@@ -243,11 +253,6 @@ public static class ResultGridChrome
     {
         if ((e.Source as Visual)?.GetSelfAndVisualAncestors().OfType<DataGridColumnHeader>().FirstOrDefault() is not { } header)
             return;
-        // Two quick clicks on the sort glyph are two sorts, not a request to fit the column.
-        if ((e.Source as Visual)?.GetSelfAndVisualAncestors().OfType<SortGlyph>().Any() == true)
-        {
-            return;
-        }
         var col = grid.Columns.FirstOrDefault(c => ReferenceEquals(c.Header, header.Content));
         if (col is not null) col.Width = DataGridLength.Auto; // recomputes to fit content
     }

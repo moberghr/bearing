@@ -5,7 +5,6 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Avalonia.VisualTree;
 using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using static Bearing.App.Controls.Tokens;
@@ -20,24 +19,26 @@ namespace Bearing.App.Controls;
 /// <para>
 /// Its own target rather than the header's click, because the header's click selects the column (#6).
 /// <see cref="GridSelectionController.TrySelectFromHeader"/> recognises this type and leaves the selection
-/// alone, and the press is marked handled here so the header does not start a column drag from it.
+/// alone; the press is marked handled here so the header does not start a column drag from it, and the
+/// double-tap so two quick clicks are two sorts rather than an auto-fit.
 /// </para>
 /// <para>
-/// Hidden by opacity, not <c>IsVisible</c>, so the column's width (which reserves <see cref="Reserve"/>) is
-/// the same sorted or not, and the header never shifts when the glyph appears. Invisible and clickable is not
-/// a trap: it is only invisible while the pointer is elsewhere.
+/// Shown by style, not code (<see cref="ResultGridChrome"/>): transparent by default, opaque under a hovered
+/// header or while <c>:sorted</c>. Opacity rather than <c>IsVisible</c>, so the column's width (which reserves
+/// <see cref="Reserve"/>) is the same either way and the header never shifts when the glyph appears.
 /// </para>
 /// <para>
-/// Subscribes to the result's sort and to its header only while attached: a result outlives every grid built
-/// from it (§9.9b), so a subscription held past detach would pin a discarded header.
+/// Subscribes to the result's sort only while attached: a result outlives every grid built from it (§9.9b),
+/// so a subscription held past detach would pin a discarded header.
 /// </para>
 /// </summary>
 public sealed class SortGlyph : Border
 {
     // Drawn, not typed: ▲▼⇅ are not in every mono face (see ResultChrome's chevrons). 8×12 box.
-    private const string BothData = "M0,5 L4,1 L8,5 Z M0,7 L4,11 L8,7 Z";
-    private const string AscendingData = "M0,8 L4,3 L8,8 Z";
-    private const string DescendingData = "M0,4 L4,9 L8,4 Z";
+    private static readonly Geometry Both = Geometry.Parse("M0,5 L4,1 L8,5 Z M0,7 L4,11 L8,7 Z");
+    private static readonly Geometry Ascending = Geometry.Parse("M0,8 L4,3 L8,8 Z");
+    private static readonly Geometry Descending = Geometry.Parse("M0,4 L4,9 L8,4 Z");
+    private static readonly Cursor Hand = new(StandardCursorType.Hand);
 
     private const double GlyphWidth = 10;
     private const double Gap = 5;
@@ -47,7 +48,7 @@ public sealed class SortGlyph : Border
 
     private readonly ResultSetViewModel _result;
     private readonly int _column;
-    private readonly Action<SortDirection> _sort;
+    private readonly Action<ResultSetViewModel, int, SortDirection> _sort;
     private readonly Path _path = new()
     {
         Stretch = Stretch.None,
@@ -55,10 +56,10 @@ public sealed class SortGlyph : Border
         VerticalAlignment = VerticalAlignment.Center,
     };
 
-    private DataGridColumnHeader? _header;
+    private SortDirection? _shown;
 
     /// <param name="sort">Asked for the direction one click moves to; the caller sorts and reports.</param>
-    public SortGlyph(ResultSetViewModel result, int column, Action<SortDirection> sort)
+    public SortGlyph(ResultSetViewModel result, int column, Action<ResultSetViewModel, int, SortDirection> sort)
     {
         _result = result;
         _column = column;
@@ -68,10 +69,11 @@ public sealed class SortGlyph : Border
         Margin = new Thickness(Gap, 0, 0, 0);
         VerticalAlignment = VerticalAlignment.Center;
         Background = Brushes.Transparent;   // the whole box is the target, not just the triangles' ink
-        Cursor = new Cursor(StandardCursorType.Hand);
+        Cursor = Hand;
         Child = _path;
         // handledEventsToo: the DataGrid marks pointer presses handled in the tunnel phase.
         AddHandler(PointerPressedEvent, OnPressed, RoutingStrategies.Bubble, handledEventsToo: true);
+        DoubleTapped += (_, e) => e.Handled = true;
         Sync();
     }
 
@@ -82,11 +84,6 @@ public sealed class SortGlyph : Border
     {
         base.OnAttachedToVisualTree(e);
         _result.Sort.Changed += Sync;
-        _header = this.FindAncestorOfType<DataGridColumnHeader>();
-        if (_header is not null)
-        {
-            _header.PropertyChanged += OnHeaderPropertyChanged;
-        }
         Sync();
     }
 
@@ -94,19 +91,6 @@ public sealed class SortGlyph : Border
     {
         base.OnDetachedFromVisualTree(e);
         _result.Sort.Changed -= Sync;
-        if (_header is not null)
-        {
-            _header.PropertyChanged -= OnHeaderPropertyChanged;
-            _header = null;
-        }
-    }
-
-    private void OnHeaderPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
-    {
-        if (e.Property == InputElement.IsPointerOverProperty)
-        {
-            Sync();
-        }
     }
 
     private void OnPressed(object? sender, PointerPressedEventArgs e)
@@ -116,20 +100,25 @@ public sealed class SortGlyph : Border
             return;
         }
         e.Handled = true;
-        _sort(ResultSort.Next(Direction));
+        _sort(_result, _column, ResultSort.Next(Direction));
     }
 
     private void Sync()
     {
         var direction = Direction;
-        _path.Data = Geometry.Parse(direction switch
+        if (direction == _shown)
         {
-            SortDirection.Ascending => AscendingData,
-            SortDirection.Descending => DescendingData,
-            _ => BothData,
-        });
+            return;
+        }
+        _shown = direction;
+        _path.Data = direction switch
+        {
+            SortDirection.Ascending => Ascending,
+            SortDirection.Descending => Descending,
+            _ => Both,
+        };
         _path.Fill = direction == SortDirection.None ? Res("Text.Faint") : Res("Accent.Brand");
-        Opacity = direction != SortDirection.None || _header?.IsPointerOver == true ? 1 : 0;
+        PseudoClasses.Set(":sorted", direction != SortDirection.None);
         ToolTip.SetTip(this, ResultSort.Next(direction) switch
         {
             SortDirection.Ascending => "Sort ascending",
