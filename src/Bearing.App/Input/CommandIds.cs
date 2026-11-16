@@ -154,4 +154,5 @@ public static class CommandIds
     public const string GridFollowFk = "grid.followFk";
     public const string GridBack = "grid.back";
     public const string GridLeaveInline = "grid.leaveInline";
+    public const string GridFilter = "grid.filter";
 }

@@ -259,6 +259,9 @@ public sealed partial class ResultView : UserControl
             () => V().ToggleInspectActiveCell(), canRun: () => V().InspectableActiveCell() is not null));
         r.Register(KeyCommand.Sync(CommandIds.GridFollowFk, "Follow foreign key", KeyScope.Grid, "Grid",
             () => V().FollowActiveFk(), canRun: () => V()._selection.ActiveCellIsFk()));
+        r.Register(KeyCommand.Sync(CommandIds.GridFilter, "Filter rows", KeyScope.Grid, "Grid",
+            () => { if (V().GridTarget() is { } t) t.Result.Filter.Open(); },
+            canRun: () => V().GridTarget() is { } t && t.Result.HasGrid));
         r.Register(KeyCommand.Sync(CommandIds.GridBack, "Back (foreign-key navigation)", KeyScope.Grid, "Grid",
             () => V().GoBack?.Invoke(), canRun: () => V().CanGoBack));
     }

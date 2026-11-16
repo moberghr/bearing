@@ -207,3 +207,19 @@ objects, not sub-groups.
 - Focus leaving the grid commits; Escape cancels.
 - `CommitFirstCommands` (`grid.save`, `grid.discard`, `grid.showSql`): resolve the key, commit, then dispatch
   with that set as `only`. Don't add Ctrl+C/V/arrows.
+
+## §9.16 — Client-side sort & filter (#106, design v4)
+- `result.Rows` = every loaded row (pending changes, save, export read it). `result.ViewRows` = what the grid
+  shows (`ResultFilterViewModel`, rules in pure `RowView`/`ColumnFilter`). **Anything meaning "order on
+  screen"** — selection rectangles, copy order, arrows, paste, ring adjacency, inline sizing — uses `ViewRows`.
+- Unfiltered/unsorted, `ViewRows` mirrors `Rows` change for change (paging never resets the grid). Active: rebuilt
+  by `RowView.Apply`; `AppendPage` defers to one rebuild; new rows pin at the bottom (mark `_newRows` *before*
+  `Rows.Add`); `ReplaceRow` keeps its place. Auto-load is off while active; ⤓ all still loads.
+- Header click still selects the column (#6). The sort glyph and the header filter input carry
+  `ResultColumnHeader.ChromeClass`: they don't select (`GridPressTarget.ScrollBar`), don't auto-fit on double-tap,
+  and focus in a header doesn't seed the cursor. Header filter inputs swallow Enter/Esc/arrows.
+- The header template keeps a ≥32px right column for its own sort arrow; `ResultColumnHeader` sizes itself
+  from the header width and left-aligns to run over it. Find the cell editor with `ResultsHarness.CellEditor`,
+  never "the TextBox in the grid".
+- NULL matches no column filter (`!=` included). Docs (json/jsonb/xml) filter but don't sort. Changing filter
+  or sort clears the selection. §5 "→ SQL" push-to-server is not built yet.

@@ -221,6 +221,8 @@ public static class ResultGridChrome
         colHeader.Setters.Add(new Setter(TemplatedControl.FontWeightProperty, HeaderFontWeight));
         colHeader.Setters.Add(new Setter(TemplatedControl.FontSizeProperty, HeaderFontSize)); // as the cells
         colHeader.Setters.Add(new Setter(DataGridColumnHeader.SeparatorBrushProperty, SeparatorBrush));
+        // Stretched so a header's sort indicator and filter input can sit at its right edge / full width (#106).
+        colHeader.Setters.Add(new Setter(ContentControl.HorizontalContentAlignmentProperty, HorizontalAlignment.Stretch));
         grid.Styles.Add(colHeader);
 
         // Row-number gutter: same bg.window fill as the header row, dim digits, our separator colour.
@@ -240,6 +242,11 @@ public static class ResultGridChrome
     /// <summary>Double-tap a column header (or its resize gripper) → auto-fit the column to its content.</summary>
     public static void AutoFitColumn(DataGrid grid, TappedEventArgs e)
     {
+        // Not from the header's own controls (#106): two quick clicks on the sort indicator are asc → desc, and
+        // auto-fitting on the second slid the indicator out from under the pointer before it could click.
+        if ((e.Source as Visual)?.GetSelfAndVisualAncestors()
+                .Any(v => v is StyledElement s && s.Classes.Contains(ResultColumnHeader.ChromeClass)) == true)
+            return;
         if ((e.Source as Visual)?.GetSelfAndVisualAncestors().OfType<DataGridColumnHeader>().FirstOrDefault() is not { } header)
             return;
         var col = grid.Columns.FirstOrDefault(c => ReferenceEquals(c.Header, header.Content));

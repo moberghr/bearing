@@ -130,6 +130,8 @@ public static class KeymapDefaults
         yield return R(CommandIds.GridInspect, "F7");          // peek at the active cell's full value
         yield return R(CommandIds.GridFollowFk, "Alt+Right"); // drill into the FK the active cell points to
         yield return R(CommandIds.GridBack, "Alt+Left");      // return to the pre-navigation result
+        // Open the client-side filter bar and focus it (#106). Grid scope only: in the editor Ctrl+F stays find.
+        yield return R(CommandIds.GridFilter, "Ctrl+F");
     }
 
     private static KeyBinding G(string id, string gesture) => new(KeyScope.Global, GestureParser.Parse(gesture), id);

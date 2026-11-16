@@ -60,12 +60,17 @@ public sealed partial class ResultView
             if (result.IsEditable) ResultRowPainter.ApplyRowStatus(e.Row, result);
             else e.Row.Background = ResultRowPainter.RowBackground(e.Row.Index);
             // Infinite scroll: when a near-bottom row realizes and more rows exist, fetch the next page.
-            if (result.HasMore && e.Row.Index >= result.Rows.Count - 8) TriggerAutoLoad(result);
+            // Off while a filter or sort is active (#106): the view's last rows aren't the loaded ones, and a
+            // page landing under a sort reshuffles what the user is reading. ⭳ all still loads, and re-applies.
+            if (result.HasMore && !result.Filter.IsActive && e.Row.Index >= result.Rows.Count - 8)
+                TriggerAutoLoad(result);
         };
 
         for (var i = 0; i < result.Columns.Count; i++)
             grid.Columns.Add(_cells.BuildColumn(result, i, grid));
-        grid.ItemsSource = result.Rows; // ObservableCollection → paged rows append without a rebuild
+        // The view over the loaded rows (#106): equal to them, change for change, until a filter or sort is
+        // set — so paged rows still append without a rebuild.
+        grid.ItemsSource = result.ViewRows;
 
         // Double-tap: a column header (incl. its resize gripper) auto-fits that column; a checkbox cell
         // cycles its value, which is how a bool is edited with the mouse now that a plain click only selects.
@@ -113,6 +118,17 @@ public sealed partial class ResultView
         void OnLayoutChanged() => ApplyColumnLayout(grid, result);
         result.ColumnLayout.Changed += OnLayoutChanged;
         _layoutSubscriptions.Add((result.ColumnLayout, OnLayoutChanged));
+
+        // A new filter or sort clears the selection (design v4 §8): a selection over rows that moved or vanished
+        // means nothing, and Copy must never act on cells the user can no longer see. Restyled either way, so the
+        // sorted column's wash follows the sort.
+        void OnViewChanged()
+        {
+            if (ReferenceEquals(_selection.Model.Result, result) || _selection.Model.Result is null)
+                _selection.ClearAndNotify();
+        }
+        result.Filter.ViewChanged += OnViewChanged;
+        _filterSubscriptions.Add((result.Filter, OnViewChanged));
 
         WireSelection(grid, result);
         if (result.IsEditable) WireEditing(grid, result);
@@ -199,8 +215,11 @@ public sealed partial class ResultView
 
         // When the grid takes focus (e.g. via F6) with no active cell yet, seed the top-left cell so the
         // focus is visible instead of the caller having to press an arrow first.
-        grid.GotFocus += (_, _) =>
+        grid.GotFocus += (_, e) =>
         {
+            // Focus arriving in a header's filter input (#106) is not focus arriving in the cells: seeding a
+            // cursor there selected a cell under the column the user was typing a filter for.
+            if (e.Source is Visual v && v.FindAncestorOfType<DataGridColumnHeader>() is not null) return;
             if (_selection.NeedsSeed(result))
             {
                 _selection.SeedActive(grid, result);
@@ -328,7 +347,7 @@ public sealed partial class ResultView
         // guard is true by the time it is asked (#147/#148).
         var inCellEditor = e.Source is TextBox;
         if (inCellEditor && !ResolvesToCommitFirst(e)) return;
-        if (!result.HasGrid || result.Rows.Count == 0) return;
+        if (!result.HasGrid || result.ViewRows.Count == 0) return;
         if (inCellEditor) CommitOpenEdit(grid);
 
         _keyStrokeTarget = (grid, result);
