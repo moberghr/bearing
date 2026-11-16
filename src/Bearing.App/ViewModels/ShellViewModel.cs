@@ -117,7 +117,7 @@ public sealed partial class ShellViewModel : ObservableObject
         _externalScripts = new ExternalScripts(_ctx, _workspace, _scripts, _connections, OpenProjectAsync);
         _ctx.FileSync = new ScriptFileSync(_ctx, dialogs);
         _ctx.FileSync.Reloaded += tab => ScriptReloaded?.Invoke(tab);
-        History = new HistoryPanelViewModel(SearchHistoryAsync, ColorForConnection);
+        History = new HistoryPanelViewModel(SearchHistoryAsync, ColorForConnection, _queryLog.SetStarredAsync);
         Activity = new ActivityPanelViewModel(_ctx, dialogs);
         // Refresh from the log's own "the row is in" signal rather than from the execution path: Append
         // hands the entry to a background writer and returns, so reloading when a run finishes would race
@@ -274,8 +274,8 @@ public sealed partial class ShellViewModel : ObservableObject
         => _connections.Connections.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.Ordinal))?.EnvironmentColor;
 
     /// <summary>Search the query log (feeds the History panel VM); stays on the shell — it only touches the log.</summary>
-    public Task<IReadOnlyList<QueryLogEntry>> SearchHistoryAsync(string? text, CancellationToken ct)
-        => _queryLog.SearchAsync(new QueryLogQuery { Text = text }, ct);
+    public Task<IReadOnlyList<QueryLogEntry>> SearchHistoryAsync(string? text, bool starredOnly, CancellationToken ct)
+        => _queryLog.SearchAsync(new QueryLogQuery { Text = text, StarredOnly = starredOnly }, ct);
 
     /// <summary>
     /// Export the query history as an audit report (#113) — <i>what ran against which connection, when</i>.

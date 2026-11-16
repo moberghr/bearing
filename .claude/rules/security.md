@@ -22,6 +22,8 @@ absences typed.
 
 ## §1.3 — Query log
 - `SqliteQueryLog`, retention `QueryLogRetentionDays` (default 180, ≤0 = forever). No PII beyond the SQL.
+- Starred entries (#111) are exempt from the prune. Stars live in `query_log_star` (v6), never as a column on
+  `query_log` — logged rows stay append-only. A star the store refused is taken back on screen, never left.
 - Literal redaction (`QueryLogRedactLiterals`, `SqlRedactor`) is **opt-in, default off** — never assume a
   log is sanitized. It runs in `Append`; a redactor that throws stores `(redaction failed)`, never the
   verbatim SQL. It reaches the store as `Func<string,string,string>` — (provider id, SQL), so each engine's
@@ -71,7 +73,7 @@ removed:
 
 ## §1.6 — Query log schema and audit export (#113)
 - Migrations are **stepwise and additive** (`MigrateToN`), never rebuild. Each runs under
-  `BEGIN IMMEDIATE` and is idempotent per column (`HasColumn` before each `ALTER`). Current: v5 (§1.3a).
+  `BEGIN IMMEDIATE` and is idempotent per column (`HasColumn` before each `ALTER`). Current: v6 (`query_log_star`, #111; v5 is §1.3a).
 - `connection_id` is null on pre-v2 rows — reports say how many, never imply an id match. `environment` is
   stored at write time, never resolved later; `ResolveEnvironment` prefers recorded value, then id, never
   name.

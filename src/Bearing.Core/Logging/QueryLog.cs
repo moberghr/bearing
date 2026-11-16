@@ -69,6 +69,16 @@ public sealed record QueryLogEntry
     /// </para>
     /// </summary>
     public IReadOnlyList<QueryLogParameter> Parameters { get; init; } = [];
+
+    /// <summary>
+    /// Bookmarked from the history panel (#111). A starred entry is kept past
+    /// <c>QueryLogRetentionDays</c> and can be listed on its own (<see cref="QueryLogQuery.StarredOnly"/>).
+    /// <para>
+    /// Kept beside the log rather than in it: starring is something done to an entry later, and the
+    /// entries themselves stay the append-only record of what ran.
+    /// </para>
+    /// </summary>
+    public bool IsStarred { get; init; }
 }
 
 /// <summary>One logged <c>:name</c> value, by the name the user wrote rather than the driver's.</summary>
@@ -98,6 +108,10 @@ public sealed record QueryLogQuery
     /// existing caller silently becomes an unbounded read.
     /// </summary>
     public int? Limit { get; init; } = 200;
+
+    /// <summary>Only bookmarked entries (#111). A store-side filter rather than one over the newest
+    /// <see cref="Limit"/> rows, so a query starred months ago is still found.</summary>
+    public bool StarredOnly { get; init; }
 }
 
 /// <summary>Append-only, searchable log of every executed query.</summary>
@@ -118,6 +132,13 @@ public interface IQueryLog
     event Action<QueryLogEntry>? Appended;
 
     Task<IReadOnlyList<QueryLogEntry>> SearchAsync(QueryLogQuery query, CancellationToken ct);
+
+    /// <summary>
+    /// Star or unstar a logged entry by its <see cref="QueryLogEntry.Id"/> (#111). A starred entry survives
+    /// the retention prune. Unlike <see cref="Append"/> this can fail, and says so by throwing: the panel
+    /// that asked has already drawn the star and must be able to take it back.
+    /// </summary>
+    Task SetStarredAsync(long id, bool starred, CancellationToken ct);
 }
 
 /// <summary>The hosts that write to the query log, for <see cref="QueryLogEntry.Origin"/>. Bearing itself

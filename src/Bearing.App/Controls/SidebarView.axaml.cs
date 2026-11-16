@@ -899,6 +899,15 @@ public partial class SidebarView : UserControl
 
     /// <summary>The panel's Export… button (#113). The shell owns the two prompts and the write; this only
     /// asks, as §2.2 requires of a code-behind.</summary>
+    /// <summary>The star on a history row (#111). Handled, so the click stars instead of selecting the row
+    /// and opening its preview. The view model owns failure: it puts the star back and says why.</summary>
+    private async void OnHistoryStarClick(object? sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (Vm is not null && (sender as Control)?.DataContext is HistoryRowViewModel row)
+            await Vm.History.ToggleStarAsync(row);
+    }
+
     private async void OnHistoryExportClick(object? sender, RoutedEventArgs e)
     {
         if (Vm is not null) await Vm.ExportHistoryAsync();

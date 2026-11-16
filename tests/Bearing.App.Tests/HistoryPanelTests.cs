@@ -113,7 +113,7 @@ public class HistoryPanelTests
         var now = DateTimeOffset.Now;
         var entries = new List<QueryLogEntry> { Entry(now.AddMinutes(-5), ok: true) };
         var vm = new HistoryPanelViewModel(
-            (_, _) => Task.FromResult<IReadOnlyList<QueryLogEntry>>(entries.ToList()),
+            (_, _, _) => Task.FromResult<IReadOnlyList<QueryLogEntry>>(entries.ToList()),
             _ => "#7AA89F");
 
         await vm.ReloadAsync(CancellationToken.None);
@@ -156,7 +156,7 @@ public class HistoryPanelTests
         var first = true;
 
         var vm = new HistoryPanelViewModel(
-            async (_, ct) =>
+            async (_, _, ct) =>
             {
                 if (!first) return fresh;
                 first = false;
@@ -181,7 +181,7 @@ public class HistoryPanelTests
 
     private static HistoryPanelViewModel Make(IReadOnlyList<QueryLogEntry> entries)
         => new(
-            (_, _) => Task.FromResult(entries),
+            (_, _, _) => Task.FromResult(entries),
             name => name == "prod" ? "#E46876" : "#7AA89F");
 
     /// <summary>
@@ -250,5 +250,122 @@ public class HistoryPanelTests
 
         Assert.False(row.HasParameters);
         Assert.Equal("select :id", row.OpenText);
+    }
+
+    // ---- bookmarks (#111) ----------------------------------------------------------------------------
+
+    /// <summary>A store stand-in that answers the starred filter from its own set, the way the log does,
+    /// and can be told to refuse a write.</summary>
+    private sealed class StarStore
+    {
+        public List<QueryLogEntry> Entries { get; } = [];
+        public HashSet<long> Starred { get; } = [];
+        public bool Fail { get; set; }
+        public List<bool> StarredOnlyAsked { get; } = [];
+
+        public Task<IReadOnlyList<QueryLogEntry>> Search(string? text, bool starredOnly, CancellationToken ct)
+        {
+            StarredOnlyAsked.Add(starredOnly);
+            var rows = Entries.Select(e => e with { IsStarred = Starred.Contains(e.Id) })
+                .Where(e => !starredOnly || e.IsStarred).ToList();
+            return Task.FromResult<IReadOnlyList<QueryLogEntry>>(rows);
+        }
+
+        public Task Set(long id, bool starred, CancellationToken ct)
+        {
+            if (Fail) throw new InvalidOperationException("database is locked");
+            if (starred) Starred.Add(id); else Starred.Remove(id);
+            return Task.CompletedTask;
+        }
+    }
+
+    private static (HistoryPanelViewModel Vm, StarStore Store) Starrable()
+    {
+        var store = new StarStore();
+        var now = DateTimeOffset.Now;
+        store.Entries.Add(Entry(now, ok: true, sql: "select a") with { Id = 1 });
+        store.Entries.Add(Entry(now.AddMinutes(-1), ok: true, sql: "select b") with { Id = 2 });
+        return (new HistoryPanelViewModel(store.Search, _ => null, store.Set), store);
+    }
+
+    [Fact]
+    public async Task Starring_a_row_writes_it_to_the_log_and_marks_the_row()
+    {
+        var (vm, store) = Starrable();
+        await vm.ReloadAsync(CancellationToken.None);
+        var row = vm.Groups.SelectMany(g => g.Rows).Single(r => r.Sql == "select a");
+        Assert.Equal("☆", row.StarGlyph);
+
+        await vm.ToggleStarAsync(row);
+
+        Assert.True(row.IsStarred);
+        Assert.Equal("★", row.StarGlyph);
+        Assert.Equal([1L], store.Starred);
+    }
+
+    [Fact]
+    public async Task A_star_the_log_refused_is_taken_back_and_said()
+    {
+        // A star on screen that the log doesn't hold would let retention prune a row the user thinks is kept.
+        var (vm, store) = Starrable();
+        await vm.ReloadAsync(CancellationToken.None);
+        var row = vm.Groups.SelectMany(g => g.Rows).First();
+        store.Fail = true;
+
+        await vm.ToggleStarAsync(row);
+
+        Assert.False(row.IsStarred);
+        Assert.Empty(store.Starred);
+        Assert.Contains("Couldn't star", vm.Status);
+    }
+
+    [Fact]
+    public async Task The_starred_filter_asks_the_log_rather_than_the_cached_rows()
+    {
+        var (vm, store) = Starrable();
+        store.Starred.Add(2);
+        await vm.ReloadAsync(CancellationToken.None);
+        store.StarredOnlyAsked.Clear();
+
+        vm.Filter = HistoryFilter.Starred;
+        await Task.Yield();
+
+        Assert.Equal([true], store.StarredOnlyAsked);
+        Assert.Equal("select b", vm.Groups.SelectMany(g => g.Rows).Single().Sql);
+
+        // …and leaving it asks for everything again.
+        vm.Filter = HistoryFilter.All;
+        await Task.Yield();
+        Assert.Equal([true, false], store.StarredOnlyAsked);
+        Assert.Equal(2, vm.Groups.Sum(g => g.Rows.Count));
+    }
+
+    [Fact]
+    public async Task Unstarring_in_the_starred_view_drops_the_row()
+    {
+        var (vm, store) = Starrable();
+        store.Starred.Add(1);
+        vm.Filter = HistoryFilter.Starred;
+        await vm.ReloadAsync(CancellationToken.None);
+        var row = vm.Groups.SelectMany(g => g.Rows).Single();
+
+        await vm.ToggleStarAsync(row);
+
+        Assert.Empty(vm.Groups.SelectMany(g => g.Rows));
+        Assert.Empty(store.Starred);
+    }
+
+    [Fact]
+    public async Task A_row_not_yet_in_the_log_cannot_be_starred()
+    {
+        var store = new StarStore();
+        store.Entries.Add(Entry(DateTimeOffset.Now, ok: true));   // Id 0: not persisted yet
+        var vm = new HistoryPanelViewModel(store.Search, _ => null, store.Set);
+        await vm.ReloadAsync(CancellationToken.None);
+
+        await vm.ToggleStarAsync(vm.Groups[0].Rows[0]);
+
+        Assert.False(vm.Groups[0].Rows[0].IsStarred);
+        Assert.Empty(store.Starred);
     }
 }
