@@ -60,7 +60,7 @@ public sealed partial class ResultView
             if (result.IsEditable) ResultRowPainter.ApplyRowStatus(e.Row, result);
             else e.Row.Background = ResultRowPainter.RowBackground(e.Row.Index);
             // Infinite scroll: when a near-bottom row realizes and more rows exist, fetch the next page.
-            if (result.HasMore && e.Row.Index >= result.Rows.Count - 8) TriggerAutoLoad(result);
+            if (result is { IsPageable: true, HasMore: true } && e.Row.Index >= result.Rows.Count - 8) TriggerAutoLoad(result);
         };
 
         for (var i = 0; i < result.Columns.Count; i++)

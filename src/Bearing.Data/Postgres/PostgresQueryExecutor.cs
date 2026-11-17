@@ -28,7 +28,17 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
     /// (#131). Nothing below knows which source it has; that is the point of the seam.</summary>
     internal PostgresQueryExecutor(IPgConnectionSource source) => _source = source;
 
-    public async Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
+    public Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
+        => ExecuteCoreAsync(sql, options, stream: null, ct);
+
+    /// <inheritdoc/>
+    /// <remarks>The loop <see cref="ExecuteAsync"/> runs, observed (<see cref="BatchStream"/>), so the two can't
+    /// drift apart.</remarks>
+    public IAsyncEnumerable<BatchEvent> ExecuteStreamingAsync(string sql, QueryOptions options, CancellationToken ct)
+        => BatchStream.Run(options.BatchRows, (stream, token) => ExecuteCoreAsync(sql, options, stream, token), ct);
+
+    private async Task<IReadOnlyList<QueryResult>> ExecuteCoreAsync(
+        string sql, QueryOptions options, BatchStream? stream, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
         var results = new List<QueryResult>();
@@ -43,7 +53,9 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
             // withBaseTables: capture column origin (schema/table/column) for FK-nav + inline edit.
             do
             {
-                results.Add(await ReadResultSetAsync(reader, options, sw, ct, withBaseTables: true).ConfigureAwait(false));
+                var result = await ReadResultSetAsync(reader, options, sw, ct, withBaseTables: true, stream).ConfigureAwait(false);
+                if (stream is not null) await stream.DoneAsync(result, ct).ConfigureAwait(false);
+                results.Add(result);
             }
             while (await reader.NextResultAsync(ct).ConfigureAwait(false));
 
@@ -53,14 +65,19 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         {
             sw.Stop();
             var pos = pg.Position > 0 ? pg.Position : (int?)null;
-            return new[] { Failure(sw.Elapsed, new QueryError(MessageFor(pg, options.Parameters), pg.SqlState, pos)) };
+            return Failed(stream, Failure(sw.Elapsed, new QueryError(MessageFor(pg, options.Parameters), pg.SqlState, pos)));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             sw.Stop();
-            return new[] { Failure(sw.Elapsed, new QueryError(PostgresErrorText.Explain(ex), null, null)) };
+            return Failed(stream, Failure(sw.Elapsed, new QueryError(PostgresErrorText.Explain(ex), null, null)));
         }
     }
+
+    /// <summary>A failed run: the failure alone for <see cref="ExecuteAsync"/>, the sets read before it and then
+    /// the failure when streaming — those sets are already on screen.</summary>
+    private static IReadOnlyList<QueryResult> Failed(BatchStream? stream, QueryResult failure)
+        => stream is null ? new[] { failure } : stream.WithFailure(failure);
 
     public async Task<QueryResult> ExecutePageAsync(
         string pageSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
@@ -406,7 +423,8 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
     }
 
     private static async Task<QueryResult> ReadResultSetAsync(
-        NpgsqlDataReader reader, QueryOptions options, Stopwatch sw, CancellationToken ct, bool withBaseTables = false)
+        NpgsqlDataReader reader, QueryOptions options, Stopwatch sw, CancellationToken ct, bool withBaseTables = false,
+        BatchStream? stream = null)
     {
         // A non-row-returning statement (INSERT/UPDATE/DDL) still reports affected rows.
         if (reader.FieldCount == 0)
@@ -418,6 +436,8 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
         var columns = ReadColumns(reader, withBaseTables);
         var rows = new List<object?[]>();
         var truncated = false;
+        var flushed = 0;
+        if (stream is not null) await stream.StartedAsync(columns, ct).ConfigureAwait(false);
 
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
@@ -430,7 +450,9 @@ public sealed class PostgresQueryExecutor : IQueryExecutor
             for (var i = 0; i < reader.FieldCount; i++)
                 row[i] = reader.IsDBNull(i) ? null : reader.GetValue(i);
             rows.Add(row);
+            if (stream is not null) flushed = await stream.FlushAsync(rows, flushed, final: false, ct).ConfigureAwait(false);
         }
+        if (stream is not null) await stream.FlushAsync(rows, flushed, final: true, ct).ConfigureAwait(false);
 
         return new QueryResult(columns, rows, rows.Count, sw.Elapsed,
             Message: null, Error: null, Truncated: truncated);

@@ -29,7 +29,17 @@ public sealed class MySqlQueryExecutor : IQueryExecutor
 
     internal MySqlQueryExecutor(IMySqlConnectionSource source) => _source = source;
 
-    public async Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
+    public Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
+        => ExecuteCoreAsync(sql, options, stream: null, ct);
+
+    /// <inheritdoc/>
+    /// <remarks>The loop <see cref="ExecuteAsync"/> runs, observed (<see cref="BatchStream"/>), so the two can't
+    /// drift apart.</remarks>
+    public IAsyncEnumerable<BatchEvent> ExecuteStreamingAsync(string sql, QueryOptions options, CancellationToken ct)
+        => BatchStream.Run(options.BatchRows, (stream, token) => ExecuteCoreAsync(sql, options, stream, token), ct);
+
+    private async Task<IReadOnlyList<QueryResult>> ExecuteCoreAsync(
+        string sql, QueryOptions options, BatchStream? stream, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
         try
@@ -45,7 +55,7 @@ public sealed class MySqlQueryExecutor : IQueryExecutor
             var counted = 0;
             do
             {
-                var result = await ReadResultSetAsync(reader, options, sw, ct, withOrigin: true).ConfigureAwait(false);
+                var result = await ReadResultSetAsync(reader, options, sw, ct, withOrigin: true, stream).ConfigureAwait(false);
                 if (result.Columns.Count == 0)
                 {
                     var total = Math.Max(reader.RecordsAffected, 0);
@@ -53,6 +63,7 @@ public sealed class MySqlQueryExecutor : IQueryExecutor
                     counted = total;
                     result = result with { RowCount = own, Message = DescribeNonQuery(own) };
                 }
+                if (stream is not null) await stream.DoneAsync(result, ct).ConfigureAwait(false);
                 results.Add(result);
             }
             while (await reader.NextResultAsync(ct).ConfigureAwait(false));
@@ -63,14 +74,19 @@ public sealed class MySqlQueryExecutor : IQueryExecutor
         {
             ThrowIfCancelled(ex, ct);
             sw.Stop();
-            return new[] { Failure(sw.Elapsed, ErrorFrom(ex)) };
+            return Failed(stream, Failure(sw.Elapsed, ErrorFrom(ex)));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             sw.Stop();
-            return new[] { Failure(sw.Elapsed, new QueryError(SafeErrorText.Of(ex), null, null)) };
+            return Failed(stream, Failure(sw.Elapsed, new QueryError(SafeErrorText.Of(ex), null, null)));
         }
     }
+
+    /// <summary>A failed run: the failure alone for <see cref="ExecuteAsync"/>, the sets read before it and then
+    /// the failure when streaming — those sets are already on screen.</summary>
+    private static IReadOnlyList<QueryResult> Failed(BatchStream? stream, QueryResult failure)
+        => stream is null ? new[] { failure } : stream.WithFailure(failure);
 
     public async Task<QueryResult> ExecutePageAsync(
         string pageSql, IReadOnlyList<QueryParameter> parameters, CancellationToken ct)
@@ -339,7 +355,8 @@ public sealed class MySqlQueryExecutor : IQueryExecutor
     }
 
     private static async Task<QueryResult> ReadResultSetAsync(
-        MySqlDataReader reader, QueryOptions options, Stopwatch sw, CancellationToken ct, bool withOrigin = false)
+        MySqlDataReader reader, QueryOptions options, Stopwatch sw, CancellationToken ct, bool withOrigin = false,
+        BatchStream? stream = null)
     {
         if (reader.FieldCount == 0)
         {
@@ -352,6 +369,8 @@ public sealed class MySqlQueryExecutor : IQueryExecutor
         var columns = ReadColumns(reader, withOrigin);
         var rowList = new List<object?[]>();
         var truncated = false;
+        var flushed = 0;
+        if (stream is not null) await stream.StartedAsync(columns, ct).ConfigureAwait(false);
 
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
@@ -361,7 +380,9 @@ public sealed class MySqlQueryExecutor : IQueryExecutor
                 break;
             }
             rowList.Add(ReadRow(reader));
+            if (stream is not null) flushed = await stream.FlushAsync(rowList, flushed, final: false, ct).ConfigureAwait(false);
         }
+        if (stream is not null) await stream.FlushAsync(rowList, flushed, final: true, ct).ConfigureAwait(false);
 
         return new QueryResult(columns, rowList, rowList.Count, sw.Elapsed,
             Message: null, Error: null, Truncated: truncated);

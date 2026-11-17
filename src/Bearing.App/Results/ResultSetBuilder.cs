@@ -23,37 +23,73 @@ internal static class ResultSetBuilder
         IReadOnlyList<QueryResult> results, string sql, ISchemaSnapshot? snapshot,
         ProviderTraits? traits = null, bool connectionReadOnly = false, PreparedRun? run = null)
     {
-        var pageable = results.Count == 1 && results[0].Success && results[0].Columns.Count > 0;
-        // With variables the text sent has driver placeholders in it (`@bearing_id`), which is no answer to
-        // "what produced this": every set reports what the user wrote, with its values set above it.
+        // Only a lone statement pages: its text is what PageSql/CountWrap shape. A batch's text is not one
+        // query — `declare @x …; select …` wrapped in a derived table is a syntax error — so a batch is read to
+        // the end on the first run instead (RunFetchAsync) and never pages. Statements, not result sets: a
+        // DECLARE ahead of one SELECT is still a batch with one result.
+        var pageable = results.Count == 1 && results[0].Success && results[0].Columns.Count > 0
+                       && !IsBatch((traits ?? ProviderTraits.Postgres).Dialect, sql);
+        var statements = ExecutedStatements(results, sql, run);
+        return results
+            .Select((r, i) => BuildOne(
+                r, statements[i].Source, pageable, statements[i].Shown, snapshot, traits, connectionReadOnly, run))
+            .ToList();
+    }
+
+    /// <summary>
+    /// For each result, the text behind it: <c>Source</c> is what pages and counts (only used when pageable),
+    /// <c>Shown</c> what "Copy as ▸ … with query" reports. With variables the text sent has driver placeholders
+    /// in it (<c>@bearing_id</c>), which is no answer to "what produced this", so every set reports what the
+    /// user wrote with its values set above it.
+    /// </summary>
+    internal static IReadOnlyList<(string Source, string? Shown)> ExecutedStatements(
+        IReadOnlyList<QueryResult> results, string sql, PreparedRun? run)
+    {
         var bound = run is { Parameters.Count: > 0 } ? run : null;
         var statements = bound is null ? StatementsBehind(results, sql) : null;
         var shown = bound is null ? null
             : ScriptDirectives.Render(bound.LogParameters.Select(p => (p.Name, p.Value, p.Kind))) + bound.LogSql;
-        return results
-            .Select((r, i) =>
-            {
-                // Resolve editability (with a lock reason) only for row-returning results with a schema.
-                var (target, reason) = snapshot is null || r.Columns.Count == 0
-                    ? (null, null)
-                    : EditabilityResolver.ResolveWithReason(snapshot, r.Columns, connectionReadOnly);
-                var source = statements?[i] ?? sql;
-                var vm = new ResultSetViewModel(r, source, pageable)
-                {
-                    ExecutedSql = shown ?? (string.IsNullOrWhiteSpace(source) ? null : source.Trim()),
-                    // So Copy as ▸ SQL renders this engine's literals and quoting, not Postgres'.
-                    Traits = traits ?? ProviderTraits.Postgres,
-                    ForeignKeyColumns = DetectForeignKeyColumns(snapshot, r.Columns),
-                    PrimaryKeyColumns = DetectPrimaryKeyColumns(snapshot, r.Columns),
-                    EditTarget = target,
-                    LockReason = target is null ? reason : null,
-                    SourceParameters = bound?.Parameters ?? [],
-                };
-                if (vm.IsEditable) vm.CaptureOriginals();
-                return vm;
-            })
-            .ToList();
+        return results.Select((_, i) =>
+        {
+            var source = statements?[i] ?? sql;
+            return (source, shown ?? (string.IsNullOrWhiteSpace(source) ? null : source.Trim()));
+        }).ToList();
     }
+
+    /// <summary>One result's view model: editability, key/FK badges and the engine's traits resolved — the
+    /// per-set half of <see cref="BuildResultSets"/>, also what a streamed batch builds each set with as it
+    /// begins (<see cref="BatchRunAssembler"/>).</summary>
+    internal static ResultSetViewModel BuildOne(
+        QueryResult r, string source, bool pageable, string? shown, ISchemaSnapshot? snapshot,
+        ProviderTraits? traits, bool connectionReadOnly, PreparedRun? run)
+    {
+        // Resolve editability (with a lock reason) only for row-returning results with a schema.
+        var (target, reason) = snapshot is null || r.Columns.Count == 0
+            ? (null, null)
+            : EditabilityResolver.ResolveWithReason(snapshot, r.Columns, connectionReadOnly);
+        var vm = new ResultSetViewModel(r, source, pageable)
+        {
+            ExecutedSql = shown,
+            // So Copy as ▸ SQL renders this engine's literals and quoting, not Postgres'.
+            Traits = traits ?? ProviderTraits.Postgres,
+            ForeignKeyColumns = DetectForeignKeyColumns(snapshot, r.Columns),
+            PrimaryKeyColumns = DetectPrimaryKeyColumns(snapshot, r.Columns),
+            EditTarget = target,
+            LockReason = target is null ? reason : null,
+            SourceParameters = run is { Parameters.Count: > 0 } ? run.Parameters : [],
+        };
+        if (vm.IsEditable) vm.CaptureOriginals();
+        return vm;
+    }
+
+    /// <summary>
+    /// True when <paramref name="sql"/> is more than one statement by <paramref name="dialect"/>'s own split —
+    /// the one definition of "a batch" for both the run (which reads a batch to the end) and the result sets
+    /// (which page only a lone statement), so the two can never disagree about the same text.
+    /// </summary>
+    public static bool IsBatch(ISqlDialect dialect, string? sql)
+        => !string.IsNullOrWhiteSpace(sql)
+           && StatementSplitter.Split(dialect, sql).Count(s => !string.IsNullOrWhiteSpace(s.Text)) > 1;
 
     /// <summary>
     /// The statement behind each result set, positionally — or null when the run's own text is the honest

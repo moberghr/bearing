@@ -42,12 +42,22 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
     /// (#131). Nothing below knows which source it has; that is the point of the seam.</summary>
     internal SqlServerQueryExecutor(ISqlConnectionSource source) => _source = source;
 
-    public async Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
+    public Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
+        => ExecuteCoreAsync(sql, options, stream: null, ct);
+
+    /// <inheritdoc/>
+    /// <remarks>The loop <see cref="ExecuteAsync"/> runs, observed (<see cref="BatchStream"/>), so the two can't
+    /// drift apart.</remarks>
+    public IAsyncEnumerable<BatchEvent> ExecuteStreamingAsync(string sql, QueryOptions options, CancellationToken ct)
+        => BatchStream.Run(options.BatchRows, (stream, token) => ExecuteCoreAsync(sql, options, stream, token), ct);
+
+    private async Task<IReadOnlyList<QueryResult>> ExecuteCoreAsync(
+        string sql, QueryOptions options, BatchStream? stream, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
         try
         {
-            return await RunAsync(sql, options, sw, keyInfo: true, ct).ConfigureAwait(false);
+            return await RunAsync(sql, options, sw, keyInfo: true, stream, ct).ConfigureAwait(false);
         }
         catch (SqlException ex) when (ex.Number == MustBeFirstInBatch)
         {
@@ -63,32 +73,37 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
             // correct — that one is the user's to fix.
             try
             {
-                return await RunAsync(sql, options, sw, keyInfo: false, ct).ConfigureAwait(false);
+                return await RunAsync(sql, options, sw, keyInfo: false, stream, ct).ConfigureAwait(false);
             }
             catch (SqlException retry)
             {
                 sw.Stop();
-                return new[] { Failure(sw.Elapsed, ErrorFrom(retry)) };
+                return Failed(stream, Failure(sw.Elapsed, ErrorFrom(retry)));
             }
         }
         catch (SqlException ex)
         {
             sw.Stop();
-            return new[] { Failure(sw.Elapsed, ErrorFrom(ex)) };
+            return Failed(stream, Failure(sw.Elapsed, ErrorFrom(ex)));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             sw.Stop();
-            return new[] { Failure(sw.Elapsed, new QueryError(SafeErrorText.Of(ex), null, null)) };
+            return Failed(stream, Failure(sw.Elapsed, new QueryError(SafeErrorText.Of(ex), null, null)));
         }
     }
+
+    /// <summary>A failed run: the failure alone for <see cref="ExecuteAsync"/>, the sets read before it and then
+    /// the failure when streaming — those sets are already on screen.</summary>
+    private static IReadOnlyList<QueryResult> Failed(BatchStream? stream, QueryResult failure)
+        => stream is null ? new[] { failure } : stream.WithFailure(failure);
 
     /// <summary>
     /// One execution of <paramref name="sql"/>, with or without the browse metadata that column origin
     /// needs. Exceptions propagate: <see cref="ExecuteAsync"/> owns the decision to retry or report.
     /// </summary>
     private async Task<IReadOnlyList<QueryResult>> RunAsync(
-        string sql, QueryOptions options, Stopwatch sw, bool keyInfo, CancellationToken ct)
+        string sql, QueryOptions options, Stopwatch sw, bool keyInfo, BatchStream? stream, CancellationToken ct)
     {
         var results = new List<QueryResult>();
 
@@ -112,8 +127,10 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
         // withBaseTables: capture column origin (schema/table/column) for FK-nav + inline edit.
         do
         {
-            results.Add(await ReadResultSetAsync(reader, options, sw, ct, withBaseTables: keyInfo)
-                .ConfigureAwait(false));
+            var result = await ReadResultSetAsync(reader, options, sw, ct, withBaseTables: keyInfo, stream)
+                .ConfigureAwait(false);
+            if (stream is not null) await stream.DoneAsync(result, ct).ConfigureAwait(false);
+            results.Add(result);
         }
         while (await reader.NextResultAsync(ct).ConfigureAwait(false));
 
@@ -455,7 +472,7 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
 
     private static async Task<QueryResult> ReadResultSetAsync(
         SqlDataReader reader, QueryOptions options, Stopwatch sw,
-        CancellationToken ct, bool withBaseTables = false)
+        CancellationToken ct, bool withBaseTables = false, BatchStream? stream = null)
     {
         // A non-row-returning statement (INSERT/UPDATE/DDL) still reports affected rows. RecordsAffected is
         // the whole batch's total, which is the right number for this one result — a collapsed run of them
@@ -472,6 +489,8 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
         var columns = ReadColumns(reader, withBaseTables);
         var rowList = new List<object?[]>();
         var truncated = false;
+        var flushed = 0;
+        if (stream is not null) await stream.StartedAsync(columns, ct).ConfigureAwait(false);
 
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
@@ -484,7 +503,9 @@ public sealed class SqlServerQueryExecutor : IQueryExecutor
             for (var i = 0; i < reader.FieldCount; i++)
                 row[i] = reader.IsDBNull(i) ? null : reader.GetValue(i);
             rowList.Add(row);
+            if (stream is not null) flushed = await stream.FlushAsync(rowList, flushed, final: false, ct).ConfigureAwait(false);
         }
+        if (stream is not null) await stream.FlushAsync(rowList, flushed, final: true, ct).ConfigureAwait(false);
 
         return new QueryResult(columns, rowList, rowList.Count, sw.Elapsed,
             Message: null, Error: null, Truncated: truncated);

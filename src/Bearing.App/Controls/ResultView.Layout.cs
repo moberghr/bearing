@@ -105,6 +105,17 @@ public sealed partial class ResultView
 
     // ---- Body: single set, stacked, or tabbed ------------------------------------------------
 
+    /// <summary>A tab's header: a grid's count is bound, so it follows a streamed batch and Load more instead of
+    /// keeping the size the set had when the tab was built (0, for a set that was still being read).</summary>
+    private static object TabHeader(int index, ResultSetViewModel result)
+    {
+        if (!result.Success || result.Columns.Count == 0) return ResultMetaText.TabHeader(index, result);
+        var header = new TextBlock { DataContext = result };
+        header.Bind(TextBlock.TextProperty,
+            new Binding(nameof(ResultSetViewModel.CountBadge)) { StringFormat = ResultMetaText.TabHeaderFormat(index) });
+        return header;
+    }
+
     private Control BuildBody(IReadOnlyList<ResultSetViewModel> results)
     {
         if (results.Count == 1)
@@ -116,7 +127,7 @@ public sealed partial class ResultView
             for (var i = 0; i < results.Count; i++)
                 tabs.Items.Add(new TabItem
                 {
-                    Header = ResultMetaText.TabHeader(i, results[i]),
+                    Header = TabHeader(i, results[i]),
                     Content = BuildSetContainer(results[i], null, collapsible: false, capHeight: false),
                 });
             tabs.SelectedIndex = 0;
