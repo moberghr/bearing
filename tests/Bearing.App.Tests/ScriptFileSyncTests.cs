@@ -211,6 +211,7 @@ public class ScriptFileSyncTests : IDisposable
         var secondPath = Path.Combine(vm.ScriptsDirectory!, "other.sql");
         Assert.True(await vm.Workspace.SaveScriptAsync(second, secondPath, "select 'b';"));
         File.WriteAllText(secondPath, "select 'b2';");   // unseen: nothing below is watching yet
+        await SettleFileEventsAsync(Path.GetDirectoryName(secondPath)!);
 
         // A sync of its own, so its posts run here instead of on a UI thread these tests don't pump.
         using var sync = new ScriptFileSync(vm.Context, null, post: a => a(), debounce: TimeSpan.FromMilliseconds(20));
@@ -223,6 +224,31 @@ public class ScriptFileSyncTests : IDisposable
 
         await sync.CheckAllAsync();
         Assert.Equal("select 'b2';", second.Text);
+    }
+
+    /// <summary>
+    /// Wait until every change made so far in <paramref name="dir"/> is behind any watcher started from here on.
+    /// On macOS a watcher reports changes "since now", but FSEvents numbers a change asynchronously, so a write
+    /// made just before a watcher starts can be numbered after it and reported to it. FSEvents numbers in order:
+    /// once a watcher has reported a later fence file, the earlier writes are numbered too.
+    /// </summary>
+    private static async Task SettleFileEventsAsync(string dir)
+    {
+        var name = $".fence-{Guid.NewGuid():N}";
+        var seen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var fence = new FileSystemWatcher(dir);
+        FileSystemEventHandler onEvent = (_, e) =>
+        {
+            if (e.Name == name)
+            {
+                seen.TrySetResult();
+            }
+        };
+        fence.Created += onEvent;
+        fence.Changed += onEvent;
+        fence.EnableRaisingEvents = true;
+        File.WriteAllText(Path.Combine(dir, name), "");
+        await seen.Task.WaitAsync(TimeSpan.FromSeconds(10));
     }
 
     // ---- writes stand aside -----------------------------------------------------------------------
