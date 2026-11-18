@@ -1,0 +1,827 @@
+{
+  "slug": "dynamodb-provider",
+  "date": "2026-11-18",
+  "scope": "new-feature",
+  "change_manifest": [
+    {
+      "path": "src/Bearing.Core/Data/CredentialKind.cs",
+      "action": "modify",
+      "purpose": "add CredentialKind.AwsProfile",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Core/Data/ConnectionInfo.cs",
+      "action": "modify",
+      "purpose": "add ConfirmFullScans (default true)",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Core/Data/QueryResult.cs",
+      "action": "modify",
+      "purpose": "add QueryResult.Continuation (opaque, in-memory)",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Core/Data/IDbProvider.cs",
+      "action": "modify",
+      "purpose": "four provider capability flags; IQueryExecutor.ExecuteContinuationAsync default member",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Data/DynamoDb/DynamoDbProvider.cs",
+      "action": "create",
+      "purpose": "the dynamodb IDbProvider",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Data/DynamoDb/DynamoDbConnectionFactory.cs",
+      "action": "create",
+      "purpose": "client from profile + region + endpoint; endpoint rule; describe cache",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Data/DynamoDb/IDynamoDbApi.cs",
+      "action": "create",
+      "purpose": "three-method seam over the SDK client so tests use a hand-rolled fake",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Data/DynamoDb/DynamoDbMetadataReader.cs",
+      "action": "create",
+      "purpose": "tables, key attributes, indexes, approximate sizes",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Data/DynamoDb/DynamoDbQueryExecutor.cs",
+      "action": "create",
+      "purpose": "ExecuteStatement with page rules, continuation, timeout",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Data/DynamoDb/DynamoDbValues.cs",
+      "action": "create",
+      "purpose": "attribute values to cells; column layout and overflow column",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Data/DynamoDb/DynamoDbContinuation.cs",
+      "action": "create",
+      "purpose": "encode/decode the opaque continuation",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Data/DynamoDb/DynamoDbErrors.cs",
+      "action": "create",
+      "purpose": "error classification and sign-in sentences",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Data/DynamoDb/PartiQlBatch.cs",
+      "action": "create",
+      "purpose": "quote/comment-aware statement split, lead verb, target table",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Data/ProviderRegistry.cs",
+      "action": "modify",
+      "purpose": "register DynamoDB fourth",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Data/Postgres/PostgresProvider.cs",
+      "action": "modify",
+      "purpose": "answer the four flags",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Data/SqlServer/SqlServerProvider.cs",
+      "action": "modify",
+      "purpose": "answer the four flags",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Data/MySql/MySqlProvider.cs",
+      "action": "modify",
+      "purpose": "answer the four flags",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Data/Bearing.Data.csproj",
+      "action": "modify",
+      "purpose": "AWS SDK package references",
+      "mechanical": false
+    },
+    {
+      "path": "Directory.Packages.props",
+      "action": "modify",
+      "purpose": "AWS SDK package versions",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Demo/DemoProvider.cs",
+      "action": "modify",
+      "purpose": "answer the four flags",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Sql/PartiQlDialect.cs",
+      "action": "create",
+      "purpose": "the dynamodb ISqlDialect",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Sql/PartiQlScan.cs",
+      "action": "create",
+      "purpose": "ScanTarget and the lexical reduction of a SELECT",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Sql/ISqlDialect.cs",
+      "action": "modify",
+      "purpose": "ScanTargets default member",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Sessions/ProviderTraits.cs",
+      "action": "modify",
+      "purpose": "DynamoDB arm; GridEditUnavailable and OffersTableDdl members",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Sessions/CredentialResolver.cs",
+      "action": "modify",
+      "purpose": "AwsProfile arm: no secret, no store, no prompt",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Sessions/ScanGuard.cs",
+      "action": "create",
+      "purpose": "pure Keyed / FullScan / Undetermined verdict and sentences",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.App/Connections/CredentialKindOptions.cs",
+      "action": "modify",
+      "purpose": "offer kinds from the provider flags",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.App/Connections/ConnectionFieldModel.cs",
+      "action": "modify",
+      "purpose": "Port 0 for a provider with a Host field and no Port field",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.App/Connections/TabTransactions.cs",
+      "action": "modify",
+      "purpose": "refuse to open a transaction when the provider cannot hold one",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.App/Views/ConnectionDialog.axaml",
+      "action": "modify",
+      "purpose": "scan checkbox, AWS profile hint",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.App/Views/ConnectionDialog.axaml.cs",
+      "action": "modify",
+      "purpose": "hide TLS / manual commit by flag; load and save ConfirmFullScans",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.App/Results/ContinuationPaging.cs",
+      "action": "create",
+      "purpose": "load-more and fetch-all loops for a result with a continuation",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.App/Results/ResultSetBuilder.cs",
+      "action": "modify",
+      "purpose": "LockReason from traits; carry the continuation",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.App/ViewModels/ResultSetViewModel.cs",
+      "action": "modify",
+      "purpose": "Continuation and IsFullScan",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.App/ViewModels/ExecutionViewModel.cs",
+      "action": "modify",
+      "purpose": "delegating continuation branches; scan confirmation call; CommitModeVisible by flag",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.App/ViewModels/SchemaNodes.cs",
+      "action": "modify",
+      "purpose": "CanShowDefinition false for tables when OffersTableDdl is false",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.App/Workspace/WorkspaceContext.cs",
+      "action": "modify",
+      "purpose": "EffectiveConnection forces ManualCommit off when unsupported",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.App/Services/ScanConfirmation.cs",
+      "action": "create",
+      "purpose": "pure model for the scan dialog",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.App/Services/IDialogService.cs",
+      "action": "modify",
+      "purpose": "ConfirmScanAsync",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.App/Views/DialogService.cs",
+      "action": "modify",
+      "purpose": "ConfirmScanAsync implementation",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.App/Views/ConfirmScanDialog.cs",
+      "action": "create",
+      "purpose": "the scan confirmation dialog",
+      "mechanical": false
+    },
+    {
+      "path": "src/Bearing.Cli/Tools/BearingHost.cs",
+      "action": "modify",
+      "purpose": "keyed-reads-only refusal via ScanGuard; follow the continuation on export",
+      "mechanical": false
+    },
+    {
+      "path": "build/test-db-dynamodb.sh",
+      "action": "create",
+      "purpose": "DynamoDB Local container (bearing-dynamodb-test, port 18000)",
+      "mechanical": false
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "action": "modify",
+      "purpose": "Provision DynamoDB Local on the database leg",
+      "mechanical": false
+    },
+    {
+      "path": "README.md",
+      "action": "modify",
+      "purpose": "name the fourth engine",
+      "mechanical": true
+    },
+    {
+      "path": "CLAUDE.md",
+      "action": "modify",
+      "purpose": "name the fourth engine, driver and test container",
+      "mechanical": true
+    },
+    {
+      "path": "AGENTS.md",
+      "action": "modify",
+      "purpose": "name the fourth engine",
+      "mechanical": true
+    },
+    {
+      "path": "docs/CLI.md",
+      "action": "modify",
+      "purpose": "DynamoDB section: SELECT only, keyed reads only",
+      "mechanical": false
+    },
+    {
+      "path": ".claude/rules/architecture.md",
+      "action": "modify",
+      "purpose": "Data now includes DynamoDB",
+      "mechanical": true
+    },
+    {
+      "path": ".claude/rules/data-layer.md",
+      "action": "modify",
+      "purpose": "new section 5.1b for DynamoDB",
+      "mechanical": true
+    },
+    {
+      "path": ".claude/rules/security.md",
+      "action": "modify",
+      "purpose": "new section 1.9c: read-only, scans, AWS profile",
+      "mechanical": true
+    },
+    {
+      "path": ".claude/rules/testing.md",
+      "action": "modify",
+      "purpose": "DynamoDbTestServer and its container",
+      "mechanical": true
+    }
+  ],
+  "public_contracts": [
+    {
+      "kind": "schema",
+      "signature": "Bearing.Core.Data.CredentialKind.AwsProfile = 4 (serialised in project.json)",
+      "change": "new",
+      "surface": "external"
+    },
+    {
+      "kind": "schema",
+      "signature": "Bearing.Core.Data.ConnectionInfo.ConfirmFullScans : bool = true (serialised in project.json)",
+      "change": "new",
+      "surface": "external"
+    },
+    {
+      "kind": "schema",
+      "signature": "provider id \"dynamodb\" in project.json; Host = region, User = AWS profile, Port = 0, Options[\"Endpoint\"]",
+      "change": "new",
+      "surface": "external"
+    },
+    {
+      "kind": "method",
+      "signature": "Bearing.Core.Data.IDbProvider.SupportsPasswordCredentials / SupportsAwsProfile / SupportsManualCommit / SupportsTlsModes { get; }",
+      "change": "new",
+      "surface": "internal-tooling"
+    },
+    {
+      "kind": "method",
+      "signature": "Bearing.Core.Data.IQueryExecutor.ExecuteContinuationAsync(string continuation, int maxRows, CancellationToken ct)",
+      "change": "new",
+      "surface": "internal-tooling"
+    },
+    {
+      "kind": "method",
+      "signature": "Bearing.Core.Data.QueryResult.Continuation { get; init; }",
+      "change": "new",
+      "surface": "internal-tooling"
+    },
+    {
+      "kind": "method",
+      "signature": "Bearing.Sql.ISqlDialect.ScanTargets(string sql)",
+      "change": "new",
+      "surface": "internal-tooling"
+    },
+    {
+      "kind": "method",
+      "signature": "Bearing.Sessions.ProviderTraits(..., string? GridEditUnavailable, bool OffersTableDdl)",
+      "change": "modified",
+      "surface": "internal-tooling"
+    },
+    {
+      "kind": "cli-flag",
+      "signature": "bearing query / tables / describe on an exposed dynamodb connection (keyed SELECT only)",
+      "change": "new",
+      "surface": "external"
+    }
+  ],
+  "success_criteria": [
+    {
+      "id": "SC1",
+      "description": "dynamodb is registered fourth, named Amazon DynamoDB, and paired with its traits and dialect",
+      "verification": "ProviderRegistryTests, ProviderTraitsTests",
+      "evidence_channel": "test-run",
+      "observable": "both classes pass and the registry ids equal postgres, sqlserver, mysql, dynamodb"
+    },
+    {
+      "id": "SC2",
+      "description": "the connection editor shows Region / AWS profile / Endpoint, offers only the AWS-profile credential, hides TLS / manual commit / session time zone, keeps external access, and shows Confirm full table scans checked; other engines show none of the DynamoDB-only items",
+      "verification": "Ui/ConnectionEditorTests, CredentialKindOptionsTests",
+      "evidence_channel": "test-run",
+      "observable": "new DynamoDB editor tests pass and existing editor tests pass with only the engine list changed"
+    },
+    {
+      "id": "SC3",
+      "description": "a saved DynamoDB connection has Host = region, User = profile, Port = 0, CredentialKind.AwsProfile; ConfirmFullScans survives project.json and the clipboard; endpoint text is profile@region",
+      "verification": "ConnectionFieldModelTests, ConnectionEndpointTests, ConnectionManagementTests",
+      "evidence_channel": "test-run",
+      "observable": "new cases pass"
+    },
+    {
+      "id": "SC4",
+      "description": "resolving an AwsProfile credential reads no secret, writes none and never prompts",
+      "verification": "CredentialResolverTests",
+      "evidence_channel": "test-run",
+      "observable": "fake store and fake prompt record 0 calls and the test passes"
+    },
+    {
+      "id": "SC5",
+      "description": "missing-credential / expired-SSO / unknown-profile failures classify Authentication with a message naming the profile and aws sso login --profile <name>; access-denied classifies Unknown; no key or token text appears",
+      "verification": "ProviderClassificationTests, DynamoDbErrorTextTests",
+      "evidence_channel": "test-run",
+      "observable": "theories pass"
+    },
+    {
+      "id": "SC6",
+      "description": "http to a non-loopback endpoint is refused at connect; loopback http and any https are accepted",
+      "verification": "DynamoDbConnectionFactoryTests",
+      "evidence_channel": "test-run",
+      "observable": "theories pass"
+    },
+    {
+      "id": "SC7",
+      "description": "live: a table with partition + sort key, one GSI and one LSI appears with key columns flagged (partition key ordinal 1); details list primary key, GSI and LSI; a size entry is returned; routines, roles, tablespaces and object kinds are empty",
+      "verification": "DynamoDbLiveTests (schema)",
+      "evidence_channel": "test-run",
+      "observable": "pass with 0 skipped while the container is up"
+    },
+    {
+      "id": "SC8",
+      "description": "live: a keyed SELECT returns key columns first then alphabetical; S / N / BOOL / B map to string / decimal / bool / byte[]; map, list and sets are JSON text; a missing attribute is null",
+      "verification": "DynamoDbLiveTests (values)",
+      "evidence_channel": "test-run",
+      "observable": "pass with 0 skipped while the container is up"
+    },
+    {
+      "id": "SC9",
+      "description": "live: over 250 items with page size 100 the first result has 100 rows, Truncated and a continuation; two continuation calls return 100 then 50 rows, the last with no continuation; 250 distinct keys in total",
+      "verification": "DynamoDbLiveTests (paging)",
+      "evidence_channel": "test-run",
+      "observable": "pass with 0 skipped while the container is up"
+    },
+    {
+      "id": "SC10",
+      "description": "live: an attribute first seen on page two arrives in (other attributes) as JSON; a one-page result has no such column",
+      "verification": "DynamoDbLiveTests (overflow)",
+      "evidence_channel": "test-run",
+      "observable": "pass with 0 skipped while the container is up"
+    },
+    {
+      "id": "SC11",
+      "description": "a filter matching nothing stops after 10 requests with 0 rows, Truncated true and a continuation; a 1 s statement timeout cancels a slow read with an error naming the timeout",
+      "verification": "DynamoDbQueryExecutorTests",
+      "evidence_channel": "test-run",
+      "observable": "the fake API records exactly 10 requests and both tests pass"
+    },
+    {
+      "id": "SC12",
+      "description": "a result carrying a continuation loads more and fetches all through ExecuteContinuationAsync only; HasMore follows the continuation; fetch all stops at the cap with the ceiling report",
+      "verification": "ContinuationPagingTests",
+      "evidence_channel": "test-run",
+      "observable": "tests pass and the fake records 0 offset-page and 0 stream calls"
+    },
+    {
+      "id": "SC13",
+      "description": "the scan classifier returns Keyed / FullScan / Undetermined for the statement table in the spec, including index queries and the documented AWS examples",
+      "verification": "PartiQlScanTests, ScanGuardTests",
+      "evidence_channel": "test-run",
+      "observable": "theories pass"
+    },
+    {
+      "id": "SC14",
+      "description": "with the setting on a FullScan or Undetermined statement asks once and Cancel runs nothing; Keyed never asks; setting off never asks; other engines never ask; fetch all / export on a scan result asks again",
+      "verification": "ScanConfirmationTests",
+      "evidence_channel": "test-run",
+      "observable": "fake dialog counts and executor call counts match per case"
+    },
+    {
+      "id": "SC15",
+      "description": "PartiQlDialect: INSERT / UPDATE / DELETE and unknown lead verbs are risky, SELECT is not, keywords in strings and quoted names do not trip; paging and count hooks return null; SelectTopRows is select * from \"T\"; FormatRefusal is set; SupportsExplainPlan is false; statements split on ; outside strings, quoted names and comments",
+      "verification": "PartiQlDialectTests, PartiQlBatchTests",
+      "evidence_channel": "test-run",
+      "observable": "theories pass"
+    },
+    {
+      "id": "SC16",
+      "description": "withheld features: DynamoDB results carry the editing lock reason; EffectiveConnection never reports manual commit and TabTransactions.OpenAsync refuses; the mode pill is hidden; table nodes do not offer Show definition",
+      "verification": "DynamoDbResultTests, ManualCommitGuardTests, SchemaNodeTests",
+      "evidence_channel": "test-run",
+      "observable": "new cases pass"
+    },
+    {
+      "id": "SC17",
+      "description": "nothing regresses and layering holds",
+      "verification": "dotnet build; dotnet test; grep Reference items in src/Bearing.Core/Bearing.Core.csproj; grep cross-references between Bearing.Sql.csproj and Bearing.Data.csproj",
+      "evidence_channel": "build-output",
+      "observable": "build exit 0, test exit 0, 0 Reference items in Bearing.Core.csproj, 0 cross-references between Sql and Data"
+    },
+    {
+      "id": "SC18",
+      "description": "docs and rules name the fourth engine",
+      "verification": "grep -l DynamoDB README.md CLAUDE.md AGENTS.md docs/CLI.md .claude/rules/architecture.md .claude/rules/data-layer.md .claude/rules/security.md .claude/rules/testing.md",
+      "evidence_channel": "script-output",
+      "observable": "all 8 files are listed"
+    },
+    {
+      "id": "SC19",
+      "description": "bearing on an exposed DynamoDB connection: listed as available; a keyed SELECT runs; a full scan and an undetermined SELECT are refused with the spec's sentences even with Confirm full table scans off, and logged as refusals; INSERT / UPDATE / DELETE and non-SELECT verbs are refused; --export follows the continuation to the last row; explain is refused",
+      "verification": "DynamoDbExposureTests, ConnectionListingTests",
+      "evidence_channel": "test-run",
+      "observable": "tests pass and the fake executor records 0 calls for every refused statement"
+    }
+  ],
+  "test_manifest": [
+    {
+      "path": "tests/Bearing.Data.Tests/ProviderRegistryTests.cs",
+      "covers": [
+        "SC1"
+      ]
+    },
+    {
+      "path": "tests/Bearing.App.Tests/ProviderTraitsTests.cs",
+      "covers": [
+        "SC1",
+        "SC2"
+      ]
+    },
+    {
+      "path": "tests/Bearing.App.Tests/Ui/ConnectionEditorTests.cs",
+      "covers": [
+        "SC2"
+      ]
+    },
+    {
+      "path": "tests/Bearing.App.Tests/ConnectionFieldModelTests.cs",
+      "covers": [
+        "SC3",
+        "SC17"
+      ]
+    },
+    {
+      "path": "tests/Bearing.App.Tests/ConnectionEndpointTests.cs",
+      "covers": [
+        "SC3"
+      ]
+    },
+    {
+      "path": "tests/Bearing.App.Tests/ConnectionManagementTests.cs",
+      "covers": [
+        "SC3"
+      ]
+    },
+    {
+      "path": "tests/Bearing.App.Tests/CredentialResolverTests.cs",
+      "covers": [
+        "SC4"
+      ]
+    },
+    {
+      "path": "tests/Bearing.Data.Tests/ProviderClassificationTests.cs",
+      "covers": [
+        "SC5"
+      ]
+    },
+    {
+      "path": "tests/Bearing.Data.Tests/DynamoDbErrorTextTests.cs",
+      "covers": [
+        "SC5"
+      ]
+    },
+    {
+      "path": "tests/Bearing.Data.Tests/DynamoDbConnectionFactoryTests.cs",
+      "covers": [
+        "SC6"
+      ]
+    },
+    {
+      "path": "tests/Bearing.Data.Tests/DynamoDbLiveTests.cs",
+      "covers": [
+        "SC7",
+        "SC8",
+        "SC9",
+        "SC10"
+      ]
+    },
+    {
+      "path": "tests/Shared/DynamoDbTestServer.cs",
+      "covers": [
+        "SC7",
+        "SC8",
+        "SC9",
+        "SC10"
+      ]
+    },
+    {
+      "path": "tests/Bearing.Data.Tests/DynamoDbQueryExecutorTests.cs",
+      "covers": [
+        "SC11"
+      ]
+    },
+    {
+      "path": "tests/Bearing.Data.Tests/PartiQlBatchTests.cs",
+      "covers": [
+        "SC11",
+        "SC15"
+      ]
+    },
+    {
+      "path": "tests/Bearing.App.Tests/ContinuationPagingTests.cs",
+      "covers": [
+        "SC12"
+      ]
+    },
+    {
+      "path": "tests/Bearing.Sql.Tests/PartiQlScanTests.cs",
+      "covers": [
+        "SC13"
+      ]
+    },
+    {
+      "path": "tests/Bearing.App.Tests/ScanGuardTests.cs",
+      "covers": [
+        "SC13"
+      ]
+    },
+    {
+      "path": "tests/Bearing.App.Tests/ScanConfirmationTests.cs",
+      "covers": [
+        "SC14"
+      ]
+    },
+    {
+      "path": "tests/Bearing.Sql.Tests/PartiQlDialectTests.cs",
+      "covers": [
+        "SC15"
+      ]
+    },
+    {
+      "path": "tests/Bearing.App.Tests/DynamoDbResultTests.cs",
+      "covers": [
+        "SC16"
+      ]
+    },
+    {
+      "path": "tests/Bearing.App.Tests/ManualCommitGuardTests.cs",
+      "covers": [
+        "SC16"
+      ]
+    },
+    {
+      "path": "tests/Bearing.App.Tests/SchemaNodeTests.cs",
+      "covers": [
+        "SC16"
+      ]
+    },
+    {
+      "path": "tests/Bearing.Cli.Tests/ConnectionListingTests.cs",
+      "covers": [
+        "SC19"
+      ]
+    },
+    {
+      "path": "tests/Bearing.App.Tests/Fakes.cs",
+      "covers": [
+        "SC17"
+      ]
+    },
+    {
+      "path": "tests/Bearing.App.Tests/Ui/ChoiceFieldTests.cs",
+      "covers": [
+        "SC17"
+      ]
+    },
+    {
+      "path": "tests/Bearing.Cli.Tests/DynamoDbExposureTests.cs",
+      "covers": [
+        "SC19"
+      ]
+    }
+  ],
+  "out_of_scope": [
+    "grid editing, inserting and deleting items",
+    "access keys stored in the keychain; launching aws sso login from Bearing",
+    "scans from the bearing command, even when asked for explicitly",
+    "manual commit / ExecuteTransaction; BatchExecuteStatement",
+    "query plans, Activity panel, roles, routines, session time zone",
+    "script variables (:name, @set) and PartiQL ? parameters",
+    "a PartiQL grammar, PartiQL-aware keyword completion and SQL formatting",
+    "total row counts; consumed-capacity reporting",
+    "distinguishing a missing attribute from a DynamoDB NULL in the grid",
+    "a PartiQL form of Copy as SQL INSERT",
+    "creating, altering or deleting tables and indexes; table DDL display",
+    "multi-region browsing in one connection; Streams, TTL, backups, global-table settings",
+    "release notes"
+  ],
+  "security_impact": "new-auth-path",
+  "assumptions": [
+    "[VERIFIED:src/Bearing.App/ViewModels/ExecutionViewModel.cs] the grid pages by load-more from an offset; a null from the dialect retires paging; a null CountWrap reports Count unavailable",
+    "[VERIFIED:src/Bearing.App/Connections/ConnectionFieldModel.cs] only Host, Port, Database, User map to ConnectionInfo properties; other keys land in Options; SameNetwork compares the intrinsics, not Options",
+    "[VERIFIED:src/Bearing.Sessions/EntraTokenProvider.cs] ProviderTraits Entra and Azure members are read only behind an EntraToken check",
+    "[VERIFIED:src/Bearing.Core/Schema/EditabilityResolver.cs] a result with no base columns is labelled a computed expression, which would be a false claim on DynamoDB",
+    "[VERIFIED:src/Bearing.App/Views/ConnectionDialog.axaml] TLS, manual commit, statement timeout and external access rows are unconditional today",
+    "[COVERAGE:1] TabTransactions.OpenAsync is the only production caller of CreateTransactionScope",
+    "[COVERAGE:5] user SQL reaches an executor from five sites in ExecutionViewModel; on DynamoDB only run and fetch-all are reachable",
+    "[CITED:https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_ExecuteStatement.html] Limit is the number of items evaluated; a read stops at 1 MB; NextToken continues it; statements are at most 8192 characters",
+    "[CITED:https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ql-reference.select.html] a SELECT scans unless WHERE has = or IN on the partition key; indexes are addressed as \"Table\".\"Index\"",
+    "[CITED:https://docs.aws.amazon.com/sdk-for-net/v4/developer-guide/sso.html] SSO profile resolution needs AWSSDK.SSO and AWSSDK.SSOOIDC referenced",
+    "[ASSUMED] DynamoDB Local honours Limit and NextToken on ExecuteStatement and accepts -- and /* */ comments",
+    "[ASSUMED] assumed-role profiles need AWSSDK.SecurityToken referenced",
+    "[ASSUMED] after aws sso login the SDK picks up the new token on the next call without the client being rebuilt",
+    "[ASSUMED] a NextToken stays valid for as long as a result is on screen",
+    "[ASSUMED] the PostgreSQL lexer reads every PartiQL statement DynamoDB accepts without mis-splitting or mis-reading a string",
+    "[ASSUMED] completion and Select top 100 rows emit an unqualified table name when the snapshot's schema name is empty",
+    "[ASSUMED] opening the definition view is the only tree action besides Select top 100 rows that generates SQL for a table"
+  ],
+  "risks": [
+    "ExecutionViewModel is a god object; mitigated by ContinuationPaging, ScanGuard and ScanConfirmation helpers",
+    "four new IDbProvider flags touch every implementer and five test fakes",
+    "installer size grows with the AWS SDK; measure the Release package",
+    "CentralPackageTransitivePinningEnabled may require an explicit AWSSDK.Core version entry",
+    "executor decorators (TrackedExecutor, Demo CountingExecutor) do not forward ExecuteContinuationAsync",
+    "keyword completion offers Postgres keywords PartiQL lacks",
+    "Wayland blocks headless GUI verification; dialog rows, scan dialog and tree need eyeball QA",
+    "the SSO re-login path cannot be covered in CI; needs one manual check against a real SSO profile",
+    "trap: paging by re-running and skipping rows re-reads and re-bills loaded rows",
+    "trap: an offset marker in a SQL comment with a token cache in the executor is hidden state keyed by text",
+    "trap: reusing CredentialKind.Integrated drags OS-identity copy and SQL Server branches onto AWS",
+    "trap: region and profile in the Options bag are invisible to SameNetwork and the endpoint text",
+    "trap: indexes as relations under a per-table schema put phantom schemas in the tree",
+    "trap: default interface members for the provider flags let a future engine ship without answering",
+    "trap: skipping the confirmation for an unfiltered first page leaves load-more and fetch-all unguarded",
+    "trap: rebuilding grid columns when a new attribute appears breaks the never-rebuild rule (9.10)",
+    "the bearing command is a new unattended read path for DynamoDB; held to keyed SELECT only, which is accident prevention, not a boundary (IAM is)"
+  ],
+  "coverage_claims": [
+    {
+      "claim": "one refusal in TabTransactions.OpenAsync backstops manual commit for an engine that cannot hold a transaction",
+      "write_sites": [
+        "src/Bearing.App/Connections/TabTransactions.cs:140"
+      ],
+      "verified": true
+    },
+    {
+      "claim": "confirming in ExecutionViewModel.ExecuteAsync and in fetch-all covers every statement that can scan a DynamoDB table",
+      "write_sites": [
+        "src/Bearing.App/ViewModels/ExecutionViewModel.cs:750",
+        "src/Bearing.App/ViewModels/ExecutionViewModel.cs:1022",
+        "src/Bearing.App/ViewModels/ExecutionViewModel.cs:1083",
+        "src/Bearing.App/ViewModels/ExecutionViewModel.cs:1283",
+        "src/Bearing.App/ViewModels/ExecutionViewModel.cs:1351"
+      ],
+      "verified": true
+    }
+  ],
+  "conditional_descopes": [
+    {
+      "condition": "DynamoDB Local does not honour Limit on ExecuteStatement",
+      "action": "assert SC9's page sizes against the fake API; the live test asserts only that all 250 keys arrive exactly once",
+      "fired": false
+    }
+  ],
+  "plan": {
+    "batches": [
+      {
+        "id": "1",
+        "title": "Core seams, every implementer answers the flags",
+        "status": "pending"
+      },
+      {
+        "id": "2",
+        "title": "PartiQlDialect and PartiQlScan",
+        "status": "pending"
+      },
+      {
+        "id": "3a",
+        "title": "AWS SDK packages, IDynamoDbApi, factory, errors",
+        "status": "pending"
+      },
+      {
+        "id": "3b",
+        "title": "values, continuation, PartiQlBatch",
+        "status": "pending"
+      },
+      {
+        "id": "3c",
+        "title": "executor, metadata reader, provider, registry",
+        "status": "pending"
+      },
+      {
+        "id": "4",
+        "title": "DynamoDB Local live tests and CI step",
+        "status": "pending"
+      },
+      {
+        "id": "5",
+        "title": "Sessions: traits, AwsProfile arm, ScanGuard",
+        "status": "pending"
+      },
+      {
+        "id": "6",
+        "title": "Connection editor",
+        "status": "pending"
+      },
+      {
+        "id": "7a",
+        "title": "Continuation paging",
+        "status": "pending"
+      },
+      {
+        "id": "7b",
+        "title": "Scan confirmation",
+        "status": "pending"
+      },
+      {
+        "id": "7c",
+        "title": "Withheld features",
+        "status": "pending"
+      },
+      {
+        "id": "8",
+        "title": "bearing command keyed reads",
+        "status": "pending"
+      },
+      {
+        "id": "9",
+        "title": "Docs and rules",
+        "status": "pending"
+      }
+    ]
+  }
+}
