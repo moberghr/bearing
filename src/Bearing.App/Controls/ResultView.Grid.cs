@@ -75,7 +75,7 @@ public sealed partial class ResultView
             _selection.ToggleBoolAt(grid, result, e);
         };
 
-        // Right-click menu: copy (in any format), paste, set NULL, fetch the rest, export. The cells collapse
+        // Right-click menu: copy (in any format), paste, set NULL, delete rows, fetch the rest, export. The cells collapse
         // the selection onto themselves on a right-click outside it (see ResultCellFactory), so what the menu
         // acts on is always what the user is pointing at.
         grid.ContextFlyout = ResultContextMenu.Build(
@@ -91,6 +91,7 @@ public sealed partial class ResultView
             // which is why the menu takes the list rather than looking one up — it knows nothing about
             // engines, and the cell it writes is judged by this same dialect (§5.4a).
             expressions: result.Traits.Dialect.OfferedEditExpressions,
+            deleteRows: result.IsEditable ? () => _selection.DeleteSelectedRows(grid, result) : null,
             fetchAll: result.IsPageable ? () => FetchAll?.Invoke(result) ?? Task.CompletedTask : null,
             export: format => Export?.Invoke(result, format) ?? Task.CompletedTask);
 
