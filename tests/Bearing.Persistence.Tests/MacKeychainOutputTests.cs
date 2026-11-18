@@ -31,4 +31,10 @@ public class MacKeychainOutputTests
     [Fact]
     public void An_unknown_form_is_an_error_not_a_guess()
         => Assert.Throws<InvalidOperationException>(() => MacKeychainSecretStore.ParsePasswordLine("password: <redacted>"));
+
+    [Theory]
+    [InlineData("password: 0xFF  \"\\377\"")]          // a byte UTF-8 never uses
+    [InlineData("password: 0xC3  \"\\303\"")]          // a truncated two-byte sequence
+    public void Hex_that_is_not_utf8_is_an_error_not_a_replacement_character(string line)
+        => Assert.Throws<InvalidOperationException>(() => MacKeychainSecretStore.ParsePasswordLine(line));
 }
