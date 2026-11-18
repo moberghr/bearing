@@ -119,4 +119,20 @@ public class ProviderClassificationTests
         Assert.True(new PostgresProvider().SupportsEntraToken);
         Assert.True(new SqlServerProvider().SupportsEntraToken);
     }
+
+    [Fact]
+    public void The_relational_engines_answer_the_credential_and_transport_flags_alike()
+    {
+        // Explicit on every provider (§1.9a), so a new engine has to answer rather than inherit. The three
+        // SQL engines take a password, hold transactions and honour a TLS mode, and none has an AWS profile.
+        IDbProvider[] relational = [new PostgresProvider(), new SqlServerProvider(), new Bearing.Data.MySql.MySqlProvider()];
+
+        foreach (var provider in relational)
+        {
+            Assert.True(provider.SupportsPasswordCredentials, provider.Id);
+            Assert.False(provider.SupportsAwsProfile, provider.Id);
+            Assert.True(provider.SupportsManualCommit, provider.Id);
+            Assert.True(provider.SupportsTlsModes, provider.Id);
+        }
+    }
 }

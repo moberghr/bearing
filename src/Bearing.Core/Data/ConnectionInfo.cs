@@ -161,6 +161,24 @@ public sealed record ConnectionInfo
     /// </summary>
     public TlsMode Tls { get; init; } = TlsPolicy.Default;
 
+    /// <summary>
+    /// When true (the default), a statement that would read a whole table — one the engine cannot narrow by
+    /// key — asks for confirmation before it runs, because on a metered engine that read is the cost.
+    /// <para>
+    /// <b>Client-side, like <see cref="ManualCommit"/>:</b> it is a question Bearing asks and an answer it
+    /// waits for, never something sent to a server, so it is not part of what defines a pool — see
+    /// <c>SamePool</c> / <c>SameConnection</c> — and toggling it never rebuilds one. A typed field rather than
+    /// an <see cref="Options"/> entry because it is a safety setting (the <see cref="Tls"/> /
+    /// <see cref="ExternalAccess"/> rule), and a missing value in an older project file keeps the safe
+    /// default.
+    /// </para>
+    /// <para>
+    /// Inert on an engine that never asks the scan question (<c>ISqlDialect.ScanTargets</c> returns null) —
+    /// every engine today but DynamoDB.
+    /// </para>
+    /// </summary>
+    public bool ConfirmFullScans { get; init; } = true;
+
     /// <summary>Provider-specific extra options (e.g. search_path). <c>sslmode</c> used to live here and is
     /// still read from here for older projects — see <see cref="Tls"/>.</summary>
     public IReadOnlyDictionary<string, string> Options { get; init; }

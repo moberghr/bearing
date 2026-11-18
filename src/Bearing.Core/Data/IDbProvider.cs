@@ -64,6 +64,37 @@ public interface IDbProvider
     bool SupportsEntraToken { get; }
 
     /// <summary>
+    /// Whether this engine authenticates with a password at all (<see cref="CredentialKind.StoredPassword"/>
+    /// and <see cref="CredentialKind.Prompt"/>). False for an engine whose credential is resolved elsewhere —
+    /// the dialog then offers neither a password box nor those kinds, rather than a field the factory would
+    /// ignore (§1.9a: never offer what the factory cannot honour).
+    /// </summary>
+    bool SupportsPasswordCredentials { get; }
+
+    /// <summary>
+    /// Whether this engine's connection factory can authenticate through a named AWS profile
+    /// (<see cref="CredentialKind.AwsProfile"/>). The dialog offers that kind only where it works, for the
+    /// reason <see cref="SupportsIntegratedAuth"/> is a flag.
+    /// </summary>
+    bool SupportsAwsProfile { get; }
+
+    /// <summary>
+    /// Whether <see cref="ConnectionInfo.ManualCommit"/> means anything on this engine — that is, whether
+    /// <see cref="CreateTransactionScope"/> can hold a transaction open across calls. An engine without
+    /// transactions answers false and the dialog does not offer the setting, rather than offering one that
+    /// would never open anything.
+    /// </summary>
+    bool SupportsManualCommit { get; }
+
+    /// <summary>
+    /// Whether <see cref="ConnectionInfo.Tls"/> reaches this engine's transport. False for an engine whose
+    /// transport security is not the user's to choose (an HTTPS-only API): the dialog hides the control
+    /// instead of showing a mode nothing honours — and never describes the connection as unencrypted or
+    /// verified on the strength of a setting that is inert here (§1.4).
+    /// </summary>
+    bool SupportsTlsModes { get; }
+
+    /// <summary>
     /// Place a failed statement's error (see <see cref="QueryError.SqlState"/>) on the neutral
     /// <see cref="DbErrorKind"/> scale. The engine's codes never leave the provider: the App layer used
     /// to sniff Postgres SQLSTATEs as strings, which quietly mislabelled every other engine's errors.
@@ -275,6 +306,20 @@ public interface IQueryExecutor
     /// single error result rather than thrown.
     /// </summary>
     Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct);
+
+    /// <summary>
+    /// The next chunk of a read that returned a <see cref="QueryResult.Continuation"/>: at most
+    /// <paramref name="maxRows"/> more rows, as one <see cref="QueryResult"/> whose own
+    /// <see cref="QueryResult.Continuation"/> is null once the read is exhausted. The token is the one the
+    /// previous result carried, passed back untouched.
+    /// <para>
+    /// A default member that throws, the shape of the overloads above, because only an engine whose reads are
+    /// continued by a server-side token (not by <c>LIMIT</c>/<c>OFFSET</c>) overrides it — and a caller
+    /// reaches it only with a token that engine issued, so reaching the default is a bug, not a state.
+    /// </para>
+    /// </summary>
+    Task<QueryResult> ExecuteContinuationAsync(string continuation, int maxRows, CancellationToken ct)
+        => throw new NotSupportedException("This engine's reads are not continued by token.");
 }
 
 /// <summary>Where a transaction opened by <see cref="ITransactionScope"/> stands.</summary>

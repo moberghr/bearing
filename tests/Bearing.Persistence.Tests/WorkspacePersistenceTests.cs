@@ -202,6 +202,46 @@ public class WorkspacePersistenceTests : IDisposable
         Assert.Null(ExternalAccessPolicy.ForExternalHost(conn));
     }
 
+    /// <summary>
+    /// The scan confirmation is a safety setting, so the half that matters is the legacy one: every
+    /// project.json written before it existed has no such property and must open with the question still
+    /// asked.
+    /// </summary>
+    [Fact]
+    public async Task ConfirmFullScans_round_trips_and_defaults_to_true_for_legacy_manifests()
+    {
+        var dir = Path.Combine(_root, "scanproj");
+        var store = new JsonProjectStore();
+        var created = await store.CreateAsync(dir, "Scans", CancellationToken.None);
+        created.Manifest.Connections.Add(new ConnectionInfo
+        {
+            Id = Guid.NewGuid(),
+            Name = "tables",
+            ProviderId = "postgres",
+            Host = "db",
+            Database = "app",
+            User = "svc",
+            ConfirmFullScans = false,
+        });
+        await store.SaveAsync(created, CancellationToken.None);
+
+        var manifestText = await File.ReadAllTextAsync(Path.Combine(dir, "project.json"));
+        Assert.Contains("\"confirmFullScans\": false", manifestText);
+        var reopened = await store.OpenAsync(dir, CancellationToken.None);
+        Assert.False(reopened.Manifest.Connections.Single().ConfirmFullScans);
+
+        // A manifest written before the setting existed: its own line is dropped, and the options entry
+        // that follows it keeps the JSON valid.
+        var legacy = string.Join('\n',
+            manifestText.Split('\n').Where(l => !l.Contains("confirmFullScans")));
+        Assert.DoesNotContain("confirmFullScans", legacy);
+        await File.WriteAllTextAsync(Path.Combine(dir, "project.json"), legacy);
+
+        var legacyOpened = await store.OpenAsync(dir, CancellationToken.None);
+        Assert.True(legacyOpened.Manifest.Connections.Single().ConfirmFullScans);
+        Assert.True(new ConnectionInfo { Id = Guid.NewGuid(), Name = "n", ProviderId = "postgres" }.ConfirmFullScans);
+    }
+
     [Fact]
     public async Task Session_round_trips_scratch_name_and_side_pane_state()
     {

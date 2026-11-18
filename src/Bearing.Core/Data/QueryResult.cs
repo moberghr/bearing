@@ -69,6 +69,18 @@ public sealed record QueryResult(
     /// </para>
     /// </summary>
     public int? StatementIndex { get; init; }
+
+    /// <summary>
+    /// Opaque, provider-owned token meaning <i>this read can be continued</i>: non-null hands it back to
+    /// <see cref="IQueryExecutor.ExecuteContinuationAsync"/> for the next chunk, null means there is nothing
+    /// more to fetch this way. What it holds (the statement, the server's paging token, the column layout) is
+    /// the provider's business — nothing above the executor may parse it.
+    /// <para>
+    /// <b>In memory only.</b> It can carry statement text and a server token, so it is never logged,
+    /// persisted or shown (§1.3). A result that sets it pages by continuation instead of by offset.
+    /// </para>
+    /// </summary>
+    public string? Continuation { get; init; }
 }
 
 /// <summary>

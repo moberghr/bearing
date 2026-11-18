@@ -56,6 +56,18 @@ public sealed class SqlServerProvider : IDbProvider
     /// for Azure Database for PostgreSQL is refused by Azure SQL and vice versa.</summary>
     public bool SupportsEntraToken => true;
 
+    /// <inheritdoc />
+    public bool SupportsPasswordCredentials => true;
+
+    /// <inheritdoc />
+    public bool SupportsAwsProfile => false;
+
+    /// <inheritdoc />
+    public bool SupportsManualCommit => true;
+
+    /// <inheritdoc />
+    public bool SupportsTlsModes => true;
+
     public DbErrorKind Classify(QueryError error)
         => int.TryParse(error.SqlState, out var number) ? FromNumber(number) : DbErrorKind.Unknown;
 

@@ -39,6 +39,10 @@ public class ConnectionFieldModelTests
         public bool SupportsSessionTimeZone => false;
         public bool SupportsIntegratedAuth => false;
         public bool SupportsEntraToken => false;
+        public bool SupportsPasswordCredentials => true;
+        public bool SupportsAwsProfile => false;
+        public bool SupportsManualCommit => true;
+        public bool SupportsTlsModes => true;
 
         // Not the subject: these fakes exist for the dialog's field rendering.
         public bool SupportsServerActivity => false;
@@ -91,6 +95,10 @@ public class ConnectionFieldModelTests
         public bool SupportsSessionTimeZone => false;
         public bool SupportsIntegratedAuth => false;
         public bool SupportsEntraToken => false;
+        public bool SupportsPasswordCredentials => true;
+        public bool SupportsAwsProfile => false;
+        public bool SupportsManualCommit => true;
+        public bool SupportsTlsModes => true;
 
         // Not the subject: these fakes exist for the dialog's field rendering.
         public bool SupportsServerActivity => false;
@@ -565,6 +573,10 @@ public class ConnectionFieldModelTests
         public bool SupportsSessionTimeZone => false;
         public bool SupportsIntegratedAuth => false;
         public bool SupportsEntraToken => false;
+        public bool SupportsPasswordCredentials => true;
+        public bool SupportsAwsProfile => false;
+        public bool SupportsManualCommit => true;
+        public bool SupportsTlsModes => true;
 
         // Not the subject: this fake exists for the dialog's field rendering.
         public bool SupportsServerActivity => false;

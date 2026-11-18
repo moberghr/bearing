@@ -52,6 +52,18 @@ public sealed class MySqlProvider : IDbProvider
     /// arrangement as Azure Database for PostgreSQL, so it needs no path of its own.</summary>
     public bool SupportsEntraToken => true;
 
+    /// <inheritdoc />
+    public bool SupportsPasswordCredentials => true;
+
+    /// <inheritdoc />
+    public bool SupportsAwsProfile => false;
+
+    /// <inheritdoc />
+    public bool SupportsManualCommit => true;
+
+    /// <inheritdoc />
+    public bool SupportsTlsModes => true;
+
     /// <summary>
     /// A failed statement's verdict. Unlike <see cref="ClassifyException"/> (the connect path), 1044 is not
     /// an authentication failure here: on a session that is already in, it is the server refusing a database

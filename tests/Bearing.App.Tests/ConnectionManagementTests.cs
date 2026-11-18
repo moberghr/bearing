@@ -372,6 +372,9 @@ public class ConnectionClipboardTests
         Tls = TlsMode.VerifyFull,
         ReadOnly = true,
         StatementTimeoutSeconds = 30,
+        // Off, which is not the default (true), so a payload that dropped it fails below rather than
+        // comparing true with true.
+        ConfirmFullScans = false,
         // Not the default (null, this machine's zone), so a payload that dropped it fails below rather than
         // comparing null with null (#163).
         SessionTimeZone = "UTC",

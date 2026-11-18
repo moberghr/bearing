@@ -33,6 +33,10 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
     public bool SupportsSessionTimeZone => true;   // Postgres has one (#163), and this fake claims to be it
     public bool SupportsIntegratedAuth => false;
     public bool SupportsEntraToken => true;
+    public bool SupportsPasswordCredentials => true;
+    public bool SupportsAwsProfile => false;
+    public bool SupportsManualCommit => true;
+    public bool SupportsTlsModes => true;
 
     public bool SupportsServerActivity => true;
 
