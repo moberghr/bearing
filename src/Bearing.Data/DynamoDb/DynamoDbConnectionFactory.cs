@@ -45,10 +45,12 @@ public sealed class DynamoDbConnectionFactory : IDbConnectionFactory
     /// <summary>
     /// What a loopback connection with no profile signs with. Not a secret and not a credential for anything:
     /// DynamoDB Local accepts any value, and a real endpoint would refuse these (which is the point — they
-    /// cannot be mistaken for, or used as, an identity).
+    /// cannot be mistaken for, or used as, an identity). Letters only, and that is measured, not style:
+    /// DynamoDB Local 3.1 refuses an access key id holding anything else (a hyphen gave "The Access Key ID or
+    /// security token is invalid") — it keys its in-memory database by the id.
     /// </summary>
-    internal const string PlaceholderAccessKey = "bearing-local";
-    internal const string PlaceholderSecretKey = "bearing-local";
+    internal const string PlaceholderAccessKey = "bearinglocal";
+    internal const string PlaceholderSecretKey = "bearinglocal";
 
     private readonly IDynamoDbApi? _api;
     private readonly Exception? _failure;
