@@ -29,8 +29,20 @@ public sealed partial class UpdateViewModel : ObservableObject
             if (Dispatcher.UIThread.CheckAccess()) Sync();
             else Dispatcher.UIThread.Post(Sync);
         };
+        _coordinator.Announced += message =>
+        {
+            if (Dispatcher.UIThread.CheckAccess()) CheckStatus = message;
+            else Dispatcher.UIThread.Post(() => CheckStatus = message);
+        };
         Sync();
     }
+
+    /// <summary>
+    /// The last thing an explicit Check for Updates said — "Checking for updates…", "Bearing is up to date.",
+    /// or why it failed. The status bar gets the same sentence; this is for the About window, which asks the
+    /// question in front of that bar. Empty until a check was asked for.
+    /// </summary>
+    [ObservableProperty] private string _checkStatus = "";
 
     /// <summary>What the strip says. Empty while there is nothing to report.</summary>
     [ObservableProperty] private string _message = "";
