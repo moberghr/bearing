@@ -70,6 +70,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
     // Load more / fetch all for a result continued by token rather than by offset (DynamoDB).
     private readonly ContinuationPaging _continuationPaging;
 
+    // DynamoDB's full-scan question: before a run, and before fetch all / export of a confirmed scan.
+    private readonly ScanConfirmation _scanConfirmation;
+
     public ExecutionViewModel(WorkspaceContext ctx, IDialogService? dialogs)
     {
         _ctx = ctx;
@@ -78,6 +81,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             ctx, ResolveLiveLease, ExecutorFor,
             (tab, body, cancelled, failed) => RunExclusiveAsync(tab, body, cancelled, failed),
             RunStatus, RunFinished, ReportCeiling, Classify);
+        _scanConfirmation = new ScanConfirmation(ctx.Sessions, dialogs, ctx.SetStatus);
         _elapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _elapsedTimer.Tick += (_, _) => RefreshElapsed();
         // IsBusy / RunButtonText / CancelExecution are a façade over the *selected* tab's per-tab run
@@ -531,6 +535,10 @@ public sealed partial class ExecutionViewModel : ObservableObject
             }
         }
 
+        // A read that may cover a whole table asks first (DynamoDB only; every other engine returns at once).
+        var scan = await _scanConfirmation.ConfirmRunAsync(info, traits.Dialect, sql);
+        if (!scan.Proceed) return;
+
         if (beforeRun is not null && !await beforeRun())
         {
             return;
@@ -570,13 +578,13 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // and on an auth failure refresh the credential and retry exactly once. A stored password that
             // didn't change can't be helped by a retry, so it surfaces the error on the first pass.
             var canRefresh = CanRefreshCredential(info);
-            var outcome = await RunFetchAsync(info, tab, run, fetchSql, opensTransaction, final: !canRefresh, ct);
+            var outcome = await RunFetchAsync(info, tab, run, fetchSql, opensTransaction, scan.IsFullScan, final: !canRefresh, ct);
             if (outcome == RunOutcome.AuthFailed && canRefresh && !ct.IsCancellationRequested)
             {
                 _ctx.Credentials.Invalidate(info.Id);
                 await _ctx.Sessions.EvictAsync(SessionKey.For(info));
                 RunStatus(tab, "Reauthenticating…");
-                await RunFetchAsync(info, tab, run, fetchSql, opensTransaction, final: true, ct);
+                await RunFetchAsync(info, tab, run, fetchSql, opensTransaction, scan.IsFullScan, final: true, ct);
             }
         }, "Query cancelled by user.", "Execution error");
     }
@@ -720,7 +728,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// final attempt any error (auth included) is surfaced normally.</summary>
     private async Task<RunOutcome> RunFetchAsync(
         ConnectionInfo info, EditorTabViewModel tab, PreparedRun run, string fetchSql, bool opensTransaction,
-        bool final, CancellationToken ct)
+        bool fullScan, bool final, CancellationToken ct)
     {
         var sql = run.Sql;
         var wall = Stopwatch.StartNew();
@@ -769,8 +777,10 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // Results always route to the tab that started the run, never to whichever tab is focused now.
             // A tab that has since been closed (or dropped by a project switch) is dead but harmless to
             // assign to — RunFinished is what tells the user the run ended, with TabStillOpen false.
-            tab.SetRunResults(ResultSetBuilder.BuildResultSets(
-                results, sql, session.Snapshot, ProviderTraits.For(info), SessionPolicy.IsReadOnly(info), run));
+            var sets = ResultSetBuilder.BuildResultSets(
+                results, sql, session.Snapshot, ProviderTraits.For(info), SessionPolicy.IsReadOnly(info), run);
+            ScanConfirmation.Mark(sets, fullScan);
+            tab.SetRunResults(sets);
             LogExecution(info, run.LogSql, results, _ctx.Transactions.For(tab)?.Id, run.LogParameters);
             var summary = ResultSetBuilder.DescribeResults(
                 results, wall.Elapsed, info, ct.IsCancellationRequested);
@@ -1052,6 +1062,10 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
     public async Task<bool> FetchAllAsync(ResultSetViewModel rs)
     {
+        // Export enters here too, so a confirmed scan is asked about once more on either path.
+        if (!await _scanConfirmation.ConfirmFetchAllAsync(
+                rs, Selected is { IsRunning: false } ? SelectedConnection : null, _ctx.Settings.ResultFetchAllMaxRows))
+            return false;
         if (rs.Continuation is not null) return await _continuationPaging.FetchAllAsync(rs);
         var tab = Selected;
         if (tab is null || tab.IsRunning || !rs.IsPageable || rs.SourceSql is null) return false;

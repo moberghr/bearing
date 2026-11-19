@@ -87,6 +87,14 @@ public interface IDialogService
     /// proceed silently.</summary>
     Task<bool> ConfirmWriteAsync(WriteConfirmation request);
 
+    /// <summary>
+    /// Confirm a read that may cover a whole DynamoDB table (<see cref="ScanConfirmation"/>): before a run, or
+    /// before Fetch all / Export on a result confirmed as one. True = proceed. Implementations with no window
+    /// (headless/tests) return <b>false</b> — unlike <see cref="ConfirmWriteAsync"/>: the question exists because
+    /// the connection asked for it, and a scan nobody confirmed does not run.
+    /// </summary>
+    Task<bool> ConfirmScanAsync(ScanQuestion request);
+
     /// <summary>Confirm throwing away queries that are still running, before an action that would cancel
     /// them. <paramref name="tabName"/> null asks about quitting (<paramref name="runningCount"/> tabs);
     /// non-null asks about closing that one tab. True = cancel the run(s) and proceed.

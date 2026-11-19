@@ -1,0 +1,408 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using Bearing.App.Services;
+using Bearing.App.Settings;
+using Bearing.App.ViewModels;
+using Bearing.App.Workspace;
+using Bearing.Core.Data;
+using Bearing.Core.Schema;
+using Bearing.Core.Workspace;
+using Bearing.Persistence;
+using Bearing.Results;
+using Bearing.Sessions;
+using Bearing.Sql;
+using Xunit;
+using TokenExecutor = Bearing.App.Tests.ContinuationPagingTests.TokenExecutor;
+
+namespace Bearing.App.Tests;
+
+/// <summary>
+/// DynamoDB's full-scan question in the App (SC14, <i>Behaviour 8</i>), driven through
+/// <see cref="ExecutionViewModel"/> with the real <see cref="PartiQlDialect"/> (a <c>dynamodb</c> connection resolves
+/// <see cref="ProviderTraits.DynamoDb"/>), a fake table list and a token executor. Every case counts both what the
+/// dialog was asked and what the executor ran — "Cancel runs nothing" is the executor's zero.
+/// </summary>
+public class ScanConfirmationTests : IDisposable
+{
+    private const long OrdersId = 1;
+
+    private readonly string _root = Path.Combine(Path.GetTempPath(), "bearing-scan", Guid.NewGuid().ToString("N"));
+
+    public void Dispose() { try { if (Directory.Exists(_root)) Directory.Delete(_root, true); } catch { } }
+
+    /// <summary>Orders: partition key customerId, sort key orderDate, and a GSI byStatus on status — shaped the
+    /// way <c>DynamoDbMetadataReader</c> builds it.</summary>
+    private static readonly SchemaSnapshot Tables = new(
+        "eu-west-1",
+        [""],
+        [new TableInfo(OrdersId, "", "Orders", RelationKind.Table)],
+        [
+            new ColumnInfo(OrdersId, 1, "customerId", "S", NotNull: true, IsPrimaryKey: true),
+            new ColumnInfo(OrdersId, 2, "orderDate", "S", NotNull: true, IsPrimaryKey: true),
+            new ColumnInfo(OrdersId, 3, "status", "S", NotNull: false, IsPrimaryKey: false),
+        ],
+        [],
+        searchPath: [""]);
+
+    private static readonly TableDetails OrdersDetails = new(
+        [],
+        [
+            new IndexInfo(10, "PRIMARY", IsUnique: true, IsPrimary: true, IsValid: true, [1, 2], "primary key"),
+            new IndexInfo(11, "byStatus", IsUnique: false, IsPrimary: false, IsValid: true, [3, 2], "gsi"),
+        ],
+        [],
+        []);
+
+    private sealed record Harness(
+        ExecutionViewModel Exec,
+        EditorTabViewModel Tab,
+        TokenExecutor Executor,
+        FakeDialogs Dialogs,
+        FakeProvider Provider,
+        WorkspaceContext Ctx,
+        ConnectionInfo Connection,
+        Func<string> Status);
+
+    private Harness Build(
+        string providerId = "dynamodb", bool confirmFullScans = true, bool withDialogs = true, int totalRows = 25)
+    {
+        Directory.CreateDirectory(_root);
+        var settings = SettingsService.InMemory(new AppSettings
+        {
+            AutosaveMode = AutosaveMode.Off,
+            ResultPageSize = 10,
+            ResultFetchAllMaxRows = 5_000,
+        });
+        var executor = new TokenExecutor { TotalRows = totalRows };
+        var provider = new FakeProvider
+        {
+            Executor = executor,
+            Snapshot = Tables,
+            Details = OrdersDetails,
+            Sizes = [new RelationSize(OrdersId, 0, 0, 0, 0, EstimatedRows: 12_345)],
+        };
+        var ctx = new WorkspaceContext(
+            provider,
+            new JsonProjectStore(),
+            new JsonSessionStore(),
+            new SqliteQueryLog(Path.Combine(_root, "log.sqlite")),
+            new FileRecentProjects(Path.Combine(_root, "recent.json")),
+            new FakeSecretStore(),
+            settings: settings);
+        var conn = new ConnectionInfo
+        {
+            Id = Guid.NewGuid(),
+            Name = "orders-prod",
+            ProviderId = providerId,
+            Host = "eu-west-1",
+            Database = "eu-west-1",
+            CredentialKind = providerId == "dynamodb" ? CredentialKind.AwsProfile : CredentialKind.StoredPassword,
+            ConfirmFullScans = confirmFullScans,
+        };
+        ctx.Project = new Project { Directory = _root, Manifest = new ProjectManifest { Connections = { conn } } };
+
+        var status = "";
+        var tab = new EditorTabViewModel("orders") { ConnectionId = conn.Id };
+        ctx.Tabs.Add(tab);
+        ctx.SelectedTab = tab;
+        ctx.Status = s => status = s;
+
+        var dialogs = new FakeDialogs();
+        var exec = new ExecutionViewModel(ctx, withDialogs ? dialogs : null);
+
+        return new Harness(exec, tab, executor, dialogs, provider, ctx, conn, () => status);
+    }
+
+    // ---- before a run ----------------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_full_scan_asks_once_and_cancel_runs_nothing()
+    {
+        var h = Build();
+
+        await h.Exec.ExecuteAsync("select * from \"Orders\" where status = 'open'");
+
+        var question = Assert.Single(h.Dialogs.ScanQuestions);
+        Assert.Equal(ScanQuestionKind.Run, question.Kind);
+        Assert.Equal(ScanVerdictKind.FullScan, Assert.Single(question.Verdicts).Kind);
+        Assert.Equal(0, h.Executor.ExecuteCalls);
+        Assert.Null(h.Tab.LastResult);
+        Assert.Equal("Cancelled — nothing ran.", h.Status());
+    }
+
+    [Fact]
+    public async Task A_confirmed_scan_runs_once_and_its_results_are_marked()
+    {
+        var h = Build();
+        h.Dialogs.ConfirmScanAnswer = true;
+
+        await h.Exec.ExecuteAsync("select * from \"Orders\"");
+
+        Assert.Single(h.Dialogs.ScanQuestions);
+        Assert.Equal(1, h.Executor.ExecuteCalls);
+        Assert.True(h.Tab.LastResult!.IsFullScan);
+    }
+
+    /// <summary>The text names the table, the partition key it lacks, DynamoDB's item estimate, that rows load a
+    /// page at a time, and the IAM boundary — the sentences are ScanGuard's.</summary>
+    [Fact]
+    public async Task The_question_names_the_table_the_key_the_item_count_and_the_boundary()
+    {
+        var h = Build();
+
+        await h.Exec.ExecuteAsync("select * from \"Orders\"");
+
+        var question = Assert.Single(h.Dialogs.ScanQuestions);
+        Assert.Contains("\"Orders\"", question.Text);
+        Assert.Contains("\"customerId\"", question.Text);
+        Assert.Contains("about 12,345 items", question.Text);
+        Assert.Contains(ScanGuard.Paging, question.Text);
+        Assert.Contains(ScanGuard.Boundary, question.Text);
+        Assert.Contains("dynamodb:FullTableScan", question.Text);
+        Assert.Equal("Read a whole table on orders-prod?", question.Heading);
+        Assert.Equal("Run anyway", question.ConfirmLabel);
+    }
+
+    [Fact]
+    public async Task A_scan_through_an_index_names_the_index()
+    {
+        var h = Build();
+
+        await h.Exec.ExecuteAsync("select * from \"Orders\".\"byStatus\" where customerId = 'a'");
+
+        var verdict = Assert.Single(Assert.Single(h.Dialogs.ScanQuestions).Verdicts);
+        Assert.Equal(ScanVerdictKind.FullScan, verdict.Kind);
+        Assert.Equal("status", verdict.PartitionKey);
+        Assert.Equal(0, h.Executor.ExecuteCalls);
+    }
+
+    /// <summary>An unknown table is "could not check": asked, and never described as a scan.</summary>
+    [Fact]
+    public async Task An_undetermined_read_asks_once_says_it_could_not_check_and_cancel_runs_nothing()
+    {
+        var h = Build();
+
+        await h.Exec.ExecuteAsync("select * from \"Invoices\" where id = 'a'");
+
+        var question = Assert.Single(h.Dialogs.ScanQuestions);
+        var verdict = Assert.Single(question.Verdicts);
+        Assert.Equal(ScanVerdictKind.Undetermined, verdict.Kind);
+        Assert.Equal(ScanUncertainty.UnknownTable, verdict.Uncertainty);
+        Assert.Contains("could not check", question.Text);
+        Assert.DoesNotContain("would read the whole", question.Text);
+        Assert.Contains("could not check", question.Heading);
+        Assert.Equal(0, h.Executor.ExecuteCalls);
+    }
+
+    /// <summary>A batch is asked about once, listing only the statements that are not keyed.</summary>
+    [Fact]
+    public async Task A_batch_with_a_keyed_read_and_two_scans_asks_once_for_the_whole_run()
+    {
+        var h = Build();
+        h.Dialogs.ConfirmScanAnswer = true;
+
+        await h.Exec.ExecuteAsync(
+            "select * from \"Orders\" where customerId = 'a'; select * from \"Orders\"; select * from \"Invoices\"");
+
+        var question = Assert.Single(h.Dialogs.ScanQuestions);
+        Assert.Equal(
+            [ScanVerdictKind.FullScan, ScanVerdictKind.Undetermined],
+            question.Verdicts.Select(v => v.Kind));
+        Assert.Equal(1, h.Executor.ExecuteCalls);
+    }
+
+    [Theory]
+    [InlineData("select * from \"Orders\" where customerId = 'a'")]
+    [InlineData("select * from \"Orders\" where customerId IN ['a', 'b'] and status = 'open'")]
+    [InlineData("select * from \"Orders\".\"byStatus\" where status = 'open'")]
+    public async Task A_keyed_read_never_asks(string sql)
+    {
+        var h = Build();
+
+        await h.Exec.ExecuteAsync(sql);
+
+        Assert.Empty(h.Dialogs.ScanQuestions);
+        Assert.Equal(1, h.Executor.ExecuteCalls);
+        Assert.False(h.Tab.LastResult!.IsFullScan);
+    }
+
+    [Fact]
+    public async Task With_the_setting_off_a_scan_never_asks()
+    {
+        var h = Build(confirmFullScans: false);
+
+        await h.Exec.ExecuteAsync("select * from \"Orders\"");
+
+        Assert.Empty(h.Dialogs.ScanQuestions);
+        Assert.Equal(1, h.Executor.ExecuteCalls);
+        Assert.False(h.Tab.LastResult!.IsFullScan);
+
+        await h.Exec.FetchAllAsync(h.Tab.LastResult);
+        Assert.Empty(h.Dialogs.ScanQuestions);
+    }
+
+    [Theory]
+    [InlineData("postgres")]
+    [InlineData("sqlserver")]
+    [InlineData("mysql")]
+    public async Task Other_engines_never_ask(string providerId)
+    {
+        var h = Build(providerId);
+
+        await h.Exec.ExecuteAsync("select * from Orders");
+
+        Assert.Empty(h.Dialogs.ScanQuestions);
+        Assert.Equal(1, h.Executor.ExecuteCalls);
+        Assert.Null(ScanConfirmation.TargetsToCheck(h.Connection, ProviderTraits.For(h.Connection).Dialect, "select * from Orders"));
+    }
+
+    /// <summary>No window, no answer: the run that would have been asked about does not happen (the real
+    /// <see cref="Views.DialogService"/> answers false headless for the same reason).</summary>
+    [Fact]
+    public async Task With_no_window_to_ask_in_a_scan_does_not_run()
+    {
+        var h = Build(withDialogs: false);
+
+        await h.Exec.ExecuteAsync("select * from \"Orders\"");
+
+        Assert.Equal(0, h.Executor.ExecuteCalls);
+        Assert.Contains("no window to confirm it in", h.Status());
+    }
+
+    // ---- after a confirmed scan --------------------------------------------------------------------
+
+    private async Task<Harness> ConfirmedScan()
+    {
+        var h = Build();
+        h.Dialogs.ConfirmScanAnswer = true;
+        await h.Exec.ExecuteAsync("select * from \"Orders\"");
+        h.Dialogs.ScanQuestions.Clear();
+
+        return h;
+    }
+
+    [Fact]
+    public async Task Fetch_all_on_a_scan_asks_again_naming_the_limit_and_cancel_reads_nothing()
+    {
+        var h = await ConfirmedScan();
+        h.Dialogs.ConfirmScanAnswer = false;
+
+        Assert.False(await h.Exec.FetchAllAsync(h.Tab.LastResult!));
+
+        var question = Assert.Single(h.Dialogs.ScanQuestions);
+        Assert.Equal(ScanQuestionKind.FetchAll, question.Kind);
+        Assert.Contains("Fetch all limit of 5,000 rows", question.Text);
+        Assert.Contains(ScanGuard.Boundary, question.Text);
+        Assert.Empty(h.Executor.Continued);
+        Assert.Equal(10, h.Tab.LastResult!.Loaded);
+    }
+
+    [Fact]
+    public async Task Fetch_all_on_a_scan_confirmed_again_reads_to_the_end()
+    {
+        var h = await ConfirmedScan();
+
+        Assert.True(await h.Exec.FetchAllAsync(h.Tab.LastResult!));
+
+        Assert.Single(h.Dialogs.ScanQuestions);
+        Assert.Equal(25, h.Tab.LastResult!.Loaded);
+        Assert.Equal(1, h.Executor.ExecuteCalls);
+    }
+
+    [Fact]
+    public async Task Export_of_a_scan_asks_again_once_and_cancel_writes_nothing()
+    {
+        var h = await ConfirmedScan();
+        h.Dialogs.ConfirmScanAnswer = false;
+        h.Dialogs.ExportPath = Path.Combine(_root, "orders.csv");
+
+        await h.Exec.ExportAsync(h.Tab.LastResult!, ExportFormat.Csv);
+
+        var question = Assert.Single(h.Dialogs.ScanQuestions);
+        Assert.Equal(ScanQuestionKind.FetchAll, question.Kind);
+        Assert.Empty(h.Executor.Continued);
+        Assert.Empty(h.Dialogs.ExportPickers);
+        Assert.False(File.Exists(h.Dialogs.ExportPath));
+    }
+
+    [Fact]
+    public async Task Export_of_a_scan_confirmed_again_writes_every_row()
+    {
+        var h = await ConfirmedScan();
+        h.Dialogs.ExportPath = Path.Combine(_root, "orders.csv");
+
+        await h.Exec.ExportAsync(h.Tab.LastResult!, ExportFormat.Csv);
+
+        Assert.Single(h.Dialogs.ScanQuestions);
+        var lines = File.ReadAllText(h.Dialogs.ExportPath).TrimEnd('\r', '\n').Split("\r\n");
+        Assert.Equal(26, lines.Length);
+    }
+
+    [Fact]
+    public async Task Load_more_on_a_scan_does_not_ask_again()
+    {
+        var h = await ConfirmedScan();
+
+        await h.Exec.LoadMoreAsync(h.Tab.LastResult!);
+        await h.Exec.LoadMoreAsync(h.Tab.LastResult!);
+
+        Assert.Empty(h.Dialogs.ScanQuestions);
+        Assert.Equal(["t1", "t2"], h.Executor.Continued);
+    }
+
+    /// <summary>A scan that fit in one page has nothing more to read, so Fetch all has nothing to ask about.</summary>
+    [Fact]
+    public async Task Fetch_all_on_a_scan_with_nothing_more_does_not_ask()
+    {
+        var h = Build(totalRows: 5);
+        h.Dialogs.ConfirmScanAnswer = true;
+        await h.Exec.ExecuteAsync("select * from \"Orders\"");
+        h.Dialogs.ScanQuestions.Clear();
+
+        Assert.True(await h.Exec.FetchAllAsync(h.Tab.LastResult!));
+        Assert.Empty(h.Dialogs.ScanQuestions);
+    }
+
+    // ---- the lookup's budget -----------------------------------------------------------------------
+
+    /// <summary>A table list that does not arrive within the budget is "could not check", not a scan and not a
+    /// pass — and the lookup returns at the budget rather than waiting for it.</summary>
+    [Fact]
+    public async Task A_table_list_that_misses_the_budget_is_undetermined()
+    {
+        var h = Build();
+        h.Provider.MetadataGate = new TaskCompletionSource();
+        var check = new ScanConfirmation(h.Ctx.Sessions, h.Dialogs, _ => { }) { Budget = TimeSpan.FromMilliseconds(100) };
+        var targets = PartiQlDialect.Instance.ScanTargets("select * from \"Orders\" where customerId = 'a'")!;
+
+        try
+        {
+            var verdict = Assert.Single(await check.ClassifyAsync(h.Connection, targets));
+
+            Assert.Equal(ScanVerdictKind.Undetermined, verdict.Kind);
+            Assert.Equal(ScanUncertainty.TablesNotLoaded, verdict.Uncertainty);
+        }
+        finally
+        {
+            h.Provider.MetadataGate.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public void Mark_sets_every_result_of_a_confirmed_scan_and_nothing_otherwise()
+    {
+        var columns = new[] { new ColumnDescriptor("pk", "S", typeof(string)) };
+        var rows = new[] { new object?[] { "a" } };
+        var results = new[] { new QueryResult(columns, rows, 1, TimeSpan.Zero, null, null, Truncated: false) };
+
+        var plain = Results.ResultSetBuilder.BuildResultSets(results, "select * from a", snapshot: null);
+        ScanConfirmation.Mark(plain, isFullScan: false);
+        Assert.False(plain[0].IsFullScan);
+
+        var scanned = Results.ResultSetBuilder.BuildResultSets(results, "select * from a", snapshot: null);
+        ScanConfirmation.Mark(scanned, isFullScan: true);
+        Assert.True(scanned[0].IsFullScan);
+    }
+}

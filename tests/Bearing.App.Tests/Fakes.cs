@@ -89,7 +89,23 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
     public TaskCompletionSource? MetadataGate;
 
     public IMetadataReader CreateMetadataReader(IDbConnectionFactory factory)
-        => new FakeMetadata((FakeFactory)factory) { Gate = MetadataGate };
+        => new FakeMetadata((FakeFactory)factory)
+        {
+            Gate = MetadataGate,
+            Snapshot = Snapshot,
+            Details = Details,
+            Sizes = Sizes,
+        };
+
+    /// <summary>When set, every metadata reader loads this snapshot instead of an empty one — a table list with
+    /// keys, for the full-scan check.</summary>
+    public ISchemaSnapshot? Snapshot;
+
+    /// <summary>When set, the details every table read reports (its indexes, for the full-scan check).</summary>
+    public TableDetails? Details;
+
+    /// <summary>When set, the size entries every reader reports (item counts, for the full-scan check).</summary>
+    public IReadOnlyList<RelationSize>? Sizes;
 
     /// <summary>When set, every session built by this provider shares this executor (so a test can gate
     /// concurrent runs across tabs). Otherwise each session gets a fresh no-op <see cref="FakeExecutor"/>.</summary>
@@ -187,11 +203,17 @@ internal sealed class FakeMetadata : IMetadataReader
     /// <summary>When set, the load waits for the test to release it (see FakeProvider.MetadataGate).</summary>
     public TaskCompletionSource? Gate;
 
+    /// <summary>See <see cref="FakeProvider.Snapshot"/>, <see cref="FakeProvider.Details"/>,
+    /// <see cref="FakeProvider.Sizes"/>.</summary>
+    public ISchemaSnapshot? Snapshot { get; init; }
+    public TableDetails? Details { get; init; }
+    public IReadOnlyList<RelationSize>? Sizes { get; init; }
+
     public async Task<ISchemaSnapshot> LoadSnapshotAsync(string database, CancellationToken ct)
     {
         Interlocked.Increment(ref LoadCount);
         if (Gate is not null) await Gate.Task.WaitAsync(ct);
-        return new FakeSnapshot(database);
+        return Snapshot ?? new FakeSnapshot(database);
     }
 
     public Task<IReadOnlyList<RoutineInfo>> GetRoutinesAsync(CancellationToken ct)
@@ -219,10 +241,10 @@ internal sealed class FakeMetadata : IMetadataReader
         => Task.FromResult("");
 
     public Task<TableDetails> GetTableDetailsAsync(long tableId, CancellationToken ct)
-        => Task.FromResult(TableDetails.Empty);
+        => Task.FromResult(Details ?? TableDetails.Empty);
 
     public Task<IReadOnlyList<RelationSize>> GetRelationSizesAsync(CancellationToken ct)
-        => Task.FromResult<IReadOnlyList<RelationSize>>(System.Array.Empty<RelationSize>());
+        => Task.FromResult(Sizes ?? System.Array.Empty<RelationSize>());
 
     public Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(CancellationToken ct)
         => Task.FromResult<IReadOnlyList<DatabaseSize>>(System.Array.Empty<DatabaseSize>());
@@ -769,6 +791,18 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
     {
         WriteConfirmations.Add(request);
         return Task.FromResult(ConfirmWriteAnswer);
+    }
+
+    /// <summary>What the full-scan confirmation answers. False (the real headless answer) cancels the read.</summary>
+    public bool ConfirmScanAnswer { get; set; }
+
+    /// <summary>Every full-scan confirmation raised, in order.</summary>
+    public List<Bearing.App.Services.ScanQuestion> ScanQuestions { get; } = new();
+
+    public Task<bool> ConfirmScanAsync(Bearing.App.Services.ScanQuestion request)
+    {
+        ScanQuestions.Add(request);
+        return Task.FromResult(ConfirmScanAnswer);
     }
 
     public Task<Bearing.App.Views.ConnectionDialogResult?> ShowConnectionDialogAsync(ConnectionInfo? existing, string? existingPassword,
