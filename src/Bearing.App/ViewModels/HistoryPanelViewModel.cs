@@ -64,8 +64,10 @@ public sealed partial class HistoryPanelViewModel : ObservableObject
             Regroup(DateTimeOffset.Now);
             return;
         }
-        _filterReload?.Cancel();
+        var superseded = _filterReload;
         _filterReload = new CancellationTokenSource();
+        superseded?.Cancel();
+        superseded?.Dispose();
         _ = ReloadAsync(_filterReload.Token);
     }
 
@@ -108,12 +110,18 @@ public sealed partial class HistoryPanelViewModel : ObservableObject
     public async Task ReloadAsync(CancellationToken ct)
     {
         var text = string.IsNullOrWhiteSpace(SearchText) ? null : SearchText;
+        var starredOnly = Filter == HistoryFilter.Starred;
         try
         {
-            var found = await _search(text, Filter == HistoryFilter.Starred, ct);
+            var found = await _search(text, starredOnly, ct);
             // A superseded reload must not land: the caller cancels the previous one for each new query in
             // a run, and applying a stale answer after a newer one would leave the panel behind the log.
             ct.ThrowIfCancellationRequested();
+            // The shell's refresh and the filter's own reload hold separate tokens, so neither cancels the
+            // other. An answer asked under the other side of the Starred pill is for a view no longer shown —
+            // starred-only rows under "All", or the newest screenful under "Starred" — and the filter change
+            // has started a reload of its own.
+            if ((Filter == HistoryFilter.Starred) != starredOnly) return;
             _entries = found;
             Regroup(DateTimeOffset.Now);
             Status = _entries.Count == 0

@@ -897,8 +897,6 @@ public partial class SidebarView : UserControl
         if (e.Key == Key.Enter && Vm is not null) { e.Handled = true; await Vm.History.ReloadAsync(CancellationToken.None); }
     }
 
-    /// <summary>The panel's Export… button (#113). The shell owns the two prompts and the write; this only
-    /// asks, as §2.2 requires of a code-behind.</summary>
     /// <summary>The star on a history row (#111). Handled, so the click stars instead of selecting the row
     /// and opening its preview. The view model owns failure: it puts the star back and says why.</summary>
     private async void OnHistoryStarClick(object? sender, RoutedEventArgs e)
@@ -908,6 +906,8 @@ public partial class SidebarView : UserControl
             await Vm.History.ToggleStarAsync(row);
     }
 
+    /// <summary>The panel's Export… button (#113). The shell owns the two prompts and the write; this only
+    /// asks, as §2.2 requires of a code-behind.</summary>
     private async void OnHistoryExportClick(object? sender, RoutedEventArgs e)
     {
         if (Vm is not null) await Vm.ExportHistoryAsync();

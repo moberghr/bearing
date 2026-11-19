@@ -341,6 +341,38 @@ public class HistoryPanelTests
     }
 
     [Fact]
+    public async Task A_starred_only_answer_landing_after_leaving_the_starred_filter_is_dropped()
+    {
+        // The shell's per-statement refresh and the filter's own reload hold separate tokens. A starred-only
+        // search started before the user clicked "All" can land after the "All" one; it must not leave
+        // starred rows under the "All" pill.
+        var now = DateTimeOffset.Now;
+        var all = new[] { Entry(now, ok: true, sql: "select a") with { Id = 1 },
+                          Entry(now.AddMinutes(-1), ok: true, sql: "select b") with { Id = 2, IsStarred = true } };
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var vm = new HistoryPanelViewModel(
+            async (_, starredOnly, _) =>
+            {
+                if (!starredOnly) return all;
+                await gate.Task;                                      // the slow starred-only search
+                return all.Where(e => e.IsStarred).ToList();
+            },
+            _ => null);
+        vm.Filter = HistoryFilter.Starred;                            // starts a starred-only reload (held)
+        var shellRefresh = vm.ReloadAsync(CancellationToken.None);    // a second one, as a new log row would
+
+        vm.Filter = HistoryFilter.All;                                // the "All" reload lands first
+        await Task.Yield();
+        Assert.Equal(2, vm.Groups.Sum(g => g.Rows.Count));
+
+        gate.SetResult();                                             // then the stale starred-only answers
+        await shellRefresh;
+
+        Assert.Equal(2, vm.Groups.Sum(g => g.Rows.Count));
+        Assert.Equal("2 queries.", vm.Status);
+    }
+
+    [Fact]
     public async Task Unstarring_in_the_starred_view_drops_the_row()
     {
         var (vm, store) = Starrable();
