@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using Bearing.Core.Data;
 using Bearing.Core.Logging;
 using Bearing.Core.Schema;
@@ -101,9 +102,18 @@ public sealed class BearingHost(
         // and the whole result is never in memory at once, which is what makes `--out` safe to point at a
         // table larger than this process. Everything else materialises — a workbook needs every row to build
         // the sheet (XlsxWriter), and a batch returning several grids is not one table anyway.
+        //
+        // An engine whose reads continue from a server token (DynamoDB) streams the same way, page by page
+        // through ExecuteContinuationAsync rather than StreamRowsAsync — see ContinuedRowsAsync.
         if (format == ExportFormat.Csv && traits.Dialect.SplitStatements(sql).Count == 1)
-            return await StreamCsvAsync(info, lease.Session, sql, request.OutPath!, Rows(request), ct)
-                .ConfigureAwait(false);
+        {
+            var executor = lease.Session.Executor;
+            var batches = ContinuesByToken(traits)
+                ? ContinuedRowsAsync(executor, sql, Rows(request), ct)
+                : executor.StreamRowsAsync(sql, new QueryOptions { MaxRows = Rows(request) }, ct);
+
+            return await StreamCsvAsync(info, sql, request.OutPath!, batches, ct).ConfigureAwait(false);
+        }
 
         IReadOnlyList<QueryResult> results;
         var wall = Stopwatch.StartNew();
@@ -112,6 +122,14 @@ public sealed class BearingHost(
             results = await lease.Session.Executor
                 .ExecuteAsync(sql, new QueryOptions { MaxRows = Rows(request) }, ct)
                 .ConfigureAwait(false);
+
+            // A plain query answers with the first page and its Truncated flag, as on every engine. An export
+            // is the whole answer (unlimited unless capped, §1.11e), so a result that can be continued is
+            // followed to its end — or to --max-rows — before anything is written.
+            if (request.OutPath is not null)
+                results = await FollowContinuationsAsync(lease.Session.Executor, results, Rows(request), ct)
+                    .ConfigureAwait(false);
+
             wall.Stop();
         }
         catch (Exception ex) when (ex is not OperationCanceledException and not CommandFailure)
@@ -265,7 +283,82 @@ public sealed class BearingHost(
         if (ExternalSqlPolicy.Refuse(traits.Dialect, sql) is { } notARead)
             throw Refused(info, sql, $"{info.Name}: {notARead}");
 
+        // And last, on an engine with a full-scan question (DynamoDB): only a read Bearing can show is keyed
+        // runs. Whatever the connection's "Confirm full table scans" says — that setting is a question for the
+        // person at the keyboard, and nobody is at this one to answer it (Behaviour 12). Third because the two
+        // checks above settle what kind of statement this is; this one only asks how much of a table a read
+        // would touch.
+        if (traits.Dialect.ScanTargets(sql) is { } targets
+            && await ScanRefusalAsync(info, targets, risks.Count, ct).ConfigureAwait(false) is { } scan)
+        {
+            throw Refused(info, sql, scan);
+        }
+
         return (info, traits);
+    }
+
+    /// <summary>
+    /// The refusal for any <c>SELECT</c> in the batch that <see cref="ScanGuard"/> cannot call keyed — a full
+    /// scan, or one it could not check — or null when every one is keyed.
+    /// <para>
+    /// <b>What is looked up, and for how long.</b> The connection is opened in its own words (a sign-in that
+    /// fails says so, rather than turning into "could not check"), and the run would open it anyway. The table
+    /// list and the details of each table read through an index are then given <see cref="ScanGuard.Budget"/>;
+    /// whatever has not arrived by then makes the verdict <see cref="ScanVerdictKind.Undetermined"/>, which is
+    /// refused here saying Bearing could not check — never that the statement scans (§1.1).
+    /// </para>
+    /// <para>
+    /// <b>Fail closed on a statement the reduction skipped.</b> <see cref="ISqlDialect.ScanTargets"/> returns one
+    /// target per statement led by <c>SELECT</c>, and the allow-list above has let through only reads; a batch
+    /// with more statements than targets holds a read the reduction did not follow, and it is refused as one
+    /// Bearing could not check rather than run unclassified.
+    /// </para>
+    /// </summary>
+    private async Task<string?> ScanRefusalAsync(
+        ConnectionInfo info, IReadOnlyList<ScanTarget> targets, int statements, CancellationToken ct)
+    {
+        if (targets.Count < statements)
+            targets = [.. targets, new ScanTarget(Statement: "", Table: null, Index: null, [], Readable: false)];
+
+        if (targets.Count == 0) return null;
+
+        ISchemaSnapshot? snapshot = null;
+        var details = new Dictionary<long, TableDetails>();
+
+        using (var lease = await ConnectAsync(info, ct).ConfigureAwait(false))
+        {
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            budget.CancelAfter(ScanGuard.Budget);
+
+            try
+            {
+                snapshot = await sessions.EnsureSchemaAsync(lease.Session, budget.Token).ConfigureAwait(false);
+
+                foreach (var table in targets
+                             .Where(t => t.Index is not null)
+                             .Select(t => ScanGuard.TableOf(t, snapshot))
+                             .OfType<TableInfo>()
+                             .DistinctBy(t => t.Id))
+                {
+                    details[table.Id] = await lease.Session.Metadata
+                        .GetTableDetailsAsync(table.Id, budget.Token)
+                        .ConfigureAwait(false);
+                }
+            }
+            // The budget running out, or a catalog read that failed: classify with what arrived. A missing fact
+            // makes a verdict Undetermined, which is refused — never a reason to run unclassified. The caller's
+            // own cancellation is not swallowed.
+            catch (Exception) when (!ct.IsCancellationRequested)
+            {
+            }
+        }
+
+        var refusals = ScanGuard.Classify(targets, snapshot, t => details.GetValueOrDefault(t.Id))
+            .Select(v => ScanGuard.CliRefusal(info.Name, v))
+            .OfType<string>()
+            .ToList();
+
+        return refusals.Count == 0 ? null : string.Join("\n", refusals);
     }
 
     /// <summary>
@@ -359,17 +452,13 @@ public sealed class BearingHost(
     /// </para>
     /// </summary>
     private async Task<ICliResponse> StreamCsvAsync(
-        ConnectionInfo info, ConnectionSession session, string sql, string path, int? maxRows,
-        CancellationToken ct)
+        ConnectionInfo info, string sql, string path, IAsyncEnumerable<RowBatch> batches, CancellationToken ct)
     {
         var wall = Stopwatch.StartNew();
         ResultExport.StreamedCsv written;
         try
         {
-            written = await ResultExport.WriteCsvStreamAsync(
-                path,
-                session.Executor.StreamRowsAsync(sql, new QueryOptions { MaxRows = maxRows }, ct),
-                ct).ConfigureAwait(false);
+            written = await ResultExport.WriteCsvStreamAsync(path, batches, ct).ConfigureAwait(false);
             wall.Stop();
         }
         // The file, not the statement. Reported as what it is and **not logged as a failed execution**: the
@@ -411,6 +500,125 @@ public sealed class BearingHost(
         {
             Truncated = written.Truncated,
         };
+    }
+
+    // ---- reads continued by token ---------------------------------------------------------------
+
+    /// <summary>How many rows each continuation call asks for while an export follows a read to its end. The
+    /// engine still ends a call early at its own page rules (DynamoDB: 10 requests), so this bounds memory per
+    /// call, not the read.</summary>
+    internal const int ContinuationChunkRows = 1000;
+
+    /// <summary>
+    /// Whether this engine's reads continue from a server-side token (<see cref="QueryResult.Continuation"/>)
+    /// rather than by re-running with an offset. Asked only where it must be known before anything runs — the
+    /// streamed CSV picks its source up front. Read from the dialect, like
+    /// <see cref="ProviderTraits.AsksFullScanQuestion"/>: DynamoDB is the one engine with either property, and
+    /// the scan question exists <i>because</i> its reads are continued pages of a possible scan.
+    /// </summary>
+    private static bool ContinuesByToken(ProviderTraits traits) => traits.AsksFullScanQuestion;
+
+    private static int ChunkFor(int? maxRows, long taken)
+        => maxRows is { } cap
+            ? (int)Math.Max(1, Math.Min(ContinuationChunkRows, cap - taken))
+            : ContinuationChunkRows;
+
+    /// <summary>
+    /// Each result that carries a <see cref="QueryResult.Continuation"/>, followed with
+    /// <see cref="IQueryExecutor.ExecuteContinuationAsync"/> until the engine says it is exhausted or
+    /// <paramref name="maxRows"/> rows are held — so an export holds the whole answer, not its first page. A
+    /// result with no continuation (every other engine's) is returned as it was.
+    /// <para>
+    /// A continuation call that fails ends the batch with that failure in place, so the caller logs it and writes
+    /// nothing: a file holding the pages before the error would be a plausible-looking fraction of the answer.
+    /// </para>
+    /// </summary>
+    private static async Task<IReadOnlyList<QueryResult>> FollowContinuationsAsync(
+        IQueryExecutor executor, IReadOnlyList<QueryResult> results, int? maxRows, CancellationToken ct)
+    {
+        if (!results.Any(r => r.Continuation is not null)) return results;
+
+        var followed = new List<QueryResult>(results.Count);
+        foreach (var result in results)
+        {
+            if (result.Continuation is not { } token || !result.Success)
+            {
+                followed.Add(result);
+                continue;
+            }
+
+            var rows = new List<object?[]>(result.Rows);
+            var duration = result.Duration;
+            string? next = token;
+            while (next is not null && (maxRows is not { } cap || rows.Count < cap))
+            {
+                var page = await executor
+                    .ExecuteContinuationAsync(next, ChunkFor(maxRows, rows.Count), ct)
+                    .ConfigureAwait(false);
+                if (!page.Success)
+                {
+                    followed.Add(page);
+
+                    return followed;
+                }
+
+                rows.AddRange(page.Rows);
+                duration += page.Duration;
+                next = page.Continuation;
+            }
+
+            // The first page's message described that page ("Load more continues…"), and is no longer true of
+            // the whole. Truncated is the cap stopping the read with a token still in hand.
+            followed.Add(result with
+            {
+                Rows = rows,
+                RowCount = rows.Count,
+                Duration = duration,
+                Message = null,
+                Truncated = next is not null,
+                Continuation = null,
+            });
+        }
+
+        return followed;
+    }
+
+    /// <summary>
+    /// The streamed form of <see cref="FollowContinuationsAsync"/> for one statement: the first page from
+    /// <see cref="IQueryExecutor.ExecuteAsync"/>, then each continuation as it lands, one page in memory at a
+    /// time. Honours <see cref="RowBatch"/>'s contract (§5.7): every batch carries the first page's columns, a
+    /// row-returning read always ends with a tail batch, a statement with no shape yields nothing, and only the
+    /// tail says <c>Truncated</c> — when <paramref name="maxRows"/> stopped the read with a token still in hand.
+    /// A failure is thrown, as a stream reports one.
+    /// </summary>
+    private static async IAsyncEnumerable<RowBatch> ContinuedRowsAsync(
+        IQueryExecutor executor, string sql, int? maxRows, [EnumeratorCancellation] CancellationToken ct)
+    {
+        var results = await executor
+            .ExecuteAsync(sql, new QueryOptions { MaxRows = maxRows }, ct)
+            .ConfigureAwait(false);
+
+        var page = results.FirstOrDefault(r => !r.Success) ?? results.FirstOrDefault(r => r.Columns.Count > 0);
+        if (page is null) yield break;
+
+        var columns = page.Columns;
+        long taken = 0;
+        while (true)
+        {
+            if (page.Error is { } error) throw new InvalidOperationException(error.Message);
+
+            taken += page.Rows.Count;
+            var next = page.Continuation is { } token && (maxRows is not { } cap || taken < cap) ? token : null;
+            if (next is null)
+            {
+                yield return new RowBatch(columns, page.Rows, Truncated: page.Continuation is not null);
+                yield break;
+            }
+
+            yield return new RowBatch(columns, page.Rows, Truncated: false);
+
+            page = await executor.ExecuteContinuationAsync(next, ChunkFor(maxRows, taken), ct).ConfigureAwait(false);
+        }
     }
 
     // ---- the record -----------------------------------------------------------------------------
