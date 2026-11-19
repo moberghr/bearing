@@ -20,6 +20,7 @@
          rather than copying the defaults (see PgTestServer's comment on why copies are forbidden). -->
     <Compile Include="..\Shared\MsSqlTestServer.cs" Link="Shared\MsSqlTestServer.cs" />
     <Compile Include="..\Shared\MySqlTestServer.cs" Link="Shared\MySqlTestServer.cs" />
+    <Compile Include="..\Shared\DynamoDbTestServer.cs" Link="Shared\DynamoDbTestServer.cs" />
   </ItemGroup>
 
   <ItemGroup>
