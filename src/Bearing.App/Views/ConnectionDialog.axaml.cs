@@ -804,7 +804,11 @@ public partial class ConnectionDialog : Window
         var pin = tunnel?.HostKeyFingerprint;
         SshHostKeyText.Text = !on ? "" : pin ?? "Not seen yet — pinned on first connect.";
         SshForgetButton.IsEnabled = pin is not null;
-        var problem = SshTunnelForm.Problem(tunnel);
+        ShowSshProblem(SshTunnelForm.Problem(tunnel, HostValue()));
+    }
+
+    private void ShowSshProblem(string? problem)
+    {
         SshProblem.Text = problem ?? "";
         SshProblem.IsVisible = problem is not null;
     }
@@ -841,10 +845,22 @@ public partial class ConnectionDialog : Window
         }
     }
 
+    /// <summary>Unlike the Connection tab's advisory hints (<see cref="RefreshValidation"/>), a ticked SSH tab
+    /// that can't connect is a gate: no saved connection predates the tab, and a tunnel with no host would be
+    /// saved as one the tree shows as a direct connection.</summary>
     private void OnSaveClick(object? sender, RoutedEventArgs e)
-        => Close(new ConnectionDialogResult(BuildConnection(), SecretToStore(), Delete: false,
-            SshTunnelForm.SecretToSave(BuildSshTunnel(), _existing?.SshTunnel, _existingSshSecret,
+    {
+        var tunnel = BuildSshTunnel();
+        if (SshTunnelForm.Problem(tunnel, HostValue()) is { } problem)
+        {
+            ShowSshProblem(problem);
+            SshTab.IsSelected = true;
+            return;
+        }
+        Close(new ConnectionDialogResult(BuildConnection(), SecretToStore(), Delete: false,
+            SshTunnelForm.SecretToSave(tunnel, _existing?.SshTunnel, _existingSshSecret,
                 SshPasswordBox.Text, SshPassphraseBox.Text), _forgetHostKey));
+    }
 
     private void OnDeleteClick(object? sender, RoutedEventArgs e)
         => Close(new ConnectionDialogResult(BuildConnection(), SecretToStore(), Delete: true));

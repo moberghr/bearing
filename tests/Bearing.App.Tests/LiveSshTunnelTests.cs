@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
@@ -124,7 +125,7 @@ public class LiveSshTunnelTests
         var credentials = new CredentialResolver(() => secrets, prompt, new ThrowingEntraTokens());
         credentials.Ssh.HostKeyPinned = (_, _) => Task.CompletedTask;
 
-        await using var tunnel = await credentials.Ssh.OpenAsync(info, CancellationToken.None);
+        await using var tunnel = await credentials.Ssh.OpenAsync(info, info.Host, info.Port, CancellationToken.None);
 
         Assert.Equal(1, prompt.Calls);
         Assert.True(tunnel.LocalPort > 0);
@@ -149,6 +150,60 @@ public class LiveSshTunnelTests
                 () => sessions.GetOrConnectAsync(stale, CancellationToken.None));
             Assert.Contains("CHANGED", ex.Message);
         }
+    }
+
+    [SkippableFact]
+    public async Task A_stale_pinned_copy_gives_way_to_a_pin_forgotten_since()
+    {
+        // The other way round: the key rotated, the user pressed Forget host key and saved, and an explorer node
+        // still holds the record with the old pin. The saved record (no pin) wins, so the new key is accepted
+        // and pinned rather than refused with "use Forget host key and save" — which the user just did.
+        await RequireAsync();
+        var stale = Info("SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+        var (sessions, credentials, _) = Compose(stale);
+        var pinned = new List<string>();
+        credentials.Ssh.HostKeyPinned = (_, fp) => { pinned.Add(fp); return Task.CompletedTask; };
+        credentials.Ssh.SavedTunnel = id => id == stale.Id ? stale.SshTunnel! with { HostKeyFingerprint = null } : null;
+
+        await using (sessions)
+        {
+            var session = await sessions.GetOrConnectAsync(stale, CancellationToken.None);
+            Assert.NotNull(session.Tunnel);
+        }
+        Assert.StartsWith("SHA256:", Assert.Single(pinned));
+    }
+
+    [SkippableFact]
+    public async Task Every_database_of_a_connection_shares_one_ssh_session_and_one_prompt()
+    {
+        // A tab connecting while the tree loads, or several databases: concurrent first opens queue behind one
+        // login, so the password is asked for once and the bastion sees one SSH session, not one per pool.
+        await RequireAsync();
+        var info = Info();
+        var secrets = new FakeSecretStore();
+        secrets.Seed(info.Id, MySqlTestServer.Password);
+        var prompt = new FakeCredentialPrompt(SshPassword);
+        var credentials = new CredentialResolver(() => secrets, prompt, new ThrowingEntraTokens());
+        credentials.Ssh.HostKeyPinned = (_, _) => Task.CompletedTask;
+
+        var tunnels = await Task.WhenAll(Enumerable.Range(0, 4)
+            .Select(_ => credentials.Ssh.OpenAsync(info, info.Host, info.Port, CancellationToken.None)));
+        try
+        {
+            Assert.Equal(1, prompt.Calls);
+            Assert.Equal(1, credentials.Ssh.OpenSessionCount);
+            Assert.Equal(4, tunnels.Select(t => t.LocalPort).Distinct().Count());
+            Assert.All(tunnels, t => Assert.True(t.IsAlive));
+        }
+        finally
+        {
+            foreach (var tunnel in tunnels)
+            {
+                await tunnel.DisposeAsync();
+            }
+        }
+        // The last forward released disconnects the session.
+        Assert.Equal(0, credentials.Ssh.OpenSessionCount);
     }
 
     [SkippableFact]

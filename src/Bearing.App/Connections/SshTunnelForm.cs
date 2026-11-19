@@ -1,5 +1,6 @@
 using System.Globalization;
 using Bearing.Core.Data;
+using Bearing.Sessions;
 
 namespace Bearing.App.Connections;
 
@@ -74,10 +75,14 @@ public static class SshTunnelForm
         return secret == (existingSecret ?? "") ? null : secret;
     }
 
-    /// <summary>What a ticked tab is missing, or null when it can connect.</summary>
-    public static string? Problem(SshTunnel? tunnel)
+    /// <summary>What a ticked tab is missing, or null when it can connect. <paramref name="databaseHost"/> is the
+    /// Connection tab's host: a SQL Server named instance (<c>host\instance</c>) can't be reached through a
+    /// tunnel (<see cref="ConnectionEndpoint.IsNamedInstance"/>). Save refuses while there is one.</summary>
+    public static string? Problem(SshTunnel? tunnel, string? databaseHost = null)
         => tunnel is null ? null
            : string.IsNullOrWhiteSpace(tunnel.Host) ? "SSH host is required."
            : string.IsNullOrWhiteSpace(tunnel.User) ? "SSH user is required."
+           : ConnectionEndpoint.IsNamedInstance(databaseHost)
+               ? "A SQL Server named instance can't be reached through an SSH tunnel — use the server's host and the instance's port."
            : null;
 }

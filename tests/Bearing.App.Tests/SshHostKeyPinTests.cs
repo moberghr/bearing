@@ -37,7 +37,10 @@ public class SshHostKeyPinTests : IDisposable
     };
 
     private (WorkspaceContext Ctx, ConnectionsViewModel Conns, Func<string> Status) Compose(
-        IProjectStore? store = null, params ConnectionInfo[] saved)
+        IProjectStore? store = null, params ConnectionInfo[] saved) => Compose(store, secrets: null, saved);
+
+    private (WorkspaceContext Ctx, ConnectionsViewModel Conns, Func<string> Status) Compose(
+        IProjectStore? store, FakeSecretStore? secrets, params ConnectionInfo[] saved)
     {
         Directory.CreateDirectory(_root);
         var ctx = new WorkspaceContext(
@@ -46,7 +49,7 @@ public class SshHostKeyPinTests : IDisposable
             new JsonSessionStore(),
             new SqliteQueryLog(Path.Combine(_root, "log.sqlite")),
             new FileRecentProjects(Path.Combine(_root, "recent.json")),
-            new FakeSecretStore(),
+            secrets ?? new FakeSecretStore(),
             settings: SettingsService.InMemory(new AppSettings { AutosaveMode = AutosaveMode.Off }));
         ctx.Project = new Project { Directory = _root, Manifest = new ProjectManifest { Name = "p" } };
         ctx.Project.Manifest.Connections.AddRange(saved);
@@ -173,6 +176,35 @@ public class SshHostKeyPinTests : IDisposable
         await conns.AddOrUpdateConnectionAsync(conn, password: "", sshSecret: "typed");
 
         Assert.Null(await secrets.GetPasswordAsync(SshSecretId.For(conn.Id), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task A_refused_database_password_does_not_lose_the_ssh_secret_typed_beside_it()
+    {
+        // No keychain: the database password write is refused. The SSH secret typed in the same dialog must still
+        // serve this session, and the connection must still be saved.
+        var conn = Conn() with { CredentialKind = CredentialKind.StoredPassword };
+        var (ctx, conns, status) = Compose(store: null, secrets: new FakeSecretStore { CanStore = false }, conn);
+
+        await conns.AddOrUpdateConnectionAsync(conn, password: "db-pw", sshSecret: "ssh-pw");
+
+        Assert.True(ctx.Credentials.Ssh.RemembersSecretFor(conn.Id));
+        Assert.Contains("password not saved", status());
+    }
+
+    [Fact]
+    public async Task A_prompt_connection_never_reads_its_ssh_secret_from_the_keychain()
+    {
+        var conn = Conn() with { CredentialKind = CredentialKind.Prompt };
+        var (ctx, conns, _) = Compose(saved: conn);
+        var secrets = (FakeSecretStore)ctx.Secrets!;
+        secrets.Seed(SshSecretId.For(conn.Id), "saved-before-the-switch");
+
+        Assert.Null(await conns.GetSshSecretAsync(conn));
+        Assert.DoesNotContain(SshSecretId.For(conn.Id), secrets.Fetched);
+
+        var stored = conn with { CredentialKind = CredentialKind.StoredPassword };
+        Assert.Equal("saved-before-the-switch", await conns.GetSshSecretAsync(stored));
     }
 
     /// <summary>A project store whose save fails, as a full disk or a read-only folder would.</summary>

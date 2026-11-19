@@ -856,4 +856,30 @@ public class ConnectionSessionManagerTests
         Assert.False(mgr.IsLinked(b.Id));
         Assert.Equal(2, links.Count);
     }
+
+    [Fact]
+    public async Task A_lost_tunnel_under_a_replaced_session_is_not_reported_against_the_replacement()
+    {
+        // Session A's SSH session drops; another acquire retires A and builds B on the same key; A's loss is
+        // signalled only afterwards. B is healthy, so nothing is said — TunnelLost would roll back every
+        // transaction under the key, B's included.
+        var provider = new FakeProvider();
+        await using var mgr = new ConnectionSessionManager(provider, () => null);
+        var info = Conn(Guid.NewGuid());
+        var key = SessionKey.For(info);
+        var lost = new List<SessionKey>();
+        mgr.TunnelLost += lost.Add;
+
+        var a = await mgr.GetOrConnectAsync(info, CancellationToken.None);
+        await mgr.EvictAsync(key);
+        var b = await mgr.GetOrConnectAsync(info, CancellationToken.None);
+
+        await mgr.EvictLostTunnelAsync(key, a);
+        Assert.Empty(lost);
+        Assert.Same(b, mgr.TryGet(key));
+
+        await mgr.EvictLostTunnelAsync(key, b);
+        Assert.Equal([key], lost);
+        Assert.Null(mgr.TryGet(key));
+    }
 }

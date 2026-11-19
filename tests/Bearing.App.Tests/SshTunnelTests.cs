@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Bearing.App.Connections;
 using Bearing.Core.Data;
+using Bearing.Data;
 using Bearing.Sessions;
 using Xunit;
 
@@ -117,13 +118,16 @@ public class SshTunnelTests
         Assert.NotNull(SshTunnelForm.Problem(new SshTunnel { Host = "", User = "u" }));
         Assert.NotNull(SshTunnelForm.Problem(new SshTunnel { Host = "h", User = " " }));
         Assert.Null(SshTunnelForm.Problem(new SshTunnel { Host = "h", User = "u" }));
+        Assert.Null(SshTunnelForm.Problem(new SshTunnel { Host = "h", User = "u" }, "db01"));
+        Assert.Contains("named instance", SshTunnelForm.Problem(new SshTunnel { Host = "h", User = "u" }, @"db01\SQLEXPRESS"));
+        Assert.Null(SshTunnelForm.Problem(null, @"db01\SQLEXPRESS"));   // direct: a named instance is fine
     }
 
     [Fact]
     public async Task A_direct_connection_routes_to_itself_without_opening_anything()
     {
         var info = new ConnectionInfo { Id = Guid.NewGuid(), Name = "x", ProviderId = "mysql", Host = "db", Port = 3306 };
-        var (target, tunnel) = await ConnectionFactoryBuilder.RouteAsync(null, info, default);
+        var (target, tunnel) = await ConnectionFactoryBuilder.RouteAsync(null, new ProviderRegistry().Get("mysql"), info, default);
         Assert.Same(info, target);
         Assert.Null(tunnel);
     }
@@ -143,7 +147,28 @@ public class SshTunnelTests
             Port = 3306,
             SshTunnel = new SshTunnel { Host = "127.0.0.1", Port = 1, User = "u", Auth = SshAuthKind.PrivateKey, PrivateKeyPath = "/nonexistent/key" },
         };
-        var ex = await Assert.ThrowsAsync<ConnectionFailedException>(() => tunnels.OpenAsync(info, default));
+        var ex = await Assert.ThrowsAsync<ConnectionFailedException>(() => tunnels.OpenAsync(info, info.Host, info.Port, default));
         Assert.Contains("SSH key file not found", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("sqlserver", 0, 1433)]       // SQL Server's "default port" is a real one through a tunnel
+    [InlineData("sqlserver", 14330, 14330)]
+    [InlineData("mysql", 0, 3306)]
+    [InlineData("postgres", 6543, 6543)]
+    public void The_forward_target_is_the_database_as_the_ssh_server_sees_it(string providerId, int port, int expected)
+    {
+        var provider = new ProviderRegistry().Get(providerId);
+        var info = new ConnectionInfo { Id = Guid.NewGuid(), Name = "x", ProviderId = providerId, Host = " db01 ", Port = port };
+        Assert.Equal(("db01", expected), ConnectionFactoryBuilder.ForwardTarget(provider, info));
+    }
+
+    [Fact]
+    public void A_named_instance_is_refused_before_any_tunnel_opens()
+    {
+        var provider = new ProviderRegistry().Get("sqlserver");
+        var info = new ConnectionInfo { Id = Guid.NewGuid(), Name = "x", ProviderId = "sqlserver", Host = @"db01\SQLEXPRESS", Port = 0 };
+        var ex = Assert.Throws<ConnectionFailedException>(() => ConnectionFactoryBuilder.ForwardTarget(provider, info));
+        Assert.Contains("SQL Server instance", ex.Message);
     }
 }

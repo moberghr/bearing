@@ -781,8 +781,13 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         catch { /* offline — keep the single current-DB entry */ }
     }
 
-    /// <summary>The stored SSH password / key passphrase for a connection's tunnel, for the dialog.</summary>
-    public Task<string?> GetSshSecretAsync(Guid id) => GetConnectionPasswordAsync(SshSecretId.For(id));
+    /// <summary>The stored SSH password / key passphrase for a connection's tunnel, for the dialog. Null without
+    /// a tunnel, and for a connection whose SSH secret is memory-only (§1.12) — the keychain is not read for it at
+    /// all, so it can't raise a keychain prompt for a secret that is never kept there.</summary>
+    public Task<string?> GetSshSecretAsync(ConnectionInfo connection)
+        => connection.SshTunnel is null || SshTunnels.KeepsSecretInMemoryOnly(connection)
+            ? Task.FromResult<string?>(null)
+            : GetConnectionPasswordAsync(SshSecretId.For(connection.Id));
 
     /// <summary>Fetch the stored password for the connection editor's edit mode (null if none).</summary>
     /// <remarks>A keyring that <i>errors</i> now raises rather than reporting "no password" (see
@@ -840,48 +845,57 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         // nothing (#131).
         _ctx.CommitModes.Clear(conn.Id);
 
+        // Each secret on its own, and the project save after them whatever they did: a keychain that refuses or
+        // fails the database password must not take the SSH secret typed beside it down too, nor the save.
         var refusedSecret = false;
+        string? problem = null;
+        async Task PutAsync(Guid secretId, string secret, string what)
+        {
+            try
+            {
+                await PutSecretAsync(secretId, secret);
+            }
+            // A store with nowhere safe to put it isn't a failure — it is asked for at connect time and kept in
+            // memory. Said once the save is done.
+            catch (SecretStorageRefusedException)
+            {
+                refusedSecret = true;
+            }
+            catch (Exception ex)
+            {
+                problem ??= $"Saved connection '{conn.Name}' but could not {what}: {SafeErrorText.Of(ex)}";
+            }
+        }
+
+        var sshInMemoryOnly = conn.SshTunnel is not null && SshTunnels.KeepsSecretInMemoryOnly(conn);
+        // In memory before any keychain write, so the SSH secret typed here serves this session whatever the
+        // keychain does below.
+        if (sshSecret is not null && !(sshInMemoryOnly && sshSecret.Length == 0))
+        {
+            _ctx.Credentials.Ssh.Remember(conn.Id, sshSecret);
+        }
+        if (password is not null)
+        {
+            await PutAsync(conn.Id, password, "store the password");
+        }
+        if (sshInMemoryOnly)
+        {
+            // Prompt each time: the SSH secret is not saved either (§1.12); one saved before the connection was
+            // switched to Prompt is removed. A store that can't hold secrets has none to remove.
+            await PutAsync(SshSecretId.For(conn.Id), "", "remove the saved SSH secret");
+        }
+        else if (sshSecret is not null)
+        {
+            await PutAsync(SshSecretId.For(conn.Id), sshSecret, "store the SSH secret");
+        }
         try
         {
-            if (password is not null)
-            {
-                await PutSecretAsync(conn.Id, password);
-            }
-            if (conn.SshTunnel is not null && SshTunnels.KeepsSecretInMemoryOnly(conn))
-            {
-                // Prompt each time: the SSH secret is not saved either (§1.12). One typed here serves this
-                // session; one saved before the connection was switched to Prompt is removed.
-                if (!string.IsNullOrEmpty(sshSecret))
-                {
-                    _ctx.Credentials.Ssh.Remember(conn.Id, sshSecret);
-                }
-                // Best-effort, and on its own: a keychain that can't delete must not stop the project save.
-                try
-                {
-                    await PutSecretAsync(SshSecretId.For(conn.Id), "");
-                }
-                catch (Exception ex) when (ex is not SecretStorageRefusedException)
-                {
-                    _ctx.SetStatus($"Could not remove the saved SSH secret: {SafeErrorText.Of(ex)}");
-                }
-            }
-            else if (sshSecret is not null)
-            {
-                // In memory first, so it works this session even where the keychain refuses it below.
-                _ctx.Credentials.Ssh.Remember(conn.Id, sshSecret);
-                await PutSecretAsync(SshSecretId.For(conn.Id), sshSecret);
-            }
             await _ctx.ProjectStore.SaveAsync(_ctx.Project, CancellationToken.None);
         }
-        // A store with nowhere safe to put the password isn't a failure — the connection is still saved, and
-        // the password will be asked for at connect time and kept in memory. Say that, then finish the save.
-        catch (SecretStorageRefusedException)
+        catch (Exception ex)
         {
-            refusedSecret = true;
-            try { await _ctx.ProjectStore.SaveAsync(_ctx.Project, CancellationToken.None); }
-            catch (Exception ex) { _ctx.SetStatus($"Saved connection but store failed: {SafeErrorText.Of(ex)}"); }
+            problem = $"Saved connection '{conn.Name}' but the project could not be written: {SafeErrorText.Of(ex)}";
         }
-        catch (Exception ex) { _ctx.SetStatus($"Saved connection but secret/store failed: {SafeErrorText.Of(ex)}"); }
 
         // Two questions, and they are not the same one. A changed *network target* means the cached schema
         // describes a different server, so drop that too — eviction alone deliberately keeps it, which is what
@@ -904,9 +918,10 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         // Editing the selected tab's own connection changes what StatusTip reports (#99 / #105), and nothing
         // else re-raises it on this path.
         OnPropertyChanged(nameof(StatusTip));
-        _ctx.SetStatus(refusedSecret
-            ? $"Saved connection '{conn.Name}' — password not saved (no keyring); you'll be asked when connecting."
-            : $"Saved connection '{conn.Name}'.");
+        _ctx.SetStatus(problem
+            ?? (refusedSecret
+                ? $"Saved connection '{conn.Name}' — password not saved (no keyring); you'll be asked when connecting."
+                : $"Saved connection '{conn.Name}'."));
     }
 
     /// <summary>Store a dialog-typed secret under <paramref name="secretId"/>; empty deletes it.</summary>
@@ -1104,7 +1119,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
 
         var copy = source with { Id = Guid.NewGuid(), Name = UniqueName(source.Name) };
         var password = await GetConnectionPasswordAsync(id);
-        var sshSecret = source.SshTunnel is null ? null : await GetSshSecretAsync(id);
+        var sshSecret = await GetSshSecretAsync(source);
         await AddOrUpdateConnectionAsync(copy, password, sshSecret);
     }
 
@@ -1449,21 +1464,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
             info = credential.ApplyTo(info);   // the az-resolved user, when the connection asks for one
         }
 
-        var provider = _ctx.Providers.Get(info.ProviderId);
-        var (target, tunnel) = await ConnectionFactoryBuilder.RouteAsync(_ctx.Credentials, info, ct, sshSecret);
-        try
-        {
-            var factory = provider.CreateConnectionFactory(target, secret);
-            try { return await factory.TestConnectionAsync(ct); }
-            finally { await factory.DisposeAsync(); }
-        }
-        finally
-        {
-            if (tunnel is not null)
-            {
-                await tunnel.DisposeAsync();
-            }
-        }
+        return await _ctx.Sessions.TestAsync(info, secret, sshSecret, ct);
     }
 
     /// <summary>First-run convenience: seed a demo connection if the project has none, and target it.</summary>

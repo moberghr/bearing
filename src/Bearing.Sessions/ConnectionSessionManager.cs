@@ -267,14 +267,22 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
 
     public Task EvictAsync(SessionKey key) => EvictAsync(key, only: null);
 
+    /// <inheritdoc />
+    public Task<bool> TestAsync(ConnectionInfo info, string? password, string? sshSecret, CancellationToken ct)
+        => ConnectionFactoryBuilder.TestAsync(_providers, _credentials(), info, password, sshSecret, ct);
+
     /// <summary>The SSH tunnel under <paramref name="session"/> ended: evict it — only if it is still the one
     /// live under <paramref name="key"/>, never a replacement built meanwhile. Runs on an SSH.NET thread.</summary>
-    private async Task EvictLostTunnelAsync(SessionKey key, ConnectionSession session)
+    internal async Task EvictLostTunnelAsync(SessionKey key, ConnectionSession session)
     {
         try
         {
-            await EvictAsync(key, only: session);
-            TunnelLost?.Invoke(key);
+            // Said only when this session was the one evicted: a replacement built meanwhile is healthy, and so
+            // is any transaction opened on it (TunnelLost rolls back every transaction under the key).
+            if (await EvictAsync(key, only: session))
+            {
+                TunnelLost?.Invoke(key);
+            }
         }
         catch
         {
@@ -282,7 +290,9 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         }
     }
 
-    private async Task EvictAsync(SessionKey key, ConnectionSession? only)
+    /// <summary>Evict the session under <paramref name="key"/> — with <paramref name="only"/>, just that one.
+    /// True when a session left the live map.</summary>
+    private async Task<bool> EvictAsync(SessionKey key, ConnectionSession? only)
     {
         ConnectionSession? session;
         var disposeNow = false;
@@ -290,11 +300,11 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         {
             if (only is not null && _disposed)
             {
-                return;
+                return false;
             }
             if (_live.TryGetValue(key, out session) && only is not null && !ReferenceEquals(session, only))
             {
-                return;
+                return false;
             }
             if (session is not null)
             {
@@ -309,6 +319,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         // that we are linked to the server. The idle sweep does NOT come through here, which is exactly what
         // lets a swept connection stay linked (see SweepIdleAsync).
         if (UnlinkIfNothingLive(key.ConnectionId)) RaiseLinkChanged(key.ConnectionId);
+        return session is not null;
     }
 
     /// <inheritdoc />

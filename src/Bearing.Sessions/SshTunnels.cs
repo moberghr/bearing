@@ -14,13 +14,22 @@ namespace Bearing.Sessions;
 
 /// <summary>
 /// Opens the SSH local forward a <see cref="DbConnectionInfo.SshTunnel"/> connection needs (SSH.NET,
-/// in-process). One tunnel per connection factory: it lives as long as the pool built on it and is disposed
+/// in-process). One forward per connection factory: it lives as long as the pool built on it and is disposed
 /// after it (<see cref="ConnectionSession"/>, the schema browser's readers).
+/// <para>
+/// <b>One SSH session per connection and route.</b> Every pool and schema reader of a connection shares one
+/// <see cref="SshClient"/>, each with its own forward on it, so a tab connecting while the tree loads (or
+/// several databases) does one handshake and asks for the secret once — not one prompt and one SSH login per
+/// pool, which would also run into the server's <c>MaxStartups</c>. First opens for the same connection queue
+/// behind each other, so the second finds the first's session (and its secret) instead of prompting again.
+/// The session is disconnected when its last forward is disposed.
+/// </para>
 /// <para>
 /// <b>Host key: accept-new.</b> An unpinned key is accepted and handed to <see cref="HostKeyPinned"/> so the
 /// host can write it into the connection; a key that differs from the pin is refused. With no
 /// <see cref="HostKeyPinned"/> (the CLI, which cannot save the project) an unpinned key is refused too —
-/// never trusted silently (§1.4).
+/// never trusted silently (§1.4). The pin is the one saved now (<see cref="SavedTunnel"/>), not the caller's
+/// copy, whichever way the two differ.
 /// </para>
 /// <para>
 /// <b>Secret:</b> the stored one (<see cref="SshSecretId"/>), else one typed earlier this session, else —
@@ -39,6 +48,9 @@ public sealed class SshTunnels
     private readonly Func<ISecretStore?> _secrets;
     private readonly ICredentialPrompt? _prompt;
     private readonly ConcurrentDictionary<Guid, string> _typed = new();
+    private readonly object _gate = new();
+    private readonly Dictionary<ClientKey, SharedSshClient> _clients = new();
+    private readonly ConcurrentDictionary<ClientKey, SemaphoreSlim> _opening = new();
 
     public SshTunnels(Func<ISecretStore?> secrets, ICredentialPrompt? prompt)
     {
@@ -52,24 +64,121 @@ public sealed class SshTunnels
 
     /// <summary>
     /// The connection's tunnel as saved <i>now</i>, by connection id — so a caller holding an older copy of the
-    /// record (an explorer node built before the first key was pinned, a dialog opened before its Test pinned
-    /// one) is still held to the pin. Without it such a copy reads as unpinned and accept-new would accept any
-    /// key. Must be safe to call off the UI thread. Null = the caller's copy is the record (the CLI).
+    /// record (an explorer node built before the first key was pinned, or before a pin was forgotten) is held
+    /// to the pin as it is now. Without it an unpinned copy would accept any key, and a pinned copy would refuse
+    /// the key the user just re-trusted. Must be safe to call off the UI thread. Null = the caller's copy is the
+    /// record (the CLI).
     /// </summary>
     public Func<Guid, SshTunnel?>? SavedTunnel { get; set; }
 
-    /// <summary>Open the tunnel for <paramref name="info"/>. Throws <see cref="ConnectionFailedException"/>
+    /// <summary>SSH sessions open now, for tests: one per connection and route, however many forwards.</summary>
+    internal int OpenSessionCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _clients.Count;
+            }
+        }
+    }
+
+    /// <summary>Open a forward to <paramref name="targetHost"/>:<paramref name="targetPort"/> — the database
+    /// as the SSH server sees it — for <paramref name="info"/>. Throws <see cref="ConnectionFailedException"/>
     /// naming the SSH leg on any failure.</summary>
     /// <para><paramref name="typedSecret"/> is a secret typed into the dialog and not yet saved (its Test
-    /// button): used as-is, never prompted over and never stored.</para>
-    public async Task<SshTunnelHandle> OpenAsync(DbConnectionInfo info, CancellationToken ct, string? typedSecret = null)
+    /// button): used as-is on a session of its own, never prompted over, never stored and never shared.</para>
+    public async Task<SshTunnelHandle> OpenAsync(DbConnectionInfo info, string targetHost, int targetPort,
+        CancellationToken ct, string? typedSecret = null)
     {
         var ssh = info.SshTunnel ?? throw new ArgumentException("Connection has no SSH tunnel.", nameof(info));
+
+        if (!string.IsNullOrEmpty(typedSecret))
+        {
+            // The Test button checks what was typed, so it must not ride a session logged in with another secret.
+            var own = await ConnectAsync(info, ssh, typedSecret, offered: true, ct);
+            return Forward(own, info, ssh, targetHost, targetPort);
+        }
+
+        var key = new ClientKey(info.Id, ssh with { HostKeyFingerprint = null });
+        var opening = _opening.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+        await opening.WaitAsync(ct);
+        SharedSshClient shared;
+        try
+        {
+            shared = TryReuse(key, info, ssh) ?? Register(key, await ConnectAsync(info, ssh, typed: null, offered: false, ct));
+        }
+        finally
+        {
+            opening.Release();
+        }
+        return Forward(shared, info, ssh, targetHost, targetPort);
+    }
+
+    /// <summary>The live session for <paramref name="key"/>, with a lease taken — if it is still connected and
+    /// the key it met is the one pinned now (a pin saved or forgotten since it connected re-checks the server).
+    /// </summary>
+    private SharedSshClient? TryReuse(ClientKey key, DbConnectionInfo info, SshTunnel ssh)
+    {
+        var pinned = PinFor(info.Id, ssh);
+        lock (_gate)
+        {
+            if (!_clients.TryGetValue(key, out var shared))
+            {
+                return null;
+            }
+            if (!string.IsNullOrWhiteSpace(pinned) && !string.Equals(pinned.Trim(), shared.Seen, StringComparison.Ordinal))
+            {
+                return null;
+            }
+            return shared.TryAcquire() ? shared : null;
+        }
+    }
+
+    private SharedSshClient Register(ClientKey key, SharedSshClient shared)
+    {
+        lock (_gate)
+        {
+            // A session it replaces (lost, or held to an older pin) stays with the forwards already on it.
+            _clients[key] = shared;
+        }
+        shared.Ended += () => Unregister(key, shared);
+        return shared;
+    }
+
+    private void Unregister(ClientKey key, SharedSshClient shared)
+    {
+        lock (_gate)
+        {
+            if (_clients.TryGetValue(key, out var current) && ReferenceEquals(current, shared))
+            {
+                _clients.Remove(key);
+            }
+        }
+    }
+
+    private static SshTunnelHandle Forward(SharedSshClient shared, DbConnectionInfo info, SshTunnel ssh, string targetHost, int targetPort)
+    {
+        try
+        {
+            return shared.Forward(targetHost, targetPort);
+        }
+        catch (Exception ex)
+        {
+            shared.Release();
+            throw new ConnectionFailedException(
+                $"SSH to {ssh.User}@{ssh.Host}:{ssh.Port} could not forward to {targetHost}:{targetPort} for '{info.Name}': {SafeErrorText.Of(ex)}", ex);
+        }
+    }
+
+    /// <summary>Log in to the SSH server, asking for the secret when there is none or it was refused. The
+    /// returned session holds one lease, for the forward its caller is about to open.</summary>
+    private async Task<SharedSshClient> ConnectAsync(DbConnectionInfo info, SshTunnel ssh, string? typed, bool offered, CancellationToken ct)
+    {
         var where = $"{ssh.User}@{ssh.Host}:{ssh.Port}";
         var secretId = SshSecretId.For(info.Id);
 
-        var offered = !string.IsNullOrEmpty(typedSecret);
-        var secret = offered ? typedSecret
+        var secret = offered ? typed
             : _typed.TryGetValue(secretId, out var t) ? t
             : KeepsSecretInMemoryOnly(info) ? null
             : await StoredAsync(secretId, ct);
@@ -84,12 +193,12 @@ public sealed class SshTunnels
         {
             try
             {
-                var handle = await ConnectAsync(info, ssh, secret, ct);
+                var shared = await LogInAsync(info, ssh, secret, ct);
                 if (prompted && !offered && secret is not null)
                 {
                     await RememberAsync(info, secretId, secret);
                 }
-                return handle;
+                return shared;
             }
             catch (Exception ex) when (!prompted && IsCredentialProblem(ex))
             {
@@ -110,14 +219,17 @@ public sealed class SshTunnels
            || (ex is SshException && ex is not SshConnectionException && ex is not SshOperationTimeoutException
                && ex.Message.Contains("passphrase", StringComparison.OrdinalIgnoreCase));
 
-    private async Task<SshTunnelHandle> ConnectAsync(DbConnectionInfo info, SshTunnel ssh, string? secret, CancellationToken ct)
+    private async Task<SharedSshClient> LogInAsync(DbConnectionInfo info, SshTunnel ssh, string? secret, CancellationToken ct)
     {
         AuthenticationMethod auth;
         if (ssh.UsesPrivateKey)
         {
             var path = KeyFile(ssh);
-            auth = new PrivateKeyAuthenticationMethod(ssh.User,
-                string.IsNullOrEmpty(secret) ? new PrivateKeyFile(path) : new PrivateKeyFile(path, secret));
+            // Off the caller's thread: an encrypted OpenSSH key runs its bcrypt KDF in this constructor, and the
+            // dialog's Test reaches here on the UI thread.
+            var key = await Task.Run(
+                () => string.IsNullOrEmpty(secret) ? new PrivateKeyFile(path) : new PrivateKeyFile(path, secret), ct);
+            auth = new PrivateKeyAuthenticationMethod(ssh.User, key);
         }
         else
         {
@@ -137,28 +249,24 @@ public sealed class SshTunnels
             {
                 e.CanTrust = HostKeyPinned is not null;
                 if (!e.CanTrust)
+                {
                     refusal = $"The SSH host key of {ssh.Host} ({seen}) is not trusted yet. Connect once from the Bearing app to pin it.";
+                }
             }
             else
             {
                 e.CanTrust = string.Equals(pinned.Trim(), seen, StringComparison.Ordinal);
                 if (!e.CanTrust)
+                {
                     refusal = $"The SSH host key of {ssh.Host} has CHANGED: pinned {pinned.Trim()}, server sent {seen}. "
                               + "Refused. If the change is expected, use \"Forget host key\" on the connection's SSH tab and save.";
+                }
             }
         };
 
         try
         {
             await client.ConnectAsync(ct);
-            var forward = new ForwardedPortLocal("127.0.0.1", 0, info.Host.Trim(), (uint)info.Port);
-            client.AddForwardedPort(forward);
-            forward.Start();
-            if (string.IsNullOrWhiteSpace(pinned) && seen is not null && HostKeyPinned is { } pin)
-            {
-                try { await pin(info, seen); } catch { /* pinning is best-effort; the next connect re-pins */ }
-            }
-            return new SshTunnelHandle(client, forward);
         }
         // Only the handshake sets a refusal, so this names a refused host key rather than the socket error.
         catch (Exception) when (refusal is not null)
@@ -171,13 +279,28 @@ public sealed class SshTunnels
             client.Dispose();
             throw;
         }
+
+        if (string.IsNullOrWhiteSpace(pinned) && seen is not null && HostKeyPinned is { } pin)
+        {
+            try
+            {
+                await pin(info, seen);
+            }
+            catch
+            {
+                // Pinning is best-effort; the next connect re-pins.
+            }
+        }
+        return new SharedSshClient(client, seen ?? "");
     }
 
-    /// <summary>The pin this connect is held to: the caller's, else the one saved now for the same server.
-    /// A lookup that fails refuses the connect rather than reading as "unpinned".</summary>
+    /// <summary>The pin this connect is held to: the one saved now for the same server, else the caller's. The
+    /// saved record wins both ways — an unpinned copy is held to a pin saved since, and a pinned copy gives way
+    /// to a pin forgotten or replaced since. A lookup that fails refuses the connect rather than reading as
+    /// "unpinned".</summary>
     private string? PinFor(Guid connectionId, SshTunnel ssh)
     {
-        if (!string.IsNullOrWhiteSpace(ssh.HostKeyFingerprint) || SavedTunnel is not { } lookup)
+        if (SavedTunnel is not { } lookup)
         {
             return ssh.HostKeyFingerprint;
         }
@@ -190,11 +313,12 @@ public sealed class SshTunnels
         {
             throw new ConnectionFailedException($"Could not read the pinned SSH host key of {ssh.Host}: {SafeErrorText.Of(ex)}", ex);
         }
-        // A host key belongs to the server, whoever logs in; a pin for another server says nothing here.
+        // A host key belongs to the server, whoever logs in; a pin for another server says nothing here, and
+        // neither does a connection not saved (yet) — a dialog's Test.
         return saved is not null && string.Equals(saved.Host.Trim(), ssh.Host.Trim(), StringComparison.OrdinalIgnoreCase)
                && saved.Port == ssh.Port
             ? saved.HostKeyFingerprint
-            : null;
+            : ssh.HostKeyFingerprint;
     }
 
     private async Task<string?> StoredAsync(Guid secretId, CancellationToken ct)
@@ -204,14 +328,22 @@ public sealed class SshTunnels
         {
             return null;
         }
-        try { return await store.GetPasswordAsync(secretId, ct); }
-        catch (Exception ex) when (ex is not OperationCanceledException) { return null; }
+        try
+        {
+            return await store.GetPasswordAsync(secretId, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
     }
 
     private async Task<string> AskAsync(DbConnectionInfo info, string message, CancellationToken ct)
     {
         if (_prompt is null)
+        {
             throw new ConnectionFailedException($"{message}: none is stored in the keychain and there is no prompt here.");
+        }
         return await _prompt.RequestPasswordAsync(info, message, ct)
                ?? throw new ConnectionFailedException($"SSH secret entry cancelled for '{info.Name}'.");
     }
@@ -228,8 +360,14 @@ public sealed class SshTunnels
         {
             return;
         }
-        try { await store.SetPasswordAsync(secretId, secret, CancellationToken.None); }
-        catch { /* kept in memory for the session; the keychain is best-effort here */ }
+        try
+        {
+            await store.SetPasswordAsync(secretId, secret, CancellationToken.None);
+        }
+        catch
+        {
+            // Kept in memory for the session; the keychain is best-effort here.
+        }
     }
 
     /// <summary>Forget a typed secret (and the stored one) — the connection was deleted.</summary>
@@ -242,7 +380,14 @@ public sealed class SshTunnels
         {
             return;
         }
-        try { await store.DeleteAsync(secretId, CancellationToken.None); } catch { /* best-effort */ }
+        try
+        {
+            await store.DeleteAsync(secretId, CancellationToken.None);
+        }
+        catch
+        {
+            // Best-effort.
+        }
     }
 
     /// <summary>The key file to use: the configured one, or the first default key that exists.</summary>
@@ -287,14 +432,167 @@ public sealed class SshTunnels
         }
     }
 
+    /// <summary>Whether a secret is held in memory for this connection this session, for tests.</summary>
+    internal bool RemembersSecretFor(Guid connectionId) => _typed.ContainsKey(SshSecretId.For(connectionId));
+
     internal static string ExpandHome(string path)
         => path == "~" || path.StartsWith("~/", StringComparison.Ordinal) || path.StartsWith("~\\", StringComparison.Ordinal)
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), path.Length > 2 ? path[2..] : "")
             : path;
+
+    /// <summary>Which sessions may be shared: the same connection reaching the server the same way. The pin is
+    /// left out — it is checked against the key the session met (<see cref="TryReuse"/>).</summary>
+    private readonly record struct ClientKey(Guid ConnectionId, SshTunnel Route);
 }
 
 /// <summary>
-/// An open SSH session with its loopback forward. Dispose after the pool that uses it.
+/// One logged-in SSH session and the forwards on it, counted: each <see cref="SshTunnelHandle"/> holds a lease,
+/// and the last one released disconnects the session. When the session ends on its own (server closed, a
+/// keepalive went unanswered) every forward on it is told (<see cref="SshTunnelHandle.WhenLost"/>).
+/// </summary>
+internal sealed class SharedSshClient
+{
+    private readonly SshClient _client;
+    private readonly object _gate = new();
+    private readonly List<SshTunnelHandle> _handles = [];
+    private int _leases = 1;
+    private bool _ended;
+    private bool _lost;
+
+    internal SharedSshClient(SshClient client, string seen)
+    {
+        _client = client;
+        Seen = seen;
+        // SSH.NET raises this only when its message loop ends (server closed, socket error) — the session is
+        // over. Our own Disconnect is filtered out by SSH.NET, and by _ended here.
+        _client.ErrorOccurred += (_, _) => MarkLost();
+    }
+
+    /// <summary>The host key this session met.</summary>
+    public string Seen { get; }
+
+    /// <summary>Raised once, when the session is lost or its last lease released: nothing new may use it.</summary>
+    public event Action? Ended;
+
+    public bool IsConnected => _client.IsConnected;
+
+    /// <summary>Take a lease for one more forward — false once the session is lost or closing.</summary>
+    public bool TryAcquire()
+    {
+        lock (_gate)
+        {
+            if (_ended || !_client.IsConnected)
+            {
+                return false;
+            }
+            _leases++;
+            return true;
+        }
+    }
+
+    /// <summary>Open a loopback forward on this session, carrying a lease the caller already took.</summary>
+    public SshTunnelHandle Forward(string targetHost, int targetPort)
+    {
+        var forward = new ForwardedPortLocal("127.0.0.1", 0, targetHost, (uint)targetPort);
+        SshTunnelHandle handle;
+        lock (_gate)
+        {
+            // SshClient's forwarded-port list is not thread-safe, and forwards come and go from many pools.
+            _client.AddForwardedPort(forward);
+            handle = new SshTunnelHandle(this, forward);
+            _handles.Add(handle);
+        }
+        try
+        {
+            forward.Start();
+        }
+        catch
+        {
+            Remove(handle, forward);
+            throw;
+        }
+        return handle;
+    }
+
+    internal void Remove(SshTunnelHandle handle, ForwardedPortLocal forward)
+    {
+        lock (_gate)
+        {
+            _handles.Remove(handle);
+            try
+            {
+                _client.RemoveForwardedPort(forward);
+            }
+            catch
+            {
+                // Best-effort: a session already gone has nothing to remove it from.
+            }
+        }
+        forward.Dispose();
+    }
+
+    /// <summary>Give back a lease; the last one disconnects the session.</summary>
+    public void Release()
+    {
+        bool last;
+        bool raise;
+        lock (_gate)
+        {
+            _leases--;
+            last = _leases == 0;
+            raise = last && !_ended;
+            if (last)
+            {
+                _ended = true;
+            }
+        }
+        if (raise)
+        {
+            Ended?.Invoke();
+        }
+        if (last)
+        {
+            try
+            {
+                _client.Disconnect();
+            }
+            catch
+            {
+                // Best-effort.
+            }
+            _client.Dispose();
+        }
+    }
+
+    /// <summary>A forward failed with the session gone, or SSH.NET's loop ended: tell every forward on it.</summary>
+    internal void MarkLost()
+    {
+        SshTunnelHandle[] handles;
+        bool raise;
+        lock (_gate)
+        {
+            if (_lost || (_ended && _leases == 0))
+            {
+                return;
+            }
+            _lost = true;
+            raise = !_ended;
+            _ended = true;
+            handles = [.. _handles];
+        }
+        if (raise)
+        {
+            Ended?.Invoke();
+        }
+        foreach (var handle in handles)
+        {
+            handle.MarkLost();
+        }
+    }
+}
+
+/// <summary>
+/// A loopback forward on an open SSH session. Dispose after the pool that uses it.
 /// <para>
 /// A direct connection survives a network blip because the driver dials the real host again; a pool built on a
 /// tunnel cannot — its loopback port leads nowhere once the SSH session is gone (laptop sleep, bastion
@@ -304,25 +602,22 @@ public sealed class SshTunnels
 /// </summary>
 public sealed class SshTunnelHandle : IAsyncDisposable
 {
-    private readonly SshClient _client;
+    private readonly SharedSshClient _session;
     private readonly ForwardedPortLocal _forward;
     private readonly object _gate = new();
     private readonly List<Action> _onLost = [];
     private int _disposed;
     private bool _lost;
 
-    internal SshTunnelHandle(SshClient client, ForwardedPortLocal forward)
+    internal SshTunnelHandle(SharedSshClient session, ForwardedPortLocal forward)
     {
-        _client = client;
+        _session = session;
         _forward = forward;
-        // SSH.NET raises this only when its message loop ends (server closed, socket error) — the session is
-        // over. Our own Disconnect is filtered out by SSH.NET, and by _disposed here.
-        _client.ErrorOccurred += (_, _) => MarkLost();
         _forward.Exception += (_, _) =>
         {
-            if (!_client.IsConnected)
+            if (!_session.IsConnected)
             {
-                MarkLost();
+                _session.MarkLost();
             }
         };
     }
@@ -338,7 +633,7 @@ public sealed class SshTunnelHandle : IAsyncDisposable
         {
             lock (_gate)
             {
-                return !_lost && Volatile.Read(ref _disposed) == 0 && _client.IsConnected && _forward.IsStarted;
+                return !_lost && Volatile.Read(ref _disposed) == 0 && _session.IsConnected && _forward.IsStarted;
             }
         }
     }
@@ -358,7 +653,7 @@ public sealed class SshTunnelHandle : IAsyncDisposable
         onLost();
     }
 
-    private void MarkLost()
+    internal void MarkLost()
     {
         Action[] handlers;
         lock (_gate)
@@ -373,7 +668,14 @@ public sealed class SshTunnelHandle : IAsyncDisposable
         }
         foreach (var handler in handlers)
         {
-            try { handler(); } catch { /* an owner's cleanup must not take down SSH.NET's listener thread */ }
+            try
+            {
+                handler();
+            }
+            catch
+            {
+                // An owner's cleanup must not take down SSH.NET's listener thread.
+            }
         }
     }
 
@@ -392,9 +694,16 @@ public sealed class SshTunnelHandle : IAsyncDisposable
         }
         return new ValueTask(Task.Run(() =>
         {
-            try { _forward.Stop(); } catch { /* best-effort */ }
-            try { _client.Disconnect(); } catch { /* best-effort */ }
-            _client.Dispose();
+            try
+            {
+                _forward.Stop();
+            }
+            catch
+            {
+                // Best-effort.
+            }
+            _session.Remove(this, _forward);
+            _session.Release();
         }));
     }
 }
