@@ -296,8 +296,23 @@ public sealed class WorkspaceContext
         if (tab.ConnectionId is not { } id || FindConnection(id) is not { } info) return null;
         if (tab.DatabaseName is { } db && !string.Equals(db, info.Database, StringComparison.Ordinal))
             info = info with { Database = db };
+        // An engine that cannot hold a transaction open is never in manual-commit mode: not what a hand-edited
+        // project.json says, and not a session override either (§1.10) — nothing would ever open the transaction
+        // the mode promises.
+        if (!SupportsManualCommit(info)) return info.ManualCommit ? info with { ManualCommit = false } : info;
         return CommitModes.IsManualCommit(info) == info.ManualCommit
             ? info
             : info with { ManualCommit = !info.ManualCommit };
     }
+
+    /// <summary>
+    /// Whether the engine <paramref name="info"/> connects to can hold a transaction open across statements
+    /// (<see cref="IDbProvider.SupportsManualCommit"/>). A provider id the registry does not know answers
+    /// true — the behaviour every connection had before the flag existed — rather than throwing on a path every
+    /// tab read goes through.
+    /// </summary>
+    public bool SupportsManualCommit(ConnectionInfo info)
+        => Providers.All.FirstOrDefault(p => string.Equals(p.Id, info.ProviderId, StringComparison.OrdinalIgnoreCase))
+               ?.SupportsManualCommit
+           ?? true;
 }

@@ -1171,7 +1171,9 @@ public sealed class RelationNodeViewModel : SchemaNodeViewModel
 
     private bool IsViewLike => _table.Kind is RelationKind.View or RelationKind.MaterializedView;
 
-    public override bool CanShowDefinition => true;
+    /// <summary>A view always has its SQL to show; a table only on an engine that has table DDL to render
+    /// (<see cref="ProviderTraits.OffersTableDdl"/>) — never an approximation of one.</summary>
+    public override bool CanShowDefinition => IsViewLike || ProviderTraits.For(_connection).OffersTableDdl;
 
     /// <summary>This relation's id, so a size read can find the row it belongs to.</summary>
     internal long TableId => _table.Id;

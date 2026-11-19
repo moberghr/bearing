@@ -241,8 +241,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
     private ConnectionInfo? SelectedConnection => Selected is { } tab ? _ctx.EffectiveConnection(tab) : null;
 
-    /// <summary>Whether there is a connection whose mode there is any point showing.</summary>
-    public bool CommitModeVisible => SelectedConnection is not null;
+    /// <summary>Whether there is a connection whose mode there is any point showing — not one on an engine that
+    /// cannot hold a transaction, where the pill would offer a mode nothing could honour.</summary>
+    public bool CommitModeVisible => SelectedConnection is { } info && _ctx.SupportsManualCommit(info);
 
     /// <summary>Whether the selected tab's connection is holding writes right now.</summary>
     public bool IsManualCommit => SelectedConnection is { } info && CommitPolicy.IsManualCommit(info);
@@ -291,6 +292,11 @@ public sealed partial class ExecutionViewModel : ObservableObject
     public void ToggleCommitMode()
     {
         if (SelectedConnection is not { } info) { _ctx.SetStatus("This tab has no connection."); return; }
+        if (!_ctx.SupportsManualCommit(info))
+        {
+            _ctx.SetStatus($"{info.Name}: this engine cannot hold a transaction open — statements always commit themselves.");
+            return;
+        }
         var manual = CommitPolicy.IsManualCommit(info);
 
         if (manual && _ctx.Transactions.All.FirstOrDefault(t => t.Key.ConnectionId == info.Id) is { } open)

@@ -38,6 +38,36 @@ public class SchemaNodeTests
         Assert.Equal("connected", server.Children.OfType<DatabaseNodeViewModel>().First(c => c.Title == "app").Detail);
     }
 
+    private static RelationNodeViewModel Relation(string providerId, RelationKind kind)
+    {
+        var connection = Conn() with { ProviderId = providerId };
+        var table = new TableInfo(1, "public", "film", kind);
+        var snapshot = new SchemaSnapshot(
+            "app", new[] { "public" }, new[] { table }, Array.Empty<ColumnInfo>(), Array.Empty<ForeignKeyInfo>());
+        return new RelationNodeViewModel(connection, "app", table, snapshot, new FakeSchemaBrowser(), "public");
+    }
+
+    /// <summary>DynamoDB has no table DDL for Bearing to render, so the menu item is absent rather than
+    /// opening something approximated (SC16, <i>Behaviour 10</i>).</summary>
+    [Fact]
+    public void A_table_on_dynamodb_does_not_offer_show_definition()
+        => Assert.False(Relation(Bearing.Data.DynamoDb.DynamoDbProvider.ProviderId, RelationKind.Table).CanShowDefinition);
+
+    [Theory]
+    [InlineData("postgres")]
+    [InlineData("sqlserver")]
+    [InlineData("mysql")]
+    public void A_table_on_the_other_engines_still_offers_show_definition(string providerId)
+        => Assert.True(Relation(providerId, RelationKind.Table).CanShowDefinition);
+
+    [Theory]
+    [InlineData("postgres", RelationKind.View)]
+    [InlineData("postgres", RelationKind.MaterializedView)]
+    [InlineData("sqlserver", RelationKind.View)]
+    [InlineData("mysql", RelationKind.View)]
+    public void A_view_still_offers_show_definition(string providerId, RelationKind kind)
+        => Assert.True(Relation(providerId, kind).CanShowDefinition);
+
     /// <summary>Tables are the list; views and functions are one collapsed row each after them.</summary>
     [Fact]
     public async Task Database_node_lists_tables_then_buckets_the_rest()

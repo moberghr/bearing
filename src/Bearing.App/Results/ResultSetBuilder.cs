@@ -33,10 +33,17 @@ internal static class ResultSetBuilder
         return results
             .Select((r, i) =>
             {
+                // An engine without grid editing says so before the resolver is asked: with no base columns the
+                // resolver would blame "a computed expression", which is not why this result is locked. No edit
+                // target is resolved for such a result at all.
                 // Resolve editability (with a lock reason) only for row-returning results with a schema.
-                var (target, reason) = snapshot is null || r.Columns.Count == 0
+                var (target, reason) = r.Columns.Count == 0
                     ? (null, null)
-                    : EditabilityResolver.ResolveWithReason(snapshot, r.Columns, connectionReadOnly);
+                    : traits?.GridEditUnavailable is { } unavailable
+                        ? (null, unavailable)
+                        : snapshot is null
+                            ? (null, null)
+                            : EditabilityResolver.ResolveWithReason(snapshot, r.Columns, connectionReadOnly);
                 var source = statements?[i] ?? sql;
                 // A result the engine continues by token pages on its own, one set of a batch included: the
                 // token carries its statement, so nothing is re-run and the offset rule's one-set limit is moot.
