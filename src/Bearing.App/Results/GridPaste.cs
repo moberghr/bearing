@@ -65,14 +65,14 @@ public static class GridPaste
             return writes;
         }
 
-        var anchor = result.Rows.IndexOf(active.Row);
+        var anchor = result.ViewRows.IndexOf(active.Row);
         if (anchor < 0) return writes; // the cursor's row is gone (a discarded new row) — nothing to anchor on
 
         for (var r = 0; r < block.Count; r++)
         {
             var target = anchor + r;
-            if (target >= result.Rows.Count) break; // clipped: paste never appends rows
-            var row = result.Rows[target];
+            if (target >= result.ViewRows.Count) break; // clipped: paste never appends rows
+            var row = result.ViewRows[target];
             for (var c = 0; c < block[r].Count; c++)
             {
                 var col = active.Col + c;

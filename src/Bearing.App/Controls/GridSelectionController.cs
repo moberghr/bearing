@@ -30,6 +30,10 @@ public enum GridPressTarget
     /// row must leave the highlight alone (#183).</summary>
     ScrollBar,
 
+    /// <summary>A header's own control — the sort indicator or the column filter input (#106). It acts on its
+    /// own: sorting or typing a filter neither selects the column under it nor clears the selection.</summary>
+    HeaderChrome,
+
     /// <summary>The corner above the row-number gutter: the whole result is now selected, as the same
     /// corner does in every spreadsheet.</summary>
     Corner,
@@ -79,6 +83,10 @@ public sealed class GridSelectionController
         Model.CellRestyle?.Invoke();
         Changed?.Invoke();
     }
+
+    /// <summary>Re-render each realized cell without touching the selection — for a change to what a cell
+    /// draws besides its ring (the sorted column's wash, #106).</summary>
+    public void Restyle() => Model.CellRestyle?.Invoke();
 
     /// <summary>Drop the selection without notifying — for callers that rebuild the visuals anyway.</summary>
     public void Clear() => Model.Clear();
@@ -215,6 +223,9 @@ public sealed class GridSelectionController
         {
             if (visual is Border { Tag: ValueTuple<object?[], int> }) return GridPressTarget.Cell;
             if (visual is ScrollBar) return GridPressTarget.ScrollBar;
+            // The sort indicator and the column filter input act on their own (#106).
+            if (visual is StyledElement el && el.Classes.Contains(ResultColumnHeader.ChromeClass))
+                return GridPressTarget.HeaderChrome;
             // Tested before the DataGridColumnHeader case below, because in the DataGrid's template the
             // corner *is* one — it just has no column, so it fell through to "chrome" and cleared the
             // selection instead of selecting everything (#55).
@@ -230,7 +241,7 @@ public sealed class GridSelectionController
 
         if (corner || (rowHeader is null && columnHeader is null && PressIsOnCorner(grid, e)))
         {
-            if (result.Rows.Count == 0) return GridPressTarget.None;
+            if (result.ViewRows.Count == 0) return GridPressTarget.None;
             // A right-press opens the context menu over whatever is already selected and leaves it alone.
             // The row/column headers collapse the selection onto the band being pointed at; the corner's
             // "band" is everything, so doing the same here would *expand* a deliberate selection into the
@@ -246,7 +257,7 @@ public sealed class GridSelectionController
             // The anchor is the result's top-left — the corner selected everything, and that is where
             // "everything" starts — but the *cursor* goes on a cell the user can see, or the first arrow
             // key would scroll away from what they are looking at to reach row one (found in review).
-            Model.Anchor = (result.Rows[0], GridSelectionOps.FirstColumn(result));
+            Model.Anchor = (result.ViewRows[0], GridSelectionOps.FirstColumn(result));
             Model.Active = FirstCellInView(grid, result) ?? Model.Anchor;
             Notify();
             grid.Focus();          // as a cell click does, so the keys that follow reach this grid
@@ -269,9 +280,9 @@ public sealed class GridSelectionController
 
         if (columnHeader is not null)
         {
-            if (ColumnIndexOf(grid, columnHeader) is not { } col || result.Rows.Count == 0) return GridPressTarget.None;
+            if (ColumnIndexOf(grid, columnHeader) is not { } col || result.ViewRows.Count == 0) return GridPressTarget.None;
             var from = extend ? Model.Anchor!.Value.Col : col;
-            var origin = (extend ? Model.Anchor!.Value.Row : result.Rows[0], col);
+            var origin = (extend ? Model.Anchor!.Value.Row : result.ViewRows[0], col);
             // Mirror of the row-header case: the column is the one under the pointer, so it is the *row*
             // that can be off screen — the band's origin row is the result's first, which is nowhere near
             // the viewport in a scrolled result.
@@ -432,7 +443,7 @@ public sealed class GridSelectionController
             return true;
         }
 
-        var r = result.Rows.IndexOf(active.Row);
+        var r = result.ViewRows.IndexOf(active.Row);
         if (r < 0) return false; // the active row was dropped (discarded new row) — let the key bubble
 
         var toEdge = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);
@@ -442,7 +453,7 @@ public sealed class GridSelectionController
         // Shift extends the rectangle for a spatial motion, but for Tab it chose the direction — a field
         // traversal always lands on a single cell, the way tabbing through a form does.
         var extend = e.KeyModifiers.HasFlag(KeyModifiers.Shift) && !GridSelectionOps.IsFieldMotion(motion);
-        MoveActive(grid, result, result.Rows[nr], nc, extend);
+        MoveActive(grid, result, result.ViewRows[nr], nc, extend);
         return true;
     }
 
@@ -461,9 +472,9 @@ public sealed class GridSelectionController
     /// </para></summary>
     public void SeedActive(DataGrid grid, ResultSetViewModel result)
     {
-        if (result.Rows.Count == 0) return;
+        if (result.ViewRows.Count == 0) return;
         var (row, col) = FirstCellInView(grid, result)
-                         ?? (result.Rows[0], GridSelectionOps.FirstColumn(result));
+                         ?? (result.ViewRows[0], GridSelectionOps.FirstColumn(result));
         MoveActive(grid, result, row, col, extend: false, scroll: false);
     }
 
@@ -481,6 +492,16 @@ public sealed class GridSelectionController
         var viewport = new Rect(grid.Bounds.Size);
         if (viewport.Width <= 0 || viewport.Height <= 0) return null;
 
+        // Where a scrolled column's cells start being visible. Not the grid's x = 0: the row-number gutter
+        // (and the status lane before it) sit over the left of the cells, and frozen columns sit over the
+        // rest of what scrolls under them. A cell 13px under the gutter was taken as on screen, and the next
+        // arrow key scrolled 13px to reveal it — a jump that showed up only once a font change moved the
+        // column edges off the fixture's offsets.
+        var cellsLeft = CellsLeft(grid);
+        var frozenRight = cellsLeft + grid.Columns
+            .Where(c => c.IsVisible && c.DisplayIndex < grid.FrozenColumnCount)
+            .Sum(c => c.ActualWidth);
+
         (object?[] Row, int Col)? best = null;
         var bestAt = new Point(double.MaxValue, double.MaxValue);
         foreach (var border in grid.GetVisualDescendants().OfType<Border>())
@@ -491,7 +512,7 @@ public sealed class GridSelectionController
             // Tested per candidate rather than on the winner alone: rejecting it at the end would throw
             // away every other on-screen cell with it and fall back to the result's first — an invisible
             // cursor, which is the outcome this method exists to prevent (found in review).
-            if (!result.Rows.Contains(tag.Item1)) continue;
+            if (!result.ViewRows.Contains(tag.Item1)) continue;
             // A column scrolled off to the left keeps its cells realized but collapses them to nothing —
             // and parks them at a *positive* x, so a position test alone picks the leftmost column of the
             // result rather than of the viewport. Measured, not assumed.
@@ -500,7 +521,9 @@ public sealed class GridSelectionController
             // Clipped at either edge is skipped in *both* axes: a cursor with two pixels showing is not the
             // visible cursor this is for, and the first version tested only for a fully-hidden row, so a
             // barely-peeking top row won on having the smallest y (found in review).
-            if (at.X < -0.5 || at.X >= viewport.Width) continue;
+            var frozen = tag.Item2 < grid.Columns.Count
+                         && grid.Columns[tag.Item2].DisplayIndex < grid.FrozenColumnCount;
+            if (at.X < (frozen ? cellsLeft : frozenRight) - 0.5 || at.X >= viewport.Width) continue;
             if (at.Y < -0.5 || at.Y >= viewport.Height) continue;
             if (at.Y > bestAt.Y || (at.Y == bestAt.Y && at.X >= bestAt.X)) continue;
             bestAt = at;
@@ -509,10 +532,23 @@ public sealed class GridSelectionController
         return best;
     }
 
+    /// <summary>The x, in the grid's coordinates, where cells start: the right edge of the row-number
+    /// gutter, read off a realized row header so the status lane's inset is included. 0 when the gutter is
+    /// hidden or nothing is realized.</summary>
+    private static double CellsLeft(DataGrid grid)
+    {
+        foreach (var header in grid.GetVisualDescendants().OfType<DataGridRowHeader>())
+        {
+            if (!header.IsEffectivelyVisible || header.Bounds.Width <= 0) continue;
+            if (header.TranslatePoint(new Point(header.Bounds.Width, 0), grid) is { } edge) return edge.X;
+        }
+        return 0;
+    }
+
     /// <summary>The top-most row currently on screen, falling back to the result's first when nothing of it
     /// is realized. What a column-header press puts the cursor on.</summary>
     private static object?[] InViewRow(DataGrid grid, ResultSetViewModel result)
-        => FirstCellInView(grid, result)?.Row ?? result.Rows[0];
+        => FirstCellInView(grid, result)?.Row ?? result.ViewRows[0];
 
     /// <summary>The left-most visible column currently on screen, falling back to the result's first
     /// selectable one. What a row-header press puts the cursor on.</summary>
@@ -565,9 +601,9 @@ public sealed class GridSelectionController
         Model.Result = result;
         Model.Cells.Clear();
         foreach (var cell in GridSelectionOps.AllCells(result)) Model.Cells.Add(cell);
-        if (result.Rows.Count > 0)
+        if (result.ViewRows.Count > 0)
         {
-            Model.Active ??= (result.Rows[0], GridSelectionOps.FirstColumn(result));
+            Model.Active ??= (result.ViewRows[0], GridSelectionOps.FirstColumn(result));
             Model.Anchor ??= Model.Active;
         }
         Notify();
@@ -660,8 +696,8 @@ public sealed class GridSelectionController
         if (!result.IsEditable || !ReferenceEquals(Model.Result, result)) return;
         foreach (var row in Model.Cells.Select(s => s.Row).Distinct().ToList())
             if (!result.IsRowDeleted(row)) result.ToggleDelete(row); // mark (never un-mark) for deletion
-        Model.Cells.RemoveWhere(s => !result.Rows.Contains(s.Row));
-        if (Model.Active is { } a && !result.Rows.Contains(a.Row)) { Model.Active = null; Model.Anchor = null; }
+        Model.Cells.RemoveWhere(s => !result.ViewRows.Contains(s.Row));
+        if (Model.Active is { } a && !result.ViewRows.Contains(a.Row)) { Model.Active = null; Model.Anchor = null; }
         ResultRowPainter.RefreshRowColors(grid, result);
         Notify();
     }
@@ -748,7 +784,7 @@ public sealed class GridSelectionController
     public void BeginEditActive(DataGrid grid, ResultSetViewModel result)
     {
         if (Model.Active is not { } a || !ReferenceEquals(Model.Result, result)) return;
-        if (result.Rows.IndexOf(a.Row) < 0 || a.Col >= grid.Columns.Count) return;
+        if (result.ViewRows.IndexOf(a.Row) < 0 || a.Col >= grid.Columns.Count) return;
         // This scroll stays, and it is the one exception to "a keystroke does not move the viewport".
         // `grid.BeginEdit()` needs a realized cell to put an editor in: with the cursor scrolled out of
         // view (a wheel or scrollbar drag moves the viewport without moving the cursor) and this line

@@ -124,7 +124,17 @@ public sealed class SchemaBrowser : ISchemaBrowser
         var key = (connection.Id, database);
         lock (_gate)
         {
-            if (_readers.TryGetValue(key, out var existing)) return existing;
+            if (_readers.TryGetValue(key, out var existing))
+            {
+                // A reader whose SSH tunnel has ended can read nothing more: replace it rather than fail until
+                // the connection is refreshed.
+                if (!(existing.IsCompletedSuccessfully && existing.Result.Tunnel is { IsAlive: false }))
+                {
+                    return existing;
+                }
+                _readers.Remove(key);
+                _ = DisposeAllAsync([existing]);
+            }
             var task = BuildAsync(connection, database, ct);
             _readers[key] = task;
             // Don't cache a failed (or cancelled) build — the next expand should retry, e.g. after fixing
@@ -150,8 +160,30 @@ public sealed class SchemaBrowser : ISchemaBrowser
         // Eviction of a failed build is the caller's continuation (see GetReaderAsync), so that it can check
         // this task is still the cached one before removing it.
         var clone = connection with { Database = database };
-        var (provider, factory, _) = await ConnectionFactoryBuilder.BuildAsync(_providers, _credentials(), clone, forceRefresh: false, ct);
-        return new Reader(factory, provider.CreateMetadataReader(factory));
+        var (provider, factory, _, tunnel) = await ConnectionFactoryBuilder.BuildAsync(_providers, _credentials(), clone, forceRefresh: false, ct);
+        var reader = new Reader(factory, provider.CreateMetadataReader(factory), tunnel);
+        tunnel?.WhenLost(() => DropLost((connection.Id, database), reader));
+        return reader;
+    }
+
+    /// <summary>The SSH tunnel under <paramref name="reader"/> ended: drop it if it is still the cached one,
+    /// so the next read opens a fresh tunnel. Runs on an SSH.NET thread.</summary>
+    private void DropLost((Guid, string) key, Reader reader)
+    {
+        Task<Reader>? lost = null;
+        lock (_gate)
+        {
+            if (_readers.TryGetValue(key, out var current) && current.IsCompletedSuccessfully
+                && ReferenceEquals(current.Result, reader))
+            {
+                _readers.Remove(key);
+                lost = current;
+            }
+        }
+        if (lost is not null)
+        {
+            _ = DisposeAllAsync([lost]);
+        }
     }
 
     public async Task InvalidateAsync(Guid connectionId)
@@ -183,9 +215,21 @@ public sealed class SchemaBrowser : ISchemaBrowser
     {
         foreach (var task in readers)
         {
-            try { await (await task).Factory.DisposeAsync(); } catch { /* best-effort */ }
+            try
+            {
+                var reader = await task;
+                try { await reader.Factory.DisposeAsync(); }
+                finally
+                {
+                    if (reader.Tunnel is not null)
+                    {
+                        await reader.Tunnel.DisposeAsync();
+                    }
+                }
+            }
+            catch { /* best-effort */ }
         }
     }
 
-    private sealed record Reader(IDbConnectionFactory Factory, IMetadataReader Metadata);
+    private sealed record Reader(IDbConnectionFactory Factory, IMetadataReader Metadata, SshTunnelHandle? Tunnel);
 }

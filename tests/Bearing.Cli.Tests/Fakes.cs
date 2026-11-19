@@ -136,5 +136,7 @@ internal sealed class RecordingQueryLog : IQueryLog
     public Task<IReadOnlyList<QueryLogEntry>> SearchAsync(QueryLogQuery query, CancellationToken ct)
         => Task.FromResult<IReadOnlyList<QueryLogEntry>>(Entries);
 
+    public Task SetStarredAsync(long id, bool starred, CancellationToken ct) => Task.CompletedTask;
+
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

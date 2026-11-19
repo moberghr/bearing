@@ -94,12 +94,7 @@ public sealed class ResultCellFactory
     /// <summary>Column header = the name plus inline type badges: teal PK, violet FK, mint jsonb/json
     /// (design RESULTS_GRID §3).</summary>
     private static Control ColumnHeader(ResultSetViewModel result, int index)
-    {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        row.Children.Add(new TextBlock { Text = result.Columns[index].Name, VerticalAlignment = VerticalAlignment.Center });
-        foreach (var (text, color) in Badges(result, index)) row.Children.Add(ResultChrome.Badge(text, color));
-        return row;
-    }
+        => new ResultColumnHeader(result, index, Badges(result, index));
 
     /// <summary>The header's inline type badges. Shared with the width arithmetic below, which has to know
     /// how many there are before the header is measured.</summary>
@@ -149,7 +144,10 @@ public sealed class ResultCellFactory
         return ColumnWidths.Initial(
             headerTextWidth: ResultGridChrome.MeasureText(
                 column.Name, ResultGridChrome.HeaderFontSize, ResultGridChrome.HeaderFontWeight),
-            headerExtra: ResultGridChrome.HeaderChromeFor(Badges(result, index).Select(b => b.Text)),
+            // A sortable column also opens wide enough for its sort indicator (#106), so on a column sized to
+            // its name the glyph doesn't sit on the name's last letters.
+            headerExtra: ResultGridChrome.HeaderChromeFor(Badges(result, index).Select(b => b.Text))
+                + (result.Filter.IsSortable(index) ? ResultColumnHeader.SortGlyphWidth : 0),
             // The widest of the candidates, measured. A character count alone picks the wrong one when the
             // mono stack falls back to a proportional face — "iiiiiiiiii" is longer than "WWWWWWWWW" and
             // much narrower — which is #73's symptom again on the machines least likely to be tested.
@@ -437,14 +435,15 @@ public sealed class ResultCellFactory
     {
         if (!_selection.IsSelected(result, row, index))
         {
-            border.Background = Brushes.Transparent;
+            // The sorted column carries a faint azure wash (design v4 §1), under any selection fill.
+            border.Background = result.Filter.Sort?.Column == index ? Tint("Syntax.Func", 0x17) : Brushes.Transparent;
             border.BorderThickness = new Thickness(0);
             border.Padding = new Thickness(1); // full reserve → content stays put
             border.CornerRadius = new CornerRadius(2);
             return;
         }
 
-        var rows = result.Rows;
+        var rows = result.ViewRows;
         var r = rows.IndexOf(row);
         var up = r > 0 && _selection.IsSelected(result, rows[r - 1], index);
         var down = r >= 0 && r + 1 < rows.Count && _selection.IsSelected(result, rows[r + 1], index);

@@ -220,13 +220,20 @@ public partial class SidebarView : UserControl
         if (Vm is null || NodeOf(sender) is not ServerNodeViewModel server) return;
         var existing = server.Connection;
         var password = await Vm.Connections.GetConnectionPasswordAsync(existing.Id);
+        var sshSecret = await Vm.Connections.GetSshSecretAsync(existing);
         // Re-check for a keychain first: the dialog's warnings and its default credential kind are decided by
         // the posture passed in, and a startup probe that ran too early must not pin them for the session.
         await Vm.RefreshSecretStorageAsync();
-        var result = await _dialogs.ShowConnectionDialogAsync(existing, password, (i, p, ct) => Vm.Connections.TestConnectionAsync(i, p, ct), Vm.SecretStorage, Vm.Connections.Providers, Vm.AzureCatalog);
+        var result = await _dialogs.ShowConnectionDialogAsync(existing, password, (i, p, s, ct) => Vm.Connections.TestConnectionAsync(i, p, ct, s), Vm.SecretStorage, Vm.Connections.Providers, Vm.AzureCatalog, sshSecret);
         if (result is null) return;
-        if (result.Delete) await Vm.Connections.DeleteConnectionAsync(existing.Id);
-        else await Vm.Connections.AddOrUpdateConnectionAsync(result.Connection, result.Password);
+        if (result.Delete)
+        {
+            await Vm.Connections.DeleteConnectionAsync(existing.Id);
+        }
+        else
+        {
+            await Vm.Connections.AddOrUpdateConnectionAsync(result.Connection, result.Password, result.SshSecret, result.ForgetHostKey);
+        }
     }
 
     private void OnSortRelationsBySize(object? sender, RoutedEventArgs e)
@@ -895,6 +902,15 @@ public partial class SidebarView : UserControl
     private async void OnHistorySearchKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter && Vm is not null) { e.Handled = true; await Vm.History.ReloadAsync(CancellationToken.None); }
+    }
+
+    /// <summary>The star on a history row (#111). Handled, so the click stars instead of selecting the row
+    /// and opening its preview. The view model owns failure: it puts the star back and says why.</summary>
+    private async void OnHistoryStarClick(object? sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (Vm is not null && (sender as Control)?.DataContext is HistoryRowViewModel row)
+            await Vm.History.ToggleStarAsync(row);
     }
 
     /// <summary>The panel's Export… button (#113). The shell owns the two prompts and the write; this only

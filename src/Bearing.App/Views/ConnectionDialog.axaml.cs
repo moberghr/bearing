@@ -18,7 +18,12 @@ using Bearing.Sessions;
 namespace Bearing.App.Views;
 
 /// <summary>Result of the connection editor: the edited connection + password, or a delete request.</summary>
-public sealed record ConnectionDialogResult(ConnectionInfo Connection, string Password, bool Delete);
+/// <param name="SshSecret">The SSH password or key passphrase to save under <c>SshSecretId</c>; empty deletes it,
+/// null leaves the stored one alone.</param>
+/// <param name="ForgetHostKey">Forget host key was pressed: the saved pin goes, even if a connect pinned one
+/// while the dialog was open.</param>
+public sealed record ConnectionDialogResult(
+    ConnectionInfo Connection, string Password, bool Delete, string? SshSecret = null, bool ForgetHostKey = false);
 
 /// <summary>
 /// Add/edit a named connection. Returns a <see cref="ConnectionDialogResult"/> via
@@ -45,8 +50,9 @@ public partial class ConnectionDialog : Window
     /// can carry forward the fields this dialog does not show — the folder it is filed in (#80). It builds
     /// a fresh record, so anything not re-stated is silently dropped on save.</summary>
     private readonly ConnectionInfo? _existing;
+    private readonly string? _existingSshSecret;
 
-    private readonly Func<ConnectionInfo, string?, CancellationToken, Task<bool>> _test;
+    private readonly Func<ConnectionInfo, string?, string?, CancellationToken, Task<bool>> _test;
     private readonly SecretStoragePosture _storage;
     private readonly List<IDbProvider> _providers;
 
@@ -71,15 +77,16 @@ public partial class ConnectionDialog : Window
     private bool _loading;
 
     // Parameterless ctor for the XAML designer/loader.
-    public ConnectionDialog() : this(null, null, (_, _, _) => Task.FromResult(false)) { }
+    public ConnectionDialog() : this(null, null, (_, _, _, _) => Task.FromResult(false)) { }
 
     public ConnectionDialog(
         ConnectionInfo? existing,
         string? existingPassword,
-        Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
+        Func<ConnectionInfo, string?, string?, CancellationToken, Task<bool>> test,
         SecretStoragePosture? storage = null,
         IProviderRegistry? providers = null,
-        IAzureCatalog? azure = null)
+        IAzureCatalog? azure = null,
+        string? existingSshSecret = null)
     {
         InitializeComponent();
         Opened += (_, _) => FitToScreen();
@@ -127,6 +134,8 @@ public partial class ConnectionDialog : Window
             Title = "New connection";
         }
 
+        _existingSshSecret = existingSshSecret;
+        InitSsh(existing?.SshTunnel, existingSshSecret);
         RenderFields();
         // Resolve rather than read the field: a project written before the field existed, or a DBeaver
         // import, still carries the mode in the options bag (#23). A new connection's default is computed
@@ -185,6 +194,7 @@ public partial class ConnectionDialog : Window
     private void UpdateEngineRows()
     {
         TlsGroup.IsVisible = _model.SupportsTlsModes;
+        SshTab.IsVisible = _model.SupportsSshTunnel;
         ManualCommitBox.IsVisible = _model.SupportsManualCommit;
         ScanGroup.IsVisible = _model.AsksFullScanQuestion;
         ScanNote.Text = ScanGuard.Boundary;
@@ -814,7 +824,78 @@ public partial class ConnectionDialog : Window
         // Not editable here, so carried rather than rebuilt: filing lives in the tree. Omitting it would
         // quietly discard it on every save.
         Folder = _existing?.Folder,
+        // Not saved for an engine that cannot be tunnelled, like Tls above: the record must not name a route nothing
+        // on this engine takes.
+        SshTunnel = _model.SupportsSshTunnel ? BuildSshTunnel() : null,
     };
+
+    // ---- SSH tab ---------------------------------------------------------------------------------
+
+    /// <summary>Set by Forget host key: the saved pin is dropped so the next connect pins whatever it sees.</summary>
+    private bool _forgetHostKey;
+
+    private void InitSsh(SshTunnel? ssh, string? secret)
+    {
+        SshAuthBox.SelectedIndex = ssh?.UsesPrivateKey == true ? 1 : 0;
+        if (ssh?.UsesPrivateKey == true)
+        {
+            SshPassphraseBox.Text = secret ?? "";
+        }
+        else
+        {
+            SshPasswordBox.Text = secret ?? "";
+        }
+        SshEnabledBox.IsChecked = ssh is not null;
+        SshHostBox.Text = ssh?.Host ?? "";
+        SshPortBox.Text = ssh is null || ssh.Port == SshTunnelForm.DefaultPort ? "" : ssh.Port.ToString(CultureInfo.InvariantCulture);
+        SshUserBox.Text = ssh?.User ?? "";
+        SshKeyBox.Text = ssh?.PrivateKeyPath ?? "";
+        foreach (var box in new[] { SshHostBox, SshPortBox, SshUserBox })
+        {
+            box.TextChanged += (_, _) => UpdateSsh();
+        }
+        UpdateSsh();
+    }
+
+    private SshTunnel? BuildSshTunnel()
+        => SshTunnelForm.Build(SshEnabledBox.IsChecked == true, SshHostBox.Text, SshPortBox.Text, SshUserBox.Text,
+            SelectedSshAuth(), SshKeyBox.Text, _existing?.SshTunnel, _forgetHostKey);
+
+    private SshAuthKind SelectedSshAuth() => SshAuthBox.SelectedIndex == 1 ? SshAuthKind.PrivateKey : SshAuthKind.Password;
+
+    private string SshSecretToStore()
+        => SshTunnelForm.SecretToStore(BuildSshTunnel(), SshPasswordBox.Text, SshPassphraseBox.Text);
+
+    private void OnSshAuthChanged(object? sender, SelectionChangedEventArgs e) => UpdateSsh();
+
+    private void OnSshToggled(object? sender, RoutedEventArgs e) => UpdateSsh();
+
+    private void OnSshForgetClick(object? sender, RoutedEventArgs e)
+    {
+        _forgetHostKey = true;
+        UpdateSsh();
+    }
+
+    private void UpdateSsh()
+    {
+        var on = SshEnabledBox.IsChecked == true;
+        SshFields.IsEnabled = on;
+        var key = SelectedSshAuth() == SshAuthKind.PrivateKey;
+        SshPasswordLabel.IsVisible = SshPasswordBox.IsVisible = !key;
+        SshKeyLabel.IsVisible = SshKeyBox.IsVisible = key;
+        SshPassphraseLabel.IsVisible = SshPassphraseBox.IsVisible = key;
+        var tunnel = BuildSshTunnel();
+        var pin = tunnel?.HostKeyFingerprint;
+        SshHostKeyText.Text = !on ? "" : pin ?? "Not seen yet — pinned on first connect.";
+        SshForgetButton.IsEnabled = pin is not null;
+        ShowSshProblem(SshTunnelForm.Problem(tunnel, HostValue()));
+    }
+
+    private void ShowSshProblem(string? problem)
+    {
+        SshProblem.Text = problem ?? "";
+        SshProblem.IsVisible = problem is not null;
+    }
 
     /// <summary>The password to persist: the typed value for a stored-password connection, or empty for
     /// prompt / Entra / integrated (nothing is stored — an empty value deletes any existing secret on
@@ -836,7 +917,7 @@ public partial class ConnectionDialog : Window
         TestResult.Text = "Testing…";
         try
         {
-            var ok = await _test(BuildConnection(), PasswordBox.Text ?? "", CancellationToken.None);
+            var ok = await _test(BuildConnection(), PasswordBox.Text ?? "", SshSecretToStore(), CancellationToken.None);
             TestResult.Text = ok ? "✓ Connection succeeded." : "✗ Connection failed.";
         }
         catch (Exception ex)
@@ -848,8 +929,22 @@ public partial class ConnectionDialog : Window
         }
     }
 
+    /// <summary>Unlike the Connection tab's advisory hints (<see cref="RefreshValidation"/>), a ticked SSH tab
+    /// that can't connect is a gate: no saved connection predates the tab, and a tunnel with no host would be
+    /// saved as one the tree shows as a direct connection.</summary>
     private void OnSaveClick(object? sender, RoutedEventArgs e)
-        => Close(new ConnectionDialogResult(BuildConnection(), SecretToStore(), Delete: false));
+    {
+        var tunnel = _model.SupportsSshTunnel ? BuildSshTunnel() : null;
+        if (SshTunnelForm.Problem(tunnel, HostValue()) is { } problem)
+        {
+            ShowSshProblem(problem);
+            SshTab.IsSelected = true;
+            return;
+        }
+        Close(new ConnectionDialogResult(BuildConnection(), SecretToStore(), Delete: false,
+            SshTunnelForm.SecretToSave(tunnel, _existing?.SshTunnel, _existingSshSecret,
+                SshPasswordBox.Text, SshPassphraseBox.Text), _forgetHostKey));
+    }
 
     private void OnDeleteClick(object? sender, RoutedEventArgs e)
         => Close(new ConnectionDialogResult(BuildConnection(), SecretToStore(), Delete: true));

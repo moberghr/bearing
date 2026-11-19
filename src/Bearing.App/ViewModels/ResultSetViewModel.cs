@@ -44,8 +44,23 @@ public sealed partial class ResultSetViewModel : ObservableObject
         ColumnLayout = new ColumnLayout(Columns.Count);
         // The marker on the meta row is derived from the layout, so it has to be told when the layout moves
         // (the layout itself is deliberately not an ObservableObject — it is pure, §2.5).
-        ColumnLayout.Changed += () => OnPropertyChanged(nameof(HiddenColumnsText));
+        // One handler for the result's life: the meta row's marker, and the quick filter, which searches visible
+        // columns only (#106).
+        Filter = new ResultFilterViewModel(Rows, Columns, IsNewRow, ColumnLayout.IsHidden);
+        ColumnLayout.Changed += () =>
+        {
+            OnPropertyChanged(nameof(HiddenColumnsText));
+            Filter.OnColumnVisibilityChanged();
+        };
     }
+
+    /// <summary>The client-side filter and sort over the loaded rows (#106), and the rows they leave on
+    /// screen (<see cref="ViewRows"/>). Pending changes, saves and exports keep reading <see cref="Rows"/>.</summary>
+    public ResultFilterViewModel Filter { get; }
+
+    /// <summary>The rows on screen, in view order — the grid's ItemsSource, and the order every "next row",
+    /// rectangle and paste walks. Equal to <see cref="Rows"/> while no filter or sort is active.</summary>
+    public ViewRowCollection ViewRows => Filter.ViewRows;
 
     public IReadOnlyList<ColumnDescriptor> Columns { get; }
 
@@ -203,6 +218,8 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// <summary>Append a freshly-fetched page and update whether more remain.</summary>
     public void AppendPage(IReadOnlyList<object?[]> rows, bool hasMore)
     {
+        // One rebuild for the page, not one per row, while a filter or sort is active.
+        using var _ = Filter.DeferRefresh();
         foreach (var row in rows)
         {
             Rows.Add(row);
@@ -298,8 +315,9 @@ public sealed partial class ResultSetViewModel : ObservableObject
     public object?[] AddRow()
     {
         var row = new object?[Columns.Count];
-        Rows.Add(row);
+        // Marked new *before* it lands, so the view can see it is a pending insert and pin it at the bottom.
         _newRows.Add(row);
+        Rows.Add(row);
         RaiseRowCount();
         RaisePending();
         return row;
@@ -311,8 +329,8 @@ public sealed partial class ResultSetViewModel : ObservableObject
     {
         if (_newRows.Contains(row))
         {
-            _newRows.Remove(row);
             Rows.Remove(row);
+            _newRows.Remove(row);
             RaiseRowCount();
             RaisePending();
             return;

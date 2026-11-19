@@ -1211,7 +1211,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
             return;
         }
 
-        _ctx.SetStatus($"Exported {block.Rows.Count:N0} rows to {System.IO.Path.GetFileName(path)}.");
+        // A filter only hides rows on screen; the file has all of them, in load order (#106). Said, not assumed.
+        var note = rs.Filter.IsActive ? " — every row, unfiltered and in query order" : "";
+        _ctx.SetStatus($"Exported {block.Rows.Count:N0} rows to {System.IO.Path.GetFileName(path)}{note}.");
         ExportCompleted?.Invoke(new ExportCompletion(path, block.Rows.Count, format));
     }
 
@@ -1273,8 +1275,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
             return;
         }
 
+        var note = results.Any(r => r.HasGrid && r.Filter.IsActive) ? " — every row, unfiltered and in query order" : "";
         _ctx.SetStatus($"Exported {sheets.Count} result{(sheets.Count == 1 ? "" : "s")} "
-                     + $"({rows:N0} rows) to {System.IO.Path.GetFileName(path)}.");
+                     + $"({rows:N0} rows) to {System.IO.Path.GetFileName(path)}{note}.");
         ExportCompleted?.Invoke(new ExportCompletion(path, rows, ExportFormat.Xlsx));
     }
 

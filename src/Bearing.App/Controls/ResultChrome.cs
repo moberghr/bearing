@@ -1,6 +1,7 @@
 using System;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -113,6 +114,42 @@ public static class ResultChrome
             VerticalContentAlignment = VerticalAlignment.Center,
         };
         ToolTip.SetTip(b, tip);
+        return b;
+    }
+
+    /// <summary>
+    /// A line icon from <c>Themes/Icons.axaml</c> at <paramref name="size"/>px, stroked in its button's
+    /// Foreground (so hover recolors it like the button's text). Drawn rather than typed: a symbol glyph comes
+    /// from whichever fallback font has it, and ⤓ ⌕ ✕ rendered clipped (#106). Kept on its 24×24 authoring
+    /// grid like <see cref="LineIcon"/>, so icons drawn aligned stay aligned.
+    /// </summary>
+    public static Control Icon(string key, double size = 13)
+    {
+        var path = new Path
+        {
+            Data = Application.Current?.FindResource(key) as Geometry,
+            StrokeThickness = 2,
+            StrokeLineCap = PenLineCap.Round,
+            StrokeJoin = PenLineJoin.Round,
+        };
+        path.Bind(Avalonia.Controls.Shapes.Shape.StrokeProperty, new Binding(nameof(Button.Foreground))
+        {
+            RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor) { AncestorType = typeof(Button) },
+        });
+        return new Viewbox
+        {
+            Width = size,
+            Height = size,
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = new Panel { Width = 24, Height = 24, Children = { path } },
+        };
+    }
+
+    /// <summary><see cref="SubtleButton"/> with a drawn icon before its label.</summary>
+    public static Button SubtleIconButton(string iconKey, string label, string tip)
+    {
+        var b = SubtleButton(label, tip);
+        if (b.Content is StackPanel tokens) tokens.Children.Insert(0, Icon(iconKey));
         return b;
     }
 

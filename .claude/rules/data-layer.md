@@ -71,7 +71,9 @@ connection, no password and no pool. Everything is behind `IDynamoDbApi` (the th
   limitation — keep them indistinguishable on purpose, never invent a difference).
 - Never offered, and each answers "no" rather than an approximation: grid editing (`GridEditUnavailable`), manual
   commit and transactions (`SupportsManualCommit` false, `CreateTransactionScope` throws), counts and offset paging
-  (`CountWrap`/`TryAppendPage` null), query plans, server activity, TLS modes, session time zone, `:name` variables.
+  (`CountWrap`/`TryAppendPage` null), query plans, server activity, TLS modes, session time zone, `:name` variables,
+  SSH tunnels (`SupportsSshTunnel` false: the SSH tab is hidden, and a tunnel a hand-edited project names is refused
+  in `ConnectionFactoryBuilder.RouteAsync`, never routed).
   The timeout is a client-side cancel of the page read (the SQL Server arrangement, §1.9a).
 
 ## §5.2 — SQLite (`Bearing.Persistence`)

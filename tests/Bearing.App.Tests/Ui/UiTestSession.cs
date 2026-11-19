@@ -56,12 +56,39 @@ public sealed class UiTestSession : IDisposable
 
     /// <summary>Run a test body on the Avalonia dispatcher thread. Assertion failures surface through the
     /// returned task, so a test method is written as <c>public Task Name() =&gt; _ui.Run(() =&gt; …);</c>.</summary>
-    public Task Run(Action body) => _session.Dispatch(body, CancellationToken.None);
+    public Task Run(Action body) => WithSetupRetry(started => _session.Dispatch(
+        () => { started(); body(); }, CancellationToken.None));
 
     /// <summary>The same, for a body that awaits — the shell's own setup is async. Awaits resume on the
     /// dispatcher thread, so the body stays on it throughout.</summary>
-    public Task Run(Func<Task> body) => _session.Dispatch(
-        async () => { await body(); return true; }, CancellationToken.None);
+    public Task Run(Func<Task> body) => WithSetupRetry(started => _session.Dispatch(
+        async () => { started(); await body(); return true; }, CancellationToken.None));
+
+    /// <summary>
+    /// Retry a run whose fresh <see cref="Application"/> failed to set up, before the body started — never one
+    /// whose body ran. Avalonia makes the first thread to touch <c>Dispatcher.UIThread</c> the UI thread, and
+    /// each isolated run clears that before setting up. This collection runs alone, but non-UI tests leave
+    /// background work behind that still posts to <c>Dispatcher.UIThread</c> from a pool thread — a file
+    /// watcher's late event reaching <c>ScriptFileSync</c>, a query-log append reaching <c>ShellViewModel</c>.
+    /// One landing inside that window takes the UI thread, and the setup fails <c>VerifyAccess</c> ("a
+    /// different thread owns it"). Seen on the macOS CI runner, where FSEvents delivers late; reproduced
+    /// locally with a test that leaves such a poster running. A second setup resets the global again.
+    /// </summary>
+    private static async Task WithSetupRetry(Func<Action, Task> dispatch)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var started = false;
+            try
+            {
+                await dispatch(() => started = true);
+                return;
+            }
+            catch (InvalidOperationException) when (!started && attempt < 3)
+            {
+            }
+        }
+    }
 
     public void Dispose() => _session.Dispose();
 }

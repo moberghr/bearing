@@ -16,6 +16,7 @@
   <ItemGroup>
     <!-- Shared with Bearing.Data.Tests: one definition of the test server's defaults (see PgTestServer). -->
     <Compile Include="..\Shared\PgTestServer.cs" Link="Shared\PgTestServer.cs" />
+    <Compile Include="..\Shared\MySqlTestServer.cs" Link="Shared\MySqlTestServer.cs" />
   </ItemGroup>
 
   <ItemGroup>

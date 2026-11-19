@@ -358,7 +358,7 @@ public class ConnectionEditorTests
     public Task The_dynamodb_editor_has_region_profile_and_endpoint_and_only_the_aws_profile_credential() => _ui.Run(() =>
     {
         var dialog = new ConnectionDialog(
-            null, null, (_, _, _) => Task.FromResult(false),
+            null, null, (_, _, _, _) => Task.FromResult(false),
             new Bearing.App.Services.SecretStoragePosture(Secure: false, CanStore: false, Reason: "no keychain here"),
             ConnectionEditorProbe.Registry());
         ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
@@ -392,6 +392,8 @@ public class ConnectionEditorTests
             Assert.False(Visible(dialog, "TlsGroup"));
             Assert.False(Visible(dialog, "ManualCommitBox"));
             Assert.False(Visible(dialog, "TimeZoneGroup"));
+            Assert.False(Visible(dialog, "SshTab"));    // no host and port to forward
+            Assert.Null(dialog.BuildConnection().SshTunnel);
             Assert.True(Visible(dialog, "ExternalAccessBox"));
             // The settings every engine has stay where they were.
             Assert.True(Visible(dialog, "ConfirmWritesBox"));
@@ -991,7 +993,7 @@ internal static class ConnectionEditorProbe
     /// <summary>A dialog over the app's real registry, so the engine list under test is the one this build
     /// composed. The test delegate is never invoked from here: nothing presses Test.</summary>
     public static ConnectionDialog Dialog(ConnectionInfo? existing = null, IAzureCatalog? azure = null)
-        => new(existing, null, (_, _, _) => Task.FromResult(false), providers: Registry(), azure: azure);
+        => new(existing, null, (_, _, _, _) => Task.FromResult(false), providers: Registry(), azure: azure);
 
     /// <summary>The AWS profiles the DynamoDB editor is offered here: one with a region, one without.</summary>
     public static readonly IReadOnlyList<AwsConfigProfile> Profiles =

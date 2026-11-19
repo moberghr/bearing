@@ -95,6 +95,14 @@ public interface IDbProvider
     bool SupportsTlsModes { get; }
 
     /// <summary>
+    /// Whether <see cref="ConnectionInfo.SshTunnel"/> can carry this engine's connection — a TCP forward to the
+    /// connection's host and port. True by default (every engine that dials a server). False for an engine that
+    /// reaches an HTTPS API by region and endpoint (DynamoDB): there is no host and port to forward, so the dialog
+    /// hides the SSH tab and a connect naming a tunnel is refused rather than routed somewhere meaningless.
+    /// </summary>
+    bool SupportsSshTunnel => true;
+
+    /// <summary>
     /// Place a failed statement's error (see <see cref="QueryError.SqlState"/>) on the neutral
     /// <see cref="DbErrorKind"/> scale. The engine's codes never leave the provider: the App layer used
     /// to sniff Postgres SQLSTATEs as strings, which quietly mislabelled every other engine's errors.

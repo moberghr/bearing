@@ -61,12 +61,68 @@ public sealed class MacKeychainSecretStore : ISecretStore
 
     public async Task<string?> GetPasswordAsync(Guid connectionId, CancellationToken ct)
     {
-        // -w prints the password alone on stdout. A non-zero exit is "no password to hand back" — item not
-        // found (44) or a keychain we can't read — and the caller then prompts instead of failing.
+        // -g, not -w. -w prints the password alone, but hex-encoded whenever it is not plain printable ASCII
+        // (any non-ASCII letter, a backslash) — and a hex string is also a valid password, so that output
+        // cannot be read back. -g labels which form it printed (see ParsePasswordLine). A non-zero exit is
+        // "no password to hand back" — item not found (44) or a keychain we can't read — and the caller then
+        // prompts instead of failing.
         var r = await RunAsync(
-            ["find-generic-password", "-a", connectionId.ToString(), "-s", Service, "-w"], ct).ConfigureAwait(false);
-        if (r.Exit != 0) return null;
-        return r.Stdout.TrimEnd('\n');
+            ["find-generic-password", "-a", connectionId.ToString(), "-s", Service, "-g"], ct).ConfigureAwait(false);
+        if (r.Exit != 0)
+        {
+            return null;
+        }
+        // stderr holds the password on success — never put r.Detail or r.Stderr into an error raised from
+        // this method (it would reach the status bar or a log, §1.1).
+        var line = r.Stderr.Split('\n').FirstOrDefault(l => l.StartsWith(PasswordLabel, StringComparison.Ordinal));
+        return line is null
+            ? throw new InvalidOperationException("security find-generic-password printed no password line.")
+            : ParsePasswordLine(line);
+    }
+
+    private const string PasswordLabel = "password:";
+
+    /// <summary>Throws on invalid bytes instead of substituting U+FFFD — a wrong password is never handed back.</summary>
+    private static readonly System.Text.UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
+    /// <summary>
+    /// The password from <c>security find-generic-password -g</c>'s stderr line. Measured forms:
+    /// <c>password: "text"</c> for printable ASCII, verbatim between the outer quotes (an inner <c>"</c> is
+    /// not escaped); <c>password: 0xHEX  "escaped"</c> for anything else, where the hex is the stored UTF-8
+    /// bytes and the quoted part is a lossy octal rendering to ignore; <c>password: </c> for empty. Anything
+    /// else — including hex that is not valid UTF-8 — throws.
+    /// </summary>
+    internal static string ParsePasswordLine(string line)
+    {
+        var value = line[PasswordLabel.Length..].TrimEnd('\r');
+        if (value.StartsWith(' '))
+        {
+            value = value[1..];
+        }
+        if (value.StartsWith("0x", StringComparison.Ordinal))
+        {
+            var end = value.IndexOf(' ');
+            var hex = end < 0 ? value[2..] : value[2..end];
+            try
+            {
+                return StrictUtf8.GetString(Convert.FromHexString(hex));
+            }
+            catch (System.Text.DecoderFallbackException)
+            {
+                // Not rethrown as inner: its message quotes the offending bytes, which are the password's.
+                throw new InvalidOperationException(
+                    "security find-generic-password printed a password whose bytes are not valid UTF-8.");
+            }
+        }
+        if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+        {
+            return value[1..^1];
+        }
+        if (value.Length == 0)
+        {
+            return "";
+        }
+        throw new InvalidOperationException("security find-generic-password printed a password line in an unknown form.");
     }
 
     public async Task DeleteAsync(Guid connectionId, CancellationToken ct)

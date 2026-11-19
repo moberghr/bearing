@@ -152,6 +152,9 @@ public sealed class ConnectionFieldModel
     /// and saves the default, so the record never carries a mode nothing honours (§1.4).</summary>
     public bool SupportsTlsModes => Provider.SupportsTlsModes;
 
+    /// <summary>Whether the SSH tab means anything for this engine (<see cref="IDbProvider.SupportsSshTunnel"/>).</summary>
+    public bool SupportsSshTunnel => Provider.SupportsSshTunnel;
+
     /// <summary>Whether <see cref="ConnectionInfo.ManualCommit"/> means anything on this engine. False hides the
     /// checkbox and saves off.</summary>
     public bool SupportsManualCommit => Provider.SupportsManualCommit;

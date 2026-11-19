@@ -11,7 +11,16 @@ using Bearing.Sql;
 namespace Bearing.App.ViewModels;
 
 /// <summary>Which history rows the filter pills show.</summary>
-public enum HistoryFilter { All, Ok, Error }
+public enum HistoryFilter
+{
+    All,
+    Ok,
+    Error,
+
+    /// <summary>Bookmarked rows only (#111). Asked of the store rather than filtered from the cached
+    /// screenful, so a query starred months ago is found.</summary>
+    Starred,
+}
 
 /// <summary>
 /// The inline History side-panel (design §4): a day-grouped, filterable view over the query log.
@@ -20,16 +29,22 @@ public enum HistoryFilter { All, Ok, Error }
 /// </summary>
 public sealed partial class HistoryPanelViewModel : ObservableObject
 {
-    private readonly Func<string?, CancellationToken, Task<IReadOnlyList<QueryLogEntry>>> _search;
+    private readonly Func<string?, bool, CancellationToken, Task<IReadOnlyList<QueryLogEntry>>> _search;
     private readonly Func<string, string?> _colorForConnection;
+    private readonly Func<long, bool, CancellationToken, Task>? _setStarred;
     private IReadOnlyList<QueryLogEntry> _entries = Array.Empty<QueryLogEntry>();
+    private CancellationTokenSource? _filterReload;
 
+    /// <param name="search">The log search: free text (null for none) and whether to return starred rows only.</param>
+    /// <param name="setStarred">Stars or unstars a logged row by id (#111); null leaves the star inert.</param>
     public HistoryPanelViewModel(
-        Func<string?, CancellationToken, Task<IReadOnlyList<QueryLogEntry>>> search,
-        Func<string, string?> colorForConnection)
+        Func<string?, bool, CancellationToken, Task<IReadOnlyList<QueryLogEntry>>> search,
+        Func<string, string?> colorForConnection,
+        Func<long, bool, CancellationToken, Task>? setStarred = null)
     {
         _search = search;
         _colorForConnection = colorForConnection;
+        _setStarred = setStarred;
     }
 
     [ObservableProperty] private string _searchText = "";
@@ -40,21 +55,78 @@ public sealed partial class HistoryPanelViewModel : ObservableObject
     /// <summary>Day-grouped, filtered rows (newest day first).</summary>
     public ObservableCollection<HistoryDayGroup> Groups { get; } = new();
 
-    partial void OnFilterChanged(HistoryFilter value) => Regroup(DateTimeOffset.Now);
+    /// <summary>The ok/error pills re-group the cached rows; entering or leaving <see cref="HistoryFilter.Starred"/>
+    /// changes what the store is asked for, so that one reloads.</summary>
+    partial void OnFilterChanged(HistoryFilter oldValue, HistoryFilter newValue)
+    {
+        if (oldValue != HistoryFilter.Starred && newValue != HistoryFilter.Starred)
+        {
+            Regroup(DateTimeOffset.Now);
+            return;
+        }
+        var superseded = _filterReload;
+        _filterReload = new CancellationTokenSource();
+        superseded?.Cancel();
+        superseded?.Dispose();
+        _ = ReloadAsync(_filterReload.Token);
+    }
+
+    /// <summary>
+    /// Star or unstar a row (#111). Drawn at once and written behind; a write that fails puts the star back and
+    /// says so, rather than leaving a bookmark on screen that the log doesn't hold — the one place a wrong
+    /// star costs something is retention, which would then prune a row the user thought was kept.
+    /// </summary>
+    public async Task ToggleStarAsync(HistoryRowViewModel row)
+    {
+        if (_setStarred is null) return;
+        if (row.Entry.Id == 0)
+        {
+            Status = "That query isn't in the log yet — try again in a moment.";
+            return;
+        }
+        var starred = !row.IsStarred;
+        Apply(row, starred);
+        try
+        {
+            await _setStarred(row.Entry.Id, starred, CancellationToken.None);
+            Status = starred ? "Starred — kept past history retention." : "Unstarred.";
+        }
+        catch (Exception ex)
+        {
+            Apply(row, !starred);
+            Status = "Couldn't " + (starred ? "star" : "unstar") + " that query: " + ex.Message;
+            return;
+        }
+        if (Filter == HistoryFilter.Starred && !starred) Regroup(DateTimeOffset.Now);
+    }
+
+    private void Apply(HistoryRowViewModel row, bool starred)
+    {
+        row.IsStarred = starred;
+        _entries = _entries.Select(e => e.Id == row.Entry.Id ? e with { IsStarred = starred } : e).ToList();
+    }
 
     /// <summary>Fetch matching history from the log and rebuild the grouped view.</summary>
     public async Task ReloadAsync(CancellationToken ct)
     {
         var text = string.IsNullOrWhiteSpace(SearchText) ? null : SearchText;
+        var starredOnly = Filter == HistoryFilter.Starred;
         try
         {
-            var found = await _search(text, ct);
+            var found = await _search(text, starredOnly, ct);
             // A superseded reload must not land: the caller cancels the previous one for each new query in
             // a run, and applying a stale answer after a newer one would leave the panel behind the log.
             ct.ThrowIfCancellationRequested();
+            // The shell's refresh and the filter's own reload hold separate tokens, so neither cancels the
+            // other. An answer asked under the other side of the Starred pill is for a view no longer shown —
+            // starred-only rows under "All", or the newest screenful under "Starred" — and the filter change
+            // has started a reload of its own.
+            if ((Filter == HistoryFilter.Starred) != starredOnly) return;
             _entries = found;
             Regroup(DateTimeOffset.Now);
-            Status = _entries.Count == 0 ? "No matching queries." : $"{_entries.Count} quer{(_entries.Count == 1 ? "y" : "ies")}.";
+            Status = _entries.Count == 0
+                ? Filter == HistoryFilter.Starred ? "No starred queries — ☆ a row to keep it." : "No matching queries."
+                : $"{_entries.Count} quer{(_entries.Count == 1 ? "y" : "ies")}.";
         }
         catch (OperationCanceledException)
         {
@@ -109,6 +181,7 @@ public sealed partial class HistoryPanelViewModel : ObservableObject
     {
         HistoryFilter.Ok => e.Success,
         HistoryFilter.Error => !e.Success,
+        HistoryFilter.Starred => e.IsStarred,
         _ => true,
     };
 
@@ -125,11 +198,12 @@ public sealed partial class HistoryPanelViewModel : ObservableObject
 public sealed record HistoryDayGroup(string Caption, IReadOnlyList<HistoryRowViewModel> Rows);
 
 /// <summary>Display projection of one logged query for the history panel.</summary>
-public sealed class HistoryRowViewModel
+public sealed partial class HistoryRowViewModel : ObservableObject
 {
     public HistoryRowViewModel(QueryLogEntry entry, string? connectionColor)
     {
         Entry = entry;
+        _isStarred = entry.IsStarred;
         Sql = entry.SqlText;
         OpenText = ScriptDirectives.Render(entry.Parameters.Select(p => (p.Name, p.Value, p.Kind))) + entry.SqlText;
         ParametersText = string.Join(" · ", entry.Parameters.Select(p =>
@@ -174,6 +248,17 @@ public sealed class HistoryRowViewModel
     public string ParametersText { get; }
 
     public bool HasParameters => ParametersText.Length > 0;
+
+    /// <summary>Bookmarked (#111). Observable because the star flips in place, ahead of the log write.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(StarGlyph), nameof(StarTip))]
+    private bool _isStarred;
+
+    public string StarGlyph => IsStarred ? "★" : "☆";
+
+    public string StarTip => IsStarred
+        ? "Starred: kept past history retention. Click to unstar."
+        : "Star this query to keep it past history retention.";
 
     public string? ConnectionColor { get; }
     public bool IsError { get; }

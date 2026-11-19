@@ -42,6 +42,7 @@ public sealed class CredentialResolver
         _tokens = tokens;
         _now = now ?? (() => DateTimeOffset.UtcNow);
         _takesPassword = takesPassword ?? (_ => true);
+        Ssh = new SshTunnels(secrets, prompt);
     }
 
     /// <summary>
@@ -80,6 +81,10 @@ public sealed class CredentialResolver
             _ => false,
         };
     }
+
+    /// <summary>SSH tunnels for connections that have one, sharing this resolver's secret store and prompt
+    /// (so the CLI, which has no prompt, gets none there either).</summary>
+    public SshTunnels Ssh { get; }
 
     /// <summary>Resolve a credential for <paramref name="info"/>. With <paramref name="forceRefresh"/> the
     /// in-memory cache is bypassed (re-prompt / re-mint). Throws <see cref="ConnectionFailedException"/> when

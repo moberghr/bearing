@@ -97,6 +97,10 @@ public sealed class DynamoDbProvider : IDbProvider
     /// loopback endpoint for DynamoDB Local, is decided by <see cref="DynamoDbConnectionFactory"/>'s rule.</summary>
     public bool SupportsTlsModes => false;
 
+    /// <summary>False: an SSH forward needs a host and port, and this engine has a region and an HTTPS endpoint.
+    /// Rewriting the region to a tunnel's loopback end would build a client for a region named "127.0.0.1".</summary>
+    public bool SupportsSshTunnel => false;
+
     /// <summary>False: DynamoDB has no view of other clients' requests to show or cancel.</summary>
     public bool SupportsServerActivity => false;
 

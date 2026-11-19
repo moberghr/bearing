@@ -57,11 +57,11 @@ public partial class MainWindow
         // password can be stored, so ask again before deciding it from a probe that ran at startup.
         await Vm.RefreshSecretStorageAsync();
         var result = await _dialogs.ShowConnectionDialogAsync(
-            null, null, (i, p, ct) => Vm.Connections.TestConnectionAsync(i, p, ct),
+            null, null, (i, p, s, ct) => Vm.Connections.TestConnectionAsync(i, p, ct, s),
             Vm.SecretStorage, Vm.Connections.Providers, Vm.AzureCatalog);
         if (result is not { Delete: false }) return;
         var connection = folder is null ? result.Connection : result.Connection with { Folder = folder };
-        await Vm.Connections.AddOrUpdateConnectionAsync(connection, result.Password);
+        await Vm.Connections.AddOrUpdateConnectionAsync(connection, result.Password, result.SshSecret);
     }
 
     /// <summary>

@@ -35,6 +35,18 @@ public interface IConnectionSessionManager : IAsyncDisposable
     /// <see cref="IsLinked"/>. May fire on a background thread.</summary>
     event Action<Guid>? LinkChanged;
 
+    /// <summary>Raised after a session was evicted because the SSH session under it ended (sleep/wake, a
+    /// bastion restart). Its pool is gone, and with it any transaction held on it — the server ended that.
+    /// May fire on a background thread.</summary>
+    event Action<SessionKey>? TunnelLost;
+
+    /// <summary>
+    /// Connect once with a credential the caller has in hand — the connection dialog's Test, with a typed
+    /// password and SSH secret not saved yet — and tear it down: nothing is pooled, linked or stored. Same
+    /// connect recipe as a session (§2.6), so the test reaches the server the way a connect will.
+    /// </summary>
+    Task<bool> TestAsync(ConnectionInfo info, string? password, string? sshSecret, CancellationToken ct);
+
     /// <summary>
     /// Return the live session for <paramref name="info"/>, creating and testing it on first use.
     /// Reuses an existing session only if its settings still match; a changed connection is rebuilt.
