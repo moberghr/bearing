@@ -48,6 +48,9 @@ public partial class App : Application
         SubmenuSafeTriangle.Install();
         AvaloniaXamlLoader.Load(this);
         Theming.ColorSchemes.Install(this);
+        // Before Avalonia exports the macOS application menu, which happens after this and before the main
+        // window exists — see AppMenuBar.PrepareApplicationMenu.
+        AppMenuBar.PrepareApplicationMenu(this);
     }
 
     /// <summary>
