@@ -73,15 +73,44 @@ public class SshHostKeyPinTests : IDisposable
     }
 
     [Fact]
-    public async Task An_existing_pin_is_never_overwritten()
+    public async Task The_same_key_seen_again_changes_nothing()
     {
+        var conn = Conn(Seen);
+        var (ctx, conns, status) = Compose(saved: conn);
+
+        await conns.PinHostKeyAsync(conn with { SshTunnel = conn.SshTunnel! with { HostKeyFingerprint = null } }, Seen);
+
+        Assert.Equal(Seen, PinOf(ctx, conn.Id));
+        Assert.Equal("", status());
+    }
+
+    [Fact]
+    public async Task A_different_key_than_a_pin_saved_meanwhile_keeps_the_pin_and_disconnects()
+    {
+        // Two first connects raced: one pinned "earlier", this one accepted another key.
         var conn = Conn("SHA256:earlier");
         var (ctx, conns, status) = Compose(saved: conn);
 
         await conns.PinHostKeyAsync(conn with { SshTunnel = conn.SshTunnel! with { HostKeyFingerprint = null } }, Seen);
 
         Assert.Equal("SHA256:earlier", PinOf(ctx, conn.Id));
-        Assert.Equal("", status());
+        Assert.StartsWith("Disconnected 'behind-bastion'", status());
+        Assert.Contains("different host keys", status());
+        Assert.False(ctx.Sessions.IsLinked(conn.Id));
+    }
+
+    [Fact]
+    public async Task Pinning_is_not_an_edit_so_the_commit_mode_override_survives()
+    {
+        var conn = Conn();
+        var (ctx, conns, _) = Compose(saved: conn);
+        ctx.CommitModes.Set(conn.Id, manualCommit: true);   // the toolbar pill, before the first connect
+
+        await conns.PinHostKeyAsync(conn, Seen);
+
+        Assert.Equal(Seen, PinOf(ctx, conn.Id));
+        Assert.True(ctx.CommitModes.IsOverridden(conn.Id));
+        Assert.True(ctx.CommitModes.IsManualCommit(ctx.Project!.Manifest.Connections.Single(c => c.Id == conn.Id)));
     }
 
     [Fact]
@@ -105,19 +134,32 @@ public class SshHostKeyPinTests : IDisposable
         await conns.PinHostKeyAsync(Conn(), Seen);
 
         Assert.StartsWith("Could not pin the SSH host key of bastion", status());
+        Assert.Contains("not saved in the open project", status());
         Assert.Contains("not trusted yet", status());
     }
 
     [Fact]
-    public async Task A_pin_the_project_could_not_save_is_reported_unpinned()
+    public async Task A_pin_the_project_could_not_save_holds_for_the_session_and_says_so()
     {
         var conn = Conn();
-        var (_, conns, status) = Compose(new FailingSaveStore(), conn);
+        var (ctx, conns, status) = Compose(new FailingSaveStore(), conn);
 
         await conns.PinHostKeyAsync(conn, Seen);
 
-        Assert.StartsWith("Could not pin the SSH host key of bastion", status());
+        Assert.Equal(Seen, PinOf(ctx, conn.Id));   // later tunnels this session are held to it
+        Assert.Contains("for this session only", status());
         Assert.Contains("could not be saved", status());
+        Assert.Contains("After a restart the next connect will accept whatever key it meets", status());
+    }
+
+    [Fact]
+    public void Tunnels_are_held_to_the_pin_saved_now()
+    {
+        var conn = Conn(Seen);
+        var (ctx, _, _) = Compose(saved: conn);
+
+        Assert.Equal(Seen, ctx.Credentials.Ssh.SavedTunnel!(conn.Id)!.HostKeyFingerprint);
+        Assert.Null(ctx.Credentials.Ssh.SavedTunnel!(Guid.NewGuid()));
     }
 
     [Fact]

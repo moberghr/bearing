@@ -250,10 +250,12 @@ disposed after it (`ConnectionSession.Tunnel`, `SchemaBrowser.Reader`).
 - Host key is **accept-new**: first key pinned into the connection via `SshTunnels.HostKeyPinned`; a different
   key is refused, never trusted from the failure. No callback (CLI) → an unpinned key is refused. DO NOT add a
   "trust anyway" path or disable the check.
-  The pin is written by `ConnectionsViewModel.PinHostKeyAsync`; a pin that can't be saved is said in the status line
-  (unpinned = accept-new became accept-always). Saving a connection keeps the **current** saved pin
-  (`SshTunnelForm.WithSavedPin`) unless the route changed or Forget host key was pressed — a dialog's copy
-  predates a pin its own Test wrote.
+  Every tunnel is held to the pin **saved now** (`SshTunnels.SavedTunnel` lookup, same host+port), never only the
+  caller's copy — explorer nodes keep the record they were built from. The pin is written by
+  `ConnectionsViewModel.PinHostKeyAsync` on its own path (not a dialog save: no commit-mode reset, no rollback);
+  a save that fails is said (pinned for the session only). A key differing from a pin saved meanwhile
+  disconnects the connection and says so. Saving a connection keeps the current saved pin
+  (`SshTunnelForm.WithSavedPin`) unless the route changed or Forget host key was pressed.
 - SSH password / key passphrase: `ISecretStore` under `SshSecretId.For(connectionId)`, prompted when missing or
   refused, saved only after it worked; deleted with the connection. Never in a message or log. A connection whose
   password is `CredentialKind.Prompt` keeps its SSH secret in memory only (`SshTunnels.KeepsSecretInMemoryOnly`):

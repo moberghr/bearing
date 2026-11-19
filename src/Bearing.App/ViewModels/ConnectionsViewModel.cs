@@ -64,34 +64,65 @@ public sealed partial class ConnectionsViewModel : ObservableObject
             Dispatcher.UIThread.Post(() => _ = PinHostKeyAsync(info, fingerprint), DispatcherPriority.Normal);
             return Task.CompletedTask;
         };
+        // Every tunnel is held to the pin saved now, not the copy its caller holds (explorer nodes keep the
+        // record they were built from). Called off the UI thread: ToArray copies without an enumerator, so a
+        // save landing meanwhile can't throw here.
+        _ctx.Credentials.Ssh.SavedTunnel = id => _ctx.Project?.Manifest.Connections.ToArray().FirstOrDefault(c => c.Id == id)?.SshTunnel;
     }
 
     /// <summary>
     /// Record a first-seen SSH host key on the saved connection — only while the saved record still has no pin
-    /// and the same route the connect used, so an edit made meanwhile is never overwritten. A pin that could not
-    /// be written is said in the status line: unpinned, every later connect is a first sight again, so
-    /// accept-new would quietly have become accept-always.
+    /// and the same route the connect used, so an edit made meanwhile is never overwritten. Written on its own
+    /// path, not as a dialog save: a pin is not the user editing the connection, so it must not clear the
+    /// commit-mode override or roll back a transaction (§1.10).
+    /// <para>
+    /// A pin that could not be written is said in the status line — unpinned, the next connect after a restart
+    /// is a first sight again, so accept-new would quietly have become accept-always. A key that differs from a
+    /// pin saved meanwhile (two first connects racing) is a refusal after the fact: the connection is
+    /// disconnected and reported.
+    /// </para>
     /// </summary>
     internal async Task PinHostKeyAsync(ConnectionInfo used, string fingerprint)
     {
         var host = used.SshTunnel?.Host ?? "the SSH server";
         try
         {
-            var saved = _ctx.Project?.Manifest.Connections.FirstOrDefault(c => c.Id == used.Id);
-            if (saved?.SshTunnel is not { } ssh)
+            var project = _ctx.Project;
+            var saved = project?.Manifest.Connections.FirstOrDefault(c => c.Id == used.Id);
+            if (project is null || saved?.SshTunnel is not { } ssh)
             {
-                // No project, or the connection (or its tunnel) is gone from it: there is nothing to pin onto.
-                ReportUnpinned(host, used.Name, fingerprint, "the connection is no longer in the open project");
+                // A Test on a connection not saved yet, or one deleted while it connected: nothing to pin onto.
+                // Its first connect once saved pins the key.
+                ReportUnpinned(host, used.Name, fingerprint, "the connection is not saved in the open project");
                 return;
             }
-            if (!string.IsNullOrWhiteSpace(ssh.HostKeyFingerprint) || !SshTunnel.SameRoute(ssh, used.SshTunnel))
+            if (!SshTunnel.SameRoute(ssh, used.SshTunnel))
             {
-                // Already pinned (that pin governs), or edited to another route (its own first connect pins it).
+                return;   // edited to another route meanwhile: its own first connect pins that one
+            }
+            if (!string.IsNullOrWhiteSpace(ssh.HostKeyFingerprint))
+            {
+                if (!string.Equals(ssh.HostKeyFingerprint.Trim(), fingerprint, StringComparison.Ordinal))
+                {
+                    await DropMismatchedKeyAsync(saved, ssh.HostKeyFingerprint.Trim(), fingerprint);
+                }
                 return;
             }
-            if (!await AddOrUpdateConnectionAsync(saved with { SshTunnel = ssh with { HostKeyFingerprint = fingerprint } }, password: null))
+
+            var list = project.Manifest.Connections;
+            var idx = list.FindIndex(c => c.Id == saved.Id);
+            list[idx] = saved with { SshTunnel = ssh with { HostKeyFingerprint = fingerprint } };
+            // Held in memory from here, so every tunnel this session is checked against it even if the save fails.
+            RefreshConnections();
+            try
             {
-                ReportUnpinned(host, saved.Name, fingerprint, "the project could not be saved");
+                await _ctx.ProjectStore.SaveAsync(project, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _ctx.SetStatus($"Pinned the SSH host key of {ssh.Host} for '{saved.Name}' ({fingerprint}) for this session only — "
+                               + $"the project could not be saved: {SafeErrorText.Of(ex)}. After a restart the next connect "
+                               + "will accept whatever key it meets.");
                 return;
             }
             _ctx.SetStatus($"Trusted the SSH host key of {ssh.Host} for '{saved.Name}' ({fingerprint}). A different key will be refused.");
@@ -105,6 +136,18 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     private void ReportUnpinned(string host, string name, string fingerprint, string why)
         => _ctx.SetStatus($"Could not pin the SSH host key of {host} for '{name}' ({fingerprint}): {why}. "
                           + "It is not trusted yet — the next connect will accept whatever key it meets.");
+
+    /// <summary>A tunnel accepted <paramref name="seen"/> while another connect pinned <paramref name="pinned"/>:
+    /// one of them is not the server. Disconnect everything on the connection (rolling back, as a forced
+    /// teardown does) so nothing keeps reading through it, and say so.</summary>
+    private async Task DropMismatchedKeyAsync(ConnectionInfo saved, string pinned, string seen)
+    {
+        await TransactionGuard.RollbackForConnectionAsync(_ctx.Transactions, saved.Id);
+        await _ctx.Schema.InvalidateAsync(saved.Id);
+        await _ctx.Sessions.EvictConnectionAsync(saved.Id);
+        _ctx.SetStatus($"Disconnected '{saved.Name}': two connects to SSH server {saved.SshTunnel!.Host} met different host keys "
+                       + $"(pinned {pinned}, also seen {seen}). Check the server before reconnecting.");
+    }
 
     private readonly IDialogService? _dialogs;
 
@@ -766,12 +809,10 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     /// alone, empty deletes it.</param>
     /// <param name="forgetHostKey">Drop the saved SSH host key pin. Otherwise a pin on the saved record is kept
     /// when <paramref name="conn"/> brings none for the same server (<see cref="SshTunnelForm.WithSavedPin"/>).</param>
-    /// <returns>Whether the project file was written — false with no project open, or when the store failed
-    /// (the status line then says so).</returns>
-    public async Task<bool> AddOrUpdateConnectionAsync(
+    public async Task AddOrUpdateConnectionAsync(
         ConnectionInfo conn, string? password, string? sshSecret = null, bool forgetHostKey = false)
     {
-        if (_ctx.Project is null) return false;
+        if (_ctx.Project is null) return;
         var list = _ctx.Project.Manifest.Connections;
         var idx = list.FindIndex(c => c.Id == conn.Id);
         var networkChanged = true;
@@ -800,7 +841,6 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         _ctx.CommitModes.Clear(conn.Id);
 
         var refusedSecret = false;
-        var saved = false;
         try
         {
             if (password is not null)
@@ -832,18 +872,13 @@ public sealed partial class ConnectionsViewModel : ObservableObject
                 await PutSecretAsync(SshSecretId.For(conn.Id), sshSecret);
             }
             await _ctx.ProjectStore.SaveAsync(_ctx.Project, CancellationToken.None);
-            saved = true;
         }
         // A store with nowhere safe to put the password isn't a failure — the connection is still saved, and
         // the password will be asked for at connect time and kept in memory. Say that, then finish the save.
         catch (SecretStorageRefusedException)
         {
             refusedSecret = true;
-            try
-            {
-                await _ctx.ProjectStore.SaveAsync(_ctx.Project, CancellationToken.None);
-                saved = true;
-            }
+            try { await _ctx.ProjectStore.SaveAsync(_ctx.Project, CancellationToken.None); }
             catch (Exception ex) { _ctx.SetStatus($"Saved connection but store failed: {SafeErrorText.Of(ex)}"); }
         }
         catch (Exception ex) { _ctx.SetStatus($"Saved connection but secret/store failed: {SafeErrorText.Of(ex)}"); }
@@ -869,13 +904,9 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         // Editing the selected tab's own connection changes what StatusTip reports (#99 / #105), and nothing
         // else re-raises it on this path.
         OnPropertyChanged(nameof(StatusTip));
-        if (saved)
-        {
-            _ctx.SetStatus(refusedSecret
-                ? $"Saved connection '{conn.Name}' — password not saved (no keyring); you'll be asked when connecting."
-                : $"Saved connection '{conn.Name}'.");
-        }
-        return saved;
+        _ctx.SetStatus(refusedSecret
+            ? $"Saved connection '{conn.Name}' — password not saved (no keyring); you'll be asked when connecting."
+            : $"Saved connection '{conn.Name}'.");
     }
 
     /// <summary>Store a dialog-typed secret under <paramref name="secretId"/>; empty deletes it.</summary>

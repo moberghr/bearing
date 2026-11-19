@@ -50,6 +50,14 @@ public sealed class SshTunnels
     /// the first time and accepted. Null = refuse unpinned keys.</summary>
     public Func<DbConnectionInfo, string, Task>? HostKeyPinned { get; set; }
 
+    /// <summary>
+    /// The connection's tunnel as saved <i>now</i>, by connection id — so a caller holding an older copy of the
+    /// record (an explorer node built before the first key was pinned, a dialog opened before its Test pinned
+    /// one) is still held to the pin. Without it such a copy reads as unpinned and accept-new would accept any
+    /// key. Must be safe to call off the UI thread. Null = the caller's copy is the record (the CLI).
+    /// </summary>
+    public Func<Guid, SshTunnel?>? SavedTunnel { get; set; }
+
     /// <summary>Open the tunnel for <paramref name="info"/>. Throws <see cref="ConnectionFailedException"/>
     /// naming the SSH leg on any failure.</summary>
     /// <para><paramref name="typedSecret"/> is a secret typed into the dialog and not yet saved (its Test
@@ -117,14 +125,14 @@ public sealed class SshTunnels
         }
 
         var connection = new Renci.SshNet.ConnectionInfo(ssh.Host.Trim(), ssh.Port, ssh.User, auth) { Timeout = ConnectTimeout };
+        // Read before anything is opened: a lookup failure must not leave a client behind.
+        var pinned = PinFor(info.Id, ssh);
         var client = new SshClient(connection) { KeepAliveInterval = KeepAlive };
-
         string? seen = null;
         string? refusal = null;
         client.HostKeyReceived += (_, e) =>
         {
             seen = "SHA256:" + e.FingerPrintSHA256;
-            var pinned = ssh.HostKeyFingerprint;
             if (string.IsNullOrWhiteSpace(pinned))
             {
                 e.CanTrust = HostKeyPinned is not null;
@@ -136,7 +144,7 @@ public sealed class SshTunnels
                 e.CanTrust = string.Equals(pinned.Trim(), seen, StringComparison.Ordinal);
                 if (!e.CanTrust)
                     refusal = $"The SSH host key of {ssh.Host} has CHANGED: pinned {pinned.Trim()}, server sent {seen}. "
-                              + "Refused. If the change is expected, use \"Forget host key\" on the connection's SSH tab.";
+                              + "Refused. If the change is expected, use \"Forget host key\" on the connection's SSH tab and save.";
             }
         };
 
@@ -146,7 +154,7 @@ public sealed class SshTunnels
             var forward = new ForwardedPortLocal("127.0.0.1", 0, info.Host.Trim(), (uint)info.Port);
             client.AddForwardedPort(forward);
             forward.Start();
-            if (string.IsNullOrWhiteSpace(ssh.HostKeyFingerprint) && seen is not null && HostKeyPinned is { } pin)
+            if (string.IsNullOrWhiteSpace(pinned) && seen is not null && HostKeyPinned is { } pin)
             {
                 try { await pin(info, seen); } catch { /* pinning is best-effort; the next connect re-pins */ }
             }
@@ -163,6 +171,30 @@ public sealed class SshTunnels
             client.Dispose();
             throw;
         }
+    }
+
+    /// <summary>The pin this connect is held to: the caller's, else the one saved now for the same server.
+    /// A lookup that fails refuses the connect rather than reading as "unpinned".</summary>
+    private string? PinFor(Guid connectionId, SshTunnel ssh)
+    {
+        if (!string.IsNullOrWhiteSpace(ssh.HostKeyFingerprint) || SavedTunnel is not { } lookup)
+        {
+            return ssh.HostKeyFingerprint;
+        }
+        SshTunnel? saved;
+        try
+        {
+            saved = lookup(connectionId);
+        }
+        catch (Exception ex)
+        {
+            throw new ConnectionFailedException($"Could not read the pinned SSH host key of {ssh.Host}: {SafeErrorText.Of(ex)}", ex);
+        }
+        // A host key belongs to the server, whoever logs in; a pin for another server says nothing here.
+        return saved is not null && string.Equals(saved.Host.Trim(), ssh.Host.Trim(), StringComparison.OrdinalIgnoreCase)
+               && saved.Port == ssh.Port
+            ? saved.HostKeyFingerprint
+            : null;
     }
 
     private async Task<string?> StoredAsync(Guid secretId, CancellationToken ct)

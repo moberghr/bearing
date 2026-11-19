@@ -131,6 +131,27 @@ public class LiveSshTunnelTests
         Assert.Equal(SshPassword, await secrets.GetPasswordAsync(SshSecretId.For(info.Id), CancellationToken.None));
     }
     [SkippableFact]
+    public async Task A_stale_unpinned_copy_is_held_to_the_pin_saved_since()
+    {
+        // An explorer node keeps the record it was built from — here, from before the first key was pinned. The
+        // tunnel must check the server against the pin saved now, not read the old copy as "first sight".
+        await RequireAsync();
+        var stale = Info();
+        var (sessions, credentials, _) = Compose(stale);
+        credentials.Ssh.HostKeyPinned = (_, _) => Task.CompletedTask;
+        credentials.Ssh.SavedTunnel = id => id == stale.Id
+            ? stale.SshTunnel! with { HostKeyFingerprint = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }
+            : null;
+
+        await using (sessions)
+        {
+            var ex = await Assert.ThrowsAsync<ConnectionFailedException>(
+                () => sessions.GetOrConnectAsync(stale, CancellationToken.None));
+            Assert.Contains("CHANGED", ex.Message);
+        }
+    }
+
+    [SkippableFact]
     public async Task A_dropped_tunnel_is_evicted_and_the_next_acquire_opens_a_new_one()
     {
         await RequireAsync();
