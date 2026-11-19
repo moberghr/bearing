@@ -11,8 +11,8 @@
 #     full package. v0.5.4 was tagged, described, and shipped with no assets at all — the page said
 #     "Latest" while every installed copy correctly stayed on 0.5.3, and nothing anywhere said a word.
 #
-# macOS is deliberately absent: Velopack needs codesign/xcrun/productbuild, so a macOS package cannot be
-# built here or anywhere else we have (docs/RELEASING.md).
+# macOS has its own job (`publish-macos`) on a macOS runner: Velopack needs codesign/xcrun/productbuild, so
+# the osx package cannot be cross-built from ubuntu with the other two (docs/RELEASING.md).
 
 name: release
 

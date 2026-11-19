@@ -1,6 +1,6 @@
 # Build and test every pull request, and every push to main (#24).
 #
-# Two legs, because the two things worth checking cannot both be checked in one place:
+# Three legs, because the things worth checking cannot all be checked in one place:
 #
 #   * **ubuntu** provisions the real test databases and is therefore the only leg where the ~150 live
 #     Postgres tests — and the MariaDB / MySQL ones (`build/test-db-mysql.sh`) — actually run. It uses `build/test-db.sh` rather than a GitHub `services:` container,
@@ -12,6 +12,10 @@
 #     store (§1.1), `BearingPaths` under `%LOCALAPPDATA%`, and `LocalFilePermissions` reporting
 #     `PlatformDefault` rather than a Unix mode. Docker on a Windows runner cannot host a Linux container
 #     without WSL2, so this leg has no database and its Postgres tests skip — by design, not by accident.
+#   * **macos** ships too (osx-arm64, release.yml's `publish-macos`), and until this leg the first build of a
+#     change on a Mac was the release itself. It is the only leg that reaches `MacKeychainSecretStore`
+#     (`/usr/bin/security`) and the Mac paths under `~/Library`. GitHub's macOS runners have no Docker, so
+#     like windows it has no database and its live tests skip.
 #
 # `fail-fast: false` because a red leg must not hide the other leg's result: "it fails on Linux" and "it
 # fails everywhere" are different diagnoses.
@@ -57,6 +61,9 @@ jobs:
             database: true
           - name: windows
             os: windows-latest
+            database: false
+          - name: macos
+            os: macos-latest
             database: false
 
     steps:

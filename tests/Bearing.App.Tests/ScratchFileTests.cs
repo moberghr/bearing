@@ -214,7 +214,11 @@ public class ScratchFileTests : IDisposable
         Directory.CreateDirectory(Path.Combine(vm.ScriptsDirectory!, "aaa-reports"));
         var tab = vm.Workspace.SelectedTab!;
         tab.Text = "select 1;";
-        await WaitForPath(tab);
+        // Flushed, not WaitForPath: autosave sets ScriptPath and *then* raises FileCreated, whose refresh ran
+        // on a pool thread here (no UI context) beside the refresh below — two interleaved Clear-and-rebuilds
+        // listed the scratch folder twice (3 folders, seen on CI). Awaiting the write awaits that refresh too.
+        await vm.Workspace.FlushScratchAsync();
+        Assert.NotNull(tab.ScriptPath);
         vm.Scripts.RefreshScripts();
 
         var folders = vm.Scripts.ScriptNodes.OfType<ScriptFolderViewModel>().ToList();
