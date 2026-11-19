@@ -74,7 +74,13 @@ internal sealed class AppMenuBar
         var bar = new AppMenuBar(window, editor, commands, keymap, updates);
         if (Application.Current is { } app)
         {
-            NativeMenu.SetMenu(app, bar.BuildApplicationMenu(about));
+            var appMenu = NativeMenu.GetMenu(app);
+            if (appMenu is null)
+            {
+                appMenu = new NativeMenu();
+                NativeMenu.SetMenu(app, appMenu);
+            }
+            bar.FillApplicationMenu(appMenu, about);
         }
         NativeMenu.SetMenu(window, bar.BuildWindowMenu());
         bar.SyncGestures();
@@ -94,23 +100,52 @@ internal sealed class AppMenuBar
 
     // ---- the application menu ---------------------------------------------------------------------
 
-    /// <summary>The bold "Bearing" menu. Avalonia appends Hide / Quit after these.</summary>
-    private NativeMenu BuildApplicationMenu(Action about)
+    /// <summary>
+    /// Give the application an (empty) menu of its own before Avalonia exports one. Called from
+    /// <see cref="App.Initialize"/>.
+    /// <para>
+    /// Avalonia.Native reads the application's menu exactly once, in an after-setup step that runs before
+    /// <c>OnFrameworkInitializationCompleted</c> builds the main window. Finding none, it sets its own default
+    /// ("About Avalonia") on the application, appends the standard items (Services, Hide, Quit) to it, and
+    /// never looks at the property again — so a menu <i>set</i> from the window's constructor, which is how
+    /// this used to work, was never shown. It does follow changes to the items of the menu it exported, so
+    /// <see cref="Install"/> fills this one in place, above the standard items, instead of replacing it.
+    /// </para>
+    /// </summary>
+    public static void PrepareApplicationMenu(Application app)
     {
-        var menu = new NativeMenu();
+        if (Enabled && NativeMenu.GetMenu(app) is null)
+        {
+            NativeMenu.SetMenu(app, new NativeMenu());
+        }
+    }
+
+    /// <summary>The bold "Bearing" menu: our items go on top, ahead of whatever Avalonia has already
+    /// appended (its separator, Services, Hide, Quit).</summary>
+    private void FillApplicationMenu(NativeMenu menu, Action about)
+    {
         var aboutItem = Action("About Bearing", about);
         var check = Action("Check for Updates…", () => _updates()?.CheckNowCommand.Execute(null));
-        menu.Add(aboutItem);
-        menu.Add(check);
-        menu.Add(new NativeMenuItemSeparator());
-        Add(menu, CommandIds.SettingsOpen, "Settings…");
-        Add(menu, CommandIds.SettingsKeybindings, "Keyboard Shortcuts…");
+        var ours = new NativeMenu();
+        ours.Add(aboutItem);
+        ours.Add(check);
+        ours.Add(new NativeMenuItemSeparator());
+        Add(ours, CommandIds.SettingsOpen, "Settings…");
+        Add(ours, CommandIds.SettingsKeybindings, "Keyboard Shortcuts…");
+
+        // Moved one at a time: an item belongs to one menu, and each insert is a change Avalonia re-exports.
+        var items = ours.Items.ToList();
+        ours.Items.Clear();
+        for (var i = 0; i < items.Count; i++)
+        {
+            menu.Items.Insert(i, items[i]);
+        }
+
         WireOpening(menu, () =>
         {
             aboutItem.IsEnabled = _window.IsActive;
             check.IsEnabled = _window.IsActive && _updates() is not null;
         });
-        return menu;
     }
 
     // ---- the window's menus -----------------------------------------------------------------------

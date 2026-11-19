@@ -140,7 +140,7 @@ public partial class MainWindow : Window
         EditorContextMenu.Install(Editor, _commands, () => _dispatcher!.Keymap);
         // The macOS menu bar, from the same registry and keymap (null elsewhere). Where it exists it is the
         // menu: the in-window bar would be a second one, with its own Alt-tap reveal, so it goes.
-        _menuBar = AppMenuBar.Install(this, Editor, _commands, () => _dispatcher!.Keymap, () => Vm?.Updates, () => AboutDialog.Open(this));
+        _menuBar = AppMenuBar.Install(this, Editor, _commands, () => _dispatcher!.Keymap, () => Vm?.Updates, () => AboutDialog.Open(this, Vm?.Updates));
         if (_menuBar is not null && MainMenu.Parent is Panel menuHost)
         {
             menuHost.Children.Remove(MainMenu);

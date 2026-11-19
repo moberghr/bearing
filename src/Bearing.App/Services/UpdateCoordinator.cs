@@ -84,6 +84,13 @@ public sealed class UpdateCoordinator
     /// </summary>
     public Action<string>? Report { get; set; }
 
+    /// <summary>
+    /// The same messages <see cref="Report"/> gets, for a second surface that wants the answer where the
+    /// question was asked — the About window's own Check for Updates (the status line is in the window behind
+    /// it). Raised on whatever thread the work happened on, like <see cref="Changed"/>.
+    /// </summary>
+    public event Action<string>? Announced;
+
     public UpdatePhase Phase { get; private set; } = UpdatePhase.Idle;
 
     /// <summary>The version found, once there is one. Null before that.</summary>
@@ -281,10 +288,14 @@ public sealed class UpdateCoordinator
         FailureMessage = message;
         Phase = UpdatePhase.Failed;
         Changed?.Invoke();
-        if (announce) Report?.Invoke(message);
+        if (announce) Announce(message);
     }
 
-    private void Announce(string message) => Report?.Invoke(message);
+    private void Announce(string message)
+    {
+        Report?.Invoke(message);
+        Announced?.Invoke(message);
+    }
 
     /// <summary>
     /// Reports on the calling thread, deliberately — <see cref="Progress{T}"/> would capture whatever

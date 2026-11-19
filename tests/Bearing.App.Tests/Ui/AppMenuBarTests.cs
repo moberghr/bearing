@@ -75,6 +75,42 @@ public class AppMenuBarTests
         Assert.Contains(zone.GetVisualDescendants().OfType<TextBox>(), box => box.IsFocused);
     });
 
+    /// <summary>
+    /// The application menu Avalonia already exported is filled in place, not replaced. Avalonia.Native reads
+    /// the application's menu once, before the main window exists, and only follows edits to <i>that</i> menu's
+    /// items — a menu set later never reached the menu bar, which kept showing "About Avalonia". Here the
+    /// application holds a menu shaped like the exported one (its separator and Quit) before the window
+    /// installs; afterwards it must be the same instance, with Bearing's items on top and Quit kept.
+    /// </summary>
+    [Fact]
+    public Task The_exported_application_menu_gets_Bearings_items_on_top() => _ui.Run(async () =>
+    {
+        var app = Avalonia.Application.Current!;
+        var exported = new NativeMenu();
+        exported.Add(new NativeMenuItemSeparator());
+        exported.Add(new NativeMenuItem("Quit"));
+        NativeMenu.SetMenu(app, exported);
+        AppMenuBar.Enabled = true;
+        try
+        {
+            using var shell = await ShellHarness.ShowAsync(nameof(The_exported_application_menu_gets_Bearings_items_on_top));
+
+            Assert.Same(exported, NativeMenu.GetMenu(app));
+            // A separator is a NativeMenuItem too (header "-"), so it is named before the general case.
+            var headers = exported.Items
+                .Select(i => i is NativeMenuItemSeparator ? "—" : (i as NativeMenuItem)?.Header)
+                .ToList();
+            Assert.Equal(
+                ["About Bearing", "Check for Updates…", "—", "Settings…", "Keyboard Shortcuts…", "—", "Quit"],
+                headers);
+        }
+        finally
+        {
+            AppMenuBar.Enabled = false;
+            NativeMenu.SetMenu(app, null);
+        }
+    });
+
     /// <summary>With the native bar on, it is the menu: the in-window bar is gone and an Alt tap reveals
     /// nothing (a transient bar would otherwise own Escape and swallow global keys while invisible).</summary>
     [Fact]
