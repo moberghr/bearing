@@ -18,6 +18,12 @@
     <PackageReference Include="Npgsql" />
     <PackageReference Include="Microsoft.Data.SqlClient" />
     <PackageReference Include="MySqlConnector" />
+    <!-- DynamoDb/: the AWS SDK for .NET. SSO, SSOOIDC and SecurityToken are never named in code — the SDK
+         loads them by reflection for SSO and assumed-role profiles. -->
+    <PackageReference Include="AWSSDK.DynamoDBv2" />
+    <PackageReference Include="AWSSDK.SSO" />
+    <PackageReference Include="AWSSDK.SSOOIDC" />
+    <PackageReference Include="AWSSDK.SecurityToken" />
   </ItemGroup>
 
 </Project>

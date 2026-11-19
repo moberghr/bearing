@@ -1,5 +1,6 @@
 using System;
 using Bearing.Core.Data;
+using Bearing.Data.DynamoDb;
 using Bearing.Data.Postgres;
 using Bearing.Data.SqlServer;
 using Xunit;
@@ -96,6 +97,39 @@ public class ProviderClassificationTests
 
         Assert.Equal(DbErrorKind.Authentication, provider.ClassifyException(wrapped));
         Assert.Equal(DbErrorKind.Unknown, provider.ClassifyException(new Exception("network path not found")));
+    }
+
+    // ---- DynamoDB: AWS error codes and the SDK's own exceptions ----------------------------------
+    //
+    // The provider is registered in a later batch, so these call DynamoDbErrors — the one place the engine's
+    // classification lives, which DynamoDbProvider.Classify / ClassifyException will delegate to. The
+    // sentences and the SDK-exception matrix are in DynamoDbErrorTextTests.
+
+    [Theory]
+    [InlineData("BearingSignIn", DbErrorKind.Authentication)]          // the SDK could not sign us in
+    [InlineData("ExpiredTokenException", DbErrorKind.Authentication)]  // DynamoDB refused the token it was given
+    [InlineData("UnrecognizedClientException", DbErrorKind.Authentication)]
+    [InlineData("BearingTimeout", DbErrorKind.Canceled)]               // our statement timeout
+    [InlineData("BearingCanceled", DbErrorKind.Canceled)]
+    // Good credentials, no permission: a privilege, not a credential — re-signing in changes nothing (the
+    // MySQL 1044 reasoning).
+    [InlineData("AccessDeniedException", DbErrorKind.Unknown)]
+    [InlineData("ValidationException", DbErrorKind.Unknown)]
+    [InlineData("28P01", DbErrorKind.Unknown)]                          // another engine's code is nothing here
+    [InlineData("", DbErrorKind.Unknown)]
+    [InlineData(null, DbErrorKind.Unknown)]
+    public void DynamoDb_classifies_a_statement_by_error_code(string? code, DbErrorKind expected)
+        => Assert.Equal(expected, DynamoDbErrors.ClassifyState(code));
+
+    [Fact]
+    public void DynamoDb_finds_a_sign_in_failure_in_an_untyped_exception_chain()
+    {
+        var wrapped = new InvalidOperationException(
+            "Could not connect to 'prod'", new Amazon.Runtime.AmazonClientException("No valid SSO Token could be found."));
+
+        Assert.Equal(DbErrorKind.Authentication, DynamoDbErrors.Classify(wrapped));
+        Assert.Equal(DbErrorKind.Unknown, DynamoDbErrors.Classify(new Exception("connection refused")));
+        Assert.Equal(DbErrorKind.Canceled, DynamoDbErrors.Classify(new OperationCanceledException()));
     }
 
     // ---- Capability flag -------------------------------------------------------------------------
