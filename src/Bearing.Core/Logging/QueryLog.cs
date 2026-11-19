@@ -118,7 +118,25 @@ public interface IQueryLog
     event Action<QueryLogEntry>? Appended;
 
     Task<IReadOnlyList<QueryLogEntry>> SearchAsync(QueryLogQuery query, CancellationToken ct);
+
+    /// <summary>
+    /// The most recent recorded run of each script, newest first: one row per distinct
+    /// <see cref="QueryLogEntry.ScriptPath"/>. With <paramref name="connectionId"/>, only runs on that
+    /// connection count, so a script's row is its latest run <em>there</em>.
+    /// <para>
+    /// Only runs made from the app's editor are linked to a script; a statement run before that link was
+    /// recorded, or older than the log's retention, is not here. An empty answer therefore means "nothing
+    /// recorded", never "never run". A log that keeps no history answers with nothing.
+    /// </para>
+    /// </summary>
+    Task<IReadOnlyList<ScriptUse>> LastScriptUsesAsync(Guid? connectionId, int? limit, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<ScriptUse>>([]);
 }
+
+/// <summary>The latest recorded run of one script: where and when (<see cref="IQueryLog.LastScriptUsesAsync"/>).
+/// The connection's name is the one recorded at the time; the id is null on rows older than log v2.</summary>
+public sealed record ScriptUse(
+    string ScriptPath, DateTimeOffset ExecutedAt, string ConnectionName, Guid? ConnectionId, string Database);
 
 /// <summary>The hosts that write to the query log, for <see cref="QueryLogEntry.Origin"/>. Bearing itself
 /// writes null rather than a name of its own: it is the overwhelming majority of rows, and a column that is

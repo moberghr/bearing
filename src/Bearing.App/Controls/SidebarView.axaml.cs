@@ -251,6 +251,72 @@ public partial class SidebarView : UserControl
             Vm.Connections.SetTabConnection(tab, server.Connection.Id);
     }
 
+    // ---- Recent scripts (server row menu) ----
+
+    /// <summary>The tag of the server menu's "Recent scripts" item, which is how it is found again.</summary>
+    internal const string RecentScriptsTag = "recent-scripts";
+
+    /// <summary>The server row's menu is being asked for: read the scripts last run on that connection and
+    /// list them under "Recent scripts". The read is a local one and normally lands before the submenu is
+    /// reached; until it does the submenu says so.</summary>
+    private async void OnConnectionNodeContextRequested(object? sender, ContextRequestedEventArgs e)
+    {
+        if (Vm is null || sender is not Control row || NodeOf(sender) is not ServerNodeViewModel server) return;
+        var item = row.ContextMenu?.Items.OfType<MenuItem>()
+            .FirstOrDefault(m => Equals(m.Tag, RecentScriptsTag));
+        if (item is null) return;
+
+        item.Items.Clear();
+        item.Items.Add(new MenuItem { Header = "Loading…", IsEnabled = false });
+        var connectionId = server.Connection.Id;
+        // RecentScriptsAsync reports its own failures as a note, so nothing here can throw past the await.
+        var recent = await Vm.Scripts.RecentScriptsAsync(connectionId);
+
+        item.Items.Clear();
+        if (recent.Note is { } note) item.Items.Add(new MenuItem { Header = note, IsEnabled = false });
+        foreach (var script in recent.Items)
+        {
+            // Not an access key: file names hold underscores.
+            var line = new MenuItem { Header = new TextBlock { Text = script.Label } };
+            if (script.IsOpen)
+            {
+                // A dot in the icon column marks a script a tab already holds: picking it goes to that tab.
+                line.Icon = new TextBlock
+                {
+                    Text = "●", FontSize = 8,
+                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                };
+                ToolTip.SetTip(line, "Open in a tab");
+            }
+            line.Click += async (_, _) => await OpenRecentScript(script, connectionId);
+            item.Items.Add(line);
+        }
+    }
+
+    /// <summary>Open a recent script. A tab that already holds it is only focused; a new one is put on the
+    /// server it was picked under and the database it last ran against there.</summary>
+    private async Task OpenRecentScript(RecentScript script, Guid connectionId)
+    {
+        if (Vm is null) return;
+        try
+        {
+            var before = Vm.Workspace.Tabs.Count;
+            await Vm.Workspace.OpenScriptInNewTabAsync(script.Path);
+            if (Vm.Workspace.Tabs.Count > before && Vm.Workspace.SelectedTab is { } tab)
+            {
+                Vm.Connections.SetTabConnection(tab, connectionId);
+                if (!string.IsNullOrWhiteSpace(script.Database)) Vm.Connections.SetTabDatabase(tab, script.Database);
+            }
+            EditorSyncRequested?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            // The file can vanish between the menu being filled and the click.
+            Vm.StatusText = $"Could not open {System.IO.Path.GetFileName(script.Path)}: {ex.Message}";
+        }
+    }
+
     private async void OnDeleteServer(object? sender, RoutedEventArgs e)
     {
         if (Vm is not null && NodeOf(sender) is ServerNodeViewModel server)

@@ -18,7 +18,7 @@ public sealed class FileScriptStore : IScriptStore
         // content search filters on costs nothing extra here.
         var files = new DirectoryInfo(dir).EnumerateFiles("*.sql")
             .OrderBy(f => f.FullName, StringComparer.OrdinalIgnoreCase)
-            .Select(f => new ScriptFileRef(f.FullName, f.Name, f.Length))
+            .Select(f => new ScriptFileRef(f.FullName, f.Name, f.Length, f.LastWriteTimeUtc))
             .ToList();
         return new ScriptTree(dir, Path.GetFileName(dir), folders, files);
     }

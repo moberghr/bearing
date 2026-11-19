@@ -6,7 +6,9 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Avalonia.Threading;
 using Bearing.App.Workspace;
+using Bearing.Core.Logging;
 using Bearing.Core.Workspace;
 
 namespace Bearing.App.ViewModels;
@@ -27,6 +29,120 @@ public sealed partial class ScriptsViewModel : ObservableObject
     {
         _ctx = ctx;
         _updateTitle = updateTitle;
+        // Raised on the log's writer thread, once the row is readable.
+        _ctx.QueryLog.Appended += entry => Dispatcher.UIThread.Post(() => OnRunLogged(entry));
+        // A tab opening or closing changes which rows are marked open, and rebuilds nothing.
+        Tabs.CollectionChanged += (_, _) => SyncOpenScripts();
+    }
+
+    // ---- Which scripts a tab holds -----------------------------------------------------------------
+
+    /// <summary>Whether a tab holds the script at <paramref name="path"/> — the match opening it makes
+    /// (<c>WorkspaceViewModel.OpenScriptInNewTabAsync</c>), so "open" always means "picking it focuses a
+    /// tab". One answer for the panel's rows and the server menu's recent scripts.</summary>
+    private bool IsOpenInTab(string path)
+        => Tabs.Any(t => string.Equals(t.ScriptPath, path, StringComparison.Ordinal));
+
+    private void SyncOpenScripts()
+    {
+        foreach (var item in Scripts) item.IsOpen = IsOpenInTab(item.FullPath);
+    }
+
+    // ---- Last run per script ----------------------------------------------------------------------
+
+    /// <summary>The latest recorded run of each script, by path. Read from the log once
+    /// (<see cref="LoadScriptUsesAsync"/>) and then kept current from its <c>Appended</c> event, so the
+    /// tree's many rebuilds cost no log read.</summary>
+    private readonly Dictionary<string, ScriptUse> _uses = new(StringComparer.OrdinalIgnoreCase);
+    private bool _usesRequested;
+
+    /// <summary>Raised when the log's answer has been applied to the rows; lets a test wait (§9.8).</summary>
+    public event Action? ScriptUsesLoaded;
+
+    /// <summary>Read the last run of every script from the log and show it on the rows. Best-effort: a log
+    /// that cannot be read leaves the rows on their edit dates (§5.2).</summary>
+    public async Task LoadScriptUsesAsync()
+    {
+        try
+        {
+            var uses = await _ctx.QueryLog.LastScriptUsesAsync(null, null, CancellationToken.None);
+            // Newest first, so the first row for a path wins; never overwrite a run logged meanwhile.
+            foreach (var use in uses) _uses.TryAdd(use.ScriptPath, use);
+        }
+        catch (Exception)
+        {
+            // Rows keep what they have.
+        }
+        foreach (var item in Scripts) ApplyUse(item);
+        ScriptUsesLoaded?.Invoke();
+    }
+
+    private void OnRunLogged(QueryLogEntry entry)
+    {
+        if (string.IsNullOrEmpty(entry.ScriptPath)) return;
+        _uses[entry.ScriptPath] = new ScriptUse(
+            entry.ScriptPath, entry.ExecutedAt, entry.ConnectionName, entry.ConnectionId, entry.Database);
+        foreach (var item in Scripts)
+            if (string.Equals(item.FullPath, entry.ScriptPath, StringComparison.OrdinalIgnoreCase)) ApplyUse(item);
+    }
+
+    private void ApplyUse(ScriptItem item)
+    {
+        var use = _uses.GetValueOrDefault(item.FullPath);
+        item.UseText = ScriptUseText.Trailer(use, item.Modified, DateTimeOffset.Now, TimeZoneInfo.Local);
+        item.UseTip = ScriptUseText.Tip(use, item.Modified, TimeZoneInfo.Local);
+    }
+
+    // ---- Recent scripts on one connection (the server row's menu) ----------------------------------
+
+    /// <summary>How many scripts the server menu lists.</summary>
+    public const int RecentScriptLimit = 10;
+
+    /// <summary>
+    /// The scripts most recently run on one connection, newest first, for the server row's menu. Each is
+    /// its latest run <em>there</em>, so the line names the database it ran against on that server.
+    /// <para>
+    /// A script whose file is gone is left out — the menu opens files. Three answers stay apart (§1.1):
+    /// rows, nothing recorded (which is not "never run": only runs logged since scripts were linked
+    /// count), and a log that could not be read.
+    /// </para>
+    /// </summary>
+    public async Task<RecentScripts> RecentScriptsAsync(Guid connectionId)
+    {
+        IReadOnlyList<ScriptUse> uses;
+        try
+        {
+            // Read past the limit: files deleted since must not shorten the list.
+            uses = await _ctx.QueryLog.LastScriptUsesAsync(connectionId, RecentScriptLimit * 3, CancellationToken.None);
+        }
+        catch (Exception)
+        {
+            return new RecentScripts([], "History could not be read");
+        }
+
+        var root = _ctx.Project?.ScriptsDirectory;
+        var now = DateTimeOffset.Now;
+        var items = uses
+            .Where(u => _ctx.ScriptStore.FileExists(u.ScriptPath))
+            .Take(RecentScriptLimit)
+            .Select(u => new RecentScript(
+                u.ScriptPath, u.Database,
+                ScriptUseText.MenuLine(DisplayName(u.ScriptPath, root), u, now, TimeZoneInfo.Local),
+                IsOpen: IsOpenInTab(u.ScriptPath)))
+            .ToList();
+        return new RecentScripts(items, items.Count == 0 ? "No runs recorded on this connection" : null);
+    }
+
+    /// <summary>A script's name in the menu: its path inside the scripts folder, so two files of the same
+    /// name in different folders read apart; just the file name for one outside it.</summary>
+    private static string DisplayName(string path, string? scriptsRoot)
+    {
+        if (!string.IsNullOrEmpty(scriptsRoot))
+        {
+            var relative = Path.GetRelativePath(scriptsRoot, path);
+            if (!relative.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(relative)) return relative;
+        }
+        return Path.GetFileName(path);
     }
 
     private ObservableCollection<EditorTabViewModel> Tabs => _ctx.Tabs;
@@ -231,17 +347,31 @@ public sealed partial class ScriptsViewModel : ObservableObject
         // Either reason puts a file in the tree: its name matched, or the last content pass found the filter
         // inside it.
         bool Include(ScriptItem s) => ScriptSearch.MatchesName(s.Name, filter) || s.MatchLine is not null;
-        ScriptItem Make(ScriptFileRef f) => new(f.Name, f.Path)
+        ScriptItem Make(ScriptFileRef f)
         {
-            IsUnsaved = unsaved.Contains(f.Path),
-            MatchLine = _contentHits.GetValueOrDefault(f.Path),
-        };
+            var item = new ScriptItem(f.Name, f.Path)
+            {
+                IsUnsaved = unsaved.Contains(f.Path),
+                MatchLine = _contentHits.GetValueOrDefault(f.Path),
+                Modified = f.Modified,
+                IsOpen = IsOpenInTab(f.Path),
+            };
+            ApplyUse(item);
+            return item;
+        }
 
         var scratchDir = _ctx.Project?.ScratchDirectory;
         bool IsScratchFolder(string path) => scratchDir is not null
             && string.Equals(Path.GetFullPath(path), Path.GetFullPath(scratchDir), StringComparison.OrdinalIgnoreCase);
 
         BuildScriptNodes(tree, ScriptNodes, filter, Include, Make, IsScratchFolder);
+
+        // The first tree asks the log once; later rebuilds read the cache.
+        if (!_usesRequested)
+        {
+            _usesRequested = true;
+            _ = LoadScriptUsesAsync();
+        }
 
         // Re-point the selection at the rebuilt node for the same path (or drop it if the file is gone).
         SelectedNode = _selectedPath is { } path ? Locate(path) : null;
@@ -408,3 +538,11 @@ public sealed partial class ScriptsViewModel : ObservableObject
         tab.IsScratch = Bearing.App.Workspace.ScratchNaming.IsUnderScratch(newPath, _ctx.Project?.ScratchDirectory);
     }
 }
+
+/// <summary>One line of a server's recent scripts: the file, the database it last ran against there, the
+/// menu text, and whether a tab already holds it.</summary>
+public sealed record RecentScript(string Path, string Database, string Label, bool IsOpen = false);
+
+/// <summary>A server's recent scripts, or — when there are none to list — the sentence saying why
+/// (<see cref="ScriptsViewModel.RecentScriptsAsync"/>).</summary>
+public sealed record RecentScripts(IReadOnlyList<RecentScript> Items, string? Note);

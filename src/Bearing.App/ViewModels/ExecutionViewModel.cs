@@ -764,7 +764,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // assign to — RunFinished is what tells the user the run ended, with TabStillOpen false.
             tab.SetRunResults(ResultSetBuilder.BuildResultSets(
                 results, sql, session.Snapshot, ProviderTraits.For(info), SessionPolicy.IsReadOnly(info), run));
-            LogExecution(info, run.LogSql, results, _ctx.Transactions.For(tab)?.Id, run.LogParameters);
+            LogExecution(info, run.LogSql, results, _ctx.Transactions.For(tab)?.Id, run.LogParameters, tab.ScriptPath);
             var summary = ResultSetBuilder.DescribeResults(
                 results, wall.Elapsed, info, ct.IsCancellationRequested);
             // On success, lead with the connection so the status bar reads e.g. "pagila (local) · 88 ms".
@@ -1428,9 +1428,12 @@ public sealed partial class ExecutionViewModel : ObservableObject
     // History logs one entry per submitted run; a multi-statement run aggregates its sets.
     private void LogExecution(
         ConnectionInfo info, string sql, IReadOnlyList<QueryResult> results, string? transactionId,
-        IReadOnlyList<QueryLogParameter>? parameters = null)
+        IReadOnlyList<QueryLogParameter>? parameters = null, string? scriptPath = null)
         => _ctx.QueryLog.Append(new QueryLogEntry
         {
+            // Which script the run came from, when the tab has a file: what "last run against" in the
+            // Scripts panel and a server's recent scripts are read back from.
+            ScriptPath = scriptPath,
             ExecutedAt = DateTimeOffset.UtcNow,
             ProviderId = info.ProviderId,
             ConnectionName = info.Name,
