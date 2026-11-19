@@ -75,6 +75,27 @@ public class ConnectionEndpointTests
         var info = Conn("db.example", 5433, "reporting");
         Assert.Equal($"{info.Host}:{info.Port}/{info.Database}", ConnectionEndpoint.Address(info));
     }
+
+    /// <summary>
+    /// An Amazon DynamoDB connection stores its region as <c>Host</c>, its profile as <c>User</c> and no port, so
+    /// the existing rule (zero is dropped, a blank database drops its slash, a blank user drops its at-sign)
+    /// already spells it <c>profile@region</c> — pinned here so the spelling is a decision, not an accident.
+    /// </summary>
+    [Fact]
+    public void A_dynamodb_connection_reads_as_profile_at_region()
+    {
+        var info = Conn(host: "eu-west-1", port: 0, database: "", user: "dev") with { ProviderId = "dynamodb" };
+
+        Assert.Equal("eu-west-1", ConnectionEndpoint.HostPort(info));
+        Assert.Equal("eu-west-1", ConnectionEndpoint.Address(info));
+        Assert.Equal("dev@eu-west-1", ConnectionEndpoint.Full(info));
+    }
+
+    [Fact]
+    public void A_dynamodb_connection_with_a_blank_profile_reads_as_the_region_alone()
+        => Assert.Equal("eu-west-1",
+            ConnectionEndpoint.Full(Conn(host: "eu-west-1", port: 0, database: "", user: "") with { ProviderId = "dynamodb" }));
+
     /// <summary>The second exception to "the port is always shown", alongside a port of zero. A SQL Server
     /// named instance is resolved by the SQL Browser service, which hands back whatever dynamic port that
     /// instance listens on — so the configured port is not the address, and printing it sends the reader to

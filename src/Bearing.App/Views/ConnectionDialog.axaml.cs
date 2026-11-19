@@ -108,6 +108,7 @@ public partial class ConnectionDialog : Window
             ConfirmWritesBox.IsChecked = existing.RequireWriteConfirmation;
             ReadOnlyBox.IsChecked = existing.ReadOnly;
             ManualCommitBox.IsChecked = existing.ManualCommit;
+            ConfirmFullScansBox.IsChecked = existing.ConfirmFullScans;
             ExternalAccessBox.IsChecked = ExternalAccessPolicy.IsExposed(existing);
             UserFromLoginBox.IsChecked = existing.UserFromEntraLogin;
             // 0 is "no limit" and shows as an empty box, whose placeholder says 0 — a bare "0" in a field
@@ -134,6 +135,7 @@ public partial class ConnectionDialog : Window
         // stored password it would silently fail to store. An edited one keeps whatever it was saved as.
         RebuildCredentialKinds(existing?.CredentialKind
             ?? (_storage.CanStore ? CredentialKind.StoredPassword : CredentialKind.Prompt));
+        UpdateEngineRows();
     }
 
     /// <summary>The window opens at its XAML height, which a small or heavily scaled screen may not have room
@@ -167,6 +169,22 @@ public partial class ConnectionDialog : Window
         RenderFields();
         RebuildCredentialKinds(SelectedCredentialKind());
         UpdateTimeZone();
+        UpdateEngineRows();
+    }
+
+    /// <summary>
+    /// Show the rows the selected engine can honour and hide the ones it cannot — encryption, manual commit and
+    /// the scan confirmation — each by the answer the model gives (provider flags and traits), never by comparing
+    /// an engine id here. The session time zone group is the same kind of row and follows the same rule in
+    /// <see cref="UpdateTimeZone"/>.
+    /// </summary>
+    private void UpdateEngineRows()
+    {
+        TlsGroup.IsVisible = _model.SupportsTlsModes;
+        ManualCommitBox.IsVisible = _model.SupportsManualCommit;
+        ScanGroup.IsVisible = _model.AsksFullScanQuestion;
+        ScanNote.Text = ScanGuard.Boundary;
+        UpdateSafetyNote();
     }
 
     // ---- Provider-declared fields ----------------------------------------------------------------
@@ -421,6 +439,7 @@ public partial class ConnectionDialog : Window
         // Entra is only offered where the engine supports it, so this also keeps it off engines with no Azure flavour.
         BrowseAzureButton.IsVisible = _azure is not null && kind == CredentialKind.EntraToken;
         IntegratedHint.IsVisible = kind == CredentialKind.Integrated;
+        AwsProfileHint.IsVisible = kind == CredentialKind.AwsProfile;
         UserFromLoginBox.IsVisible = UserFromLoginOffered();
         if (_userBox is not null)
         {
@@ -580,6 +599,10 @@ public partial class ConnectionDialog : Window
     private IDbProvider SelectedProvider()
         => _providers[Math.Clamp(ProviderBox.SelectedIndex, 0, _providers.Count - 1)];
 
+    /// <summary>The manual-commit box, but only where the engine can hold a transaction: a tick left behind by a
+    /// previous engine is not written and not described, so the record never claims it.</summary>
+    private bool ManualCommitOn() => _model.SupportsManualCommit && ManualCommitBox.IsChecked == true;
+
     private void OnSafetyToggled(object? sender, RoutedEventArgs e) => UpdateSafetyNote();
 
     private void OnTimeoutChanged(object? sender, TextChangedEventArgs e) => UpdateSafetyNote();
@@ -597,8 +620,13 @@ public partial class ConnectionDialog : Window
         // asked for (§1.9), so SessionPolicy has nothing to say about it — see CommitPolicy for why the two
         // are separate. On a read-only connection it says the true and slightly odd thing, which is that
         // nothing will ever open a transaction because nothing writes.
-        if (CommitPolicy.Advice(ManualCommitBox.IsChecked == true, ReadOnlyBox.IsChecked == true) is { Length: > 0 } commit)
+        if (CommitPolicy.Advice(ManualCommitOn(), ReadOnlyBox.IsChecked == true) is { Length: > 0 } commit)
             advice = advice.Length > 0 ? advice + "\n" + commit : commit;
+        // Where only Bearing refuses a write, the generic sentence above says so; the engine can also say what
+        // actually stops one (DynamoDB: an IAM policy). Appended to the read-only note, and only while read-only
+        // is on — it explains that setting, not the connection.
+        if (ReadOnlyBox.IsChecked == true && _model.WriteBoundary is { Length: > 0 } boundary)
+            advice = advice.Length > 0 ? advice + "\n" + boundary : boundary;
         // What exposing it lets in, from the same pure policy the record is built with — and appended
         // rather than folded in, for CommitPolicy's reason: it is not a thing the server is asked for, and
         // the engine still decides one clause of it (who refuses a write, §1.9a).
@@ -722,14 +750,21 @@ public partial class ConnectionDialog : Window
         EnvironmentColor = string.IsNullOrWhiteSpace(EnvColorBox.Text) ? null : EnvColorBox.Text!.Trim(),
         RequireWriteConfirmation = ConfirmWritesBox.IsChecked == true,
         ReadOnly = ReadOnlyBox.IsChecked == true,
-        ManualCommit = ManualCommitBox.IsChecked == true,
+        ManualCommit = ManualCommitOn(),
+        // Asked only where the engine asks the question; elsewhere the record's own value is carried, so editing a
+        // Postgres connection does not rewrite a flag its engine never reads.
+        ConfirmFullScans = _model.AsksFullScanQuestion
+            ? ConfirmFullScansBox.IsChecked == true
+            : _existing?.ConfirmFullScans ?? true,
         ExternalAccess = ExternalAccessBox.IsChecked == true
             ? ExternalAccess.ReadOnly
             : ExternalAccess.None,
         StatementTimeoutSeconds = TypedTimeoutSeconds(),
-        SessionTimeZone = TypedSessionTimeZone(),
+        // A setting the engine ignores is not saved, for the reason UserFromLogin is not: the record must not
+        // claim a zone or an encryption mode that nothing on this engine honours (§1.4).
+        SessionTimeZone = _model.SupportsSessionTimeZone ? TypedSessionTimeZone() : null,
         CredentialKind = SelectedCredentialKind(),
-        Tls = SelectedTls(),
+        Tls = _model.SupportsTlsModes ? SelectedTls() : TlsPolicy.Default,
         // Not editable here, so carried rather than rebuilt: filing lives in the tree. Omitting it would
         // quietly discard it on every save.
         Folder = _existing?.Folder,

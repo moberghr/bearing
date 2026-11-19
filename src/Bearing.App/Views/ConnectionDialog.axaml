@@ -141,6 +141,9 @@
             <TextBlock x:Name="IntegratedHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,4,0,0"
                        Text="Connects as the Windows account running Bearing. No password is stored, prompted for, or read from the keychain."/>
 
+            <TextBlock x:Name="AwsProfileHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,4,0,0"
+                       Text="Signs in through the AWS SDK with the profile named above (or its default credential chain when blank). Bearing never reads, stores or prompts for an AWS secret."/>
+
             <!-- No keychain: nothing is stored anywhere, so say what will happen instead — and why, which the
                  code-behind fills in from what the store actually reported (SecretStorageAdvice). -->
             <Border x:Name="NoStorageWarning" IsVisible="False"
@@ -159,21 +162,25 @@
           <StackPanel Spacing="8" Margin="0,0,12,0">
 
             <!-- Transport security (#23). It used to be settable only by hand-editing project.json, so in practice
-                 every connection ran on the driver's default: encrypt if offered, tell nobody either way. -->
-            <TextBlock Text="Encryption" Opacity="0.8"/>
-            <ComboBox x:Name="TlsBox" HorizontalAlignment="Stretch" SelectionChanged="OnTlsChanged"/>
+                 every connection ran on the driver's default: encrypt if offered, tell nobody either way. The whole
+                 group leaves with an engine whose transport is not the user's to choose (IDbProvider.SupportsTlsModes):
+                 a mode picker there would be a claim nothing honours (§1.4). -->
+            <StackPanel x:Name="TlsGroup" Spacing="8">
+              <TextBlock Text="Encryption" Opacity="0.8"/>
+              <ComboBox x:Name="TlsBox" HorizontalAlignment="Stretch" SelectionChanged="OnTlsChanged"/>
 
-            <!-- What the chosen mode leaves open, in its own words. Amber, matching the keychain block: the posture is
-                 surfaced, never silent (§1.1) — and it names *which* guarantee is missing, because "require" reads as
-                 the secure choice while accepting any certificate at all. -->
-            <Border x:Name="TlsWarning" IsVisible="False"
-                    Background="{DynamicResource Bg.Warn}" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
-                    Padding="8,6" Margin="0,4,0,0">
-              <TextBlock x:Name="TlsWarningText" TextWrapping="Wrap"
-                         Foreground="{DynamicResource Warn.Amber}" FontSize="12"/>
-            </Border>
+              <!-- What the chosen mode leaves open, in its own words. Amber, matching the keychain block: the posture is
+                   surfaced, never silent (§1.1) — and it names *which* guarantee is missing, because "require" reads as
+                   the secure choice while accepting any certificate at all. -->
+              <Border x:Name="TlsWarning" IsVisible="False"
+                      Background="{DynamicResource Bg.Warn}" BorderBrush="{DynamicResource Warn.Amber}" BorderThickness="1" CornerRadius="4"
+                      Padding="8,6" Margin="0,4,0,0">
+                <TextBlock x:Name="TlsWarningText" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Warn.Amber}" FontSize="12"/>
+              </Border>
 
-            <Separator Margin="0,4"/>
+              <Separator Margin="0,4"/>
+            </StackPanel>
 
             <!-- Safety. One group with Encryption above it, because a production connection's settings are read
                  together: what the transport guarantees, whether the server will accept a write at all (#99), and how
@@ -184,6 +191,15 @@
             <CheckBox x:Name="ConfirmWritesBox"
                       Content="Confirm before running writes / destructive DDL on this connection"/>
 
+            <!-- Only where the engine asks the question at all (ProviderTraits.AsksFullScanQuestion): a statement that
+                 would read a whole table asks first. The note under it is ScanGuard.Boundary, set in code so the
+                 sentence is the one the confirmation itself says. -->
+            <StackPanel x:Name="ScanGroup" Spacing="2" IsVisible="False">
+              <CheckBox x:Name="ConfirmFullScansBox" IsChecked="True"
+                        Content="Confirm full table scans"/>
+              <TextBlock x:Name="ScanNote" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="26,0,0,0"/>
+            </StackPanel>
+
             <!-- Read-only asks the *server* to refuse writes rather than asking the user about them. Deliberately not
                  described as prevention: it is a USERSET setting a SET can lift, so it stops mistakes and is not a
                  substitute for a role without write privileges (see SessionPolicy). -->
@@ -193,6 +209,8 @@
             <!-- Manual commit (#131). Third in the group because it is the one that changes what pressing Run
                  *does* rather than whether it is allowed: a write opens a transaction and waits for you. Reads never
                  open one, which is what keeps a session from sitting in `idle in transaction` after mere browsing. -->
+            <!-- Hidden where the engine cannot hold a transaction open across statements
+                 (IDbProvider.SupportsManualCommit): the setting would never open anything. -->
             <CheckBox x:Name="ManualCommitBox" IsCheckedChanged="OnSafetyToggled"
                       Content="Manual commit — a write waits for Commit or Rollback"/>
 

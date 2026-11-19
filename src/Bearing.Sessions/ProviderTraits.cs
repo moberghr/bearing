@@ -44,6 +44,21 @@ public sealed record ProviderTraits(
     string? GridEditUnavailable,
     bool OffersTableDdl)
 {
+    /// <summary>
+    /// Whether this engine asks the full-table-scan question at all — the connection editor's "Confirm full table
+    /// scans" setting only means something where it does. Read from the dialect rather than stored as a second
+    /// fact: <see cref="ISqlDialect.ScanTargets"/> is null exactly for an engine that never asks, and an empty list
+    /// (no statement) for one that does, so the two cannot drift apart.
+    /// </summary>
+    public bool AsksFullScanQuestion => Dialect.ScanTargets("") is not null;
+
+    /// <summary>
+    /// The sentence naming what actually stops a write on an engine where <b>only Bearing refuses</b>
+    /// (<see cref="IDbProvider.EnforcesReadOnlyOnServer"/> false), for the connection editor's read-only note —
+    /// or null where the generic wording already says enough (SQL Server: a role without write privileges).
+    /// </summary>
+    public string? WriteBoundary { get; init; }
+
     /// <summary>PostgreSQL — the behaviour every caller had when there was one engine, so it is also the
     /// fallback below.</summary>
     public static ProviderTraits Postgres { get; } = new(
@@ -119,7 +134,11 @@ public sealed record ProviderTraits(
         EntraTakesUser: false,
         AzureServers: new("", DatabasesApiVersion: ""),
         GridEditUnavailable: "Read-only — editing isn't available on Amazon DynamoDB connections yet.",
-        OffersTableDdl: false);
+        OffersTableDdl: false)
+    {
+        WriteBoundary = "On Amazon DynamoDB the boundary is an IAM policy that grants no write actions "
+                        + "(PutItem, UpdateItem, DeleteItem and the like).",
+    };
 
     /// <summary>
     /// The traits for a provider id, matched the way the registry matches it (case-insensitively).

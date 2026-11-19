@@ -235,6 +235,75 @@ public class ConnectionManagementTests : IDisposable
         await Task.CompletedTask;
     }
 
+    // ---- Amazon DynamoDB -------------------------------------------------------------------------
+
+    /// <summary>The shape the connection editor saves for DynamoDB: region as Host, profile as User, no port,
+    /// the AWS-profile kind, and the scan question switched off — not the default (true), so a path that drops
+    /// it fails below instead of comparing true with true.</summary>
+    private static ConnectionInfo DynamoConn(string name) => new()
+    {
+        Id = Guid.NewGuid(),
+        Name = name,
+        ProviderId = "dynamodb",
+        Host = "eu-west-1",
+        Port = 0,
+        User = "dev",
+        CredentialKind = CredentialKind.AwsProfile,
+        ConfirmFullScans = false,
+        Options = new Dictionary<string, string> { ["Endpoint"] = "http://localhost:8000" },
+    };
+
+    [Fact]
+    public async Task A_dynamodb_connection_survives_project_json()
+    {
+        var dir = Path.Combine(_root, "ddbproj");
+        var store = new JsonProjectStore();
+        var created = await store.CreateAsync(dir, "Ddb", CancellationToken.None);
+        created.Manifest.Connections.Add(DynamoConn("orders (dev)"));
+        await store.SaveAsync(created, CancellationToken.None);
+
+        var got = (await store.OpenAsync(dir, CancellationToken.None)).Manifest.Connections.Single();
+
+        Assert.Equal("dynamodb", got.ProviderId);
+        Assert.Equal("eu-west-1", got.Host);
+        Assert.Equal("dev", got.User);
+        Assert.Equal(0, got.Port);
+        Assert.Equal(CredentialKind.AwsProfile, got.CredentialKind);
+        Assert.False(got.ConfirmFullScans);
+        Assert.Equal("http://localhost:8000", got.Options["Endpoint"]);
+    }
+
+    [Fact]
+    public async Task Duplicating_a_dynamodb_connection_keeps_its_profile_kind_and_scan_setting()
+    {
+        var conn = DynamoConn("orders (dev)");
+        var (ctx, vm, _) = NewVm(conn);
+
+        await vm.DuplicateConnectionAsync(conn.Id);
+
+        var copy = Named(ctx, "orders (dev) (copy)");
+        Assert.Equal(CredentialKind.AwsProfile, copy.CredentialKind);
+        Assert.False(copy.ConfirmFullScans);
+        Assert.Equal("dev", copy.User);
+    }
+
+    [Fact]
+    public async Task A_copied_dynamodb_connection_pastes_back_with_its_profile_kind_and_scan_setting()
+    {
+        var conn = DynamoConn("orders (dev)");
+        var (ctx, vm, _) = NewVm(conn);
+        var text = vm.CopyToClipboardText(conn.Id);
+
+        Assert.Equal(1, await vm.PasteFromClipboardTextAsync(text));
+
+        var copy = Named(ctx, "orders (dev) (copy)");
+        Assert.Equal(CredentialKind.AwsProfile, copy.CredentialKind);
+        Assert.False(copy.ConfirmFullScans);
+        Assert.Equal("eu-west-1", copy.Host);
+        Assert.Equal(0, copy.Port);
+        Assert.Equal("http://localhost:8000", copy.Options["Endpoint"]);
+    }
+
     // ---- clipboard -----------------------------------------------------------------------------
 
     [Fact]

@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.Linq;
 using Bearing.App.Connections;
 using Bearing.Core.Data;
+using Bearing.Data.DynamoDb;
 using Bearing.Data.Postgres;
 using Bearing.Data.SqlServer;
+using Bearing.Sessions;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -597,6 +599,146 @@ public class ConnectionFieldModelTests
 
         public ITransactionScope CreateTransactionScope(IDbConnectionFactory factory)
             => throw new NotSupportedException();
+    }
+
+    // ---- Amazon DynamoDB ---------------------------------------------------------------------------
+
+    private static readonly DynamoDbProvider Ddb = new();
+
+    [Fact]
+    public void Dynamodb_declares_region_profile_and_endpoint_in_that_order_with_no_port_or_database()
+    {
+        var model = ConnectionFieldModel.For(Ddb);
+
+        Assert.Equal(
+            new[] { "Host", "User", DynamoDbConnectionFactory.EndpointOption },
+            model.Fields.Select(f => f.Key));
+        Assert.Equal(
+            new[] { "Region", "AWS profile", "Endpoint" },
+            model.Fields.Select(f => f.Label));
+        Assert.False(model.HasPasswordField);
+    }
+
+    [Fact]
+    public void Dynamodb_saves_the_region_as_host_the_profile_as_user_the_endpoint_as_an_option_and_port_zero()
+    {
+        // The template carries Postgres' port, as the dialog's blank record does for a connection switched
+        // over from another engine: a port the form never showed must not reach a connection that has none.
+        var template = Blank with { Port = 5432, Database = "", User = "" };
+        var model = ConnectionFieldModel.For(Ddb);
+        model.Set("Host", " eu-west-1 ");
+        model.Set("User", "dev");
+        model.Set(DynamoDbConnectionFactory.EndpointOption, "http://localhost:8000");
+
+        var info = model.Apply(template);
+
+        Assert.Equal(DynamoDbProvider.ProviderId, info.ProviderId);
+        Assert.Equal("eu-west-1", info.Host);
+        Assert.Equal("dev", info.User);
+        Assert.Equal(0, info.Port);
+        Assert.Equal("http://localhost:8000", info.Options[DynamoDbConnectionFactory.EndpointOption]);
+        Assert.Equal("dev@eu-west-1", ConnectionEndpoint.Full(info));
+    }
+
+    [Fact]
+    public void Dynamodb_with_a_blank_profile_and_endpoint_saves_neither()
+    {
+        var model = ConnectionFieldModel.For(Ddb);
+        model.Set("Host", "eu-west-1");
+
+        var info = model.Apply(Blank with { User = "left over" });
+
+        // Blank means the SDK's default credential chain; the template's User must not stand in for it.
+        Assert.Equal("", info.User);
+        Assert.Empty(info.Options);
+    }
+
+    [Fact]
+    public void Dynamodb_requires_a_region_and_nothing_else()
+    {
+        var model = ConnectionFieldModel.For(Ddb);
+
+        Assert.Equal(new[] { "Region is required." }, model.Validate(CredentialKind.AwsProfile));
+
+        model.Set("Host", "eu-west-1");
+        Assert.Empty(model.Validate(CredentialKind.AwsProfile));
+    }
+
+    [Fact]
+    public void The_port_rule_does_not_touch_an_engine_that_declares_a_port()
+    {
+        // Zero is for a provider with a Host and no Port; one with a Port box still saves what is in it.
+        var info = ConnectionFieldModel.For(Pg).Apply(Blank with { Port = 1 });
+
+        Assert.Equal(5432, info.Port);
+    }
+
+    [Fact]
+    public void Intrinsic_values_parked_by_an_engine_switch_are_not_written_into_the_options_bag()
+    {
+        // Typed on Postgres, parked in the model for the way back, and then saved on an engine with no such
+        // box: they must not surface as `Database` / `Port` options on a connection whose factory ignores them.
+        var onPostgres = ConnectionFieldModel.For(Pg);
+        onPostgres.Set("Database", "sales");
+        onPostgres.Set("Port", "6543");
+
+        var onDynamo = onPostgres.SwitchTo(Ddb);
+        var info = onDynamo.Apply(Blank);
+
+        Assert.DoesNotContain(info.Options.Keys, k => k is "Database" or "Port");
+        Assert.Equal(0, info.Port);
+
+        // ...and nothing was lost: switching back finds them again.
+        var back = onDynamo.SwitchTo(Pg);
+        Assert.Equal("sales", back.Get("Database"));
+        Assert.Equal("6543", back.Get("Port"));
+    }
+
+    [Fact]
+    public void An_existing_dynamodb_connection_loads_region_profile_and_endpoint()
+    {
+        var existing = Blank with
+        {
+            ProviderId = DynamoDbProvider.ProviderId,
+            Host = "eu-west-1",
+            Port = 0,
+            User = "dev",
+            Options = new Dictionary<string, string> { [DynamoDbConnectionFactory.EndpointOption] = "http://localhost:8000" },
+        };
+
+        var model = ConnectionFieldModel.For(Ddb, existing);
+
+        Assert.Equal("eu-west-1", model.Get("Host"));
+        Assert.Equal("dev", model.Get("User"));
+        Assert.Equal("http://localhost:8000", model.Get(DynamoDbConnectionFactory.EndpointOption));
+        Assert.Equal(existing.Options[DynamoDbConnectionFactory.EndpointOption], model.Apply(existing).Options[DynamoDbConnectionFactory.EndpointOption]);
+        Assert.Equal(0, model.Apply(existing).Port);
+    }
+
+    [Theory]
+    [InlineData("postgres", true, true, true, false)]
+    [InlineData("sqlserver", true, true, false, false)]
+    [InlineData("mysql", true, true, false, false)]
+    [InlineData("dynamodb", false, false, false, true)]
+    public void The_model_answers_the_editors_row_questions_from_the_provider(
+        string providerId, bool tls, bool manualCommit, bool timeZone, bool asksScans)
+    {
+        var provider = new Bearing.Data.ProviderRegistry().All.Single(p => p.Id == providerId);
+
+        var model = ConnectionFieldModel.For(provider);
+
+        Assert.Equal(tls, model.SupportsTlsModes);
+        Assert.Equal(manualCommit, model.SupportsManualCommit);
+        Assert.Equal(timeZone, model.SupportsSessionTimeZone);
+        Assert.Equal(asksScans, model.AsksFullScanQuestion);
+    }
+
+    [Fact]
+    public void The_write_boundary_sentence_is_said_only_where_the_server_does_not_enforce_read_only()
+    {
+        Assert.Contains("IAM policy", ConnectionFieldModel.For(Ddb).WriteBoundary);
+        Assert.Null(ConnectionFieldModel.For(Pg).WriteBoundary);
+        Assert.Null(ConnectionFieldModel.For(Ms).WriteBoundary);
     }
 
     // ---- Browse Azure ----------------------------------------------------------------------------

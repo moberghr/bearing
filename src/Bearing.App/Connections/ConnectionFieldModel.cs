@@ -125,6 +125,28 @@ public sealed class ConnectionFieldModel
     /// which engines have it.</summary>
     public bool SupportsIntegratedAuth => Provider.SupportsIntegratedAuth;
 
+    /// <summary>Whether the engine reads <see cref="ConnectionInfo.Tls"/> at all. False hides the encryption rows
+    /// and saves the default, so the record never carries a mode nothing honours (§1.4).</summary>
+    public bool SupportsTlsModes => Provider.SupportsTlsModes;
+
+    /// <summary>Whether <see cref="ConnectionInfo.ManualCommit"/> means anything on this engine. False hides the
+    /// checkbox and saves off.</summary>
+    public bool SupportsManualCommit => Provider.SupportsManualCommit;
+
+    /// <summary>Whether the engine has a session time zone to set. False hides the group and saves none.</summary>
+    public bool SupportsSessionTimeZone => Provider.SupportsSessionTimeZone;
+
+    /// <summary>Whether this engine asks before reading a whole table, i.e. whether "Confirm full table scans" is
+    /// offered (<see cref="ConnectionInfo.ConfirmFullScans"/>). Asked of the traits, so the dialog never compares
+    /// engine ids.</summary>
+    public bool AsksFullScanQuestion => ProviderTraits.For(ProviderId).AsksFullScanQuestion;
+
+    /// <summary>What stops a write on an engine where only Bearing refuses, or null (see
+    /// <see cref="ProviderTraits.WriteBoundary"/>). Said only when the provider does not enforce read-only on the
+    /// server — a server that does needs no such sentence.</summary>
+    public string? WriteBoundary
+        => Provider.EnforcesReadOnlyOnServer ? null : ProviderTraits.For(ProviderId).WriteBoundary;
+
     /// <summary>Extra guidance about this engine's endpoint, or null when there is nothing to say. The
     /// named-instance rule is the case that exists: it makes the Port box a no-op, which the user cannot
     /// otherwise know.</summary>
@@ -376,15 +398,26 @@ public sealed class ConnectionFieldModel
         options.Remove(TlsPolicy.LegacyOptionKey);
         options.Remove(SessionTimeZonePolicy.LegacyOptionKey);
 
+        // An intrinsic key this engine has no box for is not an option either. SwitchTo parks a value the user
+        // typed for an engine that has the box (a database name, a port) in _carried so that switching back
+        // loses nothing; written out here it would land in the bag as `Database` beside a connection whose
+        // factory never reads it. Dropped from what is saved, kept in the model.
+        foreach (var key in Intrinsic)
+            if (!Has(key)) options.Remove(key);
+
         // Each intrinsic is written only when this provider declares a field for it. `Get` returning null
         // means "this engine has no such box", which is not the same as an empty box: coercing it to ""
         // (and the port to 0) blanked the template's endpoint for a provider that declares no fields at
         // all, which is exactly what DemoProvider does.
+        //
+        // The one exception is a provider that declares a Host and no Port (DynamoDB: Host is the region):
+        // it opens no socket, so it has no port to inherit, and the template's would be a number the form never
+        // showed. Zero is the absence the endpoint text already drops (ConnectionEndpoint.HostPort).
         return template with
         {
             ProviderId = ProviderId,
             Host = Get("Host") is { } host ? host.Trim() : template.Host,
-            Port = Has("Port") ? Port : template.Port,
+            Port = Has("Port") ? Port : Has("Host") ? 0 : template.Port,
             Database = Get("Database") is { } database ? database.Trim() : template.Database,
             User = Get("User") is { } user ? user.Trim() : template.User,
             Options = options,

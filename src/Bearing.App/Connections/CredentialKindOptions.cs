@@ -28,6 +28,11 @@ public sealed record CredentialKindOption(CredentialKind Kind, string Label);
 /// secret at all, so warning it about an unreachable keychain would be warning about something it never
 /// touches (§1.1).
 /// </para>
+/// <para>
+/// The two password kinds are gated too, on <see cref="IDbProvider.SupportsPasswordCredentials"/>, and
+/// <see cref="CredentialKind.AwsProfile"/> on <see cref="IDbProvider.SupportsAwsProfile"/>: an engine that signs
+/// in through a named profile offers that kind alone, so the list is never empty for a shipped engine.
+/// </para>
 /// </summary>
 public static class CredentialKindOptions
 {
@@ -35,15 +40,20 @@ public static class CredentialKindOptions
     /// default for a new connection when a keychain is reachable.</summary>
     public static IReadOnlyList<CredentialKindOption> For(IDbProvider provider)
     {
-        var options = new List<CredentialKindOption>(4)
+        var options = new List<CredentialKindOption>(5);
+        // The two kinds that hand the driver a password. An engine whose credential is resolved elsewhere
+        // (an AWS profile) has neither, and with neither there is no password box to show (§1.9a).
+        if (provider.SupportsPasswordCredentials)
         {
-            new(CredentialKind.StoredPassword, "Stored password"),
-            new(CredentialKind.Prompt, "Prompt each time (not saved)"),
-        };
+            options.Add(new(CredentialKind.StoredPassword, "Stored password"));
+            options.Add(new(CredentialKind.Prompt, "Prompt each time (not saved)"));
+        }
         if (provider.SupportsEntraToken)
             options.Add(new(CredentialKind.EntraToken, "Microsoft Entra token (az login)"));
         if (provider.SupportsIntegratedAuth)
             options.Add(new(CredentialKind.Integrated, "Windows / integrated authentication"));
+        if (provider.SupportsAwsProfile)
+            options.Add(new(CredentialKind.AwsProfile, "AWS profile"));
         return options;
     }
 

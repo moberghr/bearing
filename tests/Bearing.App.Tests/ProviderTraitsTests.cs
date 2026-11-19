@@ -151,6 +151,32 @@ public class ProviderTraitsTests
     }
 }
 
+/// <summary>The two editor facts the traits carry: whether the scan confirmation is offered, and what bounds a
+/// write where only Bearing refuses.</summary>
+public class ProviderTraitsEditorFactsTests
+{
+    [Theory]
+    [InlineData("postgres", false)]
+    [InlineData("sqlserver", false)]
+    [InlineData("mysql", false)]
+    [InlineData("dynamodb", true)]
+    public void Only_dynamodb_asks_the_full_scan_question(string providerId, bool asks)
+        => Assert.Equal(asks, ProviderTraits.For(providerId).AsksFullScanQuestion);
+
+    [Fact]
+    public void An_unknown_engine_asks_no_scan_question()
+        => Assert.False(ProviderTraits.For("no-such-engine").AsksFullScanQuestion);
+
+    [Fact]
+    public void Dynamodb_names_iam_as_what_stops_a_write_and_no_other_engine_carries_the_sentence()
+    {
+        Assert.Contains("IAM policy", ProviderTraits.DynamoDb.WriteBoundary);
+        Assert.Null(ProviderTraits.Postgres.WriteBoundary);
+        Assert.Null(ProviderTraits.SqlServer.WriteBoundary);
+        Assert.Null(ProviderTraits.MySql.WriteBoundary);
+    }
+}
+
 /// <summary>Which credential kinds a given engine can offer.</summary>
 public class CredentialKindOptionsTests
 {
@@ -199,6 +225,87 @@ public class CredentialKindOptionsTests
         Assert.False(CredentialKindOptions.KeepsAStoredPassword(CredentialKind.Integrated));
         Assert.False(CredentialKindOptions.KeepsAStoredPassword(CredentialKind.Prompt));
         Assert.False(CredentialKindOptions.KeepsAStoredPassword(CredentialKind.EntraToken));
+    }
+
+    [Fact]
+    public void Amazon_dynamodb_offers_the_aws_profile_kind_and_nothing_else()
+    {
+        // The factory signs in through the SDK and has nowhere to put a password, a token or an OS identity, so
+        // the dropdown must not offer a kind it would silently ignore (§1.9a).
+        var kinds = CredentialKindOptions.For(new DynamoDbProvider());
+
+        var only = Assert.Single(kinds);
+        Assert.Equal(CredentialKind.AwsProfile, only.Kind);
+        Assert.Equal("AWS profile", only.Label);
+    }
+
+    [Theory]
+    [InlineData("postgres")]
+    [InlineData("sqlserver")]
+    [InlineData("mysql")]
+    public void The_aws_profile_kind_is_offered_by_no_other_engine(string providerId)
+    {
+        var provider = new ProviderRegistry().All.Single(p => p.Id == providerId);
+
+        Assert.DoesNotContain(CredentialKind.AwsProfile, CredentialKindOptions.For(provider).Select(o => o.Kind));
+        // And the two password kinds stay where they were, first and in order.
+        Assert.Equal(
+            new[] { CredentialKind.StoredPassword, CredentialKind.Prompt },
+            CredentialKindOptions.For(provider).Select(o => o.Kind).Take(2));
+    }
+
+    [Fact]
+    public void The_password_kinds_follow_the_password_flag_and_the_other_kinds_follow_theirs()
+    {
+        // Every combination of the four flags, against a provider that only answers them: the list is a pure
+        // function of the flags, so a kind cannot appear for an engine that did not claim it.
+        for (var bits = 0; bits < 16; bits++)
+        {
+            var provider = new FlagsProvider(
+                password: (bits & 1) != 0, entra: (bits & 2) != 0, integrated: (bits & 4) != 0, aws: (bits & 8) != 0);
+
+            var expected = new List<CredentialKind>();
+            if (provider.SupportsPasswordCredentials)
+            {
+                expected.Add(CredentialKind.StoredPassword);
+                expected.Add(CredentialKind.Prompt);
+            }
+            if (provider.SupportsEntraToken) expected.Add(CredentialKind.EntraToken);
+            if (provider.SupportsIntegratedAuth) expected.Add(CredentialKind.Integrated);
+            if (provider.SupportsAwsProfile) expected.Add(CredentialKind.AwsProfile);
+
+            Assert.Equal(expected, CredentialKindOptions.For(provider).Select(o => o.Kind));
+        }
+    }
+
+    [Fact]
+    public void The_aws_profile_kind_keeps_no_password()
+        => Assert.False(CredentialKindOptions.KeepsAStoredPassword(CredentialKind.AwsProfile));
+
+    /// <summary>Answers the credential flags and nothing else — the list under test reads only those.</summary>
+    private sealed class FlagsProvider(bool password, bool entra, bool integrated, bool aws) : IDbProvider
+    {
+        public string Id => "flags";
+        public string DisplayName => "Flags";
+        public IReadOnlyList<ConnectionField> ConnectionFields { get; } = Array.Empty<ConnectionField>();
+        public bool EnforcesReadOnlyOnServer => false;
+        public bool SupportsSessionTimeZone => false;
+        public bool SupportsIntegratedAuth => integrated;
+        public bool SupportsEntraToken => entra;
+        public bool SupportsPasswordCredentials => password;
+        public bool SupportsAwsProfile => aws;
+        public bool SupportsManualCommit => false;
+        public bool SupportsTlsModes => false;
+        public bool SupportsServerActivity => false;
+
+        public IServerActivity CreateServerActivity(IDbConnectionFactory factory) => throw new NotSupportedException();
+        public DbErrorKind Classify(QueryError error) => DbErrorKind.Unknown;
+        public DbErrorKind ClassifyException(Exception exception) => DbErrorKind.Unknown;
+        public IDbConnectionFactory CreateConnectionFactory(ConnectionInfo info, string? password)
+            => throw new NotSupportedException();
+        public IMetadataReader CreateMetadataReader(IDbConnectionFactory factory) => throw new NotSupportedException();
+        public IQueryExecutor CreateQueryExecutor(IDbConnectionFactory factory) => throw new NotSupportedException();
+        public ITransactionScope CreateTransactionScope(IDbConnectionFactory factory) => throw new NotSupportedException();
     }
 
     [Fact]
