@@ -34,6 +34,13 @@
     <MinVerDefaultPreReleaseIdentifiers>alpha.0</MinVerDefaultPreReleaseIdentifiers>
   </PropertyGroup>
 
+  <!-- Who makes it, stamped into every assembly: what Windows shows under an exe's Properties ▸ Details.
+       The year is the year Bearing was first published; the About window says the same (AboutDialog). -->
+  <PropertyGroup>
+    <Company>Moberg d.o.o.</Company>
+    <Copyright>© 2026 Moberg d.o.o.</Copyright>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="MinVer" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers" />
   </ItemGroup>
