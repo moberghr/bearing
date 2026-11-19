@@ -160,6 +160,47 @@ public class ScanGuardTests
             verdicts.Select(v => v.Kind));
     }
 
+    // ---- which statements are classified (TargetsFor) ----------------------------------------------------
+
+    /// <summary>ARCH1's fail-closed padding: a read the write guard counts but the reduction skipped becomes one
+    /// unreadable target, so the batch is "could not check" — never run unclassified. The keyed read beside it
+    /// keeps its own verdict.</summary>
+    [Fact]
+    public void A_read_the_reduction_skipped_is_padded_as_unreadable()
+    {
+        const string sql = "select * from \"Orders\" where customerId = 'a'; select * from \"Orders\"";
+        Assert.Single(SkippingPartiQlDialect.Instance.ScanTargets(sql)!);
+
+        var targets = ScanGuard.TargetsFor(SkippingPartiQlDialect.Instance, sql)!;
+
+        Assert.Equal([true, false], targets.Select(t => t.Readable));
+        Assert.Equal(
+            [ScanVerdictKind.Keyed, ScanVerdictKind.Undetermined],
+            ScanGuard.Classify(targets, Snapshot, Details).Select(v => v.Kind));
+    }
+
+    [Fact]
+    public void A_batch_the_reduction_followed_whole_is_not_padded()
+    {
+        var targets = ScanGuard.TargetsFor(
+            PartiQlDialect.Instance,
+            "select * from \"Orders\" where customerId = 'a'; delete from \"Orders\" where customerId = 'a'")!;
+
+        Assert.True(Assert.Single(targets).Readable);
+    }
+
+    [Fact]
+    public void An_unreadable_batch_is_not_padded_twice()
+    {
+        var targets = ScanGuard.TargetsFor(PartiQlDialect.Instance, "select * from \"Orders\"; $$ select 1 $$")!;
+
+        Assert.Single(targets, t => !t.Readable);
+    }
+
+    [Fact]
+    public void An_engine_with_no_scan_question_has_no_targets()
+        => Assert.Null(ScanGuard.TargetsFor(PostgresDialect.Instance, "select * from orders"));
+
     [Fact]
     public void The_item_count_is_carried_when_the_caller_has_one()
     {
@@ -176,8 +217,19 @@ public class ScanGuardTests
 
         Assert.Equal(
             "This SELECT would read the whole of \"Orders\" — the WHERE has no = or IN on its partition key "
-            + "\"customerId\". DynamoDB estimates \"Orders\" holds about 1,234,567 items.",
+            + "\"customerId\". DynamoDB last reported about 1,234,567 items in \"Orders\".",
             text);
+    }
+
+    /// <summary>SF7: DynamoDB refreshes its item count about every six hours, so 0 is "not reported", never
+    /// "about 0 items" — a table filled since would be named as empty.</summary>
+    [Fact]
+    public void An_item_count_of_zero_is_not_reported_as_a_fact()
+    {
+        var verdict = One("select * from \"Orders\"", _ => 0);
+
+        Assert.Null(verdict.ApproximateItemCount);
+        Assert.DoesNotContain("about", ScanGuard.Describe(verdict)!);
     }
 
     [Fact]
@@ -295,4 +347,50 @@ public class ScanGuardTests
         Assert.Null(ScanGuard.TableOf(new ScanTarget("", null, null, [], false), Snapshot));
         Assert.Null(ScanGuard.TableOf(new ScanTarget("", "Orders", null, [], true), null));
     }
+}
+
+/// <summary>
+/// PartiQL in every respect but one: <see cref="ScanTargets"/> drops the last <c>SELECT</c>'s target, the way a
+/// reduction that failed to follow a statement would. The shipping dialect's split and the guard's agree, so this
+/// is the only way to reach the fail-closed padding in <see cref="ScanGuard.TargetsFor"/> — and it has to stay
+/// reached: it is what keeps a skipped read from running unasked (ARCH1).
+/// </summary>
+internal sealed class SkippingPartiQlDialect : ISqlDialect
+{
+    private static readonly ISqlDialect P = PartiQlDialect.Instance;
+
+    public static readonly ISqlDialect Instance = new SkippingPartiQlDialect();
+
+    public IReadOnlyList<ScanTarget>? ScanTargets(string sql)
+        => P.ScanTargets(sql) is { Count: > 0 } targets ? targets.Take(targets.Count - 1).ToList() : P.ScanTargets(sql);
+
+    public string Id => P.Id;
+    public bool HasDialectAwareGuard => P.HasDialectAwareGuard;
+    public IReadOnlySet<string> RiskyVerbs => P.RiskyVerbs;
+    public IReadOnlySet<string> ExternalReadVerbs => P.ExternalReadVerbs;
+    public bool SupportsExplainPlan => P.SupportsExplainPlan;
+    public IReadOnlySet<string> ExternalDeniedFunctions => P.ExternalDeniedFunctions;
+    public IReadOnlySet<string> ExternalDeniedRelations => P.ExternalDeniedRelations;
+    public (IReadOnlySet<string> Called, IReadOnlySet<string> Mentioned) ExternalNameScan(string statement)
+        => P.ExternalNameScan(statement);
+    public IReadOnlyList<StatementRisk> DescribeStatements(string sql) => P.DescribeStatements(sql);
+    public IReadOnlyList<StatementSpan> SplitStatements(string sql) => P.SplitStatements(sql);
+    public string? TransactionControl(IReadOnlyList<string> words) => P.TransactionControl(words);
+    public ISqlParseRules ParseRules => P.ParseRules;
+    public bool InStringLiteral(string sql, int offset) => P.InStringLiteral(sql, offset);
+    public IReadOnlyList<SqlVariableRef> FindVariables(string sql) => P.FindVariables(sql);
+    public IReadOnlyList<ScriptDirective> FindDirectives(string sql) => P.FindDirectives(sql);
+    public string RedactLiterals(string? sql) => P.RedactLiterals(sql);
+    public string Quote(string i) => P.Quote(i);
+    public string QuoteIfNeeded(string i) => P.QuoteIfNeeded(i);
+    public bool NeedsQuoting(string i) => P.NeedsQuoting(i);
+    public string Unquote(string i) => P.Unquote(i);
+    public string? TryAppendPage(string s, int o, int l) => P.TryAppendPage(s, o, l);
+    public string? Wrap(string s, int o, int l) => P.Wrap(s, o, l);
+    public string? CountWrap(string s) => P.CountWrap(s);
+    public string InsertStatement(string t, string c, string v, bool r) => P.InsertStatement(t, c, v, r);
+    public string UpdateStatement(string t, string s, string w, IReadOnlyList<string>? r) => P.UpdateStatement(t, s, w, r);
+    public string? TryEditExpression(string? text) => P.TryEditExpression(text);
+    public IReadOnlyCollection<string> EditExpressions => P.EditExpressions;
+    public IReadOnlyList<string> OfferedEditExpressions => P.OfferedEditExpressions;
 }

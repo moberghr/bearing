@@ -19,7 +19,8 @@ namespace Bearing.Data.DynamoDb;
 /// <para>
 /// <b>Everything else the SDK says is scrubbed</b> before it is shown (<see cref="Scrub"/>): an access-key id
 /// or a "secret=…" fragment in a service message is redacted, as <see cref="SafeErrorText"/> does for a
-/// password in a connection string. Bearing never reads an AWS secret, so this is a second line, not the
+/// password in a connection string — in a grid's error (<see cref="ToQueryError"/>) and in every exception the
+/// provider rethrows (<see cref="ForCaller"/>: the connection test, the streamed read, the catalog reads). Bearing never reads an AWS secret, so this is a second line, not the
 /// first.
 /// </para>
 /// </summary>
@@ -179,10 +180,60 @@ internal static class DynamoDbErrors
             return new QueryError("The statement was canceled.", CanceledCode, null);
         }
 
-        var service = Chain(exception).OfType<AmazonServiceException>().FirstOrDefault(s => !string.IsNullOrEmpty(s.ErrorCode));
         var message = Scrub(string.IsNullOrWhiteSpace(exception.Message) ? exception.GetType().Name : exception.Message);
-        return new QueryError(message, service?.ErrorCode, null);
+        return new QueryError(message, ErrorCodeOf(exception), null);
     }
+
+    /// <summary>
+    /// What a caller of this provider is handed for a failed SDK call — the one rule every rethrow follows, so
+    /// no SDK text reaches a sentence unscrubbed (S2). A sign-in failure becomes the sign-in sentence
+    /// (<see cref="Translate"/>); a message holding anything <see cref="Scrub"/> redacts becomes a
+    /// <see cref="DynamoDbScrubbedException"/> carrying the redacted text and AWS's error code, and <b>not</b> the
+    /// original as its inner exception (that would carry the unredacted text along); anything else comes back as
+    /// it was, type and stack intact.
+    /// </summary>
+    internal static Exception ForCaller(Exception exception, string? profile)
+    {
+        var translated = Translate(exception, profile);
+        if (!ReferenceEquals(translated, exception)) return translated;
+
+        var message = exception.Message ?? "";
+        var scrubbed = Scrub(message);
+
+        return string.Equals(scrubbed, message, StringComparison.Ordinal)
+            ? exception
+            : new DynamoDbScrubbedException(scrubbed, ErrorCodeOf(exception));
+    }
+
+    /// <summary>AWS's error code for a failed call (<c>ResourceNotFoundException</c>, …), from anywhere in the
+    /// chain; null when the failure was not a service answer.</summary>
+    internal static string? ErrorCodeOf(Exception exception)
+        => Chain(exception)
+            .Select(e => e switch
+            {
+                AmazonServiceException service => service.ErrorCode,
+                DynamoDbScrubbedException scrubbed => scrubbed.ErrorCode,
+                _ => null,
+            })
+            .FirstOrDefault(code => !string.IsNullOrEmpty(code));
+
+    /// <summary>DynamoDB said the table (or index) is not there — dropped since it was listed.</summary>
+    internal static bool IsResourceNotFound(Exception exception)
+        => Chain(exception).Any(e => e is Amazon.DynamoDBv2.Model.ResourceNotFoundException)
+           || ErrorCodeOf(exception) == "ResourceNotFoundException";
+
+    /// <summary>A policy refused the call: the credentials are good and the answer is no. Asking again in a
+    /// moment gives the same answer, unlike a throttle or a network failure.</summary>
+    internal static bool IsAccessDenied(Exception exception)
+        => ErrorCodeOf(exception) == "AccessDeniedException";
+
+    /// <summary>
+    /// A statement failed in a way that may mean what this session remembers about its table is out of date —
+    /// the table is gone (<c>ResourceNotFoundException</c>), or DynamoDB rejected the statement against it
+    /// (<c>ValidationException</c>: an index that does not exist, a key of the wrong type).
+    /// </summary>
+    internal static bool MayMeanStaleTable(Exception exception)
+        => IsResourceNotFound(exception) || ErrorCodeOf(exception) == "ValidationException";
 
     /// <summary>
     /// Turn a sign-in failure into the <see cref="DynamoDbSignInException"/> the connect path shows and
@@ -257,6 +308,22 @@ internal sealed class DynamoDbSignInException : Exception
     {
         Profile = profile;
         ProfileMissing = profileMissing;
+    }
+}
+
+/// <summary>
+/// A failed SDK call whose message held something <see cref="DynamoDbErrors.Scrub"/> redacts: the redacted
+/// message and AWS's error code, with no inner exception — the original is the unredacted text, and an inner
+/// exception is exactly what a log line or a details pane prints (<see cref="DynamoDbErrors.ForCaller"/>).
+/// </summary>
+internal sealed class DynamoDbScrubbedException : Exception
+{
+    /// <summary>AWS's error code from the original failure, or null when it had none.</summary>
+    public string? ErrorCode { get; }
+
+    public DynamoDbScrubbedException(string message, string? errorCode) : base(message)
+    {
+        ErrorCode = errorCode;
     }
 }
 

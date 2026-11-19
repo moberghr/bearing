@@ -178,7 +178,8 @@ public class ContinuationPagingTests : IDisposable
 
         Assert.Equal(Page + 4, h.Result.Loaded);
         Assert.True(h.Result.HasMore);
-        Assert.Equal(TokenExecutor.Notice, h.Status());
+        // The engine's sentence is host-neutral (W1a); the App adds how to read on.
+        Assert.Equal($"{TokenExecutor.Notice} {ContinuationPaging.LoadMoreContinues}", h.Status());
     }
 
     [Fact]
@@ -187,7 +188,7 @@ public class ContinuationPagingTests : IDisposable
         var h = await RunOnce(new TokenExecutor { TotalRows = 50, FirstPageRows = 2, FirstPageNotice = true });
 
         Assert.Contains("Done", h.Status());
-        Assert.Contains(TokenExecutor.Notice, h.Status());
+        Assert.Contains($"{TokenExecutor.Notice} {ContinuationPaging.LoadMoreContinues}", h.Status());
     }
 
     [Fact]

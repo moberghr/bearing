@@ -159,7 +159,14 @@ internal sealed class ContinuationPaging
     }
 
     /// <summary>The engine's own sentence for a page its request budget cut short — carried in
-    /// <see cref="QueryResult.Message"/> on a result that can still continue. Null for any other page.</summary>
+    /// <see cref="QueryResult.Message"/> on a result that can still continue — with this host's way to read on
+    /// (<see cref="LoadMoreContinues"/>): the engine's sentence names no button, since the <c>bearing</c> command
+    /// has none. Null for any other page.</summary>
     internal static string? BudgetNotice(QueryResult page)
-        => page is { Success: true, Continuation: not null, Message: { Length: > 0 } message } ? message : null;
+        => page is { Success: true, Continuation: not null, Message: { Length: > 0 } message }
+            ? $"{message.TrimEnd()} {LoadMoreContinues}"
+            : null;
+
+    /// <summary>What the App appends to a budget notice: how to read on from where the page stopped.</summary>
+    internal const string LoadMoreContinues = "Load more continues from where it stopped.";
 }

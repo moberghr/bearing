@@ -125,12 +125,12 @@ public sealed class DynamoDbConnectionFactory : IDbConnectionFactory
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
-            var translated = DynamoDbErrors.Translate(e, _profile);
-            if (ReferenceEquals(translated, e))
+            var surfaced = DynamoDbErrors.ForCaller(e, _profile);
+            if (ReferenceEquals(surfaced, e))
             {
                 throw;
             }
-            throw translated;
+            throw surfaced;
         }
     }
 
@@ -138,6 +138,11 @@ public sealed class DynamoDbConnectionFactory : IDbConnectionFactory
     /// <c>DescribeTable</c>, answered from this session's cache after the first time. A table's key schema
     /// does not change under a session often enough to pay a round trip per statement (the scan check and the
     /// column layout both ask); <see cref="ForgetTable"/> is for the callers that learn it did.
+    /// <para>
+    /// <b>Only a settled description is kept</b> (<see cref="IsSettled"/>): a table being created or updated, or
+    /// one with an index still being built, is read again next time rather than remembered in a state DynamoDB is
+    /// about to leave. A table DynamoDB says is gone is forgotten.
+    /// </para>
     /// </summary>
     internal async Task<TableDescription> DescribeTableAsync(string tableName, CancellationToken ct)
     {
@@ -146,10 +151,39 @@ public sealed class DynamoDbConnectionFactory : IDbConnectionFactory
             return cached;
         }
 
-        var response = await Api.DescribeTableAsync(new DescribeTableRequest { TableName = tableName }, ct)
-            .ConfigureAwait(false);
-        _tables[tableName] = response.Table;
+        DescribeTableResponse response;
+        try
+        {
+            response = await Api.DescribeTableAsync(new DescribeTableRequest { TableName = tableName }, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception e) when (DynamoDbErrors.IsResourceNotFound(e))
+        {
+            ForgetTable(tableName);
+            throw;
+        }
+
+        if (IsSettled(response.Table))
+        {
+            _tables[tableName] = response.Table;
+        }
         return response.Table;
+    }
+
+    /// <summary>
+    /// True when nothing about the description is mid-change: the table's status, and every global index's,
+    /// is <c>ACTIVE</c> (or not reported — DynamoDB Local and older answers leave it out).
+    /// </summary>
+    internal static bool IsSettled(TableDescription? table)
+    {
+        if (table is null) return false;
+
+        var status = table.TableStatus?.Value;
+        if (!string.IsNullOrEmpty(status) && status != "ACTIVE") return false;
+
+        return (table.GlobalSecondaryIndexes ?? [])
+            .Select(index => index.IndexStatus?.Value)
+            .All(indexStatus => string.IsNullOrEmpty(indexStatus) || indexStatus == "ACTIVE");
     }
 
     /// <summary>Drop one table's cached description (it was dropped, or its indexes changed).</summary>

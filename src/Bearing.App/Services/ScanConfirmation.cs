@@ -116,13 +116,15 @@ public sealed class ScanConfirmation
 
     /// <summary>
     /// The statements to check, or null when nothing is ever asked: the setting is off, or the engine has no scan
-    /// question (every engine but DynamoDB), or the batch has no <c>SELECT</c> that reads a table.
+    /// question (every engine but DynamoDB), or the batch has no <c>SELECT</c> that reads a table. Padded
+    /// fail-closed by <see cref="ScanGuard.TargetsFor"/>: a read the reduction did not follow is asked about as
+    /// one Bearing could not check, never run unasked.
     /// </summary>
     public static IReadOnlyList<ScanTarget>? TargetsToCheck(ConnectionInfo info, ISqlDialect dialect, string sql)
     {
         if (!info.ConfirmFullScans) return null;
 
-        return dialect.ScanTargets(sql) is { Count: > 0 } targets ? targets : null;
+        return ScanGuard.TargetsFor(dialect, sql) is { Count: > 0 } targets ? targets : null;
     }
 
     /// <summary>The run's question, or null when every verdict is keyed — nothing to ask.</summary>
@@ -220,58 +222,11 @@ public sealed class ScanConfirmation
     }
 
     /// <summary>
-    /// Look up what <see cref="ScanGuard.Classify(IEnumerable{ScanTarget}, ISchemaSnapshot?, Func{TableInfo, TableDetails?}?, Func{TableInfo, long?}?)"/>
-    /// needs, within <see cref="Budget"/>, and classify with whatever arrived.
+    /// Look up what the check needs, within <see cref="Budget"/>, and classify with whatever arrived — the one
+    /// Sessions helper both hosts call (<see cref="ScanFacts.ClassifyAsync"/>), connecting here (bounded, never
+    /// cancelling the shared connect or schema load) and naming item counts beside a scan.
     /// </summary>
-    internal async Task<IReadOnlyList<ScanVerdict>> ClassifyAsync(ConnectionInfo info, IReadOnlyList<ScanTarget> targets)
-    {
-        using var budget = new CancellationTokenSource(Budget);
-        var details = new Dictionary<long, TableDetails>();
-        var counts = new Dictionary<long, long?>();
-        // The cached table list is the fallback when no session can be had in time: a DynamoDB key schema
-        // cannot change after the table is created, so last time's answer about a table's partition key holds.
-        var snapshot = _sessions.TryGetSnapshot(info.Id, info.Database);
-
-        try
-        {
-            // Not cancelled by the budget, only no longer waited for: the run joins the same connect and the
-            // same schema load, and cancelling either would make the run start them again.
-            var session = await _sessions.GetOrConnectAsync(info, CancellationToken.None).WaitAsync(budget.Token);
-            using var lease = _sessions.Lease(session);
-            snapshot = await _sessions.EnsureSchemaAsync(session, CancellationToken.None).WaitAsync(budget.Token)
-                       ?? snapshot;
-
-            foreach (var table in targets
-                         .Where(t => t.Index is not null)
-                         .Select(t => ScanGuard.TableOf(t, snapshot))
-                         .OfType<TableInfo>()
-                         .DistinctBy(t => t.Id))
-            {
-                details[table.Id] = await session.Metadata.GetTableDetailsAsync(table.Id, budget.Token);
-            }
-
-            // Item counts only matter beside a scan, so they are read only when there is one to name.
-            var scans = ScanGuard.Classify(targets, snapshot, Details)
-                .Any(v => v.Kind == ScanVerdictKind.FullScan);
-            if (scans)
-            {
-                foreach (var size in await session.Metadata.GetRelationSizesAsync(budget.Token))
-                {
-                    counts[size.TableId] = size.EstimatedRows;
-                }
-            }
-        }
-        catch (Exception)
-        {
-            // A connect that failed, a read that failed, or the budget running out all leave the same answer:
-            // classify with what arrived. A missing fact makes a verdict Undetermined, which asks — never a
-            // reason to run without asking, and never a claim that the statement scans.
-        }
-
-        return ScanGuard.Classify(targets, snapshot, Details, Counts);
-
-        TableDetails? Details(TableInfo table) => details.GetValueOrDefault(table.Id);
-
-        long? Counts(TableInfo table) => counts.GetValueOrDefault(table.Id);
-    }
+    internal Task<IReadOnlyList<ScanVerdict>> ClassifyAsync(ConnectionInfo info, IReadOnlyList<ScanTarget> targets)
+        => ScanFacts.ClassifyAsync(
+            _sessions, info, targets, Budget, withItemCounts: true, connected: null, CancellationToken.None);
 }

@@ -243,8 +243,22 @@ internal sealed class FakeMetadata : IMetadataReader
     public Task<TableDetails> GetTableDetailsAsync(long tableId, CancellationToken ct)
         => Task.FromResult(Details ?? TableDetails.Empty);
 
+    /// <summary>Whole-database size reads, and single-table ones — the full-scan check must use the second
+    /// (S5: never describe a whole region to name one table's item count).</summary>
+    public int AllSizeReads;
+    public List<long> OneSizeReads { get; } = new();
+
     public Task<IReadOnlyList<RelationSize>> GetRelationSizesAsync(CancellationToken ct)
-        => Task.FromResult(Sizes ?? System.Array.Empty<RelationSize>());
+    {
+        Interlocked.Increment(ref AllSizeReads);
+        return Task.FromResult(Sizes ?? System.Array.Empty<RelationSize>());
+    }
+
+    public Task<RelationSize?> GetRelationSizeAsync(long tableId, CancellationToken ct)
+    {
+        lock (OneSizeReads) OneSizeReads.Add(tableId);
+        return Task.FromResult((Sizes ?? System.Array.Empty<RelationSize>()).FirstOrDefault(s => s.TableId == tableId));
+    }
 
     public Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(CancellationToken ct)
         => Task.FromResult<IReadOnlyList<DatabaseSize>>(System.Array.Empty<DatabaseSize>());

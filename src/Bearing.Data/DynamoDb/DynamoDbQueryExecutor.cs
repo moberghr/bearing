@@ -95,6 +95,15 @@ public sealed class DynamoDbQueryExecutor : IQueryExecutor
             return Failure(TimeSpan.Zero, new QueryError(e.Message, null, null));
         }
 
+        // A continuation only ever continues a read. The token is opaque and this executor wrote it, but it
+        // arrives from outside — a caller holding a string — so what it would send is checked again here rather
+        // than trusted: a token naming a DELETE is refused and nothing is sent.
+        if (!IsSelect(state.Statement))
+        {
+            var refused = Failure(TimeSpan.Zero, new QueryError(ContinuationNotARead, null, null));
+            return refused with { StatementIndex = state.StatementIndex };
+        }
+
         var sw = Stopwatch.StartNew();
         using var deadline = Deadline(ct);
 
@@ -111,9 +120,13 @@ public sealed class DynamoDbQueryExecutor : IQueryExecutor
         }
         catch (Exception e) when (!ct.IsCancellationRequested)
         {
+            ForgetStaleTable(state.Statement, e);
             return Failure(sw.Elapsed, ErrorFor(e, deadline)) with { StatementIndex = state.StatementIndex };
         }
     }
+
+    internal const string ContinuationNotARead =
+        "This continuation does not continue a SELECT, so nothing was sent. Run the statement again instead.";
 
     /// <summary>
     /// One statement from the start, following <c>NextToken</c> to the end (or to
@@ -237,6 +250,7 @@ public sealed class DynamoDbQueryExecutor : IQueryExecutor
         }
         catch (Exception e) when (!ct.IsCancellationRequested)
         {
+            ForgetStaleTable(statement, e);
             return Failure(sw.Elapsed, ErrorFor(e, deadline));
         }
     }
@@ -273,9 +287,11 @@ public sealed class DynamoDbQueryExecutor : IQueryExecutor
     internal static string WriteSentence(string verb)
         => $"{(verb.Length == 0 ? "Statement" : verb)} executed. DynamoDB does not report how many items it changed.";
 
+    /// <summary>The sentence for a page the request budget cut short. Host-neutral — it says what happened, not
+    /// which button or flag reads on; each host appends its own way to continue.</summary>
     internal static string BudgetNotice(int rows)
         => $"This page stopped after {RequestBudget} requests to DynamoDB with {rows} row{(rows == 1 ? "" : "s")}: "
-            + "the read has not reached the end yet. Load more continues from where it stopped.";
+            + "the read has not reached the end yet.";
 
     internal const string NoItems = "The SELECT returned no items.";
 
@@ -336,9 +352,15 @@ public sealed class DynamoDbQueryExecutor : IQueryExecutor
     /// <summary>
     /// The key attributes a result leads with: the table's partition key, then its sort key. For
     /// <c>SELECT *</c> every item has them, so they are columns even on an empty first page; for a projection
-    /// only those the first page actually holds are (<i>Behaviour 5</i>: the attributes found). A table that
-    /// cannot be described, or a statement whose table cannot be read off, gives none — the columns are then
-    /// alphabetical only.
+    /// only those the first page actually holds are (<i>Behaviour 5</i>: the attributes found). A table that is
+    /// gone or whose description is refused, or a statement whose table cannot be read off, gives none — the
+    /// columns are then alphabetical only.
+    /// <para>
+    /// <b>Two describe failures are answers, the rest are failures.</b> A table DynamoDB says is gone, or a
+    /// policy that refuses <c>DescribeTable</c>, gives no key attributes — asking again would say the same. A
+    /// throttle, a network failure or anything else fails the statement with its own classified error rather
+    /// than quietly reorder the columns (SF2); the connection's clock running out is the timeout, as for a page.
+    /// </para>
     /// </summary>
     private async Task<IReadOnlyList<string>> KeyAttributesAsync(
         string statement,
@@ -355,9 +377,22 @@ public sealed class DynamoDbQueryExecutor : IQueryExecutor
             var table = await _factory.DescribeTableAsync(target.Table, deadline.Token).ConfigureAwait(false);
             keys = DynamoDbMetadataReader.KeyAttributes(table.KeySchema);
         }
-        catch (Exception) when (!deadline.IsCancellationRequested && !ct.IsCancellationRequested)
+        catch (Exception e) when (!ct.IsCancellationRequested
+                                  && !deadline.IsCancellationRequested
+                                  && (DynamoDbErrors.IsResourceNotFound(e) || DynamoDbErrors.IsAccessDenied(e)))
         {
             return [];
+        }
+        catch (Exception e) when (!ct.IsCancellationRequested && deadline.IsCancellationRequested)
+        {
+            throw new TimeoutException(DynamoDbErrors.TimeoutSentence(_factory.StatementTimeoutSeconds), e);
+        }
+        catch (Exception e) when (!ct.IsCancellationRequested)
+        {
+            var surfaced = DynamoDbErrors.ForCaller(e, _factory.Profile);
+            if (ReferenceEquals(surfaced, e)) throw;
+
+            throw surfaced;
         }
 
         return PartiQlBatch.SelectsAll(statement)
@@ -397,11 +432,25 @@ public sealed class DynamoDbQueryExecutor : IQueryExecutor
         }
         catch (Exception e) when (!ct.IsCancellationRequested)
         {
-            var translated = DynamoDbErrors.Translate(e, _factory.Profile);
-            if (ReferenceEquals(translated, e)) throw;
+            ForgetStaleTable(request.Statement, e);
 
-            throw translated;
+            var surfaced = DynamoDbErrors.ForCaller(e, _factory.Profile);
+            if (ReferenceEquals(surfaced, e)) throw;
+
+            throw surfaced;
         }
+    }
+
+    /// <summary>
+    /// Drop the cached description of the table <paramref name="statement"/> reads when the failure says it may
+    /// be out of date (<see cref="DynamoDbErrors.MayMeanStaleTable"/>: the table is gone, or DynamoDB rejected the
+    /// statement against it). The next statement, scan check or column layout then reads it again rather than
+    /// trust a description from before a drop, a re-create or a new index (SF5).
+    /// </summary>
+    private void ForgetStaleTable(string statement, Exception failure)
+    {
+        if (!DynamoDbErrors.MayMeanStaleTable(failure)) return;
+        if (PartiQlBatch.Target(statement) is { } target) _factory.ForgetTable(target.Table);
     }
 
     /// <summary>A failure as the grid's error. The timeout is ours to know — our own clock fired and the

@@ -390,6 +390,27 @@ public class ScanConfirmationTests : IDisposable
         }
     }
 
+    /// <summary>ARCH1: a SELECT the reduction did not follow is asked about as one Bearing could not check. Before
+    /// the shared padding the App looked only at the targets it was handed, so a batch whose only read was skipped
+    /// had nothing to ask about and ran unasked.</summary>
+    [Fact]
+    public async Task A_read_the_reduction_skipped_is_asked_about_and_cancel_runs_nothing()
+    {
+        var h = Build();
+        var statuses = new System.Collections.Generic.List<string>();
+        var check = new ScanConfirmation(h.Ctx.Sessions, h.Dialogs, statuses.Add);
+        const string sql = "select * from \"Orders\" where customerId = 'a'";
+
+        Assert.Empty(SkippingPartiQlDialect.Instance.ScanTargets(sql)!);
+        var decision = await check.ConfirmRunAsync(h.Connection, SkippingPartiQlDialect.Instance, sql);
+
+        Assert.False(decision.Proceed);
+        var verdict = Assert.Single(Assert.Single(h.Dialogs.ScanQuestions).Verdicts);
+        Assert.Equal(ScanVerdictKind.Undetermined, verdict.Kind);
+        Assert.Equal(ScanUncertainty.Unreadable, verdict.Uncertainty);
+        Assert.Contains("Cancelled — nothing ran.", statuses);
+    }
+
     [Fact]
     public void Mark_sets_every_result_of_a_confirmed_scan_and_nothing_otherwise()
     {

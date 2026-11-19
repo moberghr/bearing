@@ -93,6 +93,31 @@ public static class ScanGuard
         "Rows load a page at a time; Load more and Fetch all keep reading the same scan.";
 
     /// <summary>
+    /// The statements of <paramref name="sql"/> to classify, or null when <paramref name="dialect"/> has no scan
+    /// question (every engine but DynamoDB). <see cref="ISqlDialect.ScanTargets"/>, <b>padded fail-closed</b>:
+    /// when the write guard's reading of the batch holds more reads (statements led by one of
+    /// <see cref="ISqlDialect.ExternalReadVerbs"/>, or ones it could not read at all) than the reduction returned
+    /// targets for, a read went unfollowed, and one unreadable target is added for it — so the batch is
+    /// <see cref="ScanVerdictKind.Undetermined"/>, asked about or refused, never run unclassified. Not padded when
+    /// a target is already unreadable: that one already stops the batch.
+    /// </summary>
+    public static IReadOnlyList<ScanTarget>? TargetsFor(ISqlDialect dialect, string sql)
+    {
+        if (dialect.ScanTargets(sql) is not { } targets) return null;
+
+        var reads = WriteGuard.Describe(dialect, sql)
+            .Count(s => !s.GuardIsDialectAware || dialect.ExternalReadVerbs.Contains(s.Verb));
+
+        return targets.Count < reads && targets.All(t => t.Readable)
+            ? [.. targets, Unfollowed]
+            : targets;
+    }
+
+    /// <summary>The target standing in for a read the reduction did not follow (<see cref="TargetsFor"/>).</summary>
+    private static readonly ScanTarget Unfollowed =
+        new(Statement: "", Table: null, Index: null, PinnedAttributes: [], Readable: false);
+
+    /// <summary>
     /// The table <paramref name="target"/> reads, matched by its exact name — DynamoDB table names are
     /// case-sensitive, so <c>orders</c> is not <c>Orders</c>. Null when the target names no table, or the
     /// snapshot has none by that name. For a caller deciding which tables' details to load.
@@ -124,7 +149,10 @@ public static class ScanGuard
         if (snapshot is null) return Undetermined(target, ScanUncertainty.TablesNotLoaded);
         if (TableOf(target, snapshot) is not { } table) return Undetermined(target, ScanUncertainty.UnknownTable);
 
-        var count = itemCounts?.Invoke(table);
+        // Zero is not reported as a fact: DynamoDB's count lags by hours, and "about 0 items" beside a table that
+        // has filled since would be a claim nobody checked (SF7). Only a positive figure is named.
+        var reported = itemCounts?.Invoke(table);
+        var count = reported > 0 ? reported : null;
         var columns = snapshot.ColumnsOf(table.Id);
         string? partitionKey;
 
@@ -192,8 +220,10 @@ public static class ScanGuard
                     var sentence = $"This SELECT would read the whole of {reads} — the WHERE has no = or IN on "
                                    + $"{key} {Quote(verdict.PartitionKey!)}.";
 
+                    // "Last reported", not "holds": DynamoDB refreshes the figure about every six hours, so it
+                    // is a past reading, not a count of the table now (SF7).
                     return verdict.ApproximateItemCount is { } count
-                        ? $"{sentence} DynamoDB estimates {Quote(target.Table!)} holds about {Items(count)}."
+                        ? $"{sentence} DynamoDB last reported about {Items(count)} in {Quote(target.Table!)}."
                         : sentence;
                 }
 

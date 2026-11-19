@@ -57,15 +57,29 @@ public sealed class DynamoDbMetadataReader : IMetadataReader
         var names = await ListTableNamesAsync(ct).ConfigureAwait(false);
         var described = await DescribeAllAsync(names, ct).ConfigureAwait(false);
 
+        // A table whose description failed for a reason that may pass (a throttle, the network, a service
+        // error) fails the whole read rather than be kept without its keys: the session caches the snapshot, and
+        // a cached table with no partition key reads as "keys not loaded" for as long as the session lives (SF1).
+        // Nothing is kept, and the next read tries again.
+        if (TransientFailure(described) is { } failure) throw failure;
+
         var tables = new List<TableInfo>(names.Count);
         var columns = new List<ColumnInfo>();
 
         foreach (var name in names)
         {
+            var outcome = described[name];
+
+            // Dropped between the list and the describe: it is not a table any more.
+            if (outcome.Kind == DescribeKind.Gone) continue;
+
             var id = StableId(name);
             tables.Add(new TableInfo(id, Schema, name, RelationKind.Table));
 
-            if (described[name] is not { } table) continue;
+            // A policy that allows ListTables but refuses DescribeTable: the table is listed, its keys are not
+            // known, and asking again would get the same answer — kept without columns, which the scan check
+            // reads as "the partition key was not loaded".
+            if (outcome.Table is not { } table) continue;
 
             columns.AddRange(DeclaredAttributes(table)
                 .Select((attribute, i) =>
@@ -132,19 +146,44 @@ public sealed class DynamoDbMetadataReader : IMetadataReader
         var described = await DescribeAllAsync(names, ct).ConfigureAwait(false);
 
         return names
-            .Select(name => described[name] is { } table ? SizeOf(name, table) : null)
+            .Select(name => described[name].Table is { } table ? SizeOf(name, table) : null)
             .OfType<RelationSize>()
             .ToList();
     }
 
+    /// <summary>
+    /// One table's size entry from one <c>DescribeTable</c> (through the session's cache) — what the full-scan
+    /// check reads for the item count it names, rather than describing every table in the region. Null when the
+    /// table is gone or DynamoDB reported no size for it.
+    /// </summary>
+    public async Task<RelationSize?> GetRelationSizeAsync(long tableId, CancellationToken ct)
+    {
+        if (await ResolveAsync(tableId, ct).ConfigureAwait(false) is not { } name) return null;
+
+        try
+        {
+            return SizeOf(name, await _factory.DescribeTableAsync(name, ct).ConfigureAwait(false));
+        }
+        catch (Exception e) when (DynamoDbErrors.IsResourceNotFound(e))
+        {
+            return null;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            Rethrow(e);
+            throw;
+        }
+    }
+
     /// <summary>The region's size as the sum of its tables' — or null, saying why, when a table's size is
-    /// missing: a partial sum would read as the whole.</summary>
+    /// missing: a partial sum would read as the whole. A table dropped since the list is not one of them.</summary>
     public async Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(CancellationToken ct)
     {
         var names = await ListTableNamesAsync(ct).ConfigureAwait(false);
         var described = await DescribeAllAsync(names, ct).ConfigureAwait(false);
         var sizes = names
-            .Select(name => described[name] is { } table ? SizeOf(name, table) : null)
+            .Where(name => described[name].Kind != DescribeKind.Gone)
+            .Select(name => described[name].Table is { } table ? SizeOf(name, table) : null)
             .ToList();
 
         return sizes.Any(size => size is null)
@@ -321,12 +360,25 @@ public sealed class DynamoDbMetadataReader : IMetadataReader
 
     // ---- reads -------------------------------------------------------------------------------------
 
-    private static RelationSize? SizeOf(string name, TableDescription table)
+    /// <summary>
+    /// A table's size entry, or null when any part of it was not reported — the table's bytes or any index's
+    /// (SF4): a total missing an index would read as the whole, and the region's sum would add it up.
+    /// <para>
+    /// <b>An item count of 0 is not reported as a fact</b> (SF7). DynamoDB refreshes <c>ItemCount</c> about every
+    /// six hours, so a new table full of items still says 0; the count is null ("not reported") unless it is a
+    /// positive number.
+    /// </para>
+    /// </summary>
+    internal static RelationSize? SizeOf(string name, TableDescription table)
     {
         if (table.TableSizeBytes is not { } bytes) return null;
 
-        var indexBytes = (table.GlobalSecondaryIndexes ?? []).Sum(i => i.IndexSizeBytes ?? 0)
-            + (table.LocalSecondaryIndexes ?? []).Sum(i => i.IndexSizeBytes ?? 0);
+        var indexSizes = (table.GlobalSecondaryIndexes ?? []).Select(i => i.IndexSizeBytes)
+            .Concat((table.LocalSecondaryIndexes ?? []).Select(i => i.IndexSizeBytes))
+            .ToList();
+        if (indexSizes.Any(size => size is null)) return null;
+
+        var indexBytes = indexSizes.Sum(size => size!.Value);
 
         return new RelationSize(
             TableId: StableId(name),
@@ -334,7 +386,7 @@ public sealed class DynamoDbMetadataReader : IMetadataReader
             TableBytes: bytes,
             IndexBytes: indexBytes,
             ToastBytes: 0,
-            EstimatedRows: table.ItemCount);
+            EstimatedRows: table.ItemCount is > 0 ? table.ItemCount : null);
     }
 
     /// <summary>Every table in the region, following <c>LastEvaluatedTableName</c>. Remembers each name's id so
@@ -368,15 +420,32 @@ public sealed class DynamoDbMetadataReader : IMetadataReader
         return names;
     }
 
+    /// <summary>How one table's <c>DescribeTable</c> went — kept typed, because "gone", "refused" and "failed
+    /// for now" are different answers (§1.1).</summary>
+    internal enum DescribeKind
+    {
+        Described,
+
+        /// <summary><c>ResourceNotFoundException</c>: dropped since the list.</summary>
+        Gone,
+
+        /// <summary><c>AccessDeniedException</c>: a policy that allows <c>ListTables</c> refuses this.</summary>
+        Refused,
+
+        /// <summary>Anything else — a throttle, the network, a service error. May pass.</summary>
+        Failed,
+    }
+
+    internal readonly record struct DescribeOutcome(DescribeKind Kind, TableDescription? Table, Exception? Error);
+
     /// <summary>
     /// Each table's description, at most <see cref="DescribeConcurrency"/> at once, through the factory's
-    /// per-session cache. A table that cannot be described (dropped since the list, or refused by a policy that
-    /// allows <c>ListTables</c> but not <c>DescribeTable</c>) maps to null and keeps its row; a sign-in failure
-    /// fails the whole read, since every other table would fail the same way.
+    /// per-session cache, with how each went (<see cref="DescribeKind"/>). A sign-in failure fails the whole
+    /// read, since every other table would fail the same way.
     /// </summary>
-    private async Task<Dictionary<string, TableDescription?>> DescribeAllAsync(IReadOnlyList<string> names, CancellationToken ct)
+    private async Task<Dictionary<string, DescribeOutcome>> DescribeAllAsync(IReadOnlyList<string> names, CancellationToken ct)
     {
-        var described = new ConcurrentDictionary<string, TableDescription?>(StringComparer.Ordinal);
+        var described = new ConcurrentDictionary<string, DescribeOutcome>(StringComparer.Ordinal);
         var options = new ParallelOptions { MaxDegreeOfParallelism = DescribeConcurrency, CancellationToken = ct };
 
         try
@@ -385,11 +454,15 @@ public sealed class DynamoDbMetadataReader : IMetadataReader
             {
                 try
                 {
-                    described[name] = await _factory.DescribeTableAsync(name, token).ConfigureAwait(false);
+                    var table = await _factory.DescribeTableAsync(name, token).ConfigureAwait(false);
+                    described[name] = new DescribeOutcome(DescribeKind.Described, table, null);
                 }
                 catch (Exception e) when (!token.IsCancellationRequested && !DynamoDbErrors.IsSignInFailure(e))
                 {
-                    described[name] = null;
+                    var kind = DynamoDbErrors.IsResourceNotFound(e) ? DescribeKind.Gone
+                        : DynamoDbErrors.IsAccessDenied(e) ? DescribeKind.Refused
+                        : DescribeKind.Failed;
+                    described[name] = new DescribeOutcome(kind, null, e);
                 }
             }).ConfigureAwait(false);
         }
@@ -401,7 +474,40 @@ public sealed class DynamoDbMetadataReader : IMetadataReader
 
         return names
             .Distinct(StringComparer.Ordinal)
-            .ToDictionary(name => name, name => described.GetValueOrDefault(name), StringComparer.Ordinal);
+            .ToDictionary(
+                name => name,
+                name => described.GetValueOrDefault(name, new DescribeOutcome(DescribeKind.Failed, null, null)),
+                StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// The failure a snapshot read must not hide — the first table (by name) whose description failed for a
+    /// reason that may pass — as one sentence naming it and DynamoDB's scrubbed reason; null when there is none.
+    /// </summary>
+    private static Exception? TransientFailure(Dictionary<string, DescribeOutcome> described)
+    {
+        var failed = described
+            .Where(entry => entry.Value.Kind == DescribeKind.Failed)
+            .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+            .ToList();
+        if (failed.Count == 0) return null;
+
+        var (name, outcome) = (failed[0].Key, failed[0].Value);
+        var reason = outcome.Error is { } error
+            ? DynamoDbErrors.Scrub(string.IsNullOrWhiteSpace(error.Message) ? error.GetType().Name : error.Message)
+            : "no answer arrived";
+        var others = failed.Count - 1;
+        var more = others switch
+        {
+            0 => "",
+            1 => " (and 1 more table could not be read either)",
+            _ => $" (and {others} more tables could not be read either)",
+        };
+
+        return new DynamoDbScrubbedException(
+            $"Keys not loaded for {Quote(name)}: {reason.TrimEnd('.')}{more}. "
+            + "The table list was not kept; the next read tries again.",
+            outcome.Error is { } e ? DynamoDbErrors.ErrorCodeOf(e) : null);
     }
 
     private async Task<string?> ResolveAsync(long tableId, CancellationToken ct)
@@ -413,12 +519,13 @@ public sealed class DynamoDbMetadataReader : IMetadataReader
         return _names.TryGetValue(tableId, out var listed) ? listed : null;
     }
 
-    /// <summary>Rethrow <paramref name="e"/> as the sign-in sentence when it is a sign-in failure, else as itself
-    /// with its stack intact.</summary>
+    /// <summary>Rethrow <paramref name="e"/> as the sign-in sentence when it is a sign-in failure, scrubbed when
+    /// its message holds key material (<see cref="DynamoDbErrors.ForCaller"/>), else as itself with its stack
+    /// intact.</summary>
     private void Rethrow(Exception e)
     {
-        var translated = DynamoDbErrors.Translate(e, _factory.Profile);
-        if (!ReferenceEquals(translated, e)) throw translated;
+        var surfaced = DynamoDbErrors.ForCaller(e, _factory.Profile);
+        if (!ReferenceEquals(surfaced, e)) throw surfaced;
 
         ExceptionDispatchInfo.Capture(e).Throw();
     }

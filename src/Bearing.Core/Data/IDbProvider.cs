@@ -187,6 +187,15 @@ public interface IMetadataReader
     Task<IReadOnlyList<RelationSize>> GetRelationSizesAsync(CancellationToken ct);
 
     /// <summary>
+    /// One relation's size entry, or null when the engine reported none for it. The default reads every
+    /// relation's (<see cref="GetRelationSizesAsync"/>) and picks one; an engine that pays a request per table for
+    /// a size (DynamoDB's <c>DescribeTable</c>) reads only the one — the full-scan check names one table's item
+    /// count and must not describe a whole region to find it.
+    /// </summary>
+    async Task<RelationSize?> GetRelationSizeAsync(long tableId, CancellationToken ct)
+        => (await GetRelationSizesAsync(ct).ConfigureAwait(false)).FirstOrDefault(size => size.TableId == tableId);
+
+    /// <summary>
     /// Every database's size on the server. A size that cannot be read comes back null rather than throwing:
     /// <c>pg_database_size</c> raises for a database the user cannot connect to, and one inaccessible database
     /// must not cost the sizes of the rest.

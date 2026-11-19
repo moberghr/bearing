@@ -288,8 +288,8 @@ public sealed class BearingHost(
         // person at the keyboard, and nobody is at this one to answer it (Behaviour 12). Third because the two
         // checks above settle what kind of statement this is; this one only asks how much of a table a read
         // would touch.
-        if (traits.Dialect.ScanTargets(sql) is { } targets
-            && await ScanRefusalAsync(info, targets, risks.Count, ct).ConfigureAwait(false) is { } scan)
+        if (ScanGuard.TargetsFor(traits.Dialect, sql) is { Count: > 0 } targets
+            && await ScanRefusalAsync(info, targets, ct).ConfigureAwait(false) is { } scan)
         {
             throw Refused(info, sql, scan);
         }
@@ -308,52 +308,24 @@ public sealed class BearingHost(
     /// refused here saying Bearing could not check — never that the statement scans (§1.1).
     /// </para>
     /// <para>
-    /// <b>Fail closed on a statement the reduction skipped.</b> <see cref="ISqlDialect.ScanTargets"/> returns one
-    /// target per statement led by <c>SELECT</c>, and the allow-list above has let through only reads; a batch
-    /// with more statements than targets holds a read the reduction did not follow, and it is refused as one
-    /// Bearing could not check rather than run unclassified.
+    /// <b>Fail closed on a statement the reduction skipped.</b> The targets come from
+    /// <see cref="ScanGuard.TargetsFor"/>, which adds an unreadable one when the batch holds a read the reduction
+    /// did not follow; it is refused as one Bearing could not check rather than run unclassified. The look-up is
+    /// the App's too (<see cref="ScanFacts.ClassifyAsync"/>); only the sentence is this host's.
     /// </para>
     /// </summary>
     private async Task<string?> ScanRefusalAsync(
-        ConnectionInfo info, IReadOnlyList<ScanTarget> targets, int statements, CancellationToken ct)
+        ConnectionInfo info, IReadOnlyList<ScanTarget> targets, CancellationToken ct)
     {
-        if (targets.Count < statements)
-            targets = [.. targets, new ScanTarget(Statement: "", Table: null, Index: null, [], Readable: false)];
-
-        if (targets.Count == 0) return null;
-
-        ISchemaSnapshot? snapshot = null;
-        var details = new Dictionary<long, TableDetails>();
-
+        IReadOnlyList<ScanVerdict> verdicts;
         using (var lease = await ConnectAsync(info, ct).ConfigureAwait(false))
         {
-            using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            budget.CancelAfter(ScanGuard.Budget);
-
-            try
-            {
-                snapshot = await sessions.EnsureSchemaAsync(lease.Session, budget.Token).ConfigureAwait(false);
-
-                foreach (var table in targets
-                             .Where(t => t.Index is not null)
-                             .Select(t => ScanGuard.TableOf(t, snapshot))
-                             .OfType<TableInfo>()
-                             .DistinctBy(t => t.Id))
-                {
-                    details[table.Id] = await lease.Session.Metadata
-                        .GetTableDetailsAsync(table.Id, budget.Token)
-                        .ConfigureAwait(false);
-                }
-            }
-            // The budget running out, or a catalog read that failed: classify with what arrived. A missing fact
-            // makes a verdict Undetermined, which is refused — never a reason to run unclassified. The caller's
-            // own cancellation is not swallowed.
-            catch (Exception) when (!ct.IsCancellationRequested)
-            {
-            }
+            verdicts = await ScanFacts
+                .ClassifyAsync(sessions, info, targets, ScanGuard.Budget, withItemCounts: false, lease.Session, ct)
+                .ConfigureAwait(false);
         }
 
-        var refusals = ScanGuard.Classify(targets, snapshot, t => details.GetValueOrDefault(t.Id))
+        var refusals = verdicts
             .Select(v => ScanGuard.CliRefusal(info.Name, v))
             .OfType<string>()
             .ToList();
