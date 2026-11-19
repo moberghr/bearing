@@ -170,6 +170,12 @@ holds before selecting `*` or an options bag.
   the strength of a setting that is inert here.
 - The paging token (`QueryResult.Continuation`) holds statement text and a server token: memory only, never logged,
   persisted or shown (§1.3, §5.1b).
+- **The editor's profile list reads the AWS config file only — never the credentials file** (user decision
+  2026-11-19). `AwsConfigProfiles` opens `AWS_CONFIG_FILE` or `~/.aws/config` (bounded at 1 MB, failures → empty
+  list, contents never logged), parses it itself, and keeps **profile names and their `region`** — no other key's
+  value. DO NOT switch to the SDK's listing APIs (`CredentialProfileStoreChain.ListProfiles`, `SharedCredentialsFile`,
+  `NetSDKCredentialsFile`): they read `~/.aws/credentials` into Bearing's memory. A profile only in the credentials
+  file is not listed and stays typeable. Regions come from the SDK's built-in table (`AwsRegions`), no file or network.
 
 ## §1.10 — Manual commit (#131)
 `ConnectionInfo.ManualCommit`: a **write** opens a transaction held until Commit/Rollback. `CommitPolicy`;

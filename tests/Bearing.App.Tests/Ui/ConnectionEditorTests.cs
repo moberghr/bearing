@@ -7,9 +7,14 @@ using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.LogicalTree;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Bearing.App.Views;
 using Bearing.Core.Data;
 using Bearing.Data;
+using Bearing.Data.DynamoDb;
+using Bearing.Data.MySql;
+using Bearing.Data.Postgres;
+using Bearing.Data.SqlServer;
 using Bearing.Sessions;
 using Xunit;
 
@@ -355,7 +360,7 @@ public class ConnectionEditorTests
         var dialog = new ConnectionDialog(
             null, null, (_, _, _) => Task.FromResult(false),
             new Bearing.App.Services.SecretStoragePosture(Secure: false, CanStore: false, Reason: "no keychain here"),
-            new ProviderRegistry());
+            ConnectionEditorProbe.Registry());
         ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
 
         Assert.Equal(new[] { "Host", "User", "Endpoint" }, ConnectionEditorProbe.FieldKeys(dialog));
@@ -427,6 +432,130 @@ public class ConnectionEditorTests
         Assert.True(Visible(dialog, "PasswordBox"));
         Assert.Equal(new[] { "Stored password", "Prompt each time (not saved)" },
             ConnectionEditorProbe.Items(dialog, "CredentialKindBox").Take(2));
+        // Their rows are still plain text boxes with no field hint: suggestions and hints are DynamoDB's alone.
+        Assert.All(ConnectionEditorProbe.FieldKeys(dialog),
+            key => Assert.IsType<TextBox>(Assert.Single(ConnectionEditorProbe.Named(dialog, key + "Box"))));
+        Assert.DoesNotContain(dialog.GetLogicalDescendants().OfType<Control>(),
+            c => c.Name?.EndsWith("FieldHint", StringComparison.Ordinal) == true);
+    });
+
+    // ---- DynamoDB region / profile pickers and the endpoint hint (user decision 2026-11-19) -------------
+
+    private static SuggestionFieldBox.Item[] SuggestionItems(ConnectionDialog dialog, string key)
+        => ConnectionEditorProbe.Editor<ComboBox>(dialog, key).ItemsSource!.Cast<SuggestionFieldBox.Item>().ToArray();
+
+    [Fact]
+    public Task Region_and_profile_are_editable_pickers_and_the_endpoint_a_text_box_with_its_hint_under_it()
+        => _ui.Run(() =>
+        {
+            var dialog = ConnectionEditorProbe.Dialog();
+            ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
+
+            Assert.True(ConnectionEditorProbe.Editor<ComboBox>(dialog, "Host").IsEditable);
+            var ireland = Assert.Single(SuggestionItems(dialog, "Host"), i => i.ToString() == "eu-west-1");
+            Assert.Equal("eu-west-1 — Europe (Ireland)", ireland.Label);
+
+            Assert.True(ConnectionEditorProbe.Editor<ComboBox>(dialog, "User").IsEditable);
+            Assert.Equal(new[] { "dev", "ci" }, SuggestionItems(dialog, "User").Select(i => i.ToString()));
+
+            var endpoint = ConnectionEditorProbe.Editor<TextBox>(dialog, DynamoDbConnectionFactory.EndpointOption);
+            var hint = Assert.IsType<TextBlock>(Assert.Single(ConnectionEditorProbe.Named(dialog, "EndpointFieldHint")));
+            Assert.Equal("Leave blank for AWS; set only for DynamoDB Local or a VPC/FIPS endpoint.", hint.Text);
+            Assert.True(hint.IsVisible);
+            // Directly under the Endpoint box: the next row of the same grid, in the editor column.
+            Assert.Same(endpoint.Parent, hint.Parent);
+            Assert.Equal(Grid.GetRow(endpoint) + 1, Grid.GetRow(hint));
+            Assert.Equal(Grid.GetColumn(endpoint), Grid.GetColumn(hint));
+        });
+
+    [Fact]
+    public Task Picking_a_region_saves_its_code_not_the_text_shown_in_the_list() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Show();
+        try
+        {
+            ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
+            var region = ConnectionEditorProbe.Editor<ComboBox>(dialog, "Host");
+
+            region.SelectedIndex = Array.FindIndex(SuggestionItems(dialog, "Host"), i => i.ToString() == "eu-west-2");
+
+            Assert.Equal("eu-west-2", region.Text);
+            Assert.Equal("eu-west-2", dialog.BuildConnection().Host);
+            Assert.DoesNotContain("Region is required", dialog.FindControl<TextBlock>("ValidationHint")!.Text ?? "");
+        }
+        finally { ConnectionEditorProbe.Close(dialog); }
+    });
+
+    [Fact]
+    public Task A_region_and_profile_nobody_suggested_are_typed_and_saved() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Show();
+        try
+        {
+            ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
+            ConnectionEditorProbe.Type(dialog, "Host", "local");
+            ConnectionEditorProbe.Type(dialog, "User", "only-in-credentials");
+
+            var saved = dialog.BuildConnection();
+            Assert.Equal("local", saved.Host);
+            Assert.Equal("only-in-credentials", saved.User);
+        }
+        finally { ConnectionEditorProbe.Close(dialog); }
+    });
+
+    [Fact]
+    public Task Picking_a_profile_fills_an_empty_region() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Show();
+        try
+        {
+            ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
+
+            ConnectionEditorProbe.Editor<ComboBox>(dialog, "User").SelectedIndex = 0;   // dev, region eu-west-1
+
+            Assert.Equal("eu-west-1", ConnectionEditorProbe.Text(dialog, "Host"));
+            var saved = dialog.BuildConnection();
+            Assert.Equal("eu-west-1", saved.Host);
+            Assert.Equal("dev", saved.User);
+            Assert.False(dialog.FindControl<TextBlock>("ValidationHint")!.IsVisible);
+        }
+        finally { ConnectionEditorProbe.Close(dialog); }
+    });
+
+    [Fact]
+    public Task Typing_a_profiles_name_fills_the_region_and_typing_on_takes_it_back_out() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Show();
+        try
+        {
+            ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
+
+            ConnectionEditorProbe.Type(dialog, "User", "dev");
+            Assert.Equal("eu-west-1", dialog.BuildConnection().Host);
+
+            ConnectionEditorProbe.Type(dialog, "User", "dev-other");
+            Assert.Equal("", dialog.BuildConnection().Host);
+            Assert.Equal("", ConnectionEditorProbe.Text(dialog, "Host"));
+        }
+        finally { ConnectionEditorProbe.Close(dialog); }
+    });
+
+    [Fact]
+    public Task Picking_a_profile_leaves_a_typed_region_alone() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Show();
+        try
+        {
+            ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
+            ConnectionEditorProbe.Type(dialog, "Host", "ap-south-1");
+
+            ConnectionEditorProbe.Editor<ComboBox>(dialog, "User").SelectedIndex = 0;   // dev, region eu-west-1
+
+            Assert.Equal("ap-south-1", ConnectionEditorProbe.Text(dialog, "Host"));
+            Assert.Equal("ap-south-1", dialog.BuildConnection().Host);
+            Assert.Equal("dev", dialog.BuildConnection().User);
+        }
+        finally { ConnectionEditorProbe.Close(dialog); }
     });
 
     [Fact]
@@ -518,8 +647,8 @@ public class ConnectionEditorTests
         var dialog = ConnectionEditorProbe.Dialog(saved);
 
         Assert.Equal(DynamoDb, ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex);
-        Assert.Equal("eu-west-1", ConnectionEditorProbe.Editor<TextBox>(dialog, "Host").Text);
-        Assert.Equal("dev", ConnectionEditorProbe.Editor<TextBox>(dialog, "User").Text);
+        Assert.Equal("eu-west-1", ConnectionEditorProbe.Text(dialog, "Host"));
+        Assert.Equal("dev", ConnectionEditorProbe.Text(dialog, "User"));
         Assert.Equal("http://localhost:8000", ConnectionEditorProbe.Editor<TextBox>(dialog, "Endpoint").Text);
         Assert.False(dialog.FindControl<CheckBox>("ConfirmFullScansBox")!.IsChecked);
 
@@ -862,7 +991,19 @@ internal static class ConnectionEditorProbe
     /// <summary>A dialog over the app's real registry, so the engine list under test is the one this build
     /// composed. The test delegate is never invoked from here: nothing presses Test.</summary>
     public static ConnectionDialog Dialog(ConnectionInfo? existing = null, IAzureCatalog? azure = null)
-        => new(existing, null, (_, _, _) => Task.FromResult(false), providers: new ProviderRegistry(), azure: azure);
+        => new(existing, null, (_, _, _) => Task.FromResult(false), providers: Registry(), azure: azure);
+
+    /// <summary>The AWS profiles the DynamoDB editor is offered here: one with a region, one without.</summary>
+    public static readonly IReadOnlyList<AwsConfigProfile> Profiles =
+        [new AwsConfigProfile("dev", "eu-west-1"), new AwsConfigProfile("ci", null)];
+
+    /// <summary>
+    /// The registry <see cref="ProviderRegistry"/> builds by default — the same four engines in the same order —
+    /// except that DynamoDB's AWS profiles come from <see cref="Profiles"/>: the default reads this machine's
+    /// <c>~/.aws/config</c>, which a test must never do.
+    /// </summary>
+    public static ProviderRegistry Registry()
+        => new([new PostgresProvider(), new SqlServerProvider(), new MySqlProvider(), new DynamoDbProvider(() => Profiles)]);
 
     /// <summary>
     /// The same dialog, shown and laid out — which only the tests that <see cref="Type"/> need, because
@@ -939,7 +1080,14 @@ internal static class ConnectionEditorProbe
     /// </summary>
     public static void Type(ConnectionDialog dialog, string key, string text)
     {
-        var box = Editor<TextBox>(dialog, key);
+        // A field with suggestions is an editable dropdown; its text is typed into the box in its template,
+        // which needs the dialog shown (Show) and laid out since the rows were last rebuilt.
+        Pump(dialog);
+        var box = Assert.Single(Named(dialog, key + "Box")) switch
+        {
+            ComboBox { IsEditable: true } combo => combo.GetVisualDescendants().OfType<TextBox>().Single(),
+            var other => Assert.IsType<TextBox>(other),
+        };
         box.Focus();
         // Asserted before typing: without focus the input goes nowhere and every assertion below would be
         // about a box nobody edited.
@@ -967,6 +1115,14 @@ internal static class ConnectionEditorProbe
             .Distinct()
             .Select(c => c.Name![..^3])
             .ToList();
+
+    /// <summary>What a text row shows, whether it is a text box or an editable dropdown.</summary>
+    public static string Text(ConnectionDialog dialog, string key)
+        => Assert.Single(Named(dialog, key + "Box")) switch
+        {
+            ComboBox { IsEditable: true } combo => combo.Text ?? "",
+            var other => Assert.IsType<TextBox>(other).Text ?? "",
+        };
 
     public static ComboBox Combo(ConnectionDialog dialog, string name)
         => Assert.IsType<ComboBox>(Assert.Single(Named(dialog, name)));

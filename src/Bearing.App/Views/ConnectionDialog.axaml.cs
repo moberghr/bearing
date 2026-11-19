@@ -60,7 +60,11 @@ public partial class ConnectionDialog : Window
     private IReadOnlyList<CredentialKindOption> _credentialKinds = Array.Empty<CredentialKindOption>();
 
     /// <summary>The provider's User box, when it declares one — rebuilt with the rows.</summary>
-    private TextBox? _userBox;
+    private Control? _userBox;
+
+    /// <summary>How to redisplay each row's value after the model changed it (a suggestion's fill) — rebuilt
+    /// with the rows.</summary>
+    private readonly Dictionary<string, Action<string>> _shows = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Set while the code is writing the combo boxes, so the handlers those writes raise don't
     /// re-enter the rebuild they are part of.</summary>
@@ -195,15 +199,34 @@ public partial class ConnectionDialog : Window
     {
         FieldsHost.Children.Clear();
         _userBox = null;
+        _shows.Clear();
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("90,*") };
-        for (var i = 0; i < _model.Fields.Count; i++)
+        foreach (var field in _model.Fields)
         {
-            var field = _model.Fields[i];
+            var i = grid.RowDefinitions.Count;
             grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
 
             var editor = Editor(field);
             Grid.SetRow(editor, i);
+
+            // A field's own hint sits on the next row, under the box (DynamoDB's Endpoint).
+            if (field.Field.Hint is { Length: > 0 } hint)
+            {
+                var below = new TextBlock
+                {
+                    Name = field.Key + "FieldHint",
+                    Text = hint,
+                    TextWrapping = TextWrapping.Wrap,
+                    Opacity = 0.7,
+                    FontSize = 12,
+                    Margin = new Thickness(0, 2, 0, 0),
+                };
+                Grid.SetRow(below, grid.RowDefinitions.Count);
+                grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+                Grid.SetColumn(below, 1);
+                grid.Children.Add(below);
+            }
 
             // A checkbox carries its own label as Content and spans both columns, the way this dialog's
             // hand-written ConfirmWritesBox does. It must not sit in the 90px label column: a label like
@@ -243,8 +266,9 @@ public partial class ConnectionDialog : Window
     }
 
     /// <summary>The control for one field: a Boolean is a checkbox, a
-    /// <see cref="ConnectionFieldKind.Choice"/> with candidates is a dropdown, everything else — a
-    /// candidate-less Choice included — is a text box, with the declared default as its placeholder.
+    /// <see cref="ConnectionFieldKind.Choice"/> with candidates is a dropdown, a text field with suggestions is an
+    /// editable dropdown (<see cref="SuggestionFieldBox"/>), everything else — a candidate-less Choice included —
+    /// is a text box, with the declared default as its placeholder.
     /// Which values the dropdown lists is <see cref="ConnectionFieldState.Candidates"/>' decision, not this
     /// method's (§2.3). Passwords never reach here (the model excludes them; the dialog's own box owns the
     /// secret).</summary>
@@ -292,6 +316,18 @@ public partial class ConnectionDialog : Window
             return check;
         }
 
+        // Held so the az-login checkbox can disable it; reassigned on every rebuild.
+        var isUser = string.Equals(field.Key, "User", StringComparison.OrdinalIgnoreCase);
+
+        // Free text with suggestions (DynamoDB's region and AWS profile): an editable dropdown.
+        if (field.Suggestions.Count > 0)
+        {
+            var combo = SuggestionFieldBox.Build(field, text => Edited(field, text));
+            _shows[field.Key] = value => SuggestionFieldBox.Show(combo, value);
+            if (isUser) _userBox = combo;
+            return combo;
+        }
+
         var box = new TextBox
         {
             // Named as the hand-written rows were ("Host" -> HostBox), so a headless UI test can still find
@@ -302,20 +338,28 @@ public partial class ConnectionDialog : Window
             Margin = new Thickness(0, 6, 0, 0),
             PlaceholderText = field.Field.Default ?? "",
         };
-        // Held so the az-login checkbox can disable it; reassigned on every rebuild.
-        if (string.Equals(field.Key, "User", StringComparison.OrdinalIgnoreCase)) _userBox = box;
-        var isHost = string.Equals(field.Key, "Host", StringComparison.OrdinalIgnoreCase);
-        box.TextChanged += (_, _) =>
-        {
-            field.Value = box.Text ?? "";
-            RefreshValidation();
-            // The host is a provider-declared field now, so this hangs off its editor rather than off a named HostBox.
-            if (isHost)
-            {
-                OnHostChanged(field.Value);
-            }
-        };
+        if (isUser) _userBox = box;
+        _shows[field.Key] = value => box.Text = value;
+        box.TextChanged += (_, _) => Edited(field, box.Text ?? "");
         return box;
+    }
+
+    /// <summary>A text row changed: the model stores it and decides what else that changes (a picked AWS
+    /// profile's region), and the rows it changed are redisplayed.</summary>
+    private void Edited(ConnectionFieldState field, string text)
+    {
+        var hostChanged = string.Equals(field.Key, "Host", StringComparison.OrdinalIgnoreCase);
+        foreach (var key in _model.Edit(field.Key, text))
+        {
+            if (_shows.TryGetValue(key, out var show)) show(_model.Get(key) ?? "");
+            hostChanged |= string.Equals(key, "Host", StringComparison.OrdinalIgnoreCase);
+        }
+        RefreshValidation();
+        // The host is a provider-declared field now, so this hangs off its editor rather than off a named HostBox.
+        if (hostChanged)
+        {
+            OnHostChanged(HostValue());
+        }
     }
 
     /// <summary>
@@ -444,7 +488,9 @@ public partial class ConnectionDialog : Window
         if (_userBox is not null)
         {
             _userBox.IsEnabled = !UserFromLogin();
-            _userBox.PlaceholderText = UserFromLogin() ? "from az login" : "";
+            var placeholder = UserFromLogin() ? "from az login" : "";
+            if (_userBox is TextBox text) text.PlaceholderText = placeholder;
+            else if (_userBox is ComboBox combo) combo.PlaceholderText = placeholder;
         }
         // The credential kind changes what counts as missing — integrated auth needs no user name — so the
         // advisory hint is recomputed here too, not only when a field is typed into.

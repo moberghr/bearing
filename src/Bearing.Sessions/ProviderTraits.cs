@@ -137,9 +137,9 @@ public sealed record ProviderTraits(
         // generic SQL on this engine (a known limitation in the spec), so nothing generated is sent as typed.
         SqlLiteralStyle.Postgres,
         EntraResource: "",
+        // What the Endpoint is for is said under that field itself (DynamoDbProvider.EndpointHint).
         EndpointHint: "Region is an AWS region code such as eu-west-1. A blank AWS profile uses the AWS SDK's "
-                      + "default credential chain. Endpoint is for DynamoDB Local or a VPC endpoint; plain "
-                      + "http:// is accepted for a loopback host only.",
+                      + "default credential chain. A plain http:// endpoint is accepted for a loopback host only.",
         EntraTakesUser: false,
         AzureServers: new("", DatabasesApiVersion: ""),
         GridEditUnavailable: "Read-only — editing isn't available on Amazon DynamoDB connections yet.",

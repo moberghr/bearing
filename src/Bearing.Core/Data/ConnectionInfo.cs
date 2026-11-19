@@ -204,13 +204,35 @@ public sealed record ConnectionInfo
 /// a value the provider never offered.
 /// </para>
 /// </param>
+/// <param name="Suggestions">
+/// Values a <see cref="ConnectionFieldKind.Text"/> field offers while still taking any other typed value — an
+/// editable dropdown, not a <see cref="ConnectionFieldKind.Choice"/>. A function rather than a list because a
+/// source may be the user's own files (DynamoDB's AWS profiles), read when the editor is shown rather than when
+/// the provider is built. It must not throw: a source with nothing to offer returns an empty list, and the
+/// editor then shows a plain text box. Null for every field that suggests nothing.
+/// </param>
+/// <param name="Hint">One line of guidance shown directly under the field, or null.</param>
 public sealed record ConnectionField(
     string Key,
     string Label,
     ConnectionFieldKind Kind,
     bool Required,
     string? Default = null,
-    IReadOnlyList<string>? Choices = null);
+    IReadOnlyList<string>? Choices = null,
+    Func<IReadOnlyList<ConnectionSuggestion>>? Suggestions = null,
+    string? Hint = null);
+
+/// <summary>One value a field suggests (<see cref="ConnectionField.Suggestions"/>).</summary>
+/// <param name="Value">What the box takes and the connection saves.</param>
+/// <param name="Description">Shown beside the value in the list, never saved — a region's name beside its
+/// code.</param>
+/// <param name="Fills">Values this one supplies for other fields, by field key — an AWS profile's region for
+/// the Region field. The editor writes one only into an empty field, or into one still holding what an earlier
+/// suggestion wrote there; never over a value the user typed.</param>
+public sealed record ConnectionSuggestion(
+    string Value,
+    string? Description = null,
+    IReadOnlyDictionary<string, string>? Fills = null);
 
 public enum ConnectionFieldKind
 {

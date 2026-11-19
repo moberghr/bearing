@@ -35,6 +35,13 @@ which runs keyed `SELECT`s only.
    - **AWS profile** (optional; blank = the AWS SDK's default credential chain) — stored in
      `ConnectionInfo.User`.
    - **Endpoint** (optional, for DynamoDB Local or a VPC endpoint) — stored in `Options["Endpoint"]`.
+   - *Added 2026-11-19 (user request):* Region and AWS profile are **editable dropdowns** — free text stays
+     possible. Region suggests the AWS SDK's built-in named regions shown as `eu-west-1 — Europe (Ireland)`; only the
+     code is saved. AWS profile suggests the profiles in the AWS **config** file (`AWS_CONFIG_FILE` or
+     `~/.aws/config`; never the credentials file, §1.9c), and picking one fills an **empty** Region with its `region`
+     (a region the user typed is never overwritten; one the pick wrote follows the pick). Under Endpoint: "Leave blank
+     for AWS; set only for DynamoDB Local or a VPC/FIPS endpoint." Core gained `ConnectionField.Suggestions` /
+     `ConnectionField.Hint` and `ConnectionSuggestion` (additive); Data gained `AwsConfigProfiles` and `AwsRegions`.
    - `Port` is saved as `0`, so the endpoint text reads `profile@region` with no port.
    - Credential picker offers exactly one kind, **AWS profile**. No password box, no keychain warning.
    - Hidden on this engine: TLS mode, Manual commit, Session time zone. External access is shown.

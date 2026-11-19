@@ -23,14 +23,52 @@ public sealed class DynamoDbProvider : IDbProvider
     public string Id => ProviderId;
     public string DisplayName => "Amazon DynamoDB";
 
-    /// <summary>Region (required), AWS profile (blank = the SDK's default credential chain) and an optional
-    /// endpoint for DynamoDB Local or a VPC endpoint. No port, database or password: none of them exists here.</summary>
-    public IReadOnlyList<ConnectionField> ConnectionFields { get; } = new[]
+    /// <summary>The hint under the Endpoint field (user decision 2026-11-19). Blank already means the SDK's own
+    /// <c>https://dynamodb.&lt;region&gt;.amazonaws.com</c>.</summary>
+    public const string EndpointHint = "Leave blank for AWS; set only for DynamoDB Local or a VPC/FIPS endpoint.";
+
+    /// <summary>The editor's sources, read lazily: the profiles come from the user's AWS config file.</summary>
+    public DynamoDbProvider() : this(AwsConfigProfiles.ReadDefault) { }
+
+    /// <summary>
+    /// A provider whose AWS-profile suggestions come from <paramref name="profiles"/> — how a test keeps the
+    /// editor off the real <c>~/.aws</c>. It is called each time the editor shows this engine's fields and must
+    /// not throw (<see cref="AwsConfigProfiles.Read"/> doesn't).
+    /// </summary>
+    public DynamoDbProvider(Func<IReadOnlyList<AwsConfigProfile>> profiles)
     {
-        new ConnectionField("Host", "Region", ConnectionFieldKind.Text, Required: true),
-        new ConnectionField("User", "AWS profile", ConnectionFieldKind.Text, Required: false),
-        new ConnectionField(DynamoDbConnectionFactory.EndpointOption, "Endpoint", ConnectionFieldKind.Text, Required: false),
-    };
+        ConnectionFields = new[]
+        {
+            new ConnectionField("Host", "Region", ConnectionFieldKind.Text, Required: true,
+                Suggestions: RegionSuggestions),
+            new ConnectionField("User", "AWS profile", ConnectionFieldKind.Text, Required: false,
+                Suggestions: () => ProfileSuggestions(profiles())),
+            new ConnectionField(DynamoDbConnectionFactory.EndpointOption, "Endpoint", ConnectionFieldKind.Text,
+                Required: false, Hint: EndpointHint),
+        };
+    }
+
+    /// <summary>Region (required), AWS profile (blank = the SDK's default credential chain) and an optional
+    /// endpoint for DynamoDB Local or a VPC endpoint. No port, database or password: none of them exists here.
+    /// Region and profile are free text with suggestions: the SDK's named regions (the code is what is saved,
+    /// the name only shown) and the profiles in the AWS config file, each carrying its region for an empty
+    /// Region field.</summary>
+    public IReadOnlyList<ConnectionField> ConnectionFields { get; }
+
+    private static IReadOnlyList<ConnectionSuggestion> RegionSuggestions()
+        => RegionList.Value;
+
+    private static readonly Lazy<IReadOnlyList<ConnectionSuggestion>> RegionList = new(()
+        => AwsRegions.All.Select(r => new ConnectionSuggestion(r.Code, r.Name)).ToList());
+
+    /// <summary>One suggestion per profile; a profile that sets a region offers it for the Region field
+    /// (<see cref="ConnectionSuggestion.Fills"/>), which the editor writes only into an empty one.</summary>
+    internal static IReadOnlyList<ConnectionSuggestion> ProfileSuggestions(IReadOnlyList<AwsConfigProfile> profiles)
+        => profiles
+            .Select(p => p.Region is { Length: > 0 } region
+                ? new ConnectionSuggestion(p.Name, region, new Dictionary<string, string> { ["Host"] = region })
+                : new ConnectionSuggestion(p.Name))
+            .ToList();
 
     /// <summary>
     /// False: DynamoDB has no session to make read-only. Bearing refuses writes before they are sent
