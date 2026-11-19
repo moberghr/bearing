@@ -160,6 +160,7 @@ not part of `SamePool`/`SameConnection`.
   | Quit, close tab | Ask now, roll back later (`AskAsync` … `RollbackAsync`) — other prompts may still cancel |
   | Pool-rebuilding edit, manual commit turned off, connection/project/script deleted | Roll back and report |
   | Idle sweep | Roll back past threshold |
+  | SSH tunnel lost (`IConnectionSessionManager.TunnelLost`) | Roll back that pool's transactions and report |
 
   Every route that removes a tab or disposes/retires/re-keys a session must decide what happens to an open
   transaction (`RollbackForTabsAsync`). A project *switch* parks tabs and is safe.
@@ -249,8 +250,17 @@ disposed after it (`ConnectionSession.Tunnel`, `SchemaBrowser.Reader`).
 - Host key is **accept-new**: first key pinned into the connection via `SshTunnels.HostKeyPinned`; a different
   key is refused, never trusted from the failure. No callback (CLI) → an unpinned key is refused. DO NOT add a
   "trust anyway" path or disable the check.
+  The pin is written by `ConnectionsViewModel.PinHostKeyAsync`; a pin that can't be saved is said in the status line
+  (unpinned = accept-new became accept-always). Saving a connection keeps the **current** saved pin
+  (`SshTunnelForm.WithSavedPin`) unless the route changed or Forget host key was pressed — a dialog's copy
+  predates a pin its own Test wrote.
 - SSH password / key passphrase: `ISecretStore` under `SshSecretId.For(connectionId)`, prompted when missing or
-  refused, saved only after it worked; deleted with the connection. Never in a message or log.
+  refused, saved only after it worked; deleted with the connection. Never in a message or log. A connection whose
+  password is `CredentialKind.Prompt` keeps its SSH secret in memory only (`SshTunnels.KeepsSecretInMemoryOnly`):
+  never read from or written to the keychain, and Save removes one stored before the switch.
+- A dropped SSH session (`SshTunnelHandle.WhenLost` / `IsAlive`) evicts its pool and schema reader; a dead tunnel
+  is never handed out. Live test kills the bastion's `sshd-session`s.
 - Forward binds `127.0.0.1` only. Pin is not part of `SameRoute` / `SameConnection` / `SameNetwork`.
 - Not supported (stated in the dialog): ssh-agent, `~/.ssh/config`, ProxyJump. Verify Full TLS through a tunnel
-  checks `127.0.0.1`. Live tests: `./build/test-ssh.sh` (bastion → MariaDB), `LiveSshTunnelTests`.
+  checks `127.0.0.1`. Live tests: `./build/test-ssh.sh` (bastion → MariaDB, image pinned, run in CI's ubuntu leg),
+  `LiveSshTunnelTests`.

@@ -227,7 +227,7 @@ public partial class SidebarView : UserControl
         var result = await _dialogs.ShowConnectionDialogAsync(existing, password, (i, p, s, ct) => Vm.Connections.TestConnectionAsync(i, p, ct, s), Vm.SecretStorage, Vm.Connections.Providers, Vm.AzureCatalog, sshSecret);
         if (result is null) return;
         if (result.Delete) await Vm.Connections.DeleteConnectionAsync(existing.Id);
-        else await Vm.Connections.AddOrUpdateConnectionAsync(result.Connection, result.Password, result.SshSecret);
+        else await Vm.Connections.AddOrUpdateConnectionAsync(result.Connection, result.Password, result.SshSecret, result.ForgetHostKey);
     }
 
     private void OnSortRelationsBySize(object? sender, RoutedEventArgs e)

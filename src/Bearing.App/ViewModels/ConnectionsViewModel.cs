@@ -50,6 +50,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         // sync. Both events are wired because they answer different questions — see OnServerLinkChanged.
         _ctx.Sessions.LiveChanged += OnSessionLiveChanged;
         _ctx.Sessions.LinkChanged += OnServerLinkChanged;
+        _ctx.Sessions.TunnelLost += key => Dispatcher.UIThread.Post(() => _ = OnTunnelLostAsync(key));
 
         // The tree's shape is a stored preference (#132), so it survives a restart and reaches the panel from
         // either end: this toggle, or the same setting in the settings window.
@@ -65,17 +66,45 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         };
     }
 
-    /// <summary>Record a first-seen SSH host key on the saved connection — only while the saved record still
-    /// has no pin and the same route the connect used, so an edit made meanwhile is never overwritten.</summary>
+    /// <summary>
+    /// Record a first-seen SSH host key on the saved connection — only while the saved record still has no pin
+    /// and the same route the connect used, so an edit made meanwhile is never overwritten. A pin that could not
+    /// be written is said in the status line: unpinned, every later connect is a first sight again, so
+    /// accept-new would quietly have become accept-always.
+    /// </summary>
     internal async Task PinHostKeyAsync(ConnectionInfo used, string fingerprint)
     {
-        var saved = _ctx.Project?.Manifest.Connections.FirstOrDefault(c => c.Id == used.Id);
-        if (saved?.SshTunnel is not { } ssh || !string.IsNullOrWhiteSpace(ssh.HostKeyFingerprint)
-            || !SshTunnel.SameRoute(ssh, used.SshTunnel))
-            return;
-        await AddOrUpdateConnectionAsync(saved with { SshTunnel = ssh with { HostKeyFingerprint = fingerprint } }, password: null);
-        _ctx.SetStatus($"Trusted the SSH host key of {ssh.Host} for '{saved.Name}' ({fingerprint}). A different key will be refused.");
+        var host = used.SshTunnel?.Host ?? "the SSH server";
+        try
+        {
+            var saved = _ctx.Project?.Manifest.Connections.FirstOrDefault(c => c.Id == used.Id);
+            if (saved?.SshTunnel is not { } ssh)
+            {
+                // No project, or the connection (or its tunnel) is gone from it: there is nothing to pin onto.
+                ReportUnpinned(host, used.Name, fingerprint, "the connection is no longer in the open project");
+                return;
+            }
+            if (!string.IsNullOrWhiteSpace(ssh.HostKeyFingerprint) || !SshTunnel.SameRoute(ssh, used.SshTunnel))
+            {
+                // Already pinned (that pin governs), or edited to another route (its own first connect pins it).
+                return;
+            }
+            if (!await AddOrUpdateConnectionAsync(saved with { SshTunnel = ssh with { HostKeyFingerprint = fingerprint } }, password: null))
+            {
+                ReportUnpinned(host, saved.Name, fingerprint, "the project could not be saved");
+                return;
+            }
+            _ctx.SetStatus($"Trusted the SSH host key of {ssh.Host} for '{saved.Name}' ({fingerprint}). A different key will be refused.");
+        }
+        catch (Exception ex)
+        {
+            ReportUnpinned(host, used.Name, fingerprint, SafeErrorText.Of(ex));
+        }
     }
+
+    private void ReportUnpinned(string host, string name, string fingerprint, string why)
+        => _ctx.SetStatus($"Could not pin the SSH host key of {host} for '{name}' ({fingerprint}): {why}. "
+                          + "It is not trusted yet — the next connect will accept whatever key it meets.");
 
     private readonly IDialogService? _dialogs;
 
@@ -131,6 +160,30 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     /// the user touching the toggle, while an idle sweep no longer darkens it. Fires possibly off-thread.</summary>
     private void OnServerLinkChanged(Guid connectionId)
         => Dispatcher.UIThread.Post(() => RefreshIndicators(connectionId));
+
+    /// <summary>
+    /// The SSH session under a pool ended and the pool was evicted (§1.12). A transaction held on it went with
+    /// the connection, so it is rolled back and reported like the other routes that retire a session (§1.10);
+    /// the next query opens a fresh tunnel.
+    /// </summary>
+    private async Task OnTunnelLostAsync(SessionKey key)
+    {
+        try
+        {
+            var name = _ctx.Project?.Manifest.Connections.FirstOrDefault(c => c.Id == key.ConnectionId)?.Name ?? "a connection";
+            var rolled = await _ctx.Transactions.RollbackWhereAsync(t => t.Key == key, CancellationToken.None);
+            _ctx.SetStatus(rolled switch
+            {
+                0 => $"The SSH tunnel for '{name}' dropped — the next query reconnects.",
+                1 => $"The SSH tunnel for '{name}' dropped; rolled back the uncommitted transaction held on it. The next query reconnects.",
+                _ => $"The SSH tunnel for '{name}' dropped; rolled back the {rolled} uncommitted transactions held on it. The next query reconnects.",
+            });
+        }
+        catch
+        {
+            // §5.2: a report that fails must not take the app with it.
+        }
+    }
 
     /// <summary>Re-derive everything the given connection can affect. Only the connection is tested: every
     /// indicator is server-level now, and a tab pointed at another database of the same server is exactly a
@@ -711,9 +764,14 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     /// <summary>Add or replace a connection in the manifest and its password in the secret store.</summary>
     /// <param name="sshSecret">The SSH password / key passphrase from the dialog: null leaves the stored one
     /// alone, empty deletes it.</param>
-    public async Task AddOrUpdateConnectionAsync(ConnectionInfo conn, string? password, string? sshSecret = null)
+    /// <param name="forgetHostKey">Drop the saved SSH host key pin. Otherwise a pin on the saved record is kept
+    /// when <paramref name="conn"/> brings none for the same server (<see cref="SshTunnelForm.WithSavedPin"/>).</param>
+    /// <returns>Whether the project file was written — false with no project open, or when the store failed
+    /// (the status line then says so).</returns>
+    public async Task<bool> AddOrUpdateConnectionAsync(
+        ConnectionInfo conn, string? password, string? sshSecret = null, bool forgetHostKey = false)
     {
-        if (_ctx.Project is null) return;
+        if (_ctx.Project is null) return false;
         var list = _ctx.Project.Manifest.Connections;
         var idx = list.FindIndex(c => c.Id == conn.Id);
         var networkChanged = true;
@@ -725,6 +783,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         var commitModeDropped = false;
         if (idx >= 0)
         {
+            conn = conn with { SshTunnel = SshTunnelForm.WithSavedPin(conn.SshTunnel, list[idx].SshTunnel, forgetHostKey) };
             networkChanged = !SameNetwork(list[idx], conn);
             poolChanged = !SamePool(list[idx], conn);
             // The mode in force, which may be a session override (#131) — not the one on disk. Unticking
@@ -741,26 +800,50 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         _ctx.CommitModes.Clear(conn.Id);
 
         var refusedSecret = false;
+        var saved = false;
         try
         {
             if (password is not null)
             {
                 await PutSecretAsync(conn.Id, password);
             }
-            if (sshSecret is not null)
+            if (conn.SshTunnel is not null && SshTunnels.KeepsSecretInMemoryOnly(conn))
+            {
+                // Prompt each time: the SSH secret is not saved either (§1.12). One typed here serves this
+                // session; one saved before the connection was switched to Prompt is removed.
+                if (!string.IsNullOrEmpty(sshSecret))
+                {
+                    _ctx.Credentials.Ssh.Remember(conn.Id, sshSecret);
+                }
+                // Best-effort, and on its own: a keychain that can't delete must not stop the project save.
+                try
+                {
+                    await PutSecretAsync(SshSecretId.For(conn.Id), "");
+                }
+                catch (Exception ex) when (ex is not SecretStorageRefusedException)
+                {
+                    _ctx.SetStatus($"Could not remove the saved SSH secret: {SafeErrorText.Of(ex)}");
+                }
+            }
+            else if (sshSecret is not null)
             {
                 // In memory first, so it works this session even where the keychain refuses it below.
                 _ctx.Credentials.Ssh.Remember(conn.Id, sshSecret);
                 await PutSecretAsync(SshSecretId.For(conn.Id), sshSecret);
             }
             await _ctx.ProjectStore.SaveAsync(_ctx.Project, CancellationToken.None);
+            saved = true;
         }
         // A store with nowhere safe to put the password isn't a failure — the connection is still saved, and
         // the password will be asked for at connect time and kept in memory. Say that, then finish the save.
         catch (SecretStorageRefusedException)
         {
             refusedSecret = true;
-            try { await _ctx.ProjectStore.SaveAsync(_ctx.Project, CancellationToken.None); }
+            try
+            {
+                await _ctx.ProjectStore.SaveAsync(_ctx.Project, CancellationToken.None);
+                saved = true;
+            }
             catch (Exception ex) { _ctx.SetStatus($"Saved connection but store failed: {SafeErrorText.Of(ex)}"); }
         }
         catch (Exception ex) { _ctx.SetStatus($"Saved connection but secret/store failed: {SafeErrorText.Of(ex)}"); }
@@ -786,9 +869,13 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         // Editing the selected tab's own connection changes what StatusTip reports (#99 / #105), and nothing
         // else re-raises it on this path.
         OnPropertyChanged(nameof(StatusTip));
-        _ctx.SetStatus(refusedSecret
-            ? $"Saved connection '{conn.Name}' — password not saved (no keyring); you'll be asked when connecting."
-            : $"Saved connection '{conn.Name}'.");
+        if (saved)
+        {
+            _ctx.SetStatus(refusedSecret
+                ? $"Saved connection '{conn.Name}' — password not saved (no keyring); you'll be asked when connecting."
+                : $"Saved connection '{conn.Name}'.");
+        }
+        return saved;
     }
 
     /// <summary>Store a dialog-typed secret under <paramref name="secretId"/>; empty deletes it.</summary>

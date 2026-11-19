@@ -260,7 +260,7 @@
                          PlaceholderText="only if the key is encrypted"/>
             </Grid>
             <TextBlock TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,0,0,0"
-                       Text="Host and Port on the Connection tab are the database as the SSH server sees it (often localhost). The SSH password or passphrase is kept in the keychain. ssh-agent and ~/.ssh/config are not used."/>
+                       Text="Host and Port on the Connection tab are the database as the SSH server sees it (often localhost). The SSH password or passphrase is kept in the keychain — or, when the password is set to Prompt each time, in memory only until Bearing closes. ssh-agent and ~/.ssh/config are not used."/>
             <Grid ColumnDefinitions="90,*,Auto" Margin="0,4,0,0">
               <TextBlock Grid.Column="0" Text="Host key" VerticalAlignment="Center"/>
               <SelectableTextBlock Grid.Column="1" x:Name="SshHostKeyText" VerticalAlignment="Center" TextWrapping="Wrap"

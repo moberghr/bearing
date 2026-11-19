@@ -20,7 +20,10 @@ namespace Bearing.App.Views;
 /// <summary>Result of the connection editor: the edited connection + password, or a delete request.</summary>
 /// <param name="SshSecret">The SSH password or key passphrase to save under <c>SshSecretId</c>; empty deletes it,
 /// null leaves the stored one alone.</param>
-public sealed record ConnectionDialogResult(ConnectionInfo Connection, string Password, bool Delete, string? SshSecret = null);
+/// <param name="ForgetHostKey">Forget host key was pressed: the saved pin goes, even if a connect pinned one
+/// while the dialog was open.</param>
+public sealed record ConnectionDialogResult(
+    ConnectionInfo Connection, string Password, bool Delete, string? SshSecret = null, bool ForgetHostKey = false);
 
 /// <summary>
 /// Add/edit a named connection. Returns a <see cref="ConnectionDialogResult"/> via
@@ -841,7 +844,7 @@ public partial class ConnectionDialog : Window
     private void OnSaveClick(object? sender, RoutedEventArgs e)
         => Close(new ConnectionDialogResult(BuildConnection(), SecretToStore(), Delete: false,
             SshTunnelForm.SecretToSave(BuildSshTunnel(), _existing?.SshTunnel, _existingSshSecret,
-                SshPasswordBox.Text, SshPassphraseBox.Text)));
+                SshPasswordBox.Text, SshPassphraseBox.Text), _forgetHostKey));
 
     private void OnDeleteClick(object? sender, RoutedEventArgs e)
         => Close(new ConnectionDialogResult(BuildConnection(), SecretToStore(), Delete: true));

@@ -35,6 +35,11 @@ public interface IConnectionSessionManager : IAsyncDisposable
     /// <see cref="IsLinked"/>. May fire on a background thread.</summary>
     event Action<Guid>? LinkChanged;
 
+    /// <summary>Raised after a session was evicted because the SSH session under it ended (sleep/wake, a
+    /// bastion restart). Its pool is gone, and with it any transaction held on it — the server ended that.
+    /// May fire on a background thread.</summary>
+    event Action<SessionKey>? TunnelLost;
+
     /// <summary>
     /// Return the live session for <paramref name="info"/>, creating and testing it on first use.
     /// Reuses an existing session only if its settings still match; a changed connection is rebuilt.

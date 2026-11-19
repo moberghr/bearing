@@ -32,8 +32,8 @@ files does not count as extraction.
 - Pools are per (connection, database); "connected" is per connection. Every user-visible connected
   indicator reads `ConnectionSessionManager.IsLinked(Guid)`, never `TryGet`/`IsAnyLive`.
 - Link set by a successful `BuildAsync` on any database. Cleared by `EvictConnectionAsync`, last-session
-  `EvictAsync`, failed connect with nothing live, credential near expiry, `CloseAllAsync`. **Not** by the
-  idle sweep.
+  `EvictAsync` (including a lost SSH tunnel's), failed connect with nothing live, credential near expiry,
+  `CloseAllAsync`. **Not** by the idle sweep.
 - `SetTabDatabase` warms the new pool in the background only when already linked (never prompts).
 
 ## §9.4a — Sessions keyed by `SessionKey` (connection id + database)

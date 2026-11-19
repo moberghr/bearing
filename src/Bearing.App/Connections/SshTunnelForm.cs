@@ -30,10 +30,31 @@ public static class SshTunnelForm
             Auth = auth,
             PrivateKeyPath = auth == SshAuthKind.PrivateKey && !string.IsNullOrWhiteSpace(keyPath) ? keyPath.Trim() : null,
         };
-        var keepPin = !forgetHostKey && existing is not null
-                      && existing.Host == built.Host && existing.Port == built.Port;
+        var keepPin = !forgetHostKey && existing is not null && SameServer(existing, built);
         return keepPin ? built with { HostKeyFingerprint = existing!.HostKeyFingerprint } : built;
     }
+
+    /// <summary>
+    /// The tunnel to save over <paramref name="saved"/> — the record as it is in the project <i>now</i>, not when
+    /// the dialog opened. A pin is only ever written by a connect (accept-new), and one can land while the dialog
+    /// is open: its own Test button, or a background connect. The dialog's copy predates it, so saving that copy
+    /// would erase the pin and the next connect would trust whatever key it met. The saved pin is kept unless
+    /// the incoming tunnel carries its own, points at another server, or Forget host key was pressed.
+    /// </summary>
+    public static SshTunnel? WithSavedPin(SshTunnel? incoming, SshTunnel? saved, bool forgetHostKey)
+    {
+        if (incoming is null || saved is null || forgetHostKey
+            || !string.IsNullOrWhiteSpace(incoming.HostKeyFingerprint)
+            || string.IsNullOrWhiteSpace(saved.HostKeyFingerprint)
+            || !SameServer(saved, incoming))
+        {
+            return incoming;
+        }
+        return incoming with { HostKeyFingerprint = saved.HostKeyFingerprint };
+    }
+
+    /// <summary>A host key belongs to the server: host and port, whoever logs in.</summary>
+    private static bool SameServer(SshTunnel a, SshTunnel b) => a.Host == b.Host && a.Port == b.Port;
 
     /// <summary>The secret to save for the tunnel: the password box for password auth, the passphrase box for
     /// a key (empty = unencrypted key), and empty — which deletes any stored one — when there is no tunnel.</summary>

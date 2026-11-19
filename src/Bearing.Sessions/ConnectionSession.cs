@@ -72,6 +72,9 @@ public sealed class ConnectionSession : IAsyncDisposable
     /// the factory, so the pool's sockets close before the forward under them does.</summary>
     public IAsyncDisposable? Tunnel { get; init; }
 
+    /// <summary>The SSH session under this pool has ended, so its loopback port leads nowhere.</summary>
+    internal bool TunnelLost => Tunnel is SshTunnelHandle { IsAlive: false };
+
     public async ValueTask DisposeAsync()
     {
         try { await Factory.DisposeAsync(); }

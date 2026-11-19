@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,7 +15,8 @@ namespace Bearing.App.Tests;
 /// <summary>
 /// The tunnel end to end: Bearing → SSH bastion (<c>build/test-ssh.sh</c>) → MariaDB, which the bastion reaches
 /// by container name. Skipped when the bastion or MariaDB is not up — and a skip is not a pass (§4.2).
-/// Override with <c>BEARING_TEST_SSH_HOST/PORT/USER/PASSWORD/DB_HOST</c>.
+/// Override with <c>BEARING_TEST_SSH_HOST/PORT/USER/PASSWORD/DB_HOST</c>, and <c>BEARING_TEST_SSH_CONTAINER</c> for
+/// the bastion container the dropped-tunnel test reaches into.
 /// </summary>
 public class LiveSshTunnelTests
 {
@@ -22,6 +24,7 @@ public class LiveSshTunnelTests
     private static int SshPort => int.TryParse(Environment.GetEnvironmentVariable("BEARING_TEST_SSH_PORT"), out var p) ? p : 2223;
     private static string SshUser => Environment.GetEnvironmentVariable("BEARING_TEST_SSH_USER") ?? "bearing";
     private static string SshPassword => Environment.GetEnvironmentVariable("BEARING_TEST_SSH_PASSWORD") ?? "sshpass";
+    private static string Container => Environment.GetEnvironmentVariable("BEARING_TEST_SSH_CONTAINER") ?? "bearing-ssh-test";
     private static string DbHostFromBastion => Environment.GetEnvironmentVariable("BEARING_TEST_SSH_DB_HOST") ?? "bearing-mariadb-test";
 
     private static async Task RequireAsync()
@@ -126,5 +129,61 @@ public class LiveSshTunnelTests
         Assert.Equal(1, prompt.Calls);
         Assert.True(tunnel.LocalPort > 0);
         Assert.Equal(SshPassword, await secrets.GetPasswordAsync(SshSecretId.For(info.Id), CancellationToken.None));
+    }
+    [SkippableFact]
+    public async Task A_dropped_tunnel_is_evicted_and_the_next_acquire_opens_a_new_one()
+    {
+        await RequireAsync();
+        var info = Info();
+        var (sessions, credentials, _) = Compose(info);
+        credentials.Ssh.HostKeyPinned = (_, _) => Task.CompletedTask;
+        var key = SessionKey.For(info);
+
+        await using (sessions)
+        {
+            var first = await sessions.GetOrConnectAsync(info, CancellationToken.None);
+            var evicted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            sessions.LiveChanged += k =>
+            {
+                if (k == key && sessions.TryGet(key) is null)
+                {
+                    evicted.TrySetResult();
+                }
+            };
+
+            // The bastion ends this client's SSH session (sleep/wake or a bastion restart, as seen from here);
+            // its listener stays up, as a real bastion's would.
+            await KillSshSessionsAsync();
+
+            await evicted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.False(sessions.IsLinked(info.Id));   // the indicator says the server is not reachable
+
+            var second = await sessions.GetOrConnectAsync(info, CancellationToken.None);
+            Assert.NotSame(first, second);
+            var result = await second.Executor.ExecuteAsync("select 1 + 1 as two", new QueryOptions(), CancellationToken.None);
+            Assert.Null(result[0].Error);
+            Assert.Equal(2L, Convert.ToInt64(result[0].Rows[0][0]));
+        }
+    }
+
+    /// <summary>Kill the bastion's per-client <c>sshd-session</c> processes, never its listener (which runs as
+    /// the same user in this image). Skips when the container cannot be reached with <c>docker exec</c>.</summary>
+    private static async Task KillSshSessionsAsync()
+    {
+        var psi = new ProcessStartInfo("docker", ["exec", Container, "pkill", "-f", "sshd-session"])
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        Process? process = null;
+        try { process = Process.Start(psi); }
+        catch (Exception) { Skip.If(true, "docker is not available to drop the SSH session"); }
+        using (process)
+        {
+            await process!.WaitForExitAsync();
+            // pkill: 0 = killed something, 1 = matched nothing (a test bug), anything else = no container.
+            Skip.If(process.ExitCode > 1, $"docker exec {Container} failed — run ./build/test-ssh.sh");
+            Assert.True(process.ExitCode == 0, "No sshd-session process to kill: the tunnel's session was not found.");
+        }
     }
 }

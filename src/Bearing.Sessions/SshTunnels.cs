@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -24,8 +25,10 @@ namespace Bearing.Sessions;
 /// <para>
 /// <b>Secret:</b> the stored one (<see cref="SshSecretId"/>), else one typed earlier this session, else —
 /// for password auth, or a key that turns out to need a passphrase, or a refused login — asked for once
-/// through <see cref="ICredentialPrompt"/> and saved to the keychain when it worked. Never logged, never in
-/// an error message.
+/// through <see cref="ICredentialPrompt"/> and saved to the keychain when it worked. A connection whose
+/// password is <see cref="CredentialKind.Prompt"/> asked for nothing to be saved, so its SSH secret follows
+/// suit: never read from or written to the keychain, held in memory for the session only
+/// (<see cref="KeepsSecretInMemoryOnly"/>). Never logged, never in an error message.
 /// </para>
 /// </summary>
 public sealed class SshTunnels
@@ -60,6 +63,7 @@ public sealed class SshTunnels
         var offered = !string.IsNullOrEmpty(typedSecret);
         var secret = offered ? typedSecret
             : _typed.TryGetValue(secretId, out var t) ? t
+            : KeepsSecretInMemoryOnly(info) ? null
             : await StoredAsync(secretId, ct);
         var prompted = offered;
         if (secret is null && !ssh.UsesPrivateKey)
@@ -75,7 +79,7 @@ public sealed class SshTunnels
                 var handle = await ConnectAsync(info, ssh, secret, ct);
                 if (prompted && !offered && secret is not null)
                 {
-                    await RememberAsync(secretId, secret);
+                    await RememberAsync(info, secretId, secret);
                 }
                 return handle;
             }
@@ -180,11 +184,15 @@ public sealed class SshTunnels
                ?? throw new ConnectionFailedException($"SSH secret entry cancelled for '{info.Name}'.");
     }
 
-    private async Task RememberAsync(Guid secretId, string secret)
+    /// <summary>The connection's password is asked for at every connect and never saved, so its SSH secret is
+    /// not saved either.</summary>
+    public static bool KeepsSecretInMemoryOnly(DbConnectionInfo info) => info.CredentialKind == CredentialKind.Prompt;
+
+    private async Task RememberAsync(DbConnectionInfo info, Guid secretId, string secret)
     {
         _typed[secretId] = secret;
         var store = _secrets();
-        if (store is null || !store.CanStore)
+        if (KeepsSecretInMemoryOnly(info) || store is null || !store.CanStore)
         {
             return;
         }
@@ -253,21 +261,89 @@ public sealed class SshTunnels
             : path;
 }
 
-/// <summary>An open SSH session with its loopback forward. Dispose after the pool that uses it.</summary>
+/// <summary>
+/// An open SSH session with its loopback forward. Dispose after the pool that uses it.
+/// <para>
+/// A direct connection survives a network blip because the driver dials the real host again; a pool built on a
+/// tunnel cannot — its loopback port leads nowhere once the SSH session is gone (laptop sleep, bastion
+/// restart, a keepalive that went unanswered). <see cref="IsAlive"/> and <see cref="WhenLost"/> let the pool's
+/// owner drop it so the next acquire opens a fresh tunnel.
+/// </para>
+/// </summary>
 public sealed class SshTunnelHandle : IAsyncDisposable
 {
     private readonly SshClient _client;
     private readonly ForwardedPortLocal _forward;
+    private readonly object _gate = new();
+    private readonly List<Action> _onLost = [];
     private int _disposed;
+    private bool _lost;
 
     internal SshTunnelHandle(SshClient client, ForwardedPortLocal forward)
     {
         _client = client;
         _forward = forward;
+        // SSH.NET raises this only when its message loop ends (server closed, socket error) — the session is
+        // over. Our own Disconnect is filtered out by SSH.NET, and by _disposed here.
+        _client.ErrorOccurred += (_, _) => MarkLost();
+        _forward.Exception += (_, _) =>
+        {
+            if (!_client.IsConnected)
+            {
+                MarkLost();
+            }
+        };
     }
 
     /// <summary>The loopback port the driver should connect to.</summary>
     public int LocalPort => (int)_forward.BoundPort;
+
+    /// <summary>False once the SSH session has ended (or the handle was disposed): nothing more will reach the
+    /// database through <see cref="LocalPort"/>.</summary>
+    public bool IsAlive
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return !_lost && Volatile.Read(ref _disposed) == 0 && _client.IsConnected && _forward.IsStarted;
+            }
+        }
+    }
+
+    /// <summary>Run <paramref name="onLost"/> once when the SSH session ends — straight away if it already has.
+    /// Runs on an SSH.NET thread. Not run for a dispose.</summary>
+    public void WhenLost(Action onLost)
+    {
+        lock (_gate)
+        {
+            if (!_lost)
+            {
+                _onLost.Add(onLost);
+                return;
+            }
+        }
+        onLost();
+    }
+
+    private void MarkLost()
+    {
+        Action[] handlers;
+        lock (_gate)
+        {
+            if (_lost || Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+            _lost = true;
+            handlers = [.. _onLost];
+            _onLost.Clear();
+        }
+        foreach (var handler in handlers)
+        {
+            try { handler(); } catch { /* an owner's cleanup must not take down SSH.NET's listener thread */ }
+        }
+    }
 
     /// <summary><paramref name="info"/> pointed at this tunnel's loopback end.</summary>
     public DbConnectionInfo Route(DbConnectionInfo info) => info with { Host = "127.0.0.1", Port = LocalPort };
@@ -277,6 +353,10 @@ public sealed class SshTunnelHandle : IAsyncDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
             return ValueTask.CompletedTask;
+        }
+        lock (_gate)
+        {
+            _onLost.Clear();
         }
         return new ValueTask(Task.Run(() =>
         {

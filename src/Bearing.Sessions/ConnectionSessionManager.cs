@@ -35,6 +35,9 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     /// <inheritdoc />
     public event Action<Guid>? LinkChanged;
 
+    /// <inheritdoc />
+    public event Action<SessionKey>? TunnelLost;
+
     // Never let a subscriber's fault escape into the connect/evict path it fired from.
     private void RaiseLiveChanged(SessionKey key)
     {
@@ -119,7 +122,8 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var key = SessionKey.For(info);
-            if (_live.TryGetValue(key, out var existing) && SameConnection(existing.Info, info))
+            // A session whose SSH tunnel has ended is never handed out: BuildAsync retires it and opens a new one.
+            if (_live.TryGetValue(key, out var existing) && SameConnection(existing.Info, info) && !existing.TunnelLost)
             {
                 existing.LastUsedUtc = _clock();
                 return Task.FromResult(existing);
@@ -261,13 +265,38 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         }
     }
 
-    public async Task EvictAsync(SessionKey key)
+    public Task EvictAsync(SessionKey key) => EvictAsync(key, only: null);
+
+    /// <summary>The SSH tunnel under <paramref name="session"/> ended: evict it — only if it is still the one
+    /// live under <paramref name="key"/>, never a replacement built meanwhile. Runs on an SSH.NET thread.</summary>
+    private async Task EvictLostTunnelAsync(SessionKey key, ConnectionSession session)
+    {
+        try
+        {
+            await EvictAsync(key, only: session);
+            TunnelLost?.Invoke(key);
+        }
+        catch
+        {
+            // Best-effort: the next acquire still skips the session (TunnelLost) and rebuilds.
+        }
+    }
+
+    private async Task EvictAsync(SessionKey key, ConnectionSession? only)
     {
         ConnectionSession? session;
         var disposeNow = false;
         lock (_gate)
         {
-            if (_live.TryGetValue(key, out session))
+            if (only is not null && _disposed)
+            {
+                return;
+            }
+            if (_live.TryGetValue(key, out session) && only is not null && !ReferenceEquals(session, only))
+            {
+                return;
+            }
+            if (session is not null)
             {
                 _live.Remove(key);
                 if (session.LeaseCount == 0) disposeNow = true; else session.Retired = true;
@@ -428,7 +457,11 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             lock (_gate)
             {
                 _live.TryGetValue(key, out stale);
-                if (stale is not null && SameConnection(stale.Info, info)) { stale.LastUsedUtc = _clock(); return stale; }
+                if (stale is not null && SameConnection(stale.Info, info) && !stale.TunnelLost)
+                {
+                    stale.LastUsedUtc = _clock();
+                    return stale;
+                }
                 if (stale is not null)
                 {
                     _live.Remove(key);
@@ -480,6 +513,9 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             }
             RaiseLiveChanged(key); // a new session entered the live map
             if (newLink) RaiseLinkChanged(info.Id);
+            // A pool on a tunnel is dead once the SSH session ends (sleep/wake, bastion restart): drop it, so the
+            // indicators say so and the next acquire opens a fresh tunnel instead of failing until a Disconnect.
+            tunnel?.WhenLost(() => _ = EvictLostTunnelAsync(key, session));
             return session;
         }
         catch

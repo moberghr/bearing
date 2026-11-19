@@ -55,6 +55,23 @@ public class SshTunnelTests
         Assert.Null(SshTunnelForm.Build(true, "bastion", "22", "jump", SshAuthKind.Password, null, Pinned, forgetHostKey: true)!.HostKeyFingerprint);
     }
 
+    [Fact]
+    public void Save_keeps_a_pin_that_landed_while_the_dialog_was_open()
+    {
+        // The dialog opened unpinned; its Test (or a background connect) pinned the saved record meanwhile.
+        var fromDialog = Pinned with { HostKeyFingerprint = null };
+
+        Assert.Equal("SHA256:abc", SshTunnelForm.WithSavedPin(fromDialog, Pinned, forgetHostKey: false)!.HostKeyFingerprint);
+
+        // Forget host key, another server, or a pin of its own: the incoming tunnel stands.
+        Assert.Null(SshTunnelForm.WithSavedPin(fromDialog, Pinned, forgetHostKey: true)!.HostKeyFingerprint);
+        Assert.Null(SshTunnelForm.WithSavedPin(fromDialog with { Host = "other" }, Pinned, false)!.HostKeyFingerprint);
+        Assert.Null(SshTunnelForm.WithSavedPin(fromDialog with { Port = 2222 }, Pinned, false)!.HostKeyFingerprint);
+        Assert.Equal("SHA256:own", SshTunnelForm.WithSavedPin(Pinned with { HostKeyFingerprint = "SHA256:own" }, Pinned, false)!.HostKeyFingerprint);
+        Assert.Null(SshTunnelForm.WithSavedPin(null, Pinned, false));
+        Assert.Null(SshTunnelForm.WithSavedPin(fromDialog, null, false)!.HostKeyFingerprint);
+    }
+
     [Theory]
     [InlineData("", 22)]
     [InlineData("abc", 22)]
