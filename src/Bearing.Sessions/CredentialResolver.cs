@@ -10,7 +10,8 @@ namespace Bearing.Sessions;
 /// <summary>
 /// Resolves the secret a connection authenticates with, according to its <see cref="CredentialKind"/>:
 /// a fixed <see cref="ISecretStore"/> password, a value prompted from the user, or a freshly-minted Entra
-/// token — or, for <see cref="CredentialKind.Integrated"/>, no secret at all. Prompted passwords and
+/// token — or, for <see cref="CredentialKind.Integrated"/> and <see cref="CredentialKind.AwsProfile"/>, no
+/// secret at all. Prompted passwords and
 /// tokens are cached <b>in memory only</b>, keyed by connection id, for the life of the app session —
 /// never persisted. <see cref="Invalidate"/> drops a cache entry so the next
 /// resolve re-prompts / re-mints (used on auth failure and expiry eviction).
@@ -104,6 +105,15 @@ public sealed class CredentialResolver
                 //
                 // Not cached, because there is nothing to cache; and a forceRefresh retry would re-mint
                 // nothing, which is why ExecutionViewModel.CanRefreshCredential excludes this kind.
+                return new Credential(null, null);
+
+            case CredentialKind.AwsProfile:
+                // The AWS SDK resolves the profile itself (SSO, assumed role, or keys in ~/.aws) when the
+                // provider's factory builds its client, so there is nothing for Bearing to hand over. The
+                // Integrated arrangement for the same reason: ahead of any store or prompt code, because this
+                // kind must never read the secret store, never write to it, and never ask the user for
+                // anything — Bearing holds no AWS secret at all (§1.1). No expiry: the SDK refreshes what it
+                // resolved, so the session manager has no disconnect-before-expiry to schedule.
                 return new Credential(null, null);
 
             case CredentialKind.EntraToken:

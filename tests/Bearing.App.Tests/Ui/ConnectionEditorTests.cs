@@ -45,8 +45,9 @@ public class ConnectionEditorTests
 
     /// <summary>The engines this build ships, in the registry's own order, which is also the dropdown's
     /// (<c>ProviderRegistry</c>: PostgreSQL first, because it is the engine every existing project file
-    /// names).</summary>
-    private static readonly string[] Engines = { "PostgreSQL", "Microsoft SQL Server", "MySQL / MariaDB" };
+    /// names; Amazon DynamoDB, the one non-relational engine, last).</summary>
+    private static readonly string[] Engines =
+        { "PostgreSQL", "Microsoft SQL Server", "MySQL / MariaDB", "Amazon DynamoDB" };
 
     private const string Integrated = "Windows / integrated authentication";
 

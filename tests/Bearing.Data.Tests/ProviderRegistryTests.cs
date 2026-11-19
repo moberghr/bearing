@@ -1,4 +1,5 @@
 using Bearing.Core.Data;
+using Bearing.Data.DynamoDb;
 using Bearing.Data.MySql;
 using Bearing.Data.Postgres;
 using Bearing.Data.SqlServer;
@@ -22,13 +23,24 @@ public class ProviderRegistryTests
         var all = new ProviderRegistry().All.ToList();
 
         // The order is the order the connection dialog offers them in, and PostgreSQL — the engine every
-        // existing project file names — stays first.
+        // existing project file names — stays first. DynamoDB, the one non-relational engine, is last.
         Assert.Equal(
-            new[] { PostgresProvider.ProviderId, SqlServerProvider.ProviderId, MySqlProvider.ProviderId },
+            new[]
+            {
+                PostgresProvider.ProviderId, SqlServerProvider.ProviderId, MySqlProvider.ProviderId,
+                DynamoDbProvider.ProviderId,
+            },
             all.Select(p => p.Id));
         Assert.Equal("Microsoft SQL Server", all[1].DisplayName);
         Assert.Equal("MySQL / MariaDB", all[2].DisplayName);
+        Assert.Equal("Amazon DynamoDB", all[3].DisplayName);
     }
+
+    [Theory]
+    [InlineData("dynamodb")]
+    [InlineData("DynamoDB")]
+    public void Dynamo_db_resolves_by_id_case_insensitively(string id)
+        => Assert.IsType<DynamoDbProvider>(new ProviderRegistry().Get(id));
 
     [Theory]
     [InlineData("mysql")]

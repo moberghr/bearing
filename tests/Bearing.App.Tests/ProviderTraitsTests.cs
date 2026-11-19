@@ -5,6 +5,7 @@ using Bearing.App.Connections;
 using Bearing.App.Results;
 using Bearing.Core.Data;
 using Bearing.Data;
+using Bearing.Data.DynamoDb;
 using Bearing.Data.MySql;
 using Bearing.Data.Postgres;
 using Bearing.Data.SqlServer;
@@ -33,11 +34,64 @@ public class ProviderTraitsTests
     }
 
     [Fact]
+    public void The_registry_and_the_traits_pair_all_four_engines_by_id()
+    {
+        // Both sides, named: the registry's four ids, and for each the arm whose dialect carries the same id.
+        // A provider registered without an arm would otherwise pass the loop above only by also being missing.
+        Assert.Equal(
+            new[] { PostgresProvider.ProviderId, SqlServerProvider.ProviderId, MySqlProvider.ProviderId, DynamoDbProvider.ProviderId },
+            new ProviderRegistry().All.Select(p => p.Id));
+
+        var arms = new Dictionary<string, ProviderTraits>
+        {
+            [PostgresProvider.ProviderId] = ProviderTraits.Postgres,
+            [SqlServerProvider.ProviderId] = ProviderTraits.SqlServer,
+            [MySqlProvider.ProviderId] = ProviderTraits.MySql,
+            [DynamoDbProvider.ProviderId] = ProviderTraits.DynamoDb,
+        };
+        foreach (var (id, arm) in arms)
+        {
+            Assert.Same(arm, ProviderTraits.For(id));
+            Assert.Equal(id, arm.Dialect.Id);
+        }
+    }
+
+    [Fact]
     public void A_traits_dialect_shares_its_providers_id()
     {
         Assert.Equal(PostgresProvider.ProviderId, ProviderTraits.Postgres.Dialect.Id);
         Assert.Equal(SqlServerProvider.ProviderId, ProviderTraits.SqlServer.Dialect.Id);
         Assert.Equal(MySqlProvider.ProviderId, ProviderTraits.MySql.Dialect.Id);
+        Assert.Equal(DynamoDbProvider.ProviderId, ProviderTraits.DynamoDb.Dialect.Id);
+    }
+
+    [Fact]
+    public void A_dynamodb_connection_writes_partiql_and_withholds_editing_and_ddl()
+    {
+        var traits = ProviderTraits.For("DynamoDB");
+
+        Assert.Same(ProviderTraits.DynamoDb, traits);
+        Assert.Same(PartiQlDialect.Instance, traits.Dialect);
+        // PartiQL's strings and booleans are the Postgres forms.
+        Assert.Equal(SqlLiteralStyle.Postgres, traits.Literals);
+        Assert.Equal(
+            "Read-only — editing isn't available on Amazon DynamoDB connections yet.",
+            traits.GridEditUnavailable);
+        Assert.False(traits.OffersTableDdl);
+        // Read on every engine (the connection editor shows it), so it is real copy, not a placeholder.
+        Assert.Contains("region", traits.EndpointHint!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("profile", traits.EndpointHint!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("loopback", traits.EndpointHint!);
+    }
+
+    [Fact]
+    public void The_relational_engines_keep_editing_and_ddl()
+    {
+        foreach (var traits in new[] { ProviderTraits.Postgres, ProviderTraits.SqlServer, ProviderTraits.MySql })
+        {
+            Assert.Null(traits.GridEditUnavailable);
+            Assert.True(traits.OffersTableDdl);
+        }
     }
 
     [Fact]

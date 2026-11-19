@@ -234,4 +234,37 @@ public class CredentialResolverTests
 
         Assert.Null((await resolver.ResolveAsync(info, forceRefresh: false, CancellationToken.None)).Secret);
     }
+
+    // ---- AWS profile (DynamoDB) ----------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AwsProfile_reads_no_secret_writes_none_and_never_prompts(bool forceRefresh)
+    {
+        // The AWS SDK resolves the profile; Bearing holds no AWS secret at all (§1.1, SC4). A seeded password
+        // stands in for anything a store might hand over, and a store that refuses writes makes a write throw.
+        var secrets = new FakeSecretStore { CanStore = false };
+        var info = Conn(CredentialKind.AwsProfile) with { ProviderId = "dynamodb", Host = "eu-west-1", User = "dev" };
+        secrets.Seed(info.Id, "should-not-be-read");
+        var prompt = new FakeCredentialPrompt("should-not-be-asked");
+        var resolver = new CredentialResolver(() => secrets, prompt, new ThrowingEntraTokens());
+
+        var cred = await resolver.ResolveAsync(info, forceRefresh, CancellationToken.None);
+
+        Assert.Null(cred.Secret);
+        Assert.Null(cred.User);
+        Assert.Null(cred.ExpiresAt);
+        Assert.Empty(secrets.Fetched);
+        Assert.Equal(0, prompt.Calls);
+    }
+
+    [Fact]
+    public async Task AwsProfile_works_with_no_secret_store_and_no_prompt()
+    {
+        var info = Conn(CredentialKind.AwsProfile) with { ProviderId = "dynamodb" };
+        var resolver = new CredentialResolver(() => null, null, new ThrowingEntraTokens());
+
+        Assert.Null((await resolver.ResolveAsync(info, forceRefresh: false, CancellationToken.None)).Secret);
+    }
 }

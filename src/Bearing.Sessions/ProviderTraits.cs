@@ -1,5 +1,6 @@
 using System;
 using Bearing.Core.Data;
+using Bearing.Data.DynamoDb;
 using Bearing.Data.Postgres;
 using Bearing.Data.MySql;
 using Bearing.Data.SqlServer;
@@ -26,6 +27,12 @@ namespace Bearing.Sessions;
 /// actually running against.
 /// </para>
 /// </summary>
+/// <param name="GridEditUnavailable">Why the results grid is never editable on this engine — the lock chip's
+/// sentence, said before any per-result reason is looked for — or null where editing depends on the result.
+/// Its own member because the per-result reasons would be false here: a result with no base columns reads as
+/// "a computed expression", which is not why an engine without grid editing refuses.</param>
+/// <param name="OffersTableDdl">Whether a table's definition (DDL) can be shown. False where the engine has
+/// no table DDL for Bearing to render.</param>
 public sealed record ProviderTraits(
     string ProviderId,
     ISqlDialect Dialect,
@@ -33,7 +40,9 @@ public sealed record ProviderTraits(
     string EntraResource,
     string? EndpointHint,
     bool EntraTakesUser,
-    AzureServerKind AzureServers)
+    AzureServerKind AzureServers,
+    string? GridEditUnavailable,
+    bool OffersTableDdl)
 {
     /// <summary>PostgreSQL — the behaviour every caller had when there was one engine, so it is also the
     /// fallback below.</summary>
@@ -48,7 +57,9 @@ public sealed record ProviderTraits(
         // Azure Database for PostgreSQL wants the role name as the user, alongside the token as password.
         EntraTakesUser: true,
         // Flexible server only: single server was retired in March 2025, so nothing is left to list.
-        AzureServers: new("microsoft.dbforpostgresql/flexibleservers", DatabasesApiVersion: "2022-12-01"));
+        AzureServers: new("microsoft.dbforpostgresql/flexibleservers", DatabasesApiVersion: "2022-12-01"),
+        GridEditUnavailable: null,
+        OffersTableDdl: true);
 
     /// <summary>Microsoft SQL Server.</summary>
     public static ProviderTraits SqlServer { get; } = new(
@@ -63,7 +74,9 @@ public sealed record ProviderTraits(
         // SqlClient refuses a User ID next to an access token; the token is the identity.
         EntraTakesUser: false,
         // Azure SQL logical servers. Managed Instances are a different resource type and are not listed.
-        AzureServers: new("microsoft.sql/servers", DatabasesApiVersion: "2021-11-01"));
+        AzureServers: new("microsoft.sql/servers", DatabasesApiVersion: "2021-11-01"),
+        GridEditUnavailable: null,
+        OffersTableDdl: true);
 
     /// <summary>MySQL and MariaDB — one engine id, one dialect, one set of traits.</summary>
     public static ProviderTraits MySql { get; } = new(
@@ -78,14 +91,42 @@ public sealed record ProviderTraits(
         EntraTakesUser: true,
         // Flexible server only: single server was retired in September 2024. Azure has no managed MariaDB
         // any more (retired September 2025), so a MariaDB connection browses the MySQL list too.
-        AzureServers: new("microsoft.dbformysql/flexibleservers", DatabasesApiVersion: "2023-12-30"));
+        AzureServers: new("microsoft.dbformysql/flexibleservers", DatabasesApiVersion: "2023-12-30"),
+        GridEditUnavailable: null,
+        OffersTableDdl: true);
+
+    /// <summary>
+    /// Amazon DynamoDB, written in PartiQL. Read-focused: no grid editing and no table DDL to show.
+    /// <para>
+    /// The three Entra / Azure members are placeholders and are never read: every reader sits behind a
+    /// <see cref="CredentialKind.EntraToken"/> check (<see cref="EntraTokenProvider"/>, the connection dialog's
+    /// az-login box) or behind Browse Azure, and this engine offers neither
+    /// (<see cref="IDbProvider.SupportsEntraToken"/> is false). Empty rather than a plausible-looking audience, so
+    /// a path that did reach one would fail visibly instead of minting a token for some other service.
+    /// </para>
+    /// </summary>
+    public static ProviderTraits DynamoDb { get; } = new(
+        DynamoDbProvider.ProviderId,
+        PartiQlDialect.Instance,
+        // PartiQL shares the Postgres literal forms Bearing writes: '…' strings with '' doubled, and the
+        // true/false keywords. Binary has no PartiQL literal Bearing could write; "Copy as SQL INSERT" stays
+        // generic SQL on this engine (a known limitation in the spec), so nothing generated is sent as typed.
+        SqlLiteralStyle.Postgres,
+        EntraResource: "",
+        EndpointHint: "Region is an AWS region code such as eu-west-1. A blank AWS profile uses the AWS SDK's "
+                      + "default credential chain. Endpoint is for DynamoDB Local or a VPC endpoint; plain "
+                      + "http:// is accepted for a loopback host only.",
+        EntraTakesUser: false,
+        AzureServers: new("", DatabasesApiVersion: ""),
+        GridEditUnavailable: "Read-only — editing isn't available on Amazon DynamoDB connections yet.",
+        OffersTableDdl: false);
 
     /// <summary>
     /// The traits for a provider id, matched the way the registry matches it (case-insensitively).
     /// <para>
     /// An id nothing here knows falls back to <see cref="Postgres"/> rather than throwing: these are text
     /// and copy decisions on paths that must not fail — paging a grid, rendering a preview — and Postgres
-    /// is what every one of them did before. The cost of the fallback is a wrong page suffix for a fourth
+    /// is what every one of them did before. The cost of the fallback is a wrong page suffix for a fifth
     /// engine that shipped a provider without adding an arm here; the cost of throwing is a crash in the
     /// results grid. Adding the arm is the fix, and <c>ProviderTraitsTests</c> asserts every registered
     /// provider has one.
@@ -100,6 +141,10 @@ public sealed record ProviderTraits(
         if (string.Equals(providerId, MySql.ProviderId, StringComparison.OrdinalIgnoreCase))
         {
             return MySql;
+        }
+        if (string.Equals(providerId, DynamoDb.ProviderId, StringComparison.OrdinalIgnoreCase))
+        {
+            return DynamoDb;
         }
         return Postgres;
     }

@@ -25,9 +25,9 @@ Each commit builds and keeps the full suite green. Messages follow §8.2 (short,
 | 2 | 2 | `add a partiql dialect with full-scan target reduction` | `PartiQlDialect`, `PartiQlScan`, `PartiQlDialectTests`, `PartiQlScanTests` | SC13, SC15 |
 | 3 | 3a | `add the aws sdk and a dynamodb client seam` | packages, `IDynamoDbApi` (+ SDK impl), `DynamoDbConnectionFactory`, `DynamoDbErrors`, `DynamoDbConnectionFactoryTests`, `DynamoDbErrorTextTests`, `ProviderClassificationTests` | SC5, SC6 |
 | 4 | 3b | `map dynamodb items to result rows` | `DynamoDbValues`, `DynamoDbContinuation`, `PartiQlBatch`, `PartiQlBatchTests` | SC15 (split) |
-| 5 | 3c | `add the dynamodb executor and metadata reader and register the provider` | `DynamoDbQueryExecutor`, `DynamoDbMetadataReader`, `DynamoDbProvider`, `ProviderRegistry`, `DynamoDbQueryExecutorTests`, `ProviderRegistryTests` | SC1, SC11 |
+| 5 | 3c | `add the dynamodb executor and metadata reader` | `DynamoDbQueryExecutor`, `DynamoDbMetadataReader`, `DynamoDbProvider` (not yet registered), `DynamoDbQueryExecutorTests` | SC11 |
 | 6 | 4 | `add dynamodb local live tests` | `build/test-db-dynamodb.sh`, `tests/Shared/DynamoDbTestServer.cs`, `DynamoDbLiveTests`, CI step | SC7–SC10 |
-| 7 | 5 | `add dynamodb traits, aws profile sign-in and the scan guard` | `ProviderTraits` arm + `GridEditUnavailable` / `OffersTableDdl`, `CredentialResolver` arm, `ScanGuard`, tests | SC1, SC4, SC13 |
+| 7 | 5 | `register dynamodb with its traits, aws profile sign-in and the scan guard` | `ProviderRegistry` + `ProviderRegistryTests`, `ProviderTraits` arm + `GridEditUnavailable` / `OffersTableDdl`, `CredentialResolver` arm, `ScanGuard`, tests | SC1, SC4, SC13 |
 | 8 | 6 | `add dynamodb fields to the connection editor` | `CredentialKindOptions`, port rule, dialog gating, scan checkbox, tests | SC2, SC3 |
 | 9 | 7a | `page dynamodb results by continuation` | `ContinuationPaging`, `ResultSetViewModel.Continuation`, delegating branches in `ExecutionViewModel`, `ContinuationPagingTests` | SC12 |
 | 10 | 7b | `confirm full table scans before they run` | `ScanConfirmation`, `ConfirmScanDialog`, `IDialogService.ConfirmScanAsync`, run / fetch-all / export hooks, `ScanConfirmationTests` | SC14 |
