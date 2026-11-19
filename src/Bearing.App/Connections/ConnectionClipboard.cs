@@ -60,6 +60,9 @@ public static class ConnectionClipboard
         // client-side rather than asked of the server (#131). Pasting a manual-commit connection as an
         // auto-commit one is the same silent downgrade.
         public bool ManualCommit { get; init; }
+        // The scan confirmation is a client-side safety setting of the same kind: a paste that dropped an
+        // explicit "off" would silently ask again, and one that dropped nothing is the default (true).
+        public bool ConfirmFullScans { get; init; } = true;
         // Not a safety setting, but it decides what the SQL computes (#163), so a paste that dropped an
         // explicit UTC would silently move the recipient's `::date` results to their own zone. Copied as the
         // setting, not the resolved zone: "local" means whoever's machine the connection lands on.
@@ -135,6 +138,7 @@ public static class ConnectionClipboard
         Tls = TlsPolicy.Resolve(c),
         ReadOnly = c.ReadOnly,
         ManualCommit = c.ManualCommit,
+        ConfirmFullScans = c.ConfirmFullScans,
         StatementTimeoutSeconds = c.StatementTimeoutSeconds,
         SessionTimeZone = c.SessionTimeZone,
         CredentialKind = c.CredentialKind,
@@ -159,6 +163,7 @@ public static class ConnectionClipboard
         Tls = e.Tls,
         ReadOnly = e.ReadOnly,
         ManualCommit = e.ManualCommit,
+        ConfirmFullScans = e.ConfirmFullScans,
         StatementTimeoutSeconds = e.StatementTimeoutSeconds,
         SessionTimeZone = e.SessionTimeZone,
         CredentialKind = e.CredentialKind,

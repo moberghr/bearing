@@ -54,6 +54,17 @@ public static class ExternalSqlPolicy
             // MySqlDialect names `CREATE` as transaction control too — and the sentence below ("would let a
             // read-only session become writable") is not why CREATE is refused. No Postgres or T-SQL statement
             // is both, so for those engines the order changes nothing.
+            //
+            // NamesAWrite is also true of a statement the guard could not read at all (GuardIsDialectAware
+            // false), so that it is held — but no write was found in it, and "'SELECT — dialect not parsed'
+            // writes" asserted one (§1.1). That statement is refused just the same, in the sentence that is true
+            // of it; only one whose scan named a risky verb is said to write.
+            if (statement.NamesAWrite && (statement.RiskyVerbs.Count == 0 || statement.FromConservativeDefault))
+            {
+                return "Bearing could not read this statement safely in this engine's SQL, so it was not run. "
+                     + "A connection exposed to external tools runs only statements Bearing can read as reads.";
+            }
+
             if (statement.NamesAWrite)
             {
                 return $"'{statement.Label}' writes, and an exposed connection runs reads only.";

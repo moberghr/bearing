@@ -71,6 +71,29 @@ public sealed class ConnectionFieldState
             return withCurrent;
         }
     }
+
+    private IReadOnlyList<ConnectionSuggestion>? _suggestions;
+
+    /// <summary>
+    /// What a <see cref="ConnectionFieldKind.Text"/> field suggests (<see cref="ConnectionField.Suggestions"/>),
+    /// asked of the provider once per form and kept: the source may read a file (DynamoDB's AWS profiles), and
+    /// the list must not change under the user while they pick from it. Empty for every other kind and for a
+    /// field that suggests nothing — the dialog then renders a plain text box.
+    /// </summary>
+    public IReadOnlyList<ConnectionSuggestion> Suggestions
+        => _suggestions ??= Kind == ConnectionFieldKind.Text && Field.Suggestions is { } source
+            ? source()
+            : Array.Empty<ConnectionSuggestion>();
+
+    /// <summary>The suggestion whose value is exactly <paramref name="value"/> (trimmed; case-sensitive, as AWS
+    /// profile names are), or null.</summary>
+    public ConnectionSuggestion? SuggestionFor(string value)
+    {
+        var wanted = value.Trim();
+        return wanted.Length == 0
+            ? null
+            : Suggestions.FirstOrDefault(s => string.Equals(s.Value, wanted, StringComparison.Ordinal));
+    }
 }
 
 /// <summary>
@@ -124,6 +147,31 @@ public sealed class ConnectionFieldModel
     /// <see cref="CredentialKind.Integrated"/> at all. Asked through here so the dialog never has to know
     /// which engines have it.</summary>
     public bool SupportsIntegratedAuth => Provider.SupportsIntegratedAuth;
+
+    /// <summary>Whether the engine reads <see cref="ConnectionInfo.Tls"/> at all. False hides the encryption rows
+    /// and saves the default, so the record never carries a mode nothing honours (§1.4).</summary>
+    public bool SupportsTlsModes => Provider.SupportsTlsModes;
+
+    /// <summary>Whether the SSH tab means anything for this engine (<see cref="IDbProvider.SupportsSshTunnel"/>).</summary>
+    public bool SupportsSshTunnel => Provider.SupportsSshTunnel;
+
+    /// <summary>Whether <see cref="ConnectionInfo.ManualCommit"/> means anything on this engine. False hides the
+    /// checkbox and saves off.</summary>
+    public bool SupportsManualCommit => Provider.SupportsManualCommit;
+
+    /// <summary>Whether the engine has a session time zone to set. False hides the group and saves none.</summary>
+    public bool SupportsSessionTimeZone => Provider.SupportsSessionTimeZone;
+
+    /// <summary>Whether this engine asks before reading a whole table, i.e. whether "Confirm full table scans" is
+    /// offered (<see cref="ConnectionInfo.ConfirmFullScans"/>). Asked of the traits, so the dialog never compares
+    /// engine ids.</summary>
+    public bool AsksFullScanQuestion => ProviderTraits.For(ProviderId).AsksFullScanQuestion;
+
+    /// <summary>What stops a write on an engine where only Bearing refuses, or null (see
+    /// <see cref="ProviderTraits.WriteBoundary"/>). Said only when the provider does not enforce read-only on the
+    /// server — a server that does needs no such sentence.</summary>
+    public string? WriteBoundary
+        => Provider.EnforcesReadOnlyOnServer ? null : ProviderTraits.For(ProviderId).WriteBoundary;
 
     /// <summary>Extra guidance about this engine's endpoint, or null when there is nothing to say. The
     /// named-instance rule is the case that exists: it makes the Port box a no-op, which the user cannot
@@ -231,6 +279,70 @@ public sealed class ConnectionFieldModel
         if (Fields.FirstOrDefault(f => string.Equals(f.Key, key, StringComparison.OrdinalIgnoreCase)) is { } field)
             field.Value = value;
     }
+
+    /// <summary>What suggestions wrote into other fields: target key → the source field's key and the value
+    /// written. A target whose value still equals it holds the pick's value, not the user's.</summary>
+    private readonly Dictionary<string, (string Source, string Value)> _filled = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The user changed <paramref name="key"/>'s box to <paramref name="value"/>: store it, and apply what a
+    /// matching suggestion supplies for other fields (<see cref="ConnectionSuggestion.Fills"/> — an AWS profile's
+    /// region). Returns the keys of the <em>other</em> fields whose value changed, for the dialog to redisplay.
+    /// <para>
+    /// A filled value is written only into an empty field, or into one still holding what an earlier suggestion
+    /// from this same field wrote there — <b>never over a value the user typed</b>. A value the pick wrote and
+    /// nobody has touched since follows the pick: picking another profile replaces it, and picking one that
+    /// supplies none (or clearing the box) takes it back out. That is also what makes typing work, since an
+    /// editable dropdown matches as each character lands: "dev" fills dev's region, and the "2" that makes it
+    /// "dev2" must not leave dev's region behind as if the user had chosen it.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> Edit(string key, string value)
+    {
+        if (Find(key) is not { } field) return Array.Empty<string>();
+        field.Value = value;
+        if (field.Suggestions.Count == 0 && !_filled.Values.Any(f => Same(f.Source, field.Key)))
+            return Array.Empty<string>();
+
+        var fills = field.SuggestionFor(value)?.Fills ?? new Dictionary<string, string>();
+        var changed = new List<string>();
+
+        foreach (var (target, (source, written)) in _filled.ToList())
+        {
+            if (!Same(source, field.Key) || fills.ContainsKey(target)) continue;
+            _filled.Remove(target);
+            if (Find(target) is { } stale && stale.Value == written)
+            {
+                stale.Value = "";
+                changed.Add(stale.Key);
+            }
+        }
+
+        foreach (var (target, fill) in fills)
+        {
+            if (Same(target, field.Key) || Find(target) is not { } other) continue;
+            var pickOwnsIt = _filled.TryGetValue(target, out var prior) && Same(prior.Source, field.Key)
+                             && other.Value == prior.Value;
+            if (other.Value.Trim().Length > 0 && !pickOwnsIt)
+            {
+                // The user's value: kept, and no longer tracked as anyone's pick.
+                _filled.Remove(target);
+                continue;
+            }
+            _filled[target] = (field.Key, fill);
+            if (other.Value != fill)
+            {
+                other.Value = fill;
+                changed.Add(other.Key);
+            }
+        }
+        return changed;
+    }
+
+    private ConnectionFieldState? Find(string key)
+        => Fields.FirstOrDefault(f => Same(f.Key, key));
+
+    private static bool Same(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Point the form at a server picked in Browse Azure: its host, the engine's default port (Azure listens on
@@ -376,15 +488,26 @@ public sealed class ConnectionFieldModel
         options.Remove(TlsPolicy.LegacyOptionKey);
         options.Remove(SessionTimeZonePolicy.LegacyOptionKey);
 
+        // An intrinsic key this engine has no box for is not an option either. SwitchTo parks a value the user
+        // typed for an engine that has the box (a database name, a port) in _carried so that switching back
+        // loses nothing; written out here it would land in the bag as `Database` beside a connection whose
+        // factory never reads it. Dropped from what is saved, kept in the model.
+        foreach (var key in Intrinsic)
+            if (!Has(key)) options.Remove(key);
+
         // Each intrinsic is written only when this provider declares a field for it. `Get` returning null
         // means "this engine has no such box", which is not the same as an empty box: coercing it to ""
         // (and the port to 0) blanked the template's endpoint for a provider that declares no fields at
         // all, which is exactly what DemoProvider does.
+        //
+        // The one exception is a provider that declares a Host and no Port (DynamoDB: Host is the region):
+        // it opens no socket, so it has no port to inherit, and the template's would be a number the form never
+        // showed. Zero is the absence the endpoint text already drops (ConnectionEndpoint.HostPort).
         return template with
         {
             ProviderId = ProviderId,
             Host = Get("Host") is { } host ? host.Trim() : template.Host,
-            Port = Has("Port") ? Port : template.Port,
+            Port = Has("Port") ? Port : Has("Host") ? 0 : template.Port,
             Database = Get("Database") is { } database ? database.Trim() : template.Database,
             User = Get("User") is { } user ? user.Trim() : template.User,
             Options = options,

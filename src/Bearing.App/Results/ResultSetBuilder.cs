@@ -21,7 +21,8 @@ internal static class ResultSetBuilder
     /// result off it is editable and the lock chip says so.</param>
     public static List<ResultSetViewModel> BuildResultSets(
         IReadOnlyList<QueryResult> results, string sql, ISchemaSnapshot? snapshot,
-        ProviderTraits? traits = null, bool connectionReadOnly = false, PreparedRun? run = null)
+        ProviderTraits? traits = null, bool connectionReadOnly = false, PreparedRun? run = null,
+        SessionKey? sourceSession = null)
     {
         // Only a lone statement pages: its text is what PageSql/CountWrap shape. A batch's text is not one
         // query — `declare @x …; select …` wrapped in a derived table is a syntax error — so a batch is read to
@@ -32,7 +33,8 @@ internal static class ResultSetBuilder
         var statements = ExecutedStatements(results, sql, run);
         return results
             .Select((r, i) => BuildOne(
-                r, statements[i].Source, pageable, statements[i].Shown, snapshot, traits, connectionReadOnly, run))
+                r, statements[i].Source, pageable, statements[i].Shown, snapshot, traits, connectionReadOnly, run,
+                sourceSession))
             .ToList();
     }
 
@@ -59,15 +61,26 @@ internal static class ResultSetBuilder
     /// <summary>One result's view model: editability, key/FK badges and the engine's traits resolved — the
     /// per-set half of <see cref="BuildResultSets"/>, also what a streamed batch builds each set with as it
     /// begins (<see cref="BatchRunAssembler"/>).</summary>
+    /// <param name="sourceSession">The session the result was read from — the only one its
+    /// <see cref="QueryResult.Continuation"/> may be sent back to (<see cref="ResultSetViewModel.SourceSession"/>).</param>
     internal static ResultSetViewModel BuildOne(
         QueryResult r, string source, bool pageable, string? shown, ISchemaSnapshot? snapshot,
-        ProviderTraits? traits, bool connectionReadOnly, PreparedRun? run)
+        ProviderTraits? traits, bool connectionReadOnly, PreparedRun? run, SessionKey? sourceSession = null)
     {
-        // Resolve editability (with a lock reason) only for row-returning results with a schema.
-        var (target, reason) = snapshot is null || r.Columns.Count == 0
+        // An engine without grid editing says so before the resolver is asked: with no base columns the resolver
+        // would blame "a computed expression", which is not why this result is locked. No edit target is resolved
+        // for such a result at all. Otherwise editability (with a lock reason) resolves only for row-returning
+        // results with a schema.
+        var (target, reason) = r.Columns.Count == 0
             ? (null, null)
-            : EditabilityResolver.ResolveWithReason(snapshot, r.Columns, connectionReadOnly);
-        var vm = new ResultSetViewModel(r, source, pageable)
+            : traits?.GridEditUnavailable is { } unavailable
+                ? (null, unavailable)
+                : snapshot is null
+                    ? (null, null)
+                    : EditabilityResolver.ResolveWithReason(snapshot, r.Columns, connectionReadOnly);
+        // A result the engine continues by token pages on its own, one set of a batch included: the token carries
+        // its statement, so nothing is re-run and the batch's no-paging rule (its text is not one query) is moot.
+        var vm = new ResultSetViewModel(r, source, pageable || r.Continuation is not null)
         {
             ExecutedSql = shown,
             // So Copy as ▸ SQL renders this engine's literals and quoting, not Postgres'.
@@ -77,6 +90,7 @@ internal static class ResultSetBuilder
             EditTarget = target,
             LockReason = target is null ? reason : null,
             SourceParameters = run is { Parameters.Count: > 0 } ? run.Parameters : [],
+            SourceSession = sourceSession,
         };
         if (vm.IsEditable) vm.CaptureOriginals();
         return vm;
@@ -180,7 +194,13 @@ internal static class ResultSetBuilder
 
         var ms = (wallClock?.TotalMilliseconds) ?? results[^1].Duration.TotalMilliseconds;
         var elapsed = FormatElapsed(ms);
-        return results.Count == 1 ? $"Done · {elapsed}" : $"{results.Count} result sets · {elapsed}";
+        var line = results.Count == 1 ? $"Done · {elapsed}" : $"{results.Count} result sets · {elapsed}";
+
+        // A first page the engine's request budget cut short holds fewer rows than a page and still has more
+        // behind it; only the engine's own sentence says which, so it rides along (Behaviour 6).
+        return results.Select(ContinuationPaging.BudgetNotice).FirstOrDefault(n => n is not null) is { } notice
+            ? $"{line} — {notice}"
+            : line;
     }
 
     /// <summary>Human-friendly elapsed: "88 ms" under a second, "8.4 s" above — so a slow run reads honestly.

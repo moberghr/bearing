@@ -30,6 +30,20 @@
     <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.15" />
   </ItemGroup>
 
+  <ItemGroup Label="AWS (DynamoDB)">
+    <PackageVersion Include="AWSSDK.DynamoDBv2" Version="4.1.0.2" />
+    <!-- Loaded by reflection when a profile uses SSO (AWSSDK.Core looks the assemblies up by name), so they
+         must be referenced even though no Bearing code names a type from them. SecurityToken does the same
+         for assumed-role profiles. -->
+    <PackageVersion Include="AWSSDK.SSO" Version="4.1.0.2" />
+    <PackageVersion Include="AWSSDK.SSOOIDC" Version="4.1.0.2" />
+    <PackageVersion Include="AWSSDK.SecurityToken" Version="4.1.0.2" />
+    <!-- Transitive via the four above; pinned so they cannot drift apart. The numbers differ on purpose: AWS
+         versions Core separately from the service packages, and each 4.1.0.2 service package above declares
+         AWSSDK.Core [4.1.1.1, 5.0.0) — so 4.1.1.1 is exactly their floor, not a mismatch. -->
+    <PackageVersion Include="AWSSDK.Core" Version="4.1.1.1" />
+  </ItemGroup>
+
   <ItemGroup Label="UI (Avalonia)">
     <PackageVersion Include="Avalonia" Version="12.1.0" />
     <PackageVersion Include="Avalonia.Desktop" Version="12.1.0" />

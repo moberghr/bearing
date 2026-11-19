@@ -106,8 +106,12 @@ public static class TextTable
         if (set.Message is { Length: > 0 } message) output.AppendLine(message);
 
         // "cut short" rather than "more rows exist": the read stopped at the ceiling, and saying so is what
-        // stops someone reading a partial answer as the whole one.
-        var truncated = set.Truncated ? ", cut short at the row limit" : "";
+        // stops someone reading a partial answer as the whole one. A page the engine's request budget ended is
+        // as partial, but no row limit was reached — saying one was would send the reader to raise --max-rows,
+        // which changes nothing. It says what did stop it, and the flag that reads on.
+        var truncated = !set.Truncated ? ""
+            : set.StoppedBy == ResultSet.RequestBudget ? ", stopped by the engine's request budget; use --out to read on"
+            : ", cut short at the row limit";
         output.AppendLine(
             $"({set.RowCount} row{(set.RowCount == 1 ? "" : "s")} in {set.DurationMs} ms{truncated})");
     }

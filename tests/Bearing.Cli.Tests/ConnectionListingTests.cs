@@ -1,5 +1,6 @@
 using Bearing.Core.Data;
 using Bearing.Data;
+using Bearing.Data.DynamoDb;
 using Bearing.Data.Postgres;
 using Bearing.Cli.Tools;
 using Bearing.Persistence;
@@ -107,6 +108,41 @@ public class ConnectionListingTests : IAsyncLifetime
         var json = CliRunner.Serialize(await host.ListConnectionsAsync(CancellationToken.None));
 
         Assert.Contains("\"not_exposed\": []", json);
+    }
+
+    /// <summary>
+    /// An exposed Amazon DynamoDB connection signs in through an AWS profile — a credential kind that asks
+    /// nobody anything, so nothing about it rules out a host with no window (§1.11: only what the kind settles).
+    /// Its region and profile are where it is and who it signs in as, and are not disclosed.
+    /// </summary>
+    [Fact]
+    public async Task An_exposed_dynamodb_connection_is_listed_as_available_and_discloses_no_region_or_profile()
+    {
+        var (host, _) = await HostAsync(
+            "Payments",
+            new ConnectionInfo
+            {
+                Id = Guid.NewGuid(),
+                Name = "orders-dynamo",
+                ProviderId = DynamoDbProvider.ProviderId,
+                Host = "ap-southeast-2",
+                Port = 0,
+                Database = "ap-southeast-2",
+                User = "analytics-sso",
+                CredentialKind = CredentialKind.AwsProfile,
+                ExternalAccess = ExternalAccess.ReadOnly,
+            });
+
+        var response = await host.ListConnectionsAsync(CancellationToken.None);
+        var listed = Assert.Single(((ConnectionsResponse)response).Connections);
+        var json = CliRunner.Serialize(response);
+
+        Assert.Equal("orders-dynamo", listed.Name);
+        Assert.Equal("Amazon DynamoDB", listed.Engine);
+        Assert.True(listed.Available);
+        Assert.Null(listed.UnavailableReason);
+        Assert.DoesNotContain("ap-southeast-2", json);
+        Assert.DoesNotContain("analytics-sso", json);
     }
 
     // ---- the shared project read, from both callers ------------------------------------------

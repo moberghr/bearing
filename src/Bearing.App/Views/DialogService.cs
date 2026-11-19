@@ -34,6 +34,11 @@ public sealed class DialogService : IDialogService
             ? new ConfirmWriteDialog(request).ShowDialog<bool>(window)
             : Task.FromResult(true);
 
+    public Task<bool> ConfirmScanAsync(ScanQuestion request)
+        => Owner is { } window
+            ? new ConfirmScanDialog(request).ShowDialog<bool>(window)
+            : Task.FromResult(false); // no window → nothing runs; a scan the connection asks about needs an answer
+
     public Task<AuditExportRequest?> ShowAuditExportAsync(
         IReadOnlyList<string> connectionNames, IReadOnlyList<string> environments)
         => Owner is { } window

@@ -67,10 +67,21 @@ public sealed partial class ExecutionViewModel : ObservableObject
     // Runs only while a transaction is open: warns, and eventually rolls one back (#131).
     private readonly DispatcherTimer _transactionTimer;
 
+    // Load more / fetch all for a result continued by token rather than by offset (DynamoDB).
+    private readonly ContinuationPaging _continuationPaging;
+
+    // DynamoDB's full-scan question: before a run, and before fetch all / export of a confirmed scan.
+    private readonly ScanConfirmation _scanConfirmation;
+
     public ExecutionViewModel(WorkspaceContext ctx, IDialogService? dialogs)
     {
         _ctx = ctx;
         _dialogs = dialogs;
+        _continuationPaging = new ContinuationPaging(
+            ctx, ResolveLiveLease, ExecutorFor,
+            (tab, body, cancelled, failed) => RunExclusiveAsync(tab, body, cancelled, failed),
+            RunStatus, RunFinished, ReportCeiling, Classify);
+        _scanConfirmation = new ScanConfirmation(ctx.Sessions, dialogs, ctx.SetStatus);
         _elapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _elapsedTimer.Tick += (_, _) => RefreshElapsed();
         // IsBusy / RunButtonText / CancelExecution are a façade over the *selected* tab's per-tab run
@@ -230,8 +241,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
     private ConnectionInfo? SelectedConnection => Selected is { } tab ? _ctx.EffectiveConnection(tab) : null;
 
-    /// <summary>Whether there is a connection whose mode there is any point showing.</summary>
-    public bool CommitModeVisible => SelectedConnection is not null;
+    /// <summary>Whether there is a connection whose mode there is any point showing — not one on an engine that
+    /// cannot hold a transaction, where the pill would offer a mode nothing could honour.</summary>
+    public bool CommitModeVisible => SelectedConnection is { } info && _ctx.SupportsManualCommit(info);
 
     /// <summary>Whether the selected tab's connection is holding writes right now.</summary>
     public bool IsManualCommit => SelectedConnection is { } info && CommitPolicy.IsManualCommit(info);
@@ -280,6 +292,11 @@ public sealed partial class ExecutionViewModel : ObservableObject
     public void ToggleCommitMode()
     {
         if (SelectedConnection is not { } info) { _ctx.SetStatus("This tab has no connection."); return; }
+        if (!_ctx.SupportsManualCommit(info))
+        {
+            _ctx.SetStatus($"{info.Name}: this engine cannot hold a transaction open — statements always commit themselves.");
+            return;
+        }
         var manual = CommitPolicy.IsManualCommit(info);
 
         if (manual && _ctx.Transactions.All.FirstOrDefault(t => t.Key.ConnectionId == info.Id) is { } open)
@@ -524,6 +541,19 @@ public sealed partial class ExecutionViewModel : ObservableObject
             }
         }
 
+        // A read that may cover a whole table asks first (DynamoDB only; every other engine returns at once).
+        // The check can take the lookup budget plus the dialog, so the tab is busy for it: Esc cancels the
+        // lookup, and a second Run while it is out does not start a second lookup and a second dialog.
+        var scan = ScanDecision.NotAsked;
+        if (ScanConfirmation.TargetsToCheck(info, traits.Dialect, sql) is not null)
+        {
+            var checking = tab.BeginRun();
+            try { scan = await _scanConfirmation.ConfirmRunAsync(info, traits.Dialect, sql, checking); }
+            catch (OperationCanceledException) { RunStatus(tab, "Cancelled — nothing ran."); return; }
+            finally { tab.EndRun(); }
+        }
+        if (!scan.Proceed) return;
+
         if (beforeRun is not null && !await beforeRun())
         {
             return;
@@ -563,13 +593,13 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // and on an auth failure refresh the credential and retry exactly once. A stored password that
             // didn't change can't be helped by a retry, so it surfaces the error on the first pass.
             var canRefresh = CanRefreshCredential(info);
-            var outcome = await RunFetchAsync(info, tab, run, fetchSql, opensTransaction, final: !canRefresh, ct);
+            var outcome = await RunFetchAsync(info, tab, run, fetchSql, opensTransaction, scan.IsFullScan, final: !canRefresh, ct);
             if (outcome == RunOutcome.AuthFailed && canRefresh && !ct.IsCancellationRequested)
             {
                 _ctx.Credentials.Invalidate(info.Id);
                 await _ctx.Sessions.EvictAsync(SessionKey.For(info));
                 RunStatus(tab, "Reauthenticating…");
-                await RunFetchAsync(info, tab, run, fetchSql, opensTransaction, final: true, ct);
+                await RunFetchAsync(info, tab, run, fetchSql, opensTransaction, scan.IsFullScan, final: true, ct);
             }
         }, "Query cancelled by user.", "Execution error");
     }
@@ -713,7 +743,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// final attempt any error (auth included) is surfaced normally.</summary>
     private async Task<RunOutcome> RunFetchAsync(
         ConnectionInfo info, EditorTabViewModel tab, PreparedRun run, string fetchSql, bool opensTransaction,
-        bool final, CancellationToken ct)
+        bool fullScan, bool final, CancellationToken ct)
     {
         var sql = run.Sql;
         var wall = Stopwatch.StartNew();
@@ -749,7 +779,12 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // is not one query a page or count can wrap (`declare @x …; select …`), and its sets can't be
             // re-read one at a time without re-running everything before them. So a batch is read to the end
             // here, once — every set, up to the Fetch all ceiling — and never pages (ResultSetBuilder).
-            var batch = ResultSetBuilder.IsBatch(ProviderTraits.For(info).Dialect, sql);
+            // Not on an engine whose reads continue by token (DynamoDB): there a batch keeps the first-page path,
+            // each set continuing from its own token. Reading every set to the Fetch all ceiling would run an
+            // unfiltered scan far past the one page it runs unasked for (§1.9c), and a set the request budget cut
+            // short would lose its token and never read on.
+            var batch = !ProviderTraits.For(info).ReadsContinueByToken
+                        && ResultSetBuilder.IsBatch(ProviderTraits.For(info).Dialect, sql);
             var cap = Math.Max(1, _ctx.Settings.ResultFetchAllMaxRows);
             RunStatus(tab, "Running…");
             IReadOnlyList<QueryResult> results;
@@ -780,8 +815,11 @@ public sealed partial class ExecutionViewModel : ObservableObject
                 // Results always route to the tab that started the run, never to whichever tab is focused now.
                 // A tab that has since been closed (or dropped by a project switch) is dead but harmless to
                 // assign to — RunFinished is what tells the user the run ended, with TabStillOpen false.
-                tab.SetRunResults(ResultSetBuilder.BuildResultSets(
-                    results, sql, session.Snapshot, ProviderTraits.For(info), SessionPolicy.IsReadOnly(info), run));
+                var sets = ResultSetBuilder.BuildResultSets(
+                    results, sql, session.Snapshot, ProviderTraits.For(info), SessionPolicy.IsReadOnly(info), run,
+                    session.Key);
+                ScanConfirmation.Mark(sets, fullScan);
+                tab.SetRunResults(sets);
             }
             LogExecution(info, run.LogSql, results, _ctx.Transactions.For(tab)?.Id, run.LogParameters);
             var summary = ResultSetBuilder.DescribeResults(
@@ -898,28 +936,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
         await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
     }
 
-    /// <summary>Which credential kinds a fresh acquire can actually help. A kind that resolves to the same
-    /// value twice must not be retried: the second attempt fails identically, and the user reads
-    /// "Reauthenticating…" for an authentication that never happened. One arm per kind, with its reason,
-    /// because the arms are not obvious from the outside.</summary>
-    private bool CanRefreshCredential(ConnectionInfo info) => info.CredentialKind switch
-    {
-        // Re-asking the user, and re-minting a token, are both things a retry can actually change.
-        CredentialKind.Prompt or CredentialKind.EntraToken => true,
-
-        // A stored password that didn't change would just fail identically — unless the store can't hold
-        // passwords at all (no keyring), where "stored password" really means "there is nothing stored" and
-        // the retry is what gets the user prompted for one.
-        CredentialKind.StoredPassword => _ctx.Secrets is { CanStore: false },
-
-        // The OS identity: nothing to re-prompt for and nothing to re-mint, so a retry would send the exact
-        // same handshake. Spelled out rather than left to the default arm because the case it must not fall
-        // into is right above it — an Integrated connection swept into the no-keyring branch would
-        // "reauthenticate" by doing nothing, twice.
-        CredentialKind.Integrated => false,
-
-        _ => false,
-    };
+    /// <summary>Whether a fresh acquire can actually help — the resolver's decision
+    /// (<see cref="CredentialResolver.CanRefresh"/>), which also knows the engines that take no password.</summary>
+    private bool CanRefreshCredential(ConnectionInfo info) => _ctx.Credentials.CanRefresh(info);
 
     /// <summary>
     /// The engine's own verdict on a failed statement. The App layer used to read Postgres SQLSTATEs as
@@ -980,6 +999,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// <summary>Append the next page to a pageable result set (infinite-scroll "load more").</summary>
     public async Task LoadMoreAsync(ResultSetViewModel rs)
     {
+        if (rs.Continuation is not null) { await _continuationPaging.LoadMoreAsync(rs); return; }
         var tab = Selected;
         if (tab is null || tab.IsRunning || !rs.IsPageable || rs.SourceSql is null || !rs.HasMore) return;
         using var lease = ResolveLiveLease();
@@ -1167,8 +1187,21 @@ public sealed partial class ExecutionViewModel : ObservableObject
         return plan;
     }
 
-    public async Task<bool> FetchAllAsync(ResultSetViewModel rs)
+    public Task<bool> FetchAllAsync(ResultSetViewModel rs) => FetchAllAsync(rs, askAboutScan: true);
+
+    /// <param name="askAboutScan">False only where the caller has already asked the scan question for this read
+    /// — the multi-result export, which asks once for the whole workbook.</param>
+    private async Task<bool> FetchAllAsync(ResultSetViewModel rs, bool askAboutScan)
     {
+        // Both fetch paths refuse without an idle tab; refusing first means nobody is asked about a fetch that
+        // would not happen.
+        if (Selected is null or { IsRunning: true }) return false;
+        // Export enters here too, so a confirmed scan is asked about once more on either path — with or without a
+        // connection it can still name (fail closed).
+        if (askAboutScan
+            && !await _scanConfirmation.ConfirmFetchAllAsync(rs, SelectedConnection, _ctx.Settings.ResultFetchAllMaxRows))
+            return false;
+        if (rs.Continuation is not null) return await _continuationPaging.FetchAllAsync(rs);
         var tab = Selected;
         if (tab is null || tab.IsRunning || !rs.IsPageable || rs.SourceSql is null) return false;
         if (!rs.HasMore) return true;
@@ -1348,9 +1381,16 @@ public sealed partial class ExecutionViewModel : ObservableObject
         // Every set, before the file dialog: being asked where to save and *then* told the export cannot
         // happen is the wrong order to find out in.
         if (results.Any(r => r.HasGrid && r.IsCutShort)) { _ctx.SetStatus(CutShortExport); return; }
-        foreach (var rs in results.Where(r => r.HasGrid && r.HasMore))
+        var pending = results.Where(r => r.HasGrid && r.HasMore).ToList();
+        // One scan question for the whole workbook: asked per set, N scan results would raise N identical
+        // "Keep reading the whole table?" dialogs. Cancel writes nothing, as any other stop here does.
+        if (pending.FirstOrDefault(r => r.IsFullScan) is { } scanned
+            && !await _scanConfirmation.ConfirmFetchAllAsync(scanned, SelectedConnection, _ctx.Settings.ResultFetchAllMaxRows))
+            return;
+
+        foreach (var rs in pending)
         {
-            if (await FetchAllAsync(rs)) continue;
+            if (await FetchAllAsync(rs, askAboutScan: false)) continue;
             _ctx.SetStatus("Export stopped — a result isn't fully loaded, and a workbook missing a sheet is "
                          + "worse than no workbook.");
             return;
@@ -1421,7 +1461,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             var info = _ctx.EffectiveConnection(tab);
             (into ?? tab).Push(ResultSetBuilder.BuildResultSets(
                 results, sql, session.Snapshot, ProviderTraits.For(session.Info),
-                info is not null && SessionPolicy.IsReadOnly(info)));
+                info is not null && SessionPolicy.IsReadOnly(info), sourceSession: session.Key));
             // The connection has to travel here too, or a 57014 from its own statement timeout reads as
             // "nothing in Bearing asked for this" — a confident wrong answer about a limit we set (#105).
             RunFinished(tab, ResultSetBuilder.DescribeResults(

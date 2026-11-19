@@ -64,6 +64,45 @@ public interface IDbProvider
     bool SupportsEntraToken { get; }
 
     /// <summary>
+    /// Whether this engine authenticates with a password at all (<see cref="CredentialKind.StoredPassword"/>
+    /// and <see cref="CredentialKind.Prompt"/>). False for an engine whose credential is resolved elsewhere —
+    /// the dialog then offers neither a password box nor those kinds, rather than a field the factory would
+    /// ignore (§1.9a: never offer what the factory cannot honour).
+    /// </summary>
+    bool SupportsPasswordCredentials { get; }
+
+    /// <summary>
+    /// Whether this engine's connection factory can authenticate through a named AWS profile
+    /// (<see cref="CredentialKind.AwsProfile"/>). The dialog offers that kind only where it works, for the
+    /// reason <see cref="SupportsIntegratedAuth"/> is a flag.
+    /// </summary>
+    bool SupportsAwsProfile { get; }
+
+    /// <summary>
+    /// Whether <see cref="ConnectionInfo.ManualCommit"/> means anything on this engine — that is, whether
+    /// <see cref="CreateTransactionScope"/> can hold a transaction open across calls. An engine without
+    /// transactions answers false and the dialog does not offer the setting, rather than offering one that
+    /// would never open anything.
+    /// </summary>
+    bool SupportsManualCommit { get; }
+
+    /// <summary>
+    /// Whether <see cref="ConnectionInfo.Tls"/> reaches this engine's transport. False for an engine whose
+    /// transport security is not the user's to choose (an HTTPS-only API): the dialog hides the control
+    /// instead of showing a mode nothing honours — and never describes the connection as unencrypted or
+    /// verified on the strength of a setting that is inert here (§1.4).
+    /// </summary>
+    bool SupportsTlsModes { get; }
+
+    /// <summary>
+    /// Whether <see cref="ConnectionInfo.SshTunnel"/> can carry this engine's connection — a TCP forward to the
+    /// connection's host and port. True by default (every engine that dials a server). False for an engine that
+    /// reaches an HTTPS API by region and endpoint (DynamoDB): there is no host and port to forward, so the dialog
+    /// hides the SSH tab and a connect naming a tunnel is refused rather than routed somewhere meaningless.
+    /// </summary>
+    bool SupportsSshTunnel => true;
+
+    /// <summary>
     /// Place a failed statement's error (see <see cref="QueryError.SqlState"/>) on the neutral
     /// <see cref="DbErrorKind"/> scale. The engine's codes never leave the provider: the App layer used
     /// to sniff Postgres SQLSTATEs as strings, which quietly mislabelled every other engine's errors.
@@ -154,6 +193,25 @@ public interface IMetadataReader
     /// </para>
     /// </summary>
     Task<IReadOnlyList<RelationSize>> GetRelationSizesAsync(CancellationToken ct);
+
+    /// <summary>
+    /// One relation's size entry, or null when the engine reported none for it. The default reads every
+    /// relation's (<see cref="GetRelationSizesAsync"/>) and picks one; an engine that pays a request per table for
+    /// a size (DynamoDB's <c>DescribeTable</c>) reads only the one — the full-scan check names one table's item
+    /// count and must not describe a whole region to find it.
+    /// </summary>
+    async Task<RelationSize?> GetRelationSizeAsync(long tableId, CancellationToken ct)
+        => (await GetRelationSizesAsync(ct).ConfigureAwait(false)).FirstOrDefault(size => size.TableId == tableId);
+
+    /// <summary>
+    /// The attributes found in one small read of <paramref name="table"/>'s items (at most
+    /// <paramref name="items"/>), for an engine whose tables declare no columns beyond their keys — read only
+    /// when the user expands the table in the tree, never on connect. <b>Null means this engine does not
+    /// sample</b> (every engine with a catalog); a sample that could not be read is an
+    /// <see cref="AttributeSample"/> carrying its reason, not null and not an empty list.
+    /// </summary>
+    Task<AttributeSample?> SampleAttributesAsync(TableInfo table, int items, CancellationToken ct)
+        => Task.FromResult<AttributeSample?>(null);
 
     /// <summary>
     /// Every database's size on the server. A size that cannot be read comes back null rather than throwing:
@@ -303,6 +361,26 @@ public interface IQueryExecutor
     /// single error result rather than thrown.
     /// </summary>
     Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct);
+
+    /// <summary>
+    /// The next chunk of a read that returned a <see cref="QueryResult.Continuation"/>: about
+    /// <paramref name="maxRows"/> more rows, as one <see cref="QueryResult"/> whose own
+    /// <see cref="QueryResult.Continuation"/> is null once the read is exhausted. The token is the one the
+    /// previous result carried, passed back untouched.
+    /// <para>
+    /// <b>"About", not "at most".</b> An engine whose server cannot stop mid-request may return more — DynamoDB on
+    /// a filtered read, by at most one request's matches — rather than drop rows the token has already passed. The
+    /// same holds for the first page of such a read (<see cref="QueryOptions.MaxRows"/>). A caller that must hold
+    /// to a cap trims, and reports the result as truncated.
+    /// </para>
+    /// <para>
+    /// A default member that throws, the shape of the overloads above, because only an engine whose reads are
+    /// continued by a server-side token (not by <c>LIMIT</c>/<c>OFFSET</c>) overrides it — and a caller
+    /// reaches it only with a token that engine issued, so reaching the default is a bug, not a state.
+    /// </para>
+    /// </summary>
+    Task<QueryResult> ExecuteContinuationAsync(string continuation, int maxRows, CancellationToken ct)
+        => throw new NotSupportedException("This engine's reads are not continued by token.");
 }
 
 /// <summary>Where a transaction opened by <see cref="ITransactionScope"/> stands.</summary>

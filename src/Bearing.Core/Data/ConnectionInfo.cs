@@ -162,6 +162,24 @@ public sealed record ConnectionInfo
     public TlsMode Tls { get; init; } = TlsPolicy.Default;
 
     /// <summary>
+    /// When true (the default), a statement that would read a whole table — one the engine cannot narrow by
+    /// key — asks for confirmation before it runs, because on a metered engine that read is the cost.
+    /// <para>
+    /// <b>Client-side, like <see cref="ManualCommit"/>:</b> it is a question Bearing asks and an answer it
+    /// waits for, never something sent to a server, so it is not part of what defines a pool — see
+    /// <c>SamePool</c> / <c>SameConnection</c> — and toggling it never rebuilds one. A typed field rather than
+    /// an <see cref="Options"/> entry because it is a safety setting (the <see cref="Tls"/> /
+    /// <see cref="ExternalAccess"/> rule), and a missing value in an older project file keeps the safe
+    /// default.
+    /// </para>
+    /// <para>
+    /// Inert on an engine that never asks the scan question (<c>ISqlDialect.ScanTargets</c> returns null) —
+    /// every engine today but DynamoDB.
+    /// </para>
+    /// </summary>
+    public bool ConfirmFullScans { get; init; } = true;
+
+    /// <summary>
     /// Connect through an SSH server, or null (the default) to connect directly. <see cref="Host"/> and
     /// <see cref="Port"/> are then the database server as the SSH server sees it — often <c>localhost</c>.
     /// Part of what defines a pool (<c>SameConnection</c>) and a network target (<c>SameNetwork</c>), except
@@ -194,13 +212,35 @@ public sealed record ConnectionInfo
 /// a value the provider never offered.
 /// </para>
 /// </param>
+/// <param name="Suggestions">
+/// Values a <see cref="ConnectionFieldKind.Text"/> field offers while still taking any other typed value — an
+/// editable dropdown, not a <see cref="ConnectionFieldKind.Choice"/>. A function rather than a list because a
+/// source may be the user's own files (DynamoDB's AWS profiles), read when the editor is shown rather than when
+/// the provider is built. It must not throw: a source with nothing to offer returns an empty list, and the
+/// editor then shows a plain text box. Null for every field that suggests nothing.
+/// </param>
+/// <param name="Hint">One line of guidance shown directly under the field, or null.</param>
 public sealed record ConnectionField(
     string Key,
     string Label,
     ConnectionFieldKind Kind,
     bool Required,
     string? Default = null,
-    IReadOnlyList<string>? Choices = null);
+    IReadOnlyList<string>? Choices = null,
+    Func<IReadOnlyList<ConnectionSuggestion>>? Suggestions = null,
+    string? Hint = null);
+
+/// <summary>One value a field suggests (<see cref="ConnectionField.Suggestions"/>).</summary>
+/// <param name="Value">What the box takes and the connection saves.</param>
+/// <param name="Description">Shown beside the value in the list, never saved — a region's name beside its
+/// code.</param>
+/// <param name="Fills">Values this one supplies for other fields, by field key — an AWS profile's region for
+/// the Region field. The editor writes one only into an empty field, or into one still holding what an earlier
+/// suggestion wrote there; never over a value the user typed.</param>
+public sealed record ConnectionSuggestion(
+    string Value,
+    string? Description = null,
+    IReadOnlyDictionary<string, string>? Fills = null);
 
 public enum ConnectionFieldKind
 {

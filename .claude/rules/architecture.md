@@ -15,7 +15,7 @@ Layered clean architecture. Reference: `.claude/references/architecture-principl
 Core  ←  Sql, Data, Persistence, Updates  ←  Sessions  ←  Results  ←  App  ←  Desktop
                                                                     ↖  Cli   (the `bearing` command)
 ```
-- `Sql` (SQL parsing/completion), `Data` (Postgres/Npgsql, SQL Server, MySQL/MariaDB), `Persistence` (SQLite), `Updates`
+- `Sql` (SQL parsing/completion; one dialect per engine — `PostgresDialect`, `SqlServerDialect`, `MySqlDialect` and `PartiQlDialect`, which has no grammar and reads PartiQL with the PostgreSQL lexer), `Data` (Postgres/Npgsql, SQL Server, MySQL/MariaDB, `Data/DynamoDb` over the AWS SDK), `Persistence` (SQLite), `Updates`
   (Velopack release feed / self-update) each depend on `Core` only.
 - `Sessions` depends on `Core`, `Sql` and `Data` — see §2.6.
 - `Results` depends on those plus `Sessions` — see §2.7.
@@ -44,7 +44,7 @@ Core  ←  Sql, Data, Persistence, Updates  ←  Sessions  ←  Results  ←  Ap
 ## §2.6 — `Bearing.Sessions`: everything before a statement runs
 Credentials (`CredentialResolver`, `EntraTokenProvider`), the one connect recipe (`ConnectionFactoryBuilder`),
 pooled sessions and leases (`ConnectionSessionManager`, `SessionKey`, `SessionLease`), the schema browser,
-`ProviderTraits` and `WriteRefusal`. Shared by both hosts — never a second copy of the connect recipe or the
+`ProviderTraits`, `WriteRefusal` and `ScanGuard` (whether a DynamoDB `SELECT` reads a whole table, and the sentences that say so — the App asks, the CLI refuses, both in its words, §1.9c). Shared by both hosts — never a second copy of the connect recipe or the
 refusal in a host (§1.9).
 - No Avalonia and no `Persistence` reference; stores arrive through `Core` interfaces.
 - WHEN a change decides **whether or how a statement may run**, it goes here. `App` decides what to ask the

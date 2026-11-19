@@ -132,6 +132,24 @@ public class SshTunnelTests
         Assert.Null(tunnel);
     }
 
+    /// <summary>DynamoDB has a region and an HTTPS endpoint, not a host and port to forward: a tunnel a hand-edited
+    /// project names is refused before anything is opened, never routed to "127.0.0.1" as a region.</summary>
+    [Fact]
+    public async Task A_tunnel_on_an_engine_that_cannot_be_tunnelled_is_refused_before_anything_opens()
+    {
+        var info = new ConnectionInfo
+        {
+            Id = Guid.NewGuid(), Name = "orders", ProviderId = "dynamodb", Host = "eu-west-1",
+            CredentialKind = CredentialKind.AwsProfile, SshTunnel = new SshTunnel { Host = "bastion", User = "u" },
+        };
+        // No resolver: the refusal comes before anything that could open a tunnel is even needed.
+        var ex = await Assert.ThrowsAsync<ConnectionFailedException>(
+            () => ConnectionFactoryBuilder.RouteAsync(null, new ProviderRegistry().Get("dynamodb"), info, default));
+
+        Assert.Contains("'orders' names an SSH tunnel", ex.Message);
+        Assert.Contains("Amazon DynamoDB", ex.Message);
+    }
+
     [Fact]
     public async Task A_missing_key_file_fails_as_a_connection_error_naming_the_file()
     {

@@ -7,9 +7,14 @@ using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.LogicalTree;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Bearing.App.Views;
 using Bearing.Core.Data;
 using Bearing.Data;
+using Bearing.Data.DynamoDb;
+using Bearing.Data.MySql;
+using Bearing.Data.Postgres;
+using Bearing.Data.SqlServer;
 using Bearing.Sessions;
 using Xunit;
 
@@ -45,8 +50,9 @@ public class ConnectionEditorTests
 
     /// <summary>The engines this build ships, in the registry's own order, which is also the dropdown's
     /// (<c>ProviderRegistry</c>: PostgreSQL first, because it is the engine every existing project file
-    /// names).</summary>
-    private static readonly string[] Engines = { "PostgreSQL", "Microsoft SQL Server", "MySQL / MariaDB" };
+    /// names; Amazon DynamoDB, the one non-relational engine, last).</summary>
+    private static readonly string[] Engines =
+        { "PostgreSQL", "Microsoft SQL Server", "MySQL / MariaDB", "Amazon DynamoDB" };
 
     private const string Integrated = "Windows / integrated authentication";
 
@@ -333,6 +339,411 @@ public class ConnectionEditorTests
         Assert.Contains(SessionTimeZonePolicy.Describe(SessionTimeZonePolicy.Local), hint.Text);
     });
 
+    // ---- Amazon DynamoDB (the fourth engine) ------------------------------------------------------
+
+    private const int DynamoDb = 3;
+
+    private static bool Visible(ConnectionDialog dialog, string name)
+        => ConnectionEditorProbe.Named(dialog, name).Cast<Control>().Single().IsVisible;
+
+    private static string NoteText(ConnectionDialog dialog)
+        => dialog.FindControl<TextBlock>("SafetyNoteText")!.Text ?? "";
+
+    /// <summary>
+    /// What the editor holds for DynamoDB: Region / AWS profile / Endpoint as rows (no port, database or
+    /// password), the AWS-profile credential as the one kind, and no password row or keychain warning — asserted
+    /// with a posture that has no keychain, since that is the case in which a password-shaped engine would warn.
+    /// </summary>
+    [Fact]
+    public Task The_dynamodb_editor_has_region_profile_and_endpoint_and_only_the_aws_profile_credential() => _ui.Run(() =>
+    {
+        var dialog = new ConnectionDialog(
+            null, null, (_, _, _, _) => Task.FromResult(false),
+            new Bearing.App.Services.SecretStoragePosture(Secure: false, CanStore: false, Reason: "no keychain here"),
+            ConnectionEditorProbe.Registry());
+        ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
+
+        Assert.Equal(new[] { "Host", "User", "Endpoint" }, ConnectionEditorProbe.FieldKeys(dialog));
+        Assert.Equal(new[] { "AWS profile" }, ConnectionEditorProbe.Items(dialog, "CredentialKindBox"));
+        Assert.Equal(0, ConnectionEditorProbe.Combo(dialog, "CredentialKindBox").SelectedIndex);
+        Assert.Equal(CredentialKind.AwsProfile, dialog.BuildConnection().CredentialKind);
+
+        Assert.False(Visible(dialog, "PasswordBox"));
+        Assert.False(Visible(dialog, "PasswordLabel"));
+        Assert.False(Visible(dialog, "NoStorageWarning"));
+        Assert.True(Visible(dialog, "AwsProfileHint"));
+        Assert.False(Visible(dialog, "IntegratedHint"));
+        Assert.False(Visible(dialog, "EntraHint"));
+
+        // S7: the claim is about Bearing's own code; the SDK it hands the profile to does read the secret.
+        var hint = dialog.FindControl<TextBlock>("AwsProfileHint")!.Text ?? "";
+        Assert.Contains("Bearing's own code never reads, stores or asks for an AWS secret", hint);
+        Assert.Contains("the AWS SDK resolves the profile", hint);
+        Assert.DoesNotContain("Bearing never reads", hint);
+    });
+
+    [Fact]
+    public Task The_dynamodb_editor_hides_encryption_manual_commit_and_the_session_zone_and_keeps_external_access()
+        => _ui.Run(() =>
+        {
+            var dialog = ConnectionEditorProbe.Dialog();
+            ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
+
+            Assert.False(Visible(dialog, "TlsGroup"));
+            Assert.False(Visible(dialog, "ManualCommitBox"));
+            Assert.False(Visible(dialog, "TimeZoneGroup"));
+            Assert.False(Visible(dialog, "SshTab"));    // no host and port to forward
+            Assert.Null(dialog.BuildConnection().SshTunnel);
+            Assert.True(Visible(dialog, "ExternalAccessBox"));
+            // The settings every engine has stay where they were.
+            Assert.True(Visible(dialog, "ConfirmWritesBox"));
+            Assert.True(Visible(dialog, "ReadOnlyBox"));
+            Assert.True(Visible(dialog, "StatementTimeoutBox"));
+        });
+
+    [Fact]
+    public Task The_scan_confirmation_is_shown_checked_for_a_new_dynamodb_connection_with_the_boundary_note() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Dialog();
+        ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
+
+        Assert.True(Visible(dialog, "ScanGroup"));
+        var box = dialog.FindControl<CheckBox>("ConfirmFullScansBox")!;
+        Assert.Equal("Confirm full table scans", box.Content);
+        Assert.True(box.IsChecked);
+        // The sentence the confirmation itself says, not a second wording of it.
+        Assert.Equal(ScanGuard.Boundary, dialog.FindControl<TextBlock>("ScanNote")!.Text);
+        Assert.Contains("dynamodb:FullTableScan", dialog.FindControl<TextBlock>("ScanNote")!.Text);
+    });
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public Task The_other_three_engines_show_none_of_the_dynamodb_items(int engine) => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Dialog();
+        ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = engine;
+
+        Assert.False(Visible(dialog, "ScanGroup"));
+        Assert.False(Visible(dialog, "AwsProfileHint"));
+        Assert.DoesNotContain("AWS profile", ConnectionEditorProbe.Items(dialog, "CredentialKindBox"));
+        // Their own rows are all still there: the hiding is by the provider's flags, and theirs say yes.
+        Assert.True(Visible(dialog, "TlsGroup"));
+        Assert.True(Visible(dialog, "ManualCommitBox"));
+        Assert.True(Visible(dialog, "PasswordBox"));
+        Assert.Equal(new[] { "Stored password", "Prompt each time (not saved)" },
+            ConnectionEditorProbe.Items(dialog, "CredentialKindBox").Take(2));
+        // Their rows are still plain text boxes with no field hint: suggestions and hints are DynamoDB's alone.
+        Assert.All(ConnectionEditorProbe.FieldKeys(dialog),
+            key => Assert.IsType<TextBox>(Assert.Single(ConnectionEditorProbe.Named(dialog, key + "Box"))));
+        Assert.DoesNotContain(dialog.GetLogicalDescendants().OfType<Control>(),
+            c => c.Name?.EndsWith("FieldHint", StringComparison.Ordinal) == true);
+    });
+
+    // ---- DynamoDB region / profile pickers and the endpoint hint (user decision 2026-11-19) -------------
+
+    private static SuggestionFieldBox.Item[] SuggestionItems(ConnectionDialog dialog, string key)
+        => ConnectionEditorProbe.Editor<ComboBox>(dialog, key).ItemsSource!.Cast<SuggestionFieldBox.Item>().ToArray();
+
+    [Fact]
+    public Task Region_and_profile_are_editable_pickers_and_the_endpoint_a_text_box_with_its_hint_under_it()
+        => _ui.Run(() =>
+        {
+            var dialog = ConnectionEditorProbe.Dialog();
+            ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
+
+            Assert.True(ConnectionEditorProbe.Editor<ComboBox>(dialog, "Host").IsEditable);
+            var ireland = Assert.Single(SuggestionItems(dialog, "Host"), i => i.ToString() == "eu-west-1");
+            Assert.Equal("eu-west-1 — Europe (Ireland)", ireland.Label);
+
+            Assert.True(ConnectionEditorProbe.Editor<ComboBox>(dialog, "User").IsEditable);
+            Assert.Equal(new[] { "dev", "ci" }, SuggestionItems(dialog, "User").Select(i => i.ToString()));
+
+            var endpoint = ConnectionEditorProbe.Editor<TextBox>(dialog, DynamoDbConnectionFactory.EndpointOption);
+            var hint = Assert.IsType<TextBlock>(Assert.Single(ConnectionEditorProbe.Named(dialog, "EndpointFieldHint")));
+            Assert.Equal("Leave blank for AWS; set only for DynamoDB Local or a VPC/FIPS endpoint.", hint.Text);
+            Assert.True(hint.IsVisible);
+            // Directly under the Endpoint box: the next row of the same grid, in the editor column.
+            Assert.Same(endpoint.Parent, hint.Parent);
+            Assert.Equal(Grid.GetRow(endpoint) + 1, Grid.GetRow(hint));
+            Assert.Equal(Grid.GetColumn(endpoint), Grid.GetColumn(hint));
+        });
+
+    [Fact]
+    public Task Picking_a_region_saves_its_code_not_the_text_shown_in_the_list() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Show();
+        try
+        {
+            ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
+            var region = ConnectionEditorProbe.Editor<ComboBox>(dialog, "Host");
+
+            region.SelectedIndex = Array.FindIndex(SuggestionItems(dialog, "Host"), i => i.ToString() == "eu-west-2");
+
+            Assert.Equal("eu-west-2", region.Text);
+            Assert.Equal("eu-west-2", dialog.BuildConnection().Host);
+            Assert.DoesNotContain("Region is required", dialog.FindControl<TextBlock>("ValidationHint")!.Text ?? "");
+        }
+        finally { ConnectionEditorProbe.Close(dialog); }
+    });
+
+    [Fact]
+    public Task A_region_and_profile_nobody_suggested_are_typed_and_saved() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Show();
+        try
+        {
+            ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
+            ConnectionEditorProbe.Type(dialog, "Host", "local");
+            ConnectionEditorProbe.Type(dialog, "User", "only-in-credentials");
+
+            var saved = dialog.BuildConnection();
+            Assert.Equal("local", saved.Host);
+            Assert.Equal("only-in-credentials", saved.User);
+        }
+        finally { ConnectionEditorProbe.Close(dialog); }
+    });
+
+    [Fact]
+    public Task Picking_a_profile_fills_an_empty_region() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Show();
+        try
+        {
+            ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
+
+            ConnectionEditorProbe.Editor<ComboBox>(dialog, "User").SelectedIndex = 0;   // dev, region eu-west-1
+
+            Assert.Equal("eu-west-1", ConnectionEditorProbe.Text(dialog, "Host"));
+            var saved = dialog.BuildConnection();
+            Assert.Equal("eu-west-1", saved.Host);
+            Assert.Equal("dev", saved.User);
+            Assert.False(dialog.FindControl<TextBlock>("ValidationHint")!.IsVisible);
+        }
+        finally { ConnectionEditorProbe.Close(dialog); }
+    });
+
+    [Fact]
+    public Task Typing_a_profiles_name_fills_the_region_and_typing_on_takes_it_back_out() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Show();
+        try
+        {
+            ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
+
+            ConnectionEditorProbe.Type(dialog, "User", "dev");
+            Assert.Equal("eu-west-1", dialog.BuildConnection().Host);
+
+            ConnectionEditorProbe.Type(dialog, "User", "dev-other");
+            Assert.Equal("", dialog.BuildConnection().Host);
+            Assert.Equal("", ConnectionEditorProbe.Text(dialog, "Host"));
+        }
+        finally { ConnectionEditorProbe.Close(dialog); }
+    });
+
+    [Fact]
+    public Task Picking_a_profile_leaves_a_typed_region_alone() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Show();
+        try
+        {
+            ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
+            ConnectionEditorProbe.Type(dialog, "Host", "ap-south-1");
+
+            ConnectionEditorProbe.Editor<ComboBox>(dialog, "User").SelectedIndex = 0;   // dev, region eu-west-1
+
+            Assert.Equal("ap-south-1", ConnectionEditorProbe.Text(dialog, "Host"));
+            Assert.Equal("ap-south-1", dialog.BuildConnection().Host);
+            Assert.Equal("dev", dialog.BuildConnection().User);
+        }
+        finally { ConnectionEditorProbe.Close(dialog); }
+    });
+
+    [Fact]
+    public Task Switching_to_dynamodb_and_back_restores_the_rows_the_first_engine_had() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Dialog();
+        var providers = ConnectionEditorProbe.Combo(dialog, "ProviderBox");
+
+        providers.SelectedIndex = DynamoDb;
+        Assert.False(Visible(dialog, "TlsGroup"));
+        Assert.True(Visible(dialog, "ScanGroup"));
+
+        providers.SelectedIndex = 0;
+        Assert.True(Visible(dialog, "TlsGroup"));
+        Assert.True(Visible(dialog, "ManualCommitBox"));
+        Assert.True(Visible(dialog, "TimeZoneGroup"));
+        Assert.False(Visible(dialog, "ScanGroup"));
+        Assert.False(Visible(dialog, "AwsProfileHint"));
+        Assert.Equal(0, ConnectionEditorProbe.Combo(dialog, "CredentialKindBox").SelectedIndex);
+        Assert.Equal(CredentialKind.StoredPassword, dialog.BuildConnection().CredentialKind);
+        Assert.True(Visible(dialog, "PasswordBox"));
+        Assert.Equal(new[] { "Host", "Port", "Database", "User" }, ConnectionEditorProbe.FieldKeys(dialog));
+    });
+
+    /// <summary>
+    /// What the dialog saves for DynamoDB, through real text input: region as Host, profile as User, Port 0, the
+    /// AWS-profile kind, the scan question on, and the endpoint in the options bag — and nothing for the three
+    /// settings the engine has no use for.
+    /// </summary>
+    [Fact]
+    public Task A_dynamodb_connection_saves_region_profile_endpoint_port_zero_and_the_aws_kind() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Show();
+        try
+        {
+            ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
+            ConnectionEditorProbe.Type(dialog, "Host", "eu-west-1");
+            ConnectionEditorProbe.Type(dialog, "User", "dev");
+            ConnectionEditorProbe.Type(dialog, "Endpoint", "http://localhost:8000");
+
+            var saved = dialog.BuildConnection();
+
+            Assert.Equal("dynamodb", saved.ProviderId);
+            Assert.Equal("eu-west-1", saved.Host);
+            Assert.Equal("dev", saved.User);
+            Assert.Equal(0, saved.Port);
+            Assert.Equal("", saved.Database);
+            Assert.Equal(CredentialKind.AwsProfile, saved.CredentialKind);
+            Assert.True(saved.ConfirmFullScans);
+            Assert.Equal("http://localhost:8000", saved.Options["Endpoint"]);
+            Assert.Equal(TlsPolicy.Default, saved.Tls);
+            Assert.False(saved.ManualCommit);
+            Assert.Null(saved.SessionTimeZone);
+            Assert.Equal("dev@eu-west-1", ConnectionEndpoint.Full(saved));
+
+            dialog.FindControl<CheckBox>("ConfirmFullScansBox")!.IsChecked = false;
+            Assert.False(dialog.BuildConnection().ConfirmFullScans);
+        }
+        finally { ConnectionEditorProbe.Close(dialog); }
+    });
+
+    [Fact]
+    public Task A_dynamodb_connection_with_no_region_is_named_in_the_hint_and_a_blank_profile_is_fine() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Dialog();
+        ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex = DynamoDb;
+
+        var hint = dialog.FindControl<TextBlock>("ValidationHint")!;
+        Assert.True(hint.IsVisible);
+        Assert.Contains("Region is required.", hint.Text);
+        Assert.DoesNotContain("profile", hint.Text, StringComparison.OrdinalIgnoreCase);
+    });
+
+    [Fact]
+    public Task An_edited_dynamodb_connection_opens_on_its_own_values_and_saves_them_back() => _ui.Run(() =>
+    {
+        var saved = new ConnectionInfo
+        {
+            Id = Guid.NewGuid(),
+            Name = "orders",
+            ProviderId = "dynamodb",
+            Host = "eu-west-1",
+            Port = 0,
+            User = "dev",
+            CredentialKind = CredentialKind.AwsProfile,
+            ConfirmFullScans = false,
+            Options = new Dictionary<string, string> { ["Endpoint"] = "http://localhost:8000" },
+        };
+        var dialog = ConnectionEditorProbe.Dialog(saved);
+
+        Assert.Equal(DynamoDb, ConnectionEditorProbe.Combo(dialog, "ProviderBox").SelectedIndex);
+        Assert.Equal("eu-west-1", ConnectionEditorProbe.Text(dialog, "Host"));
+        Assert.Equal("dev", ConnectionEditorProbe.Text(dialog, "User"));
+        Assert.Equal("http://localhost:8000", ConnectionEditorProbe.Editor<TextBox>(dialog, "Endpoint").Text);
+        Assert.False(dialog.FindControl<CheckBox>("ConfirmFullScansBox")!.IsChecked);
+
+        var built = dialog.BuildConnection();
+        Assert.Equal(saved.Id, built.Id);
+        Assert.Equal(0, built.Port);
+        Assert.Equal(CredentialKind.AwsProfile, built.CredentialKind);
+        Assert.False(built.ConfirmFullScans);
+        Assert.Equal("http://localhost:8000", built.Options["Endpoint"]);
+    });
+
+    /// <summary>
+    /// A tick left behind by another engine is not written. Ticked on PostgreSQL, hidden on DynamoDB, the record
+    /// must not claim manual commit, an encryption mode or a session zone that nothing there honours (§1.4) —
+    /// and going back finds the ticks where they were.
+    /// </summary>
+    [Fact]
+    public Task Settings_ticked_on_another_engine_are_not_saved_for_dynamodb_and_come_back_with_it() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Dialog();
+        var providers = ConnectionEditorProbe.Combo(dialog, "ProviderBox");
+        dialog.FindControl<CheckBox>("ManualCommitBox")!.IsChecked = true;
+        ConnectionEditorProbe.Combo(dialog, "TlsBox").SelectedIndex = 0;   // the strongest mode, not the default
+        ConnectionEditorProbe.Combo(dialog, "TimeZoneModeBox").SelectedIndex = 1;   // "server"
+
+        var onPostgres = dialog.BuildConnection();
+        Assert.True(onPostgres.ManualCommit);
+        Assert.NotEqual(TlsPolicy.Default, onPostgres.Tls);
+        Assert.Equal("server", onPostgres.SessionTimeZone);
+
+        providers.SelectedIndex = DynamoDb;
+        var onDynamo = dialog.BuildConnection();
+        Assert.False(onDynamo.ManualCommit);
+        Assert.Equal(TlsPolicy.Default, onDynamo.Tls);
+        Assert.Null(onDynamo.SessionTimeZone);
+        // And the note does not describe the manual commit this engine will not have.
+        Assert.False(Visible(dialog, "SafetyNote"));
+
+        providers.SelectedIndex = 0;
+        var back = dialog.BuildConnection();
+        Assert.True(back.ManualCommit);
+        Assert.Equal(onPostgres.Tls, back.Tls);
+    });
+
+    [Fact]
+    public Task A_connection_on_an_engine_with_no_scan_question_keeps_its_own_setting() => _ui.Run(() =>
+    {
+        var existing = new ConnectionInfo
+        {
+            Id = Guid.NewGuid(),
+            Name = "pg",
+            ProviderId = "postgres",
+            Host = "db.example.test",
+            Database = "sales",
+            User = "app",
+            ConfirmFullScans = false,
+        };
+        var dialog = ConnectionEditorProbe.Dialog(existing);
+
+        Assert.False(Visible(dialog, "ScanGroup"));
+        // Not asked on this engine, so editing it does not rewrite a flag the engine never reads.
+        Assert.False(dialog.BuildConnection().ConfirmFullScans);
+        Assert.True(ConnectionEditorProbe.Dialog().BuildConnection().ConfirmFullScans);
+    });
+
+    /// <summary>
+    /// The read-only note says who refuses. On DynamoDB that is Bearing, and the real boundary is an IAM policy;
+    /// PostgreSQL asks the server; SQL Server shares DynamoDB's "only Bearing refuses" wording without the IAM line.
+    /// </summary>
+    [Fact]
+    public Task The_read_only_note_names_iam_on_dynamodb_and_says_the_server_refuses_on_postgres() => _ui.Run(() =>
+    {
+        var dialog = ConnectionEditorProbe.Dialog();
+        var providers = ConnectionEditorProbe.Combo(dialog, "ProviderBox");
+        dialog.FindControl<CheckBox>("ReadOnlyBox")!.IsChecked = true;
+
+        Assert.Contains("The server refuses writes", NoteText(dialog));
+        Assert.DoesNotContain("IAM", NoteText(dialog));
+
+        providers.SelectedIndex = 1;
+        Assert.Contains("Bearing refuses writes", NoteText(dialog));
+        Assert.DoesNotContain("IAM", NoteText(dialog));
+
+        providers.SelectedIndex = DynamoDb;
+        Assert.Contains("Bearing refuses writes", NoteText(dialog));
+        Assert.DoesNotContain("The server refuses writes", NoteText(dialog));
+        Assert.Contains("IAM policy that grants no write actions", NoteText(dialog));
+
+        // The IAM line explains the read-only setting, so it goes when read-only does.
+        dialog.FindControl<CheckBox>("ReadOnlyBox")!.IsChecked = false;
+        Assert.DoesNotContain("IAM", NoteText(dialog));
+    });
+
     // ---- Browse Azure ----------------------------------------------------------------------------
 
     [Fact]
@@ -582,7 +993,19 @@ internal static class ConnectionEditorProbe
     /// <summary>A dialog over the app's real registry, so the engine list under test is the one this build
     /// composed. The test delegate is never invoked from here: nothing presses Test.</summary>
     public static ConnectionDialog Dialog(ConnectionInfo? existing = null, IAzureCatalog? azure = null)
-        => new(existing, null, (_, _, _, _) => Task.FromResult(false), providers: new ProviderRegistry(), azure: azure);
+        => new(existing, null, (_, _, _, _) => Task.FromResult(false), providers: Registry(), azure: azure);
+
+    /// <summary>The AWS profiles the DynamoDB editor is offered here: one with a region, one without.</summary>
+    public static readonly IReadOnlyList<AwsConfigProfile> Profiles =
+        [new AwsConfigProfile("dev", "eu-west-1"), new AwsConfigProfile("ci", null)];
+
+    /// <summary>
+    /// The registry <see cref="ProviderRegistry"/> builds by default — the same four engines in the same order —
+    /// except that DynamoDB's AWS profiles come from <see cref="Profiles"/>: the default reads this machine's
+    /// <c>~/.aws/config</c>, which a test must never do.
+    /// </summary>
+    public static ProviderRegistry Registry()
+        => new([new PostgresProvider(), new SqlServerProvider(), new MySqlProvider(), new DynamoDbProvider(() => Profiles)]);
 
     /// <summary>
     /// The same dialog, shown and laid out — which only the tests that <see cref="Type"/> need, because
@@ -659,7 +1082,14 @@ internal static class ConnectionEditorProbe
     /// </summary>
     public static void Type(ConnectionDialog dialog, string key, string text)
     {
-        var box = Editor<TextBox>(dialog, key);
+        // A field with suggestions is an editable dropdown; its text is typed into the box in its template,
+        // which needs the dialog shown (Show) and laid out since the rows were last rebuilt.
+        Pump(dialog);
+        var box = Assert.Single(Named(dialog, key + "Box")) switch
+        {
+            ComboBox { IsEditable: true } combo => combo.GetVisualDescendants().OfType<TextBox>().Single(),
+            var other => Assert.IsType<TextBox>(other),
+        };
         box.Focus();
         // Asserted before typing: without focus the input goes nowhere and every assertion below would be
         // about a box nobody edited.
@@ -687,6 +1117,14 @@ internal static class ConnectionEditorProbe
             .Distinct()
             .Select(c => c.Name![..^3])
             .ToList();
+
+    /// <summary>What a text row shows, whether it is a text box or an editable dropdown.</summary>
+    public static string Text(ConnectionDialog dialog, string key)
+        => Assert.Single(Named(dialog, key + "Box")) switch
+        {
+            ComboBox { IsEditable: true } combo => combo.Text ?? "",
+            var other => Assert.IsType<TextBox>(other).Text ?? "",
+        };
 
     public static ComboBox Combo(ConnectionDialog dialog, string name)
         => Assert.IsType<ComboBox>(Assert.Single(Named(dialog, name)));

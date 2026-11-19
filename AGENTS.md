@@ -6,7 +6,7 @@
 
 ## What this is
 
-Bearing is a cross-platform **Avalonia 12.1 desktop** SQL query tool & script manager for PostgreSQL
+Bearing is a cross-platform **Avalonia 12.1 desktop** SQL query tool & script manager for PostgreSQL, SQL Server, MySQL/MariaDB and Amazon DynamoDB
 (.NET 10). Layered solution:
 
 ```
@@ -20,14 +20,14 @@ Bearing.Desktop     thin entry point
 ```
 
 - **UI:** Avalonia + AvaloniaEdit + Avalonia DataGrid; MVVM via CommunityToolkit.Mvvm.
-- **Data:** raw ADO.NET — Npgsql (Postgres) + Microsoft.Data.Sqlite (local). **No ORM, no MediatR.**
-- **SQL intelligence:** ANTLR4 PostgreSQL grammar + antlr4-c3 (`Bearing.Sql`).
+- **Data:** raw ADO.NET — Npgsql (Postgres), Microsoft.Data.SqlClient (SQL Server), MySqlConnector (MySQL/MariaDB), the AWS SDK for .NET (Amazon DynamoDB, PartiQL `ExecuteStatement`) + Microsoft.Data.Sqlite (local). **No ORM, no MediatR.**
+- **SQL intelligence:** ANTLR4 grammars + antlr4-c3 (`Bearing.Sql`). DynamoDB's PartiQL (`PartiQlDialect`) has no grammar of its own: it is read with the PostgreSQL lexer and completes through the PostgreSQL rule set.
 - **DI:** manual composition root in `src/Bearing.App/App.axaml.cs` (no container).
 
 ## Build / test
 
 - Build: `dotnet build`
-- Test: `dotnet test` (Postgres integration tests skip cleanly with no DB; `./build/test-db.sh` provisions one on 55434 and then they run live with no env vars)
+- Test: `dotnet test` (live database tests skip cleanly with no DB, and a skip is not a pass; `./build/test-db.sh` provisions Postgres on 55434 and then they run live with no env vars. Siblings: `./build/test-db-mssql.sh`, `./build/test-db-mysql.sh`, `./build/test-db-dynamodb.sh` — DynamoDB Local on 18000)
 - Format: `dotnet format --verbosity quiet`
 
 ## Critical rules

@@ -481,6 +481,156 @@ public class ManualCommitGuardTests : IDisposable
         return vm;
     }
 
+    // ---- an engine that cannot hold a transaction is never in manual commit (DynamoDB) -------------
+
+    private (WorkspaceContext Ctx, ExecutionViewModel Exec, ConnectionInfo Conn, EditorTabViewModel Tab) OnEngine(
+        string providerId, bool savedManualCommit)
+    {
+        Directory.CreateDirectory(_root);
+        var ctx = new WorkspaceContext(
+            new Bearing.Data.ProviderRegistry(),
+            new JsonProjectStore(),
+            new JsonSessionStore(),
+            new SqliteQueryLog(Path.Combine(_root, Guid.NewGuid().ToString("N") + ".sqlite")),
+            new FileRecentProjects(Path.Combine(_root, "recent.json")),
+            new FakeSecretStore(),
+            settings: SettingsService.InMemory(new AppSettings { AutosaveMode = AutosaveMode.Off }));
+        var conn = new ConnectionInfo
+        {
+            Id = Guid.NewGuid(),
+            Name = "ddb",
+            ProviderId = providerId,
+            Database = "app",
+            ManualCommit = savedManualCommit,
+        };
+        ctx.Project = new Project { Directory = _root, Manifest = new ProjectManifest { Connections = { conn } } };
+        var tab = new EditorTabViewModel("t") { ConnectionId = conn.Id };
+        ctx.Tabs.Add(tab);
+        ctx.SelectedTab = tab;
+        return (ctx, new ExecutionViewModel(ctx, null), conn, tab);
+    }
+
+    /// <summary>A hand-edited <c>project.json</c> can say <c>ManualCommit: true</c> for any connection; on an
+    /// engine with no transaction to hold, the effective connection ignores it.</summary>
+    [Fact]
+    public void A_saved_manual_commit_flag_is_ignored_on_an_engine_that_cannot_hold_a_transaction()
+    {
+        var (ctx, _, conn, tab) = OnEngine(Bearing.Data.DynamoDb.DynamoDbProvider.ProviderId, savedManualCommit: true);
+
+        var effective = ctx.EffectiveConnection(tab)!;
+
+        Assert.True(conn.ManualCommit);                 // what the file says is untouched
+        Assert.False(effective.ManualCommit);
+        Assert.False(CommitPolicy.IsManualCommit(effective));
+    }
+
+    /// <summary>SF6: the ignored setting is said once, in the connection's status tip, rather than dropped
+    /// silently — and it is not called "manual commit" as if it were in force.</summary>
+    [Fact]
+    public void A_saved_manual_commit_flag_on_that_engine_is_named_in_the_status_tip()
+    {
+        var (ctx, _, _, _) = OnEngine(Bearing.Data.DynamoDb.DynamoDbProvider.ProviderId, savedManualCommit: true);
+        var connections = new ConnectionsViewModel(ctx);
+
+        Assert.Contains(
+            "manual commit is set but Amazon DynamoDB can't hold a transaction; statements commit themselves",
+            connections.StatusTip);
+        Assert.DoesNotContain("· manual commit ·", connections.StatusTip + " ·");
+    }
+
+    [Fact]
+    public void Without_the_flag_or_on_an_engine_that_holds_one_there_is_no_such_note()
+    {
+        var (ddbCtx, _, _, _) = OnEngine(Bearing.Data.DynamoDb.DynamoDbProvider.ProviderId, savedManualCommit: false);
+        Assert.DoesNotContain("can't hold a transaction", new ConnectionsViewModel(ddbCtx).StatusTip);
+
+        var (pgCtx, _, pg, _) = OnEngine("postgres", savedManualCommit: true);
+        var tip = new ConnectionsViewModel(pgCtx).StatusTip;
+        Assert.Contains("manual commit", tip);
+        Assert.DoesNotContain("can't hold a transaction", tip);
+        Assert.Null(pgCtx.IgnoredManualCommitNote(pg));
+    }
+
+    /// <summary>ARCH5: the shared rule and the instance answer agree, including for an engine the registry does
+    /// not know (true — the behaviour from before the flag), which is what TabTransactions used to spell its own way.</summary>
+    [Theory]
+    [InlineData("dynamodb", false)]
+    [InlineData("postgres", true)]
+    [InlineData("no-such-engine", true)]
+    public void The_manual_commit_rule_is_one_lookup(string providerId, bool expected)
+    {
+        var (ctx, _, conn, _) = OnEngine(providerId, savedManualCommit: false);
+
+        Assert.Equal(expected, ctx.SupportsManualCommit(conn));
+        Assert.Equal(expected, WorkspaceContext.SupportsManualCommit(ctx.Providers, conn));
+    }
+
+    /// <summary>The session override is the other way in; it is ignored there too, so nothing downstream ever
+    /// sees manual commit on such an engine.</summary>
+    [Fact]
+    public void A_session_override_cannot_turn_manual_commit_on_for_that_engine()
+    {
+        var (ctx, _, conn, tab) = OnEngine(Bearing.Data.DynamoDb.DynamoDbProvider.ProviderId, savedManualCommit: false);
+
+        ctx.CommitModes.Set(conn.Id, true);
+
+        Assert.False(ctx.EffectiveConnection(tab)!.ManualCommit);
+    }
+
+    /// <summary>The same two inputs on an engine that can hold a transaction behave as before — the guard
+    /// is the flag, not a blanket change to §1.10.</summary>
+    [Fact]
+    public void Engines_that_can_hold_a_transaction_keep_the_saved_flag_and_the_override()
+    {
+        var (ctx, _, conn, tab) = OnEngine("postgres", savedManualCommit: true);
+        Assert.True(ctx.EffectiveConnection(tab)!.ManualCommit);
+
+        ctx.CommitModes.Set(conn.Id, false);
+        Assert.False(ctx.EffectiveConnection(tab)!.ManualCommit);
+    }
+
+    [Fact]
+    public void The_mode_pill_is_hidden_and_the_toggle_says_why_on_that_engine()
+    {
+        var (ctx, exec, conn, _) = OnEngine(Bearing.Data.DynamoDb.DynamoDbProvider.ProviderId, savedManualCommit: false);
+        string? status = null;
+        ctx.Status = s => status = s;
+
+        Assert.False(exec.CommitModeVisible);
+
+        exec.ToggleCommitMode();
+
+        Assert.False(ctx.CommitModes.IsOverridden(conn.Id));   // nothing was flipped
+        Assert.False(exec.IsManualCommit);
+        Assert.Contains("cannot hold a transaction", status);
+    }
+
+    [Fact]
+    public void The_mode_pill_is_still_shown_on_an_engine_that_can_hold_a_transaction()
+    {
+        var (_, exec, _, _) = OnEngine("postgres", savedManualCommit: false);
+
+        Assert.True(exec.CommitModeVisible);
+    }
+
+    /// <summary>The backstop: even if something asked for a transaction on such an engine, the refusal is a
+    /// sentence and nothing is held — no lease taken, no scope created, nothing for the chip to show.</summary>
+    [Fact]
+    public async Task OpenAsync_refuses_on_an_engine_that_cannot_hold_a_transaction()
+    {
+        var (ctx, _, conn, tab) = OnEngine(Bearing.Data.DynamoDb.DynamoDbProvider.ProviderId, savedManualCommit: false);
+        var factory = new FakeFactory();
+        await using var session = new Bearing.Sessions.ConnectionSession(
+            conn, factory, new FakeExecutor(), new FakeMetadata(factory), new FakeActivity());
+
+        var (transaction, error) = await ctx.Transactions.OpenAsync(tab, conn, session, CancellationToken.None);
+
+        Assert.Null(transaction);
+        Assert.Contains("cannot hold a transaction", error);
+        Assert.False(ctx.Transactions.Any);
+        Assert.Equal(0, session.LeaseCount);
+    }
+
     /// <summary>Open the tab's transaction through a gated executor: the statement that opens it has to be
     /// let through before a second can be held in flight.</summary>
     private static async Task<FakeTransactionScope> OpenThrough(

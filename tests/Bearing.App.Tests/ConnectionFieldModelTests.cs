@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.Linq;
 using Bearing.App.Connections;
 using Bearing.Core.Data;
+using Bearing.Data.DynamoDb;
 using Bearing.Data.Postgres;
 using Bearing.Data.SqlServer;
+using Bearing.Sessions;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -39,6 +41,10 @@ public class ConnectionFieldModelTests
         public bool SupportsSessionTimeZone => false;
         public bool SupportsIntegratedAuth => false;
         public bool SupportsEntraToken => false;
+        public bool SupportsPasswordCredentials => true;
+        public bool SupportsAwsProfile => false;
+        public bool SupportsManualCommit => true;
+        public bool SupportsTlsModes => true;
 
         // Not the subject: these fakes exist for the dialog's field rendering.
         public bool SupportsServerActivity => false;
@@ -91,6 +97,10 @@ public class ConnectionFieldModelTests
         public bool SupportsSessionTimeZone => false;
         public bool SupportsIntegratedAuth => false;
         public bool SupportsEntraToken => false;
+        public bool SupportsPasswordCredentials => true;
+        public bool SupportsAwsProfile => false;
+        public bool SupportsManualCommit => true;
+        public bool SupportsTlsModes => true;
 
         // Not the subject: these fakes exist for the dialog's field rendering.
         public bool SupportsServerActivity => false;
@@ -565,6 +575,10 @@ public class ConnectionFieldModelTests
         public bool SupportsSessionTimeZone => false;
         public bool SupportsIntegratedAuth => false;
         public bool SupportsEntraToken => false;
+        public bool SupportsPasswordCredentials => true;
+        public bool SupportsAwsProfile => false;
+        public bool SupportsManualCommit => true;
+        public bool SupportsTlsModes => true;
 
         // Not the subject: this fake exists for the dialog's field rendering.
         public bool SupportsServerActivity => false;
@@ -585,6 +599,252 @@ public class ConnectionFieldModelTests
 
         public ITransactionScope CreateTransactionScope(IDbConnectionFactory factory)
             => throw new NotSupportedException();
+    }
+
+    // ---- Amazon DynamoDB ---------------------------------------------------------------------------
+
+    /// <summary>With no AWS profiles, so nothing here reads the real <c>~/.aws/config</c>.</summary>
+    private static readonly DynamoDbProvider Ddb = new(() => []);
+
+    /// <summary>Three profiles from a config file: two with a region, one without.</summary>
+    private static readonly DynamoDbProvider DdbWithProfiles = new(() =>
+        [new AwsConfigProfile("dev", "eu-west-1"), new AwsConfigProfile("dev2", null), new AwsConfigProfile("prod", "us-east-1")]);
+
+    [Fact]
+    public void Dynamodb_declares_region_profile_and_endpoint_in_that_order_with_no_port_or_database()
+    {
+        var model = ConnectionFieldModel.For(Ddb);
+
+        Assert.Equal(
+            new[] { "Host", "User", DynamoDbConnectionFactory.EndpointOption },
+            model.Fields.Select(f => f.Key));
+        Assert.Equal(
+            new[] { "Region", "AWS profile", "Endpoint" },
+            model.Fields.Select(f => f.Label));
+        Assert.False(model.HasPasswordField);
+    }
+
+    [Fact]
+    public void Dynamodb_saves_the_region_as_host_the_profile_as_user_the_endpoint_as_an_option_and_port_zero()
+    {
+        // The template carries Postgres' port, as the dialog's blank record does for a connection switched
+        // over from another engine: a port the form never showed must not reach a connection that has none.
+        var template = Blank with { Port = 5432, Database = "", User = "" };
+        var model = ConnectionFieldModel.For(Ddb);
+        model.Set("Host", " eu-west-1 ");
+        model.Set("User", "dev");
+        model.Set(DynamoDbConnectionFactory.EndpointOption, "http://localhost:8000");
+
+        var info = model.Apply(template);
+
+        Assert.Equal(DynamoDbProvider.ProviderId, info.ProviderId);
+        Assert.Equal("eu-west-1", info.Host);
+        Assert.Equal("dev", info.User);
+        Assert.Equal(0, info.Port);
+        Assert.Equal("http://localhost:8000", info.Options[DynamoDbConnectionFactory.EndpointOption]);
+        Assert.Equal("dev@eu-west-1", ConnectionEndpoint.Full(info));
+    }
+
+    [Fact]
+    public void Dynamodb_with_a_blank_profile_and_endpoint_saves_neither()
+    {
+        var model = ConnectionFieldModel.For(Ddb);
+        model.Set("Host", "eu-west-1");
+
+        var info = model.Apply(Blank with { User = "left over" });
+
+        // Blank means the SDK's default credential chain; the template's User must not stand in for it.
+        Assert.Equal("", info.User);
+        Assert.Empty(info.Options);
+    }
+
+    [Fact]
+    public void Dynamodb_requires_a_region_and_nothing_else()
+    {
+        var model = ConnectionFieldModel.For(Ddb);
+
+        Assert.Equal(new[] { "Region is required." }, model.Validate(CredentialKind.AwsProfile));
+
+        model.Set("Host", "eu-west-1");
+        Assert.Empty(model.Validate(CredentialKind.AwsProfile));
+    }
+
+    [Fact]
+    public void The_port_rule_does_not_touch_an_engine_that_declares_a_port()
+    {
+        // Zero is for a provider with a Host and no Port; one with a Port box still saves what is in it.
+        var info = ConnectionFieldModel.For(Pg).Apply(Blank with { Port = 1 });
+
+        Assert.Equal(5432, info.Port);
+    }
+
+    [Fact]
+    public void Intrinsic_values_parked_by_an_engine_switch_are_not_written_into_the_options_bag()
+    {
+        // Typed on Postgres, parked in the model for the way back, and then saved on an engine with no such
+        // box: they must not surface as `Database` / `Port` options on a connection whose factory ignores them.
+        var onPostgres = ConnectionFieldModel.For(Pg);
+        onPostgres.Set("Database", "sales");
+        onPostgres.Set("Port", "6543");
+
+        var onDynamo = onPostgres.SwitchTo(Ddb);
+        var info = onDynamo.Apply(Blank);
+
+        Assert.DoesNotContain(info.Options.Keys, k => k is "Database" or "Port");
+        Assert.Equal(0, info.Port);
+
+        // ...and nothing was lost: switching back finds them again.
+        var back = onDynamo.SwitchTo(Pg);
+        Assert.Equal("sales", back.Get("Database"));
+        Assert.Equal("6543", back.Get("Port"));
+    }
+
+    [Fact]
+    public void An_existing_dynamodb_connection_loads_region_profile_and_endpoint()
+    {
+        var existing = Blank with
+        {
+            ProviderId = DynamoDbProvider.ProviderId,
+            Host = "eu-west-1",
+            Port = 0,
+            User = "dev",
+            Options = new Dictionary<string, string> { [DynamoDbConnectionFactory.EndpointOption] = "http://localhost:8000" },
+        };
+
+        var model = ConnectionFieldModel.For(Ddb, existing);
+
+        Assert.Equal("eu-west-1", model.Get("Host"));
+        Assert.Equal("dev", model.Get("User"));
+        Assert.Equal("http://localhost:8000", model.Get(DynamoDbConnectionFactory.EndpointOption));
+        Assert.Equal(existing.Options[DynamoDbConnectionFactory.EndpointOption], model.Apply(existing).Options[DynamoDbConnectionFactory.EndpointOption]);
+        Assert.Equal(0, model.Apply(existing).Port);
+    }
+
+    [Theory]
+    [InlineData("postgres", true, true, true, false)]
+    [InlineData("sqlserver", true, true, false, false)]
+    [InlineData("mysql", true, true, false, false)]
+    [InlineData("dynamodb", false, false, false, true)]
+    public void The_model_answers_the_editors_row_questions_from_the_provider(
+        string providerId, bool tls, bool manualCommit, bool timeZone, bool asksScans)
+    {
+        var provider = new Bearing.Data.ProviderRegistry().All.Single(p => p.Id == providerId);
+
+        var model = ConnectionFieldModel.For(provider);
+
+        Assert.Equal(tls, model.SupportsTlsModes);
+        Assert.Equal(manualCommit, model.SupportsManualCommit);
+        Assert.Equal(timeZone, model.SupportsSessionTimeZone);
+        Assert.Equal(asksScans, model.AsksFullScanQuestion);
+    }
+
+    [Fact]
+    public void The_write_boundary_sentence_is_said_only_where_the_server_does_not_enforce_read_only()
+    {
+        Assert.Contains("IAM policy", ConnectionFieldModel.For(Ddb).WriteBoundary);
+        Assert.Null(ConnectionFieldModel.For(Pg).WriteBoundary);
+        Assert.Null(ConnectionFieldModel.For(Ms).WriteBoundary);
+    }
+
+    // ---- Suggestions: DynamoDB's region and AWS profile (user decision 2026-11-19) ----------------
+
+    [Fact]
+    public void Region_and_profile_suggest_and_the_endpoint_does_not()
+    {
+        var model = ConnectionFieldModel.For(DdbWithProfiles);
+
+        Assert.Contains(Field(model, "Host").Suggestions, s => s.Value == "eu-west-1" && s.Description == "Europe (Ireland)");
+        Assert.Equal(new[] { "dev", "dev2", "prod" }, Field(model, "User").Suggestions.Select(s => s.Value));
+        Assert.Empty(Field(model, DynamoDbConnectionFactory.EndpointOption).Suggestions);
+        // The other engines' text fields suggest nothing, so they stay plain text boxes.
+        Assert.All(ConnectionFieldModel.For(Pg).Fields, f => Assert.Empty(f.Suggestions));
+    }
+
+    [Fact]
+    public void Picking_a_profile_fills_an_empty_region_and_saves_the_code()
+    {
+        var model = ConnectionFieldModel.For(DdbWithProfiles);
+
+        Assert.Equal(new[] { "Host" }, model.Edit("User", "dev"));
+
+        var info = model.Apply(Blank);
+        Assert.Equal("eu-west-1", info.Host);
+        Assert.Equal("dev", info.User);
+    }
+
+    [Fact]
+    public void Picking_a_profile_never_overwrites_a_typed_region()
+    {
+        var model = ConnectionFieldModel.For(DdbWithProfiles);
+        model.Edit("Host", "ap-south-1");
+
+        Assert.Empty(model.Edit("User", "dev"));
+        Assert.Empty(model.Edit("User", "prod"));
+        Assert.Empty(model.Edit("User", ""));
+
+        Assert.Equal("ap-south-1", model.Get("Host"));
+    }
+
+    [Fact]
+    public void A_region_the_pick_wrote_follows_the_pick_until_the_user_changes_it()
+    {
+        var model = ConnectionFieldModel.For(DdbWithProfiles);
+
+        model.Edit("User", "dev");
+        Assert.Equal("eu-west-1", model.Get("Host"));
+        // Another profile with a region replaces the one the last pick wrote.
+        model.Edit("User", "prod");
+        Assert.Equal("us-east-1", model.Get("Host"));
+        // Typing on to a profile with none takes the pick's region back out ("dev" then "dev2").
+        model.Edit("User", "dev");
+        Assert.Equal(new[] { "Host" }, model.Edit("User", "dev2"));
+        Assert.Equal("", model.Get("Host"));
+
+        // Once the user edits the region it is theirs.
+        model.Edit("User", "dev");
+        model.Edit("Host", "eu-west-2");
+        Assert.Empty(model.Edit("User", "prod"));
+        Assert.Equal("eu-west-2", model.Get("Host"));
+    }
+
+    [Fact]
+    public void An_edited_connections_region_is_never_replaced_by_a_pick()
+    {
+        var existing = new ConnectionInfo
+        {
+            Id = Guid.NewGuid(),
+            Name = "orders",
+            ProviderId = DynamoDbProvider.ProviderId,
+            Host = "sa-east-1",
+            User = "",
+        };
+        var model = ConnectionFieldModel.For(DdbWithProfiles, existing);
+
+        Assert.Empty(model.Edit("User", "dev"));
+        Assert.Empty(model.Edit("User", "dev2"));
+        Assert.Equal("sa-east-1", model.Get("Host"));
+    }
+
+    [Fact]
+    public void A_typed_value_nobody_suggested_is_saved_as_typed()
+    {
+        var model = ConnectionFieldModel.For(DdbWithProfiles);
+
+        Assert.Empty(model.Edit("Host", "local"));
+        Assert.Empty(model.Edit("User", "only-in-credentials"));
+
+        var info = model.Apply(Blank);
+        Assert.Equal("local", info.Host);
+        Assert.Equal("only-in-credentials", info.User);
+    }
+
+    [Fact]
+    public void A_profile_is_matched_case_sensitively_as_aws_names_are()
+    {
+        var model = ConnectionFieldModel.For(DdbWithProfiles);
+
+        Assert.Empty(model.Edit("User", "DEV"));
+        Assert.Equal("", model.Get("Host"));
     }
 
     // ---- Browse Azure ----------------------------------------------------------------------------

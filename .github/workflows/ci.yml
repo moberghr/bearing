@@ -3,7 +3,8 @@
 # Three legs, because the things worth checking cannot all be checked in one place:
 #
 #   * **ubuntu** provisions the real test databases and is therefore the only leg where the ~150 live
-#     Postgres tests — and the MariaDB / MySQL ones (`build/test-db-mysql.sh`) — actually run. It uses `build/test-db.sh` rather than a GitHub `services:` container,
+#     Postgres tests — and the MariaDB / MySQL ones (`build/test-db-mysql.sh`) and the DynamoDB Local ones
+#     (`build/test-db-dynamodb.sh`) — actually run. It uses `build/test-db.sh` rather than a GitHub `services:` container,
 #     and that is the whole point: the script loads pagila *and* writes the marker row that
 #     `PgTestServer.RequireWritableAsync` checks before any test creates or drops an object. A bare service
 #     container has neither, so every catalog test would still skip — quietly, which is the state #24 exists
@@ -112,6 +113,12 @@ jobs:
       - name: Provision MariaDB and MySQL
         if: matrix.database
         run: ./build/test-db-mysql.sh
+
+      # DynamoDB Local for the DynamoDb* live suite, in memory on 18000 (DynamoDbTestServer's default, so no
+      # environment variable is needed). Without it the suite skips — and a skip is not a pass.
+      - name: Provision DynamoDB Local
+        if: matrix.database
+        run: ./build/test-db-dynamodb.sh
 
       # An SSH bastion in front of that MariaDB, for LiveSshTunnelTests: the host-key trust (first key pinned,
       # changed key refused, unpinned key refused without a pin callback), the refused-password prompt and a

@@ -55,6 +55,18 @@ public sealed class DemoProvider : IDbProvider, IProviderRegistry
     /// <inheritdoc cref="SupportsIntegratedAuth"/>
     public bool SupportsEntraToken => false;
 
+    /// <inheritdoc />
+    public bool SupportsPasswordCredentials => true;
+
+    /// <inheritdoc />
+    public bool SupportsAwsProfile => false;
+
+    /// <inheritdoc />
+    public bool SupportsManualCommit => true;
+
+    /// <inheritdoc />
+    public bool SupportsTlsModes => true;
+
     /// <summary>
     /// Always <see cref="DbErrorKind.Unknown"/>. The demo executor fails only where a fixture told it to,
     /// and those failures carry no engine code to place on the scale — there is no engine. Returning

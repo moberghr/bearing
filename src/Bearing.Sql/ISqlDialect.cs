@@ -333,6 +333,18 @@ public interface ISqlDialect
     int? CodeEnd(string sql) => null;
 
     /// <summary>
+    /// The statements in <paramref name="sql"/> that could read a whole table, each reduced lexically (no
+    /// schema) to the target it names and the key attributes its <c>WHERE</c> pins — or null when this engine
+    /// has no scan question at all, which is every engine but DynamoDB. Null is "never asked", and is not the
+    /// same answer as an empty list ("asked, and no statement reads a table").
+    /// <para>
+    /// Only what the text says: a caller that must decide whether to confirm combines this with the table's
+    /// real keys, which it holds and a dialect does not (§2.2). See <see cref="ScanTarget"/>.
+    /// </para>
+    /// </summary>
+    IReadOnlyList<ScanTarget>? ScanTargets(string sql) => null;
+
+    /// <summary>
     /// Whether <paramref name="offset"/> sits inside a character literal, in this engine's lexical
     /// rules. The completion engine asks this <em>first</em> — a caret inside a string gets no
     /// suggestions — which is what made getting it wrong so total: while this was answered with the
@@ -378,4 +390,33 @@ public interface ISqlDialect
     /// </para>
     /// </summary>
     ISqlParseRules ParseRules { get; }
+}
+
+/// <summary>
+/// One statement as <see cref="ISqlDialect.ScanTargets"/> read it — a lexical reduction, not an analysis.
+/// </summary>
+/// <param name="Statement">The statement's text, as written.</param>
+/// <param name="Table">The table it reads, as written and unquoted; null when the reduction could not
+/// read one.</param>
+/// <param name="Index">The secondary index it names, as written and unquoted; null when it names none (or
+/// could not be read).</param>
+/// <param name="PinnedAttributes">The attribute names its <c>WHERE</c> pins with <c>=</c> or <c>IN</c> in
+/// <i>every</i> branch — an attribute that is only constrained in one arm of an <c>OR</c> is not pinned.
+/// Empty when there is no <c>WHERE</c>.</param>
+/// <param name="Readable">False when the lexical reduction could not read the statement. An unreadable
+/// statement is never assumed harmless: the caller treats it as a possible scan.</param>
+public sealed record ScanTarget(
+    string Statement,
+    string? Table,
+    string? Index,
+    IReadOnlyList<string> PinnedAttributes,
+    bool Readable)
+{
+    /// <summary>
+    /// Whether the statement has a <c>WHERE</c> clause. False only when the reduction read the statement and found
+    /// none (<c>select … from "T"</c>, optionally <c>"T"."Index"</c> and an <c>ORDER BY</c>): every item it
+    /// evaluates is returned, so its first page reads about one page of items. Defaults to true — "filtered" — so a
+    /// target nobody set this on is never treated as one whose first page may run unasked.
+    /// </summary>
+    public bool HasWhere { get; init; } = true;
 }

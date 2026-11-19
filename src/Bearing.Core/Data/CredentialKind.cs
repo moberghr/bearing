@@ -23,4 +23,12 @@ public enum CredentialKind
     /// written to the secret store, and the user is never prompted — so a connection on this kind must
     /// not warn about an unreachable keychain it does not use, and has nothing to refresh.</summary>
     Integrated = 3,
+
+    /// <summary>A named AWS profile, resolved by the AWS SDK's own credential chain (shared config, SSO,
+    /// assumed roles). There is no secret to obtain: the resolver returns a credential with a null secret,
+    /// nothing is read from or written to the secret store, and the user is never prompted. Not
+    /// <see cref="Integrated"/> — that kind is about the OS identity of the running process, and its dialog
+    /// copy and SQL Server branches say so. Offered only where
+    /// <see cref="IDbProvider.SupportsAwsProfile"/> says the factory can honour it.</summary>
+    AwsProfile = 4,
 }

@@ -23,8 +23,10 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
     public bool TestResult = true;
     public Exception? TestThrows;
 
-    public string Id => "postgres";
-    public string DisplayName => "Fake";
+    /// <summary>"postgres" unless a test needs the registry to answer for another engine (DynamoDB's
+    /// no-password and no-manual-commit facts, below).</summary>
+    public string Id { get; init; } = "postgres";
+    public string DisplayName { get; init; } = "Fake";
     public IReadOnlyList<ConnectionField> ConnectionFields => System.Array.Empty<ConnectionField>();
 
     /// <summary>Matches PostgresProvider (no SSPI path), so the dialog-facing behaviour a test observes
@@ -33,6 +35,10 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
     public bool SupportsSessionTimeZone => true;   // Postgres has one (#163), and this fake claims to be it
     public bool SupportsIntegratedAuth => false;
     public bool SupportsEntraToken => true;
+    public bool SupportsPasswordCredentials { get; init; } = true;
+    public bool SupportsAwsProfile => false;
+    public bool SupportsManualCommit { get; init; } = true;
+    public bool SupportsTlsModes => true;
 
     public bool SupportsServerActivity => true;
 
@@ -85,7 +91,23 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
     public TaskCompletionSource? MetadataGate;
 
     public IMetadataReader CreateMetadataReader(IDbConnectionFactory factory)
-        => new FakeMetadata((FakeFactory)factory) { Gate = MetadataGate };
+        => new FakeMetadata((FakeFactory)factory)
+        {
+            Gate = MetadataGate,
+            Snapshot = Snapshot,
+            Details = Details,
+            Sizes = Sizes,
+        };
+
+    /// <summary>When set, every metadata reader loads this snapshot instead of an empty one — a table list with
+    /// keys, for the full-scan check.</summary>
+    public ISchemaSnapshot? Snapshot;
+
+    /// <summary>When set, the details every table read reports (its indexes, for the full-scan check).</summary>
+    public TableDetails? Details;
+
+    /// <summary>When set, the size entries every reader reports (item counts, for the full-scan check).</summary>
+    public IReadOnlyList<RelationSize>? Sizes;
 
     /// <summary>When set, every session built by this provider shares this executor (so a test can gate
     /// concurrent runs across tabs). Otherwise each session gets a fresh no-op <see cref="FakeExecutor"/>.</summary>
@@ -183,11 +205,17 @@ internal sealed class FakeMetadata : IMetadataReader
     /// <summary>When set, the load waits for the test to release it (see FakeProvider.MetadataGate).</summary>
     public TaskCompletionSource? Gate;
 
+    /// <summary>See <see cref="FakeProvider.Snapshot"/>, <see cref="FakeProvider.Details"/>,
+    /// <see cref="FakeProvider.Sizes"/>.</summary>
+    public ISchemaSnapshot? Snapshot { get; init; }
+    public TableDetails? Details { get; init; }
+    public IReadOnlyList<RelationSize>? Sizes { get; init; }
+
     public async Task<ISchemaSnapshot> LoadSnapshotAsync(string database, CancellationToken ct)
     {
         Interlocked.Increment(ref LoadCount);
         if (Gate is not null) await Gate.Task.WaitAsync(ct);
-        return new FakeSnapshot(database);
+        return Snapshot ?? new FakeSnapshot(database);
     }
 
     public Task<IReadOnlyList<RoutineInfo>> GetRoutinesAsync(CancellationToken ct)
@@ -215,10 +243,24 @@ internal sealed class FakeMetadata : IMetadataReader
         => Task.FromResult("");
 
     public Task<TableDetails> GetTableDetailsAsync(long tableId, CancellationToken ct)
-        => Task.FromResult(TableDetails.Empty);
+        => Task.FromResult(Details ?? TableDetails.Empty);
+
+    /// <summary>Whole-database size reads, and single-table ones — the full-scan check must use the second
+    /// (S5: never describe a whole region to name one table's item count).</summary>
+    public int AllSizeReads;
+    public List<long> OneSizeReads { get; } = new();
 
     public Task<IReadOnlyList<RelationSize>> GetRelationSizesAsync(CancellationToken ct)
-        => Task.FromResult<IReadOnlyList<RelationSize>>(System.Array.Empty<RelationSize>());
+    {
+        Interlocked.Increment(ref AllSizeReads);
+        return Task.FromResult(Sizes ?? System.Array.Empty<RelationSize>());
+    }
+
+    public Task<RelationSize?> GetRelationSizeAsync(long tableId, CancellationToken ct)
+    {
+        lock (OneSizeReads) OneSizeReads.Add(tableId);
+        return Task.FromResult((Sizes ?? System.Array.Empty<RelationSize>()).FirstOrDefault(s => s.TableId == tableId));
+    }
 
     public Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(CancellationToken ct)
         => Task.FromResult<IReadOnlyList<DatabaseSize>>(System.Array.Empty<DatabaseSize>());
@@ -235,6 +277,10 @@ internal sealed class FakeExecutor : IQueryExecutor
     /// notice to mark itself aborted (#131).</summary>
     public string? FailWith { get; set; }
 
+    /// <summary>The state <see cref="FailWith"/>'s error carries: a syntax error unless a test needs another verdict
+    /// (a <c>28…</c> state is what <see cref="FakeProvider.Classify"/> calls an authentication failure).</summary>
+    public string FailState { get; set; } = "42601";
+
     /// <summary>The SQL each <see cref="ExecuteAsync"/> was handed, in order.</summary>
     public List<string> Executed { get; } = new();
 
@@ -248,7 +294,7 @@ internal sealed class FakeExecutor : IQueryExecutor
         return Task.FromResult<IReadOnlyList<QueryResult>>(new[]
         {
             FailWith is { } message
-                ? Empty with { Error = new QueryError(message, "42601", null) }
+                ? Empty with { Error = new QueryError(message, FailState, null) }
                 : Empty,
         });
     }
@@ -782,6 +828,22 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
     {
         WriteConfirmations.Add(request);
         return Task.FromResult(ConfirmWriteAnswer);
+    }
+
+    /// <summary>What the full-scan confirmation answers. False (the real headless answer) cancels the read.</summary>
+    public bool ConfirmScanAnswer { get; set; }
+
+    /// <summary>Every full-scan confirmation raised, in order.</summary>
+    public List<Bearing.App.Services.ScanQuestion> ScanQuestions { get; } = new();
+
+    /// <summary>Invoked with each full-scan question as it is asked, before it is answered.</summary>
+    public Action<Bearing.App.Services.ScanQuestion>? OnConfirmScan { get; set; }
+
+    public Task<bool> ConfirmScanAsync(Bearing.App.Services.ScanQuestion request)
+    {
+        ScanQuestions.Add(request);
+        OnConfirmScan?.Invoke(request);
+        return Task.FromResult(ConfirmScanAnswer);
     }
 
     public Task<Bearing.App.Views.ConnectionDialogResult?> ShowConnectionDialogAsync(ConnectionInfo? existing, string? existingPassword,

@@ -10,7 +10,8 @@ namespace Bearing.Sessions;
 /// <summary>
 /// Resolves the secret a connection authenticates with, according to its <see cref="CredentialKind"/>:
 /// a fixed <see cref="ISecretStore"/> password, a value prompted from the user, or a freshly-minted Entra
-/// token — or, for <see cref="CredentialKind.Integrated"/>, no secret at all. Prompted passwords and
+/// token — or, for <see cref="CredentialKind.Integrated"/> and <see cref="CredentialKind.AwsProfile"/>, no
+/// secret at all. Prompted passwords and
 /// tokens are cached <b>in memory only</b>, keyed by connection id, for the life of the app session —
 /// never persisted. <see cref="Invalidate"/> drops a cache entry so the next
 /// resolve re-prompts / re-mints (used on auth failure and expiry eviction).
@@ -24,17 +25,61 @@ public sealed class CredentialResolver
     private readonly ICredentialPrompt? _prompt;
     private readonly IEntraTokenProvider _tokens;
     private readonly Func<DateTimeOffset> _now;
+    private readonly Func<ConnectionInfo, bool> _takesPassword;
     private readonly ConcurrentDictionary<Guid, Credential> _cache = new();
 
+    /// <param name="takesPassword">Whether the engine <c>info</c> connects to takes a password at all
+    /// (<see cref="IDbProvider.SupportsPasswordCredentials"/>). Null = every engine does — the behaviour before
+    /// an engine without one existed. Where it answers false, a password kind (a hand-edited
+    /// <see cref="CredentialKind.StoredPassword"/> or <see cref="CredentialKind.Prompt"/>) resolves to no secret
+    /// without reading the store or asking anyone, and <see cref="CanRefresh"/> says no.</param>
     public CredentialResolver(
         Func<ISecretStore?> secrets, ICredentialPrompt? prompt, IEntraTokenProvider tokens,
-        Func<DateTimeOffset>? now = null)
+        Func<DateTimeOffset>? now = null, Func<ConnectionInfo, bool>? takesPassword = null)
     {
         _secrets = secrets;
         _prompt = prompt;
         _tokens = tokens;
         _now = now ?? (() => DateTimeOffset.UtcNow);
+        _takesPassword = takesPassword ?? (_ => true);
         Ssh = new SshTunnels(secrets, prompt);
+    }
+
+    /// <summary>
+    /// Whether resolving <paramref name="info"/> again after an authentication failure could produce something
+    /// different — the run's one retry. A kind that resolves to the same value twice must not be retried: the
+    /// second attempt fails identically, and the user reads "Reauthenticating…" for an authentication that never
+    /// happened. One arm per kind, with its reason, because the arms are not obvious from the outside.
+    /// </summary>
+    public bool CanRefresh(ConnectionInfo info)
+    {
+        // An engine with no password (DynamoDB) has nothing to re-ask for, whatever kind a hand-edited
+        // project.json names: ResolveAsync hands it no secret either way.
+        if (!_takesPassword(info)) return false;
+
+        return info.CredentialKind switch
+        {
+            // Re-asking the user, and re-minting a token, are both things a retry can actually change.
+            CredentialKind.Prompt or CredentialKind.EntraToken => true,
+
+            // A stored password that didn't change would just fail identically — unless the store can't hold
+            // passwords at all (no keyring), where "stored password" really means "there is nothing stored" and
+            // the retry is what gets the user prompted for one.
+            CredentialKind.StoredPassword => _secrets() is { CanStore: false },
+
+            // The OS identity: nothing to re-prompt for and nothing to re-mint, so a retry would send the exact
+            // same handshake. Spelled out rather than left to the default arm because the case it must not fall
+            // into is right above it — an Integrated connection swept into the no-keyring branch would
+            // "reauthenticate" by doing nothing, twice.
+            CredentialKind.Integrated => false,
+
+            // The AWS SDK resolves the profile; Bearing holds nothing to re-ask for or re-mint. A retry would
+            // sign the same request with what the SDK already has — an expired SSO session is renewed by
+            // `aws sso login` outside Bearing, not by a second attempt here.
+            CredentialKind.AwsProfile => false,
+
+            _ => false,
+        };
     }
 
     /// <summary>SSH tunnels for connections that have one, sharing this resolver's secret store and prompt
@@ -46,6 +91,12 @@ public sealed class CredentialResolver
     /// a prompt is cancelled or unavailable.</summary>
     public async Task<Credential> ResolveAsync(ConnectionInfo info, bool forceRefresh, CancellationToken ct)
     {
+        // An engine that takes no password gets none, whatever kind the record names: never a store read and
+        // never a prompt for a secret the provider would ignore (§1.1). Ahead of the switch so a hand-edited
+        // StoredPassword / Prompt on such an engine cannot reach either.
+        if (info.CredentialKind is CredentialKind.StoredPassword or CredentialKind.Prompt && !_takesPassword(info))
+            return new Credential(null, null);
+
         switch (info.CredentialKind)
         {
             case CredentialKind.StoredPassword:
@@ -108,7 +159,16 @@ public sealed class CredentialResolver
                 // the session manager has no disconnect-before-expiry to schedule.
                 //
                 // Not cached, because there is nothing to cache; and a forceRefresh retry would re-mint
-                // nothing, which is why ExecutionViewModel.CanRefreshCredential excludes this kind.
+                // nothing, which is why CanRefresh excludes this kind.
+                return new Credential(null, null);
+
+            case CredentialKind.AwsProfile:
+                // The AWS SDK resolves the profile itself, in this process (SSO, assumed role, or keys in
+                // ~/.aws) when the provider's factory builds its client, so there is nothing for Bearing to hand over. The
+                // Integrated arrangement for the same reason: ahead of any store or prompt code, because this
+                // kind must never read the secret store, never write to it, and never ask the user for
+                // anything — no Bearing code holds an AWS secret (§1.1, §1.9c). No expiry: the SDK refreshes what it
+                // resolved, so the session manager has no disconnect-before-expiry to schedule.
                 return new Credential(null, null);
 
             case CredentialKind.EntraToken:

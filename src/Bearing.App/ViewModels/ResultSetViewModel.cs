@@ -37,9 +37,12 @@ public sealed partial class ResultSetViewModel : ObservableObject
         IsPageable = pageable;
         SourceSql = pageable ? sourceSql : null;
         ExecutedSql = string.IsNullOrWhiteSpace(sourceSql) ? null : sourceSql.Trim();
+        Continuation = result.Continuation;
+        _arrivedWithToken = result.Continuation is not null;
         // Whether or not this set can page: a set cut short must never look complete. A batch is read to the
-        // Fetch all limit on its first run, so a truncated one stopped there and says so (RowCountText).
-        _hasMore = result.Truncated;
+        // Fetch all limit on its first run, so a truncated one stopped there and says so (RowCountText). A token,
+        // when there is one, is the answer to "is there more" — not whether the page came back full.
+        _hasMore = Continuation is not null || result.Truncated;
         ColumnLayout = new ColumnLayout(Columns.Count);
         // The marker on the meta row is derived from the layout, so it has to be told when the layout moves
         // (the layout itself is deliberately not an ObservableObject — it is pure, §2.5).
@@ -161,7 +164,8 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// (or when editability couldn't be determined, e.g. no schema loaded).</summary>
     public string? LockReason { get; init; }
 
-    /// <summary>Last page came back full — more rows likely exist beyond what's loaded.</summary>
+    /// <summary>Last page came back full — more rows likely exist beyond what's loaded. For a result the
+    /// engine continues by token (<see cref="Continuation"/>), the token alone decides.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanFetchAll))]
     [NotifyPropertyChangedFor(nameof(IsCutShort))]
@@ -169,6 +173,27 @@ public sealed partial class ResultSetViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(MetaDetail))]
     [NotifyPropertyChangedFor(nameof(CountBadge))]
     private bool _hasMore;
+
+    /// <summary>
+    /// The engine's token for the rest of this read (<see cref="QueryResult.Continuation"/>), replaced by each
+    /// page loaded after it and null once the read is exhausted. While set, load more and fetch all go through
+    /// <c>ContinuationPaging</c> and send this — never the SQL again. Opaque and in memory only: never logged,
+    /// never persisted.
+    /// </summary>
+    public string? Continuation { get; private set; }
+
+    /// <summary>
+    /// The session (connection + database) this result was read from — set by <c>ResultSetBuilder</c>. A
+    /// <see cref="Continuation"/> is only ever sent back to this session: the token carries its statement, so
+    /// sending it to whatever the tab is on now would run that statement there and append another server's rows
+    /// to this grid. Null for a set built without one, which is then never continued (fail closed).
+    /// </summary>
+    public SessionKey? SourceSession { get; init; }
+
+    /// <summary>The run that produced this set may read a whole table — it was confirmed as a possible scan, or
+    /// it held an unfiltered scan whose first page ran unasked — so a fetch all or export of it asks. Set by the
+    /// run after the result sets are built.</summary>
+    public bool IsFullScan { get; set; }
 
     /// <summary>Total row count of the source query; null until the user asks for it.</summary>
     [ObservableProperty]
@@ -180,8 +205,15 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// <summary>Rows loaded so far — also the offset for the next page.</summary>
     public int Loaded => Rows.Count;
 
-    /// <summary>The [Count] button is offered only while the total is still unknown.</summary>
-    public bool CanCount => IsPageable && TotalCount is null;
+    /// <summary>
+    /// The [Count] button is offered only while the total is still unknown, and only where a count can answer:
+    /// never on an engine whose reads continue by token (<see cref="ProviderTraits.ReadsContinueByToken"/> —
+    /// DynamoDB has no count short of reading every match, and its executor always answers "unavailable"), nor
+    /// for a result that arrived with a token, whose read the token — not an offset query — continues.
+    /// </summary>
+    public bool CanCount => IsPageable && TotalCount is null && !_arrivedWithToken && !Traits.ReadsContinueByToken;
+
+    private readonly bool _arrivedWithToken;
 
     /// <summary>"⤓ all" / Fetch all is offered only when more rows exist <em>and</em> this set can page to them —
     /// a cut-short batch set (<see cref="IsCutShort"/>) has more rows but no way to fetch them.</summary>
@@ -256,6 +288,14 @@ public sealed partial class ResultSetViewModel : ObservableObject
             foreach (var row in rows) _originals[row] = (object?[])row.Clone();
         HasMore = hasMore;
         RaiseRowCount();
+    }
+
+    /// <summary>Append a page continued by token and take the token it carries in place of the one used;
+    /// whether more remain follows that token (null — the read is exhausted).</summary>
+    public void AppendContinuationPage(IReadOnlyList<object?[]> rows, string? continuation)
+    {
+        Continuation = continuation;
+        AppendPage(rows, hasMore: continuation is not null);
     }
 
     /// <summary>Notify the live row-count surfaces (meta row count + count-on-demand) after a change.</summary>

@@ -1,5 +1,6 @@
 using System;
 using Bearing.Core.Data;
+using Bearing.Data.DynamoDb;
 using Bearing.Data.Postgres;
 using Bearing.Data.SqlServer;
 using Xunit;
@@ -98,6 +99,39 @@ public class ProviderClassificationTests
         Assert.Equal(DbErrorKind.Unknown, provider.ClassifyException(new Exception("network path not found")));
     }
 
+    // ---- DynamoDB: AWS error codes and the SDK's own exceptions ----------------------------------
+    //
+    // The provider is registered in a later batch, so these call DynamoDbErrors — the one place the engine's
+    // classification lives, which DynamoDbProvider.Classify / ClassifyException will delegate to. The
+    // sentences and the SDK-exception matrix are in DynamoDbErrorTextTests.
+
+    [Theory]
+    [InlineData("BearingSignIn", DbErrorKind.Authentication)]          // the SDK could not sign us in
+    [InlineData("ExpiredTokenException", DbErrorKind.Authentication)]  // DynamoDB refused the token it was given
+    [InlineData("UnrecognizedClientException", DbErrorKind.Authentication)]
+    [InlineData("BearingTimeout", DbErrorKind.Canceled)]               // our statement timeout
+    [InlineData("BearingCanceled", DbErrorKind.Canceled)]
+    // Good credentials, no permission: a privilege, not a credential — re-signing in changes nothing (the
+    // MySQL 1044 reasoning).
+    [InlineData("AccessDeniedException", DbErrorKind.Unknown)]
+    [InlineData("ValidationException", DbErrorKind.Unknown)]
+    [InlineData("28P01", DbErrorKind.Unknown)]                          // another engine's code is nothing here
+    [InlineData("", DbErrorKind.Unknown)]
+    [InlineData(null, DbErrorKind.Unknown)]
+    public void DynamoDb_classifies_a_statement_by_error_code(string? code, DbErrorKind expected)
+        => Assert.Equal(expected, DynamoDbErrors.ClassifyState(code));
+
+    [Fact]
+    public void DynamoDb_finds_a_sign_in_failure_in_an_untyped_exception_chain()
+    {
+        var wrapped = new InvalidOperationException(
+            "Could not connect to 'prod'", new Amazon.Runtime.AmazonClientException("No valid SSO Token could be found."));
+
+        Assert.Equal(DbErrorKind.Authentication, DynamoDbErrors.Classify(wrapped));
+        Assert.Equal(DbErrorKind.Unknown, DynamoDbErrors.Classify(new Exception("connection refused")));
+        Assert.Equal(DbErrorKind.Canceled, DynamoDbErrors.Classify(new OperationCanceledException()));
+    }
+
     // ---- Capability flag -------------------------------------------------------------------------
 
     [Fact]
@@ -118,5 +152,21 @@ public class ProviderClassificationTests
         // Server is asserted in SqlServerEntraTests.
         Assert.True(new PostgresProvider().SupportsEntraToken);
         Assert.True(new SqlServerProvider().SupportsEntraToken);
+    }
+
+    [Fact]
+    public void The_relational_engines_answer_the_credential_and_transport_flags_alike()
+    {
+        // Explicit on every provider (§1.9a), so a new engine has to answer rather than inherit. The three
+        // SQL engines take a password, hold transactions and honour a TLS mode, and none has an AWS profile.
+        IDbProvider[] relational = [new PostgresProvider(), new SqlServerProvider(), new Bearing.Data.MySql.MySqlProvider()];
+
+        foreach (var provider in relational)
+        {
+            Assert.True(provider.SupportsPasswordCredentials, provider.Id);
+            Assert.False(provider.SupportsAwsProfile, provider.Id);
+            Assert.True(provider.SupportsManualCommit, provider.Id);
+            Assert.True(provider.SupportsTlsModes, provider.Id);
+        }
     }
 }

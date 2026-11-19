@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using Bearing.Core.Data;
 using Bearing.Core.Logging;
 using Bearing.Core.Schema;
@@ -76,7 +77,11 @@ public sealed class BearingHost(
         var snapshot = await SnapshotAsync(info, lease.Session, ct).ConfigureAwait(false);
 
         var (schema, name) = SplitQualified(table);
+        // A dot is also just a character in a name: DynamoDB allows one in a table name (`app.orders`) and has no
+        // schemas to qualify with. When the split names nothing, the whole name is tried as one unqualified name
+        // before giving up — never instead of the split, which stays the reading on every engine with schemas.
         var found = snapshot.ResolveTable(schema, name)
+            ?? (schema is null ? null : snapshot.ResolveTable(null, Unsplit(table)))
             ?? throw new CommandFailure(
                 $"'{table}' is not a table or view on '{info.Name}'. "
                 + $"Run `bearing {Commands.Tables} {info.Name}` to see what is.");
@@ -101,17 +106,35 @@ public sealed class BearingHost(
         // and the whole result is never in memory at once, which is what makes `--out` safe to point at a
         // table larger than this process. Everything else materialises — a workbook needs every row to build
         // the sheet (XlsxWriter), and a batch returning several grids is not one table anyway.
+        //
+        // An engine whose reads continue from a server token (DynamoDB) streams the same way, page by page
+        // through ExecuteContinuationAsync rather than StreamRowsAsync — see ContinuedRowsAsync.
         if (format == ExportFormat.Csv && traits.Dialect.SplitStatements(sql).Count == 1)
-            return await StreamCsvAsync(info, lease.Session, sql, request.OutPath!, Rows(request), ct)
-                .ConfigureAwait(false);
+        {
+            var executor = lease.Session.Executor;
+            var first = new FirstPage();
+            var batches = ContinuesByToken(traits)
+                ? ContinuedRowsAsync(executor, sql, Rows(request), first, ct)
+                : executor.StreamRowsAsync(sql, new QueryOptions { MaxRows = Rows(request) }, ct);
+
+            return await StreamCsvAsync(info, sql, request.OutPath!, batches, first, ct).ConfigureAwait(false);
+        }
 
         IReadOnlyList<QueryResult> results;
         var wall = Stopwatch.StartNew();
         try
         {
-            results = await lease.Session.Executor
+            results = Capped(await lease.Session.Executor
                 .ExecuteAsync(sql, new QueryOptions { MaxRows = Rows(request) }, ct)
-                .ConfigureAwait(false);
+                .ConfigureAwait(false), Rows(request));
+
+            // A plain query answers with the first page and its Truncated flag, as on every engine. An export
+            // is the whole answer (unlimited unless capped, §1.11e), so a result that can be continued is
+            // followed to its end — or to --max-rows — before anything is written.
+            if (request.OutPath is not null)
+                results = await FollowContinuationsAsync(lease.Session.Executor, results, Rows(request), ct)
+                    .ConfigureAwait(false);
+
             wall.Stop();
         }
         catch (Exception ex) when (ex is not OperationCanceledException and not CommandFailure)
@@ -124,7 +147,8 @@ public sealed class BearingHost(
         if (results.FirstOrDefault(r => !r.Success)?.Error is { } error)
             throw new CommandFailure($"{info.Name}: {error.Message}");
 
-        if (request.OutPath is { } path) return Export(results, path, format!.Value, info.Name);
+        if (request.OutPath is { } path)
+            return Export(results, path, format!.Value, info.Name, ContinuesByToken(traits) ? EmptyRead(results) : null);
 
         // One shape whatever the SQL was. A single statement is the overwhelming case, but a result that
         // is sometimes an object and sometimes a list is a shape a consumer has to branch on, and the
@@ -244,7 +268,18 @@ public sealed class BearingHost(
         //
         // Such a statement is still refused, by the allow-list below, in the words that are true of it:
         // "'DECLARE' is not a read". Falling through to it is the whole of the fix.
-        var named = risks.Where(r => r.NamesAWrite).Select(r => r.Label).Distinct(StringComparer.Ordinal).ToList();
+        //
+        // The same holds for a statement the guard could not read at all (GuardIsDialectAware false — on DynamoDB,
+        // PartiQL holding a form the lexer reads differently, such as `$$`): NamesAWrite is true of it so that it is
+        // held, but no write was found in it, and "so SELECT — dialect not parsed will not run" framed it as one.
+        // Only a verb the scan actually found (a risky verb, not the conservative default) is named here — which
+        // is NamesAWrite minus the unreadable case; the unreadable statement falls through to the allow-list,
+        // which refuses it as one that could not be read safely.
+        var named = risks
+            .Where(r => r.RiskyVerbs.Count > 0 && !r.FromConservativeDefault)
+            .Select(r => r.Label)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
         if (named.Count > 0 && WriteRefusal.Reason(info, risks) is not null)
         {
             throw Refused(
@@ -265,7 +300,54 @@ public sealed class BearingHost(
         if (ExternalSqlPolicy.Refuse(traits.Dialect, sql) is { } notARead)
             throw Refused(info, sql, $"{info.Name}: {notARead}");
 
+        // And last, on an engine with a full-scan question (DynamoDB): only a read Bearing can show is keyed
+        // runs. Whatever the connection's "Confirm full table scans" says — that setting is a question for the
+        // person at the keyboard, and nobody is at this one to answer it (Behaviour 12). Third because the two
+        // checks above settle what kind of statement this is; this one only asks how much of a table a read
+        // would touch.
+        if (ScanGuard.TargetsFor(traits.Dialect, sql) is { Count: > 0 } targets
+            && await ScanRefusalAsync(info, targets, ct).ConfigureAwait(false) is { } scan)
+        {
+            throw Refused(info, sql, scan);
+        }
+
         return (info, traits);
+    }
+
+    /// <summary>
+    /// The refusal for any <c>SELECT</c> in the batch that <see cref="ScanGuard"/> cannot call keyed — a full
+    /// scan, or one it could not check — or null when every one is keyed.
+    /// <para>
+    /// <b>What is looked up, and for how long.</b> The connection is opened in its own words (a sign-in that
+    /// fails says so, rather than turning into "could not check"), and the run would open it anyway. The table
+    /// list and the details of each table read through an index are then given <see cref="ScanGuard.Budget"/>;
+    /// whatever has not arrived by then makes the verdict <see cref="ScanVerdictKind.Undetermined"/>, which is
+    /// refused here saying Bearing could not check — never that the statement scans (§1.1).
+    /// </para>
+    /// <para>
+    /// <b>Fail closed on a statement the reduction skipped.</b> The targets come from
+    /// <see cref="ScanGuard.TargetsFor"/>, which adds an unreadable one when the batch holds a read the reduction
+    /// did not follow; it is refused as one Bearing could not check rather than run unclassified. The look-up is
+    /// the App's too (<see cref="ScanFacts.ClassifyAsync"/>); only the sentence is this host's.
+    /// </para>
+    /// </summary>
+    private async Task<string?> ScanRefusalAsync(
+        ConnectionInfo info, IReadOnlyList<ScanTarget> targets, CancellationToken ct)
+    {
+        IReadOnlyList<ScanVerdict> verdicts;
+        using (var lease = await ConnectAsync(info, ct).ConfigureAwait(false))
+        {
+            verdicts = await ScanFacts
+                .ClassifyAsync(sessions, info, targets, ScanGuard.Budget, withItemCounts: false, lease.Session, ct)
+                .ConfigureAwait(false);
+        }
+
+        var refusals = verdicts
+            .Select(v => ScanGuard.CliRefusal(info.Name, v))
+            .OfType<string>()
+            .ToList();
+
+        return refusals.Count == 0 ? null : string.Join("\n", refusals);
     }
 
     /// <summary>
@@ -309,12 +391,14 @@ public sealed class BearingHost(
     /// still exports as one table.
     /// </para>
     /// </summary>
+    /// <param name="emptyRead">What a read that came back with no shape said for itself, on an engine whose reads
+    /// can (<see cref="EmptyRead"/>) — carried into the refusal so it reads the same as the streamed path's.</param>
     private static ExportResponse Export(
-        IReadOnlyList<QueryResult> results, string path, ExportFormat format, string connection)
+        IReadOnlyList<QueryResult> results, string path, ExportFormat format, string connection, string? emptyRead)
     {
         var grids = results.Where(r => r.Columns.Count > 0).ToList();
         if (grids.Count == 0)
-            throw new CommandFailure($"{connection}: that statement returned no rows to write.");
+            throw new CommandFailure(NothingToWrite(connection, emptyRead));
 
         if (format == ExportFormat.Csv && grids.Count > 1)
             throw new CommandFailure(
@@ -359,17 +443,18 @@ public sealed class BearingHost(
     /// </para>
     /// </summary>
     private async Task<ICliResponse> StreamCsvAsync(
-        ConnectionInfo info, ConnectionSession session, string sql, string path, int? maxRows,
+        ConnectionInfo info,
+        string sql,
+        string path,
+        IAsyncEnumerable<RowBatch> batches,
+        FirstPage first,
         CancellationToken ct)
     {
         var wall = Stopwatch.StartNew();
         ResultExport.StreamedCsv written;
         try
         {
-            written = await ResultExport.WriteCsvStreamAsync(
-                path,
-                session.Executor.StreamRowsAsync(sql, new QueryOptions { MaxRows = maxRows }, ct),
-                ct).ConfigureAwait(false);
+            written = await ResultExport.WriteCsvStreamAsync(path, batches, ct).ConfigureAwait(false);
             wall.Stop();
         }
         // The file, not the statement. Reported as what it is and **not logged as a failed execution**: the
@@ -399,7 +484,7 @@ public sealed class BearingHost(
         // contradicts.
         if (written.Columns == 0)
         {
-            var refusal = $"{info.Name}: that statement returned no rows to write.";
+            var refusal = NothingToWrite(info.Name, first.EmptyRead);
             Write(info, sql, wall.Elapsed, rows: 0, success: false, error: refusal);
             throw new CommandFailure(refusal);
         }
@@ -412,6 +497,193 @@ public sealed class BearingHost(
             Truncated = written.Truncated,
         };
     }
+
+    // ---- reads continued by token ---------------------------------------------------------------
+
+    /// <summary>How many rows each continuation call asks for while an export follows a read to its end. The
+    /// engine still ends a call early at its own page rules (DynamoDB: 10 requests), so this bounds memory per
+    /// call, not the read.</summary>
+    internal const int ContinuationChunkRows = 1000;
+
+    /// <summary>
+    /// Whether this engine's reads continue from a server-side token (<see cref="QueryResult.Continuation"/>)
+    /// rather than by re-running with an offset. Asked only where it must be known before anything runs — the
+    /// streamed CSV picks its source up front. The engine's own declared fact
+    /// (<see cref="ProviderTraits.ReadsContinueByToken"/>), not inferred from another one.
+    /// </summary>
+    private static bool ContinuesByToken(ProviderTraits traits) => traits.ReadsContinueByToken;
+
+    /// <summary>
+    /// <paramref name="results"/> held to <paramref name="maxRows"/>: a result with more rows keeps the first
+    /// <paramref name="maxRows"/> and says it was truncated. Only an engine whose page can overshoot its cap
+    /// (DynamoDB on a filtered read, see <see cref="IQueryExecutor.ExecuteContinuationAsync"/>) ever has more; for
+    /// the rest this changes nothing. Its continuation is dropped with the rows: what follows the token is no longer
+    /// what follows the rows kept.
+    /// </summary>
+    internal static IReadOnlyList<QueryResult> Capped(IReadOnlyList<QueryResult> results, int? maxRows)
+        => maxRows is not { } cap || results.All(r => r.Rows.Count <= cap)
+            ? results
+            : results.Select(r => Capped(r, cap)).ToList();
+
+    private static QueryResult Capped(QueryResult result, int cap)
+        => result.Rows.Count <= cap
+            ? result
+            : result with
+            {
+                Rows = result.Rows.Take(Math.Max(0, cap)).ToList(),
+                RowCount = Math.Max(0, cap),
+                Truncated = true,
+                Continuation = null,
+            };
+
+    private static int ChunkFor(int? maxRows, long taken)
+        => maxRows is { } cap
+            ? (int)Math.Max(1, Math.Min(ContinuationChunkRows, cap - taken))
+            : ContinuationChunkRows;
+
+    /// <summary>
+    /// Each result that carries a <see cref="QueryResult.Continuation"/>, followed with
+    /// <see cref="IQueryExecutor.ExecuteContinuationAsync"/> until the engine says it is exhausted or
+    /// <paramref name="maxRows"/> rows are held — so an export holds the whole answer, not its first page. A
+    /// result with no continuation (every other engine's) is returned as it was.
+    /// <para>
+    /// A continuation call that fails ends the batch with that failure in place, so the caller logs it and writes
+    /// nothing: a file holding the pages before the error would be a plausible-looking fraction of the answer.
+    /// </para>
+    /// </summary>
+    private static async Task<IReadOnlyList<QueryResult>> FollowContinuationsAsync(
+        IQueryExecutor executor, IReadOnlyList<QueryResult> results, int? maxRows, CancellationToken ct)
+    {
+        if (!results.Any(r => r.Continuation is not null)) return results;
+
+        var followed = new List<QueryResult>(results.Count);
+        foreach (var result in results)
+        {
+            if (result.Continuation is not { } token || !result.Success)
+            {
+                followed.Add(result);
+                continue;
+            }
+
+            var rows = new List<object?[]>(result.Rows);
+            var duration = result.Duration;
+            string? next = token;
+            while (next is not null && (maxRows is not { } cap || rows.Count < cap))
+            {
+                var page = await executor
+                    .ExecuteContinuationAsync(next, ChunkFor(maxRows, rows.Count), ct)
+                    .ConfigureAwait(false);
+                if (!page.Success)
+                {
+                    followed.Add(page);
+
+                    return followed;
+                }
+
+                rows.AddRange(page.Rows);
+                duration += page.Duration;
+                next = page.Continuation;
+            }
+
+            // A page can overshoot the cap (a filtered DynamoDB read); the cap is the caller's, so it is held here.
+            var trimmed = maxRows is { } held && rows.Count > held;
+            if (trimmed) rows.RemoveRange(maxRows!.Value, rows.Count - maxRows.Value);
+
+            // The first page's message described that page (the engine's request-budget notice), and is no longer
+            // true of the whole. Truncated is the cap stopping the read — a token still in hand, or rows dropped.
+            followed.Add(result with
+            {
+                Rows = rows,
+                RowCount = rows.Count,
+                Duration = duration,
+                Message = null,
+                Truncated = next is not null || trimmed,
+                Continuation = null,
+            });
+        }
+
+        return followed;
+    }
+
+    /// <summary>
+    /// The streamed form of <see cref="FollowContinuationsAsync"/> for one statement: the first page from
+    /// <see cref="IQueryExecutor.ExecuteAsync"/>, then each continuation as it lands, one page in memory at a
+    /// time. Honours <see cref="RowBatch"/>'s contract (§5.7): every batch carries the first page's columns, a
+    /// read always ends with a tail batch, and only the tail says <c>Truncated</c> — when
+    /// <paramref name="maxRows"/> stopped the read with a token still in hand. A failure is thrown, as a stream
+    /// reports one.
+    /// <para>
+    /// <b>The statement here is a read</b> — the allow-list admitted nothing else (§1.11a) — so its result is a
+    /// row result even when it names no column: a DynamoDB <c>SELECT</c> that found no item, on a table whose key
+    /// attributes could not be read, has none to name. It still yields its (empty) tail rather than nothing, which
+    /// is the shape of a statement that returns no rows at all; what the read said for itself goes to
+    /// <paramref name="first"/> so the refusal can say it.
+    /// </para>
+    /// </summary>
+    private static async IAsyncEnumerable<RowBatch> ContinuedRowsAsync(
+        IQueryExecutor executor,
+        string sql,
+        int? maxRows,
+        FirstPage first,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var results = await executor
+            .ExecuteAsync(sql, new QueryOptions { MaxRows = maxRows }, ct)
+            .ConfigureAwait(false);
+
+        var page = results.FirstOrDefault(r => !r.Success)
+                   ?? results.FirstOrDefault(r => r.Columns.Count > 0)
+                   ?? results.FirstOrDefault();
+        if (page is null) yield break;
+
+        first.EmptyRead = EmptyRead([page]);
+
+        var columns = page.Columns;
+        long taken = 0;
+        while (true)
+        {
+            if (page.Error is { } error) throw new InvalidOperationException(error.Message);
+
+            // A page can overshoot the cap (a filtered DynamoDB read): the rows past it are dropped and the tail
+            // says the read was cut, as when the cap stops it with a token in hand.
+            var rows = page.Rows;
+            var over = maxRows is { } held && taken + rows.Count > held;
+            if (over) rows = rows.Take((int)(maxRows!.Value - taken)).ToList();
+
+            taken += rows.Count;
+            var next = !over && page.Continuation is { } token && (maxRows is not { } cap || taken < cap) ? token : null;
+            if (next is null)
+            {
+                yield return new RowBatch(columns, rows, Truncated: page.Continuation is not null || over);
+                yield break;
+            }
+
+            yield return new RowBatch(columns, rows, Truncated: false);
+
+            page = await executor.ExecuteContinuationAsync(next, ChunkFor(maxRows, taken), ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>What <see cref="ContinuedRowsAsync"/> learned about the read's first page that the row stream
+    /// cannot carry. Written before the first batch is yielded, read after the stream ends.</summary>
+    private sealed class FirstPage
+    {
+        public string? EmptyRead { get; set; }
+    }
+
+    /// <summary>The sentence a successful read with no shape gave for itself (DynamoDB: "The SELECT returned no
+    /// items."), or null.</summary>
+    private static string? EmptyRead(IEnumerable<QueryResult> results)
+        => results.FirstOrDefault(r => r.Success && r.Columns.Count == 0)?.Message is { Length: > 0 } said
+            ? said.Trim()
+            : null;
+
+    /// <summary>The one refusal for an export with nothing to write, the same from the streamed and the
+    /// materialised path: the generic sentence, then what the read said for itself when it said something.</summary>
+    private static string NothingToWrite(string connection, string? emptyRead)
+        => emptyRead is null
+            ? $"{connection}: that statement returned no rows to write."
+            : $"{connection}: that statement returned no rows to write. {emptyRead}";
 
     // ---- the record -----------------------------------------------------------------------------
 
@@ -567,4 +839,8 @@ public sealed class BearingHost(
             ? (null, trimmed)
             : (trimmed[..dot].Trim('"'), trimmed[(dot + 1)..].Trim('"'));
     }
+
+    /// <summary>The name as one unqualified name, dots and all — the outer quotes and whitespace
+    /// <see cref="SplitQualified"/> trims, and nothing else.</summary>
+    internal static string Unsplit(string table) => table.Trim().Trim('"');
 }

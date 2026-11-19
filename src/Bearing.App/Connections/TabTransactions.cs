@@ -126,6 +126,12 @@ public sealed class TabTransactions
     {
         if (_open.TryGetValue(tab, out var already)) return (already, null);
 
+        // The backstop for EffectiveConnection's rule: a provider that cannot hold a transaction throws from
+        // CreateTransactionScope, so say why here instead of surfacing that as a failed start.
+        if (!Workspace.WorkspaceContext.SupportsManualCommit(_providers, info))
+            return (null, $"{info.Name} is on an engine that cannot hold a transaction open across statements, "
+                          + "so every statement commits itself.");
+
         var key = SessionKey.For(info);
         if (_open.Values.Count(t => t.Key == key) >= CommitPolicy.MaxOpenPerPool)
             return (null, $"{CommitPolicy.MaxOpenPerPool} tabs already have an uncommitted transaction on "

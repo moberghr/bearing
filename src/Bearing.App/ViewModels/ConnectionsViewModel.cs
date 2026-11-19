@@ -462,13 +462,16 @@ public sealed partial class ConnectionsViewModel : ObservableObject
             // A setting of the connection, like the two beside it — not "a transaction is open right now",
             // which the status chip says and which is a fact about this tab rather than this connection.
             if (CommitPolicy.IsManualCommit(info)) marks.Add("manual commit");
+            // The saved record's setting, which EffectiveConnection drops on an engine that cannot hold a
+            // transaction — said here once rather than dropped silently.
+            else if (_ctx.FindConnection(info.Id) is { } saved && _ctx.IgnoredManualCommitNote(saved) is { } ignored)
+                marks.Add(ignored);
             if (SessionPolicy.TimeoutSeconds(info) > SessionPolicy.NoTimeout)
                 marks.Add($"statement timeout {SessionPolicy.TimeoutLabel(info)}");
             // Always, where the engine has one (#163): the zone is not a safety setting to flag when on, it is
             // what every timestamp expression computes in, and the mismatch it caused was invisible because
             // nothing ever named it.
-            if (_ctx.Providers.All.FirstOrDefault(p => string.Equals(p.Id, info.ProviderId, StringComparison.OrdinalIgnoreCase))
-                    is { SupportsSessionTimeZone: true })
+            if (WorkspaceContext.ProviderFor(_ctx.Providers, info.ProviderId) is { SupportsSessionTimeZone: true })
                 marks.Add($"time zone {SessionTimeZonePolicy.Describe(info)}");
             return marks.Count == 0 ? StatusLabel : $"{StatusLabel} · {string.Join(" · ", marks)}";
         }
@@ -1430,7 +1433,19 @@ public sealed partial class ConnectionsViewModel : ObservableObject
            && a.UserFromEntraLogin == b.UserFromEntraLogin
            && TlsPolicy.Resolve(a) == TlsPolicy.Resolve(b)
            // Another SSH route is another way to the server; pinning its host key is not.
-           && SshTunnel.SameRoute(a.SshTunnel, b.SshTunnel);
+           && SshTunnel.SameRoute(a.SshTunnel, b.SshTunnel)
+           // Which service is reached, like Host, for the options the engine says carry it
+           // (ProviderTraits.NetworkOptions — DynamoDB's endpoint, which replaces the region's). Without it an
+           // endpoint-only edit kept the old endpoint's schema and its live pool, so Load more / Fetch all went on
+           // reading the old service. SamePool inherits it from here.
+           && ProviderTraits.For(a).NetworkOptions.All(key =>
+               string.Equals(OptionOf(a, key), OptionOf(b, key), StringComparison.Ordinal));
+
+    /// <summary>One options-bag value as a factory reads it (trimmed; blank = none), for <see cref="SameNetwork"/>.</summary>
+    private static string? OptionOf(ConnectionInfo info, string key)
+        => info.Options.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value.Trim()
+            : null;
 
     /// <summary>
     /// Whether a live pool built from <paramref name="a"/> can go on serving <paramref name="b"/>.

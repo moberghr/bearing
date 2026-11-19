@@ -1,4 +1,5 @@
 using Bearing.Core.Data;
+using Bearing.Data.DynamoDb;
 using Bearing.Data.MySql;
 using Bearing.Data.Postgres;
 using Bearing.Data.SqlServer;
@@ -7,7 +8,8 @@ namespace Bearing.Data;
 
 /// <summary>Default provider registry: every engine this build ships with, keyed by
 /// <see cref="IDbProvider.Id"/>. The order is the order the connection dialog offers them in, so
-/// PostgreSQL — the engine every existing project file names — stays first.</summary>
+/// PostgreSQL — the engine every existing project file names — stays first, and Amazon DynamoDB, the one
+/// non-relational engine, comes last.</summary>
 public sealed class ProviderRegistry : IProviderRegistry
 {
     private readonly Dictionary<string, IDbProvider> _providers;
@@ -15,7 +17,10 @@ public sealed class ProviderRegistry : IProviderRegistry
     public ProviderRegistry(IEnumerable<IDbProvider>? providers = null)
     {
         var list = providers?.ToList()
-            ?? new List<IDbProvider> { new PostgresProvider(), new SqlServerProvider(), new MySqlProvider() };
+            ?? new List<IDbProvider>
+            {
+                new PostgresProvider(), new SqlServerProvider(), new MySqlProvider(), new DynamoDbProvider(),
+            };
         _providers = list.ToDictionary(p => p.Id, StringComparer.OrdinalIgnoreCase);
     }
 

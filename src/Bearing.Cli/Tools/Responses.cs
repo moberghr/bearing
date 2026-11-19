@@ -89,8 +89,9 @@ public sealed record KeySide(string Table, IReadOnlyList<string> Columns);
 public sealed record QueryResponse(IReadOnlyList<ResultSet> Results) : ICliResponse;
 
 /// <summary>
-/// One result set. <see cref="Truncated"/> means the read stopped at the row ceiling with rows still
-/// waiting — not "there are more rows somewhere", which is a different and weaker claim.
+/// One result set. <see cref="Truncated"/> means the read stopped with rows still waiting — at the row
+/// ceiling, unless <see cref="StoppedBy"/> names what else stopped it. Not "there are more rows somewhere",
+/// which is a different and weaker claim.
 /// </summary>
 public sealed record ResultSet(
     IReadOnlyList<ColumnHeader> Columns,
@@ -99,9 +100,20 @@ public sealed record ResultSet(
     bool Truncated,
     long DurationMs)
 {
-    /// <summary>What a statement with no grid said for itself ("SELECT 0", an affected-row count). Absent
-    /// for an ordinary result.</summary>
+    /// <summary>What a statement with no grid said for itself ("SELECT 0", an affected-row count) — or, beside
+    /// <see cref="StoppedBy"/>, the engine's own sentence about where the read stopped. Absent for an ordinary
+    /// result.</summary>
     public string? Message { get; init; }
+
+    /// <summary>
+    /// What stopped a <see cref="Truncated"/> read when it was <b>not</b> the row ceiling — <see cref="RequestBudget"/>:
+    /// the engine ends a page after a fixed number of requests (DynamoDB: 10), however few rows it found. Absent
+    /// when the ceiling stopped the read, and when nothing did. <c>--out</c> follows the read to its end.
+    /// </summary>
+    public string? StoppedBy { get; init; }
+
+    /// <summary>The <see cref="StoppedBy"/> value for a page the engine's request budget ended.</summary>
+    public const string RequestBudget = "request_budget";
 }
 
 public sealed record ColumnHeader(string Name, string Type);

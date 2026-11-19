@@ -66,7 +66,11 @@ public partial class ConnectionDialog : Window
     private IReadOnlyList<CredentialKindOption> _credentialKinds = Array.Empty<CredentialKindOption>();
 
     /// <summary>The provider's User box, when it declares one — rebuilt with the rows.</summary>
-    private TextBox? _userBox;
+    private Control? _userBox;
+
+    /// <summary>How to redisplay each row's value after the model changed it (a suggestion's fill) — rebuilt
+    /// with the rows.</summary>
+    private readonly Dictionary<string, Action<string>> _shows = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Set while the code is writing the combo boxes, so the handlers those writes raise don't
     /// re-enter the rebuild they are part of.</summary>
@@ -115,6 +119,7 @@ public partial class ConnectionDialog : Window
             ConfirmWritesBox.IsChecked = existing.RequireWriteConfirmation;
             ReadOnlyBox.IsChecked = existing.ReadOnly;
             ManualCommitBox.IsChecked = existing.ManualCommit;
+            ConfirmFullScansBox.IsChecked = existing.ConfirmFullScans;
             ExternalAccessBox.IsChecked = ExternalAccessPolicy.IsExposed(existing);
             UserFromLoginBox.IsChecked = existing.UserFromEntraLogin;
             // 0 is "no limit" and shows as an empty box, whose placeholder says 0 — a bare "0" in a field
@@ -143,6 +148,7 @@ public partial class ConnectionDialog : Window
         // stored password it would silently fail to store. An edited one keeps whatever it was saved as.
         RebuildCredentialKinds(existing?.CredentialKind
             ?? (_storage.CanStore ? CredentialKind.StoredPassword : CredentialKind.Prompt));
+        UpdateEngineRows();
     }
 
     /// <summary>The window opens at its XAML height, which a small or heavily scaled screen may not have room
@@ -176,6 +182,23 @@ public partial class ConnectionDialog : Window
         RenderFields();
         RebuildCredentialKinds(SelectedCredentialKind());
         UpdateTimeZone();
+        UpdateEngineRows();
+    }
+
+    /// <summary>
+    /// Show the rows the selected engine can honour and hide the ones it cannot — encryption, manual commit and
+    /// the scan confirmation — each by the answer the model gives (provider flags and traits), never by comparing
+    /// an engine id here. The session time zone group is the same kind of row and follows the same rule in
+    /// <see cref="UpdateTimeZone"/>.
+    /// </summary>
+    private void UpdateEngineRows()
+    {
+        TlsGroup.IsVisible = _model.SupportsTlsModes;
+        SshTab.IsVisible = _model.SupportsSshTunnel;
+        ManualCommitBox.IsVisible = _model.SupportsManualCommit;
+        ScanGroup.IsVisible = _model.AsksFullScanQuestion;
+        ScanNote.Text = ScanGuard.Boundary;
+        UpdateSafetyNote();
     }
 
     // ---- Provider-declared fields ----------------------------------------------------------------
@@ -186,15 +209,34 @@ public partial class ConnectionDialog : Window
     {
         FieldsHost.Children.Clear();
         _userBox = null;
+        _shows.Clear();
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("90,*") };
-        for (var i = 0; i < _model.Fields.Count; i++)
+        foreach (var field in _model.Fields)
         {
-            var field = _model.Fields[i];
+            var i = grid.RowDefinitions.Count;
             grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
 
             var editor = Editor(field);
             Grid.SetRow(editor, i);
+
+            // A field's own hint sits on the next row, under the box (DynamoDB's Endpoint).
+            if (field.Field.Hint is { Length: > 0 } hint)
+            {
+                var below = new TextBlock
+                {
+                    Name = field.Key + "FieldHint",
+                    Text = hint,
+                    TextWrapping = TextWrapping.Wrap,
+                    Opacity = 0.7,
+                    FontSize = 12,
+                    Margin = new Thickness(0, 2, 0, 0),
+                };
+                Grid.SetRow(below, grid.RowDefinitions.Count);
+                grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+                Grid.SetColumn(below, 1);
+                grid.Children.Add(below);
+            }
 
             // A checkbox carries its own label as Content and spans both columns, the way this dialog's
             // hand-written ConfirmWritesBox does. It must not sit in the 90px label column: a label like
@@ -234,8 +276,9 @@ public partial class ConnectionDialog : Window
     }
 
     /// <summary>The control for one field: a Boolean is a checkbox, a
-    /// <see cref="ConnectionFieldKind.Choice"/> with candidates is a dropdown, everything else — a
-    /// candidate-less Choice included — is a text box, with the declared default as its placeholder.
+    /// <see cref="ConnectionFieldKind.Choice"/> with candidates is a dropdown, a text field with suggestions is an
+    /// editable dropdown (<see cref="SuggestionFieldBox"/>), everything else — a candidate-less Choice included —
+    /// is a text box, with the declared default as its placeholder.
     /// Which values the dropdown lists is <see cref="ConnectionFieldState.Candidates"/>' decision, not this
     /// method's (§2.3). Passwords never reach here (the model excludes them; the dialog's own box owns the
     /// secret).</summary>
@@ -283,6 +326,18 @@ public partial class ConnectionDialog : Window
             return check;
         }
 
+        // Held so the az-login checkbox can disable it; reassigned on every rebuild.
+        var isUser = string.Equals(field.Key, "User", StringComparison.OrdinalIgnoreCase);
+
+        // Free text with suggestions (DynamoDB's region and AWS profile): an editable dropdown.
+        if (field.Suggestions.Count > 0)
+        {
+            var combo = SuggestionFieldBox.Build(field, text => Edited(field, text));
+            _shows[field.Key] = value => SuggestionFieldBox.Show(combo, value);
+            if (isUser) _userBox = combo;
+            return combo;
+        }
+
         var box = new TextBox
         {
             // Named as the hand-written rows were ("Host" -> HostBox), so a headless UI test can still find
@@ -293,20 +348,28 @@ public partial class ConnectionDialog : Window
             Margin = new Thickness(0, 6, 0, 0),
             PlaceholderText = field.Field.Default ?? "",
         };
-        // Held so the az-login checkbox can disable it; reassigned on every rebuild.
-        if (string.Equals(field.Key, "User", StringComparison.OrdinalIgnoreCase)) _userBox = box;
-        var isHost = string.Equals(field.Key, "Host", StringComparison.OrdinalIgnoreCase);
-        box.TextChanged += (_, _) =>
-        {
-            field.Value = box.Text ?? "";
-            RefreshValidation();
-            // The host is a provider-declared field now, so this hangs off its editor rather than off a named HostBox.
-            if (isHost)
-            {
-                OnHostChanged(field.Value);
-            }
-        };
+        if (isUser) _userBox = box;
+        _shows[field.Key] = value => box.Text = value;
+        box.TextChanged += (_, _) => Edited(field, box.Text ?? "");
         return box;
+    }
+
+    /// <summary>A text row changed: the model stores it and decides what else that changes (a picked AWS
+    /// profile's region), and the rows it changed are redisplayed.</summary>
+    private void Edited(ConnectionFieldState field, string text)
+    {
+        var hostChanged = string.Equals(field.Key, "Host", StringComparison.OrdinalIgnoreCase);
+        foreach (var key in _model.Edit(field.Key, text))
+        {
+            if (_shows.TryGetValue(key, out var show)) show(_model.Get(key) ?? "");
+            hostChanged |= string.Equals(key, "Host", StringComparison.OrdinalIgnoreCase);
+        }
+        RefreshValidation();
+        // The host is a provider-declared field now, so this hangs off its editor rather than off a named HostBox.
+        if (hostChanged)
+        {
+            OnHostChanged(HostValue());
+        }
     }
 
     /// <summary>
@@ -430,11 +493,14 @@ public partial class ConnectionDialog : Window
         // Entra is only offered where the engine supports it, so this also keeps it off engines with no Azure flavour.
         BrowseAzureButton.IsVisible = _azure is not null && kind == CredentialKind.EntraToken;
         IntegratedHint.IsVisible = kind == CredentialKind.Integrated;
+        AwsProfileHint.IsVisible = kind == CredentialKind.AwsProfile;
         UserFromLoginBox.IsVisible = UserFromLoginOffered();
         if (_userBox is not null)
         {
             _userBox.IsEnabled = !UserFromLogin();
-            _userBox.PlaceholderText = UserFromLogin() ? "from az login" : "";
+            var placeholder = UserFromLogin() ? "from az login" : "";
+            if (_userBox is TextBox text) text.PlaceholderText = placeholder;
+            else if (_userBox is ComboBox combo) combo.PlaceholderText = placeholder;
         }
         // The credential kind changes what counts as missing — integrated auth needs no user name — so the
         // advisory hint is recomputed here too, not only when a field is typed into.
@@ -589,6 +655,10 @@ public partial class ConnectionDialog : Window
     private IDbProvider SelectedProvider()
         => _providers[Math.Clamp(ProviderBox.SelectedIndex, 0, _providers.Count - 1)];
 
+    /// <summary>The manual-commit box, but only where the engine can hold a transaction: a tick left behind by a
+    /// previous engine is not written and not described, so the record never claims it.</summary>
+    private bool ManualCommitOn() => _model.SupportsManualCommit && ManualCommitBox.IsChecked == true;
+
     private void OnSafetyToggled(object? sender, RoutedEventArgs e) => UpdateSafetyNote();
 
     private void OnTimeoutChanged(object? sender, TextChangedEventArgs e) => UpdateSafetyNote();
@@ -606,8 +676,13 @@ public partial class ConnectionDialog : Window
         // asked for (§1.9), so SessionPolicy has nothing to say about it — see CommitPolicy for why the two
         // are separate. On a read-only connection it says the true and slightly odd thing, which is that
         // nothing will ever open a transaction because nothing writes.
-        if (CommitPolicy.Advice(ManualCommitBox.IsChecked == true, ReadOnlyBox.IsChecked == true) is { Length: > 0 } commit)
+        if (CommitPolicy.Advice(ManualCommitOn(), ReadOnlyBox.IsChecked == true) is { Length: > 0 } commit)
             advice = advice.Length > 0 ? advice + "\n" + commit : commit;
+        // Where only Bearing refuses a write, the generic sentence above says so; the engine can also say what
+        // actually stops one (DynamoDB: an IAM policy). Appended to the read-only note, and only while read-only
+        // is on — it explains that setting, not the connection.
+        if (ReadOnlyBox.IsChecked == true && _model.WriteBoundary is { Length: > 0 } boundary)
+            advice = advice.Length > 0 ? advice + "\n" + boundary : boundary;
         // What exposing it lets in, from the same pure policy the record is built with — and appended
         // rather than folded in, for CommitPolicy's reason: it is not a thing the server is asked for, and
         // the engine still decides one clause of it (who refuses a write, §1.9a).
@@ -731,18 +806,27 @@ public partial class ConnectionDialog : Window
         EnvironmentColor = string.IsNullOrWhiteSpace(EnvColorBox.Text) ? null : EnvColorBox.Text!.Trim(),
         RequireWriteConfirmation = ConfirmWritesBox.IsChecked == true,
         ReadOnly = ReadOnlyBox.IsChecked == true,
-        ManualCommit = ManualCommitBox.IsChecked == true,
+        ManualCommit = ManualCommitOn(),
+        // Asked only where the engine asks the question; elsewhere the record's own value is carried, so editing a
+        // Postgres connection does not rewrite a flag its engine never reads.
+        ConfirmFullScans = _model.AsksFullScanQuestion
+            ? ConfirmFullScansBox.IsChecked == true
+            : _existing?.ConfirmFullScans ?? true,
         ExternalAccess = ExternalAccessBox.IsChecked == true
             ? ExternalAccess.ReadOnly
             : ExternalAccess.None,
         StatementTimeoutSeconds = TypedTimeoutSeconds(),
-        SessionTimeZone = TypedSessionTimeZone(),
+        // A setting the engine ignores is not saved, for the reason UserFromLogin is not: the record must not
+        // claim a zone or an encryption mode that nothing on this engine honours (§1.4).
+        SessionTimeZone = _model.SupportsSessionTimeZone ? TypedSessionTimeZone() : null,
         CredentialKind = SelectedCredentialKind(),
-        Tls = SelectedTls(),
+        Tls = _model.SupportsTlsModes ? SelectedTls() : TlsPolicy.Default,
         // Not editable here, so carried rather than rebuilt: filing lives in the tree. Omitting it would
         // quietly discard it on every save.
         Folder = _existing?.Folder,
-        SshTunnel = BuildSshTunnel(),
+        // Not saved for an engine that cannot be tunnelled, like Tls above: the record must not name a route nothing
+        // on this engine takes.
+        SshTunnel = _model.SupportsSshTunnel ? BuildSshTunnel() : null,
     };
 
     // ---- SSH tab ---------------------------------------------------------------------------------
@@ -850,7 +934,7 @@ public partial class ConnectionDialog : Window
     /// saved as one the tree shows as a direct connection.</summary>
     private void OnSaveClick(object? sender, RoutedEventArgs e)
     {
-        var tunnel = BuildSshTunnel();
+        var tunnel = _model.SupportsSshTunnel ? BuildSshTunnel() : null;
         if (SshTunnelForm.Problem(tunnel, HostValue()) is { } problem)
         {
             ShowSshProblem(problem);

@@ -85,6 +85,15 @@ internal static class ConnectionFactoryBuilder
         {
             return (info, null);
         }
+        if (!provider.SupportsSshTunnel)
+        {
+            // Only a hand-edited project.json gets here (the dialog neither shows nor saves a tunnel for such an
+            // engine). Refused, not ignored: a connection that says it goes through a bastion must not quietly go
+            // direct.
+            throw new ConnectionFailedException(
+                $"'{info.Name}' names an SSH tunnel, which {provider.DisplayName} connections can't use: they reach "
+                + "an HTTPS endpoint, not a host and port. Remove the tunnel from the connection.");
+        }
         if (credentials is null)
         {
             throw new ConnectionFailedException($"'{info.Name}' needs an SSH tunnel, and nothing here can open one.");

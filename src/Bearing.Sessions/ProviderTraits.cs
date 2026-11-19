@@ -1,5 +1,6 @@
 using System;
 using Bearing.Core.Data;
+using Bearing.Data.DynamoDb;
 using Bearing.Data.Postgres;
 using Bearing.Data.MySql;
 using Bearing.Data.SqlServer;
@@ -26,6 +27,12 @@ namespace Bearing.Sessions;
 /// actually running against.
 /// </para>
 /// </summary>
+/// <param name="GridEditUnavailable">Why the results grid is never editable on this engine — the lock chip's
+/// sentence, said before any per-result reason is looked for — or null where editing depends on the result.
+/// Its own member because the per-result reasons would be false here: a result with no base columns reads as
+/// "a computed expression", which is not why an engine without grid editing refuses.</param>
+/// <param name="OffersTableDdl">Whether a table's definition (DDL) can be shown. False where the engine has
+/// no table DDL for Bearing to render.</param>
 public sealed record ProviderTraits(
     string ProviderId,
     ISqlDialect Dialect,
@@ -33,8 +40,50 @@ public sealed record ProviderTraits(
     string EntraResource,
     string? EndpointHint,
     bool EntraTakesUser,
-    AzureServerKind AzureServers)
+    AzureServerKind AzureServers,
+    string? GridEditUnavailable,
+    bool OffersTableDdl)
 {
+    /// <summary>
+    /// Whether this engine asks the full-table-scan question at all — the connection editor's "Confirm full table
+    /// scans" setting only means something where it does. Read from the dialect rather than stored as a second
+    /// fact: <see cref="ISqlDialect.ScanTargets"/> is null exactly for an engine that never asks, and an empty list
+    /// (no statement) for one that does, so the two cannot drift apart.
+    /// </summary>
+    public bool AsksFullScanQuestion => Dialect.ScanTargets("") is not null;
+
+    /// <summary>
+    /// The sentence naming what actually stops a write on an engine where <b>only Bearing refuses</b>
+    /// (<see cref="IDbProvider.EnforcesReadOnlyOnServer"/> false), for the connection editor's read-only note —
+    /// or null where the generic wording already says enough (SQL Server: a role without write privileges).
+    /// </summary>
+    public string? WriteBoundary { get; init; }
+
+    /// <summary>
+    /// Whether this engine's reads continue from a server-side token (<see cref="QueryResult.Continuation"/>)
+    /// rather than by re-running the statement with an offset — so a host that must read a result to its end
+    /// follows <see cref="IQueryExecutor.ExecuteContinuationAsync"/> instead of streaming from the start. Its own
+    /// fact rather than read off <see cref="AsksFullScanQuestion"/>: the two happen to be true of the same engine
+    /// (DynamoDB), and nothing makes the next engine with one also have the other.
+    /// </summary>
+    public bool ReadsContinueByToken { get; init; }
+
+    /// <summary>
+    /// Whether expanding one of this engine's tables in the tree reads a small sample of its items
+    /// (<see cref="IMetadataReader.SampleAttributesAsync"/>): an engine whose tables declare no columns beyond
+    /// their keys. False everywhere else, and then nothing is asked for — no reader is built, so no connect, no
+    /// prompt and no "couldn't sample" row under a table whose columns the catalog already gave.
+    /// </summary>
+    public bool SamplesAttributes { get; init; }
+
+    /// <summary>
+    /// Keys of <see cref="ConnectionInfo.Options"/> that decide <em>which service is reached</em>, the way
+    /// <see cref="ConnectionInfo.Host"/> does — so a connection whose value for one of them changes is a different
+    /// network identity (the App's <c>SameNetwork</c>: a new tree, a new schema, a new pool). Compared trimmed, blank
+    /// as absent. Empty for an engine whose options bag only tunes a connection to the same server.
+    /// </summary>
+    public IReadOnlyList<string> NetworkOptions { get; init; } = [];
+
     /// <summary>PostgreSQL — the behaviour every caller had when there was one engine, so it is also the
     /// fallback below.</summary>
     public static ProviderTraits Postgres { get; } = new(
@@ -48,7 +97,9 @@ public sealed record ProviderTraits(
         // Azure Database for PostgreSQL wants the role name as the user, alongside the token as password.
         EntraTakesUser: true,
         // Flexible server only: single server was retired in March 2025, so nothing is left to list.
-        AzureServers: new("microsoft.dbforpostgresql/flexibleservers", DatabasesApiVersion: "2022-12-01"));
+        AzureServers: new("microsoft.dbforpostgresql/flexibleservers", DatabasesApiVersion: "2022-12-01"),
+        GridEditUnavailable: null,
+        OffersTableDdl: true);
 
     /// <summary>Microsoft SQL Server.</summary>
     public static ProviderTraits SqlServer { get; } = new(
@@ -63,7 +114,9 @@ public sealed record ProviderTraits(
         // SqlClient refuses a User ID next to an access token; the token is the identity.
         EntraTakesUser: false,
         // Azure SQL logical servers. Managed Instances are a different resource type and are not listed.
-        AzureServers: new("microsoft.sql/servers", DatabasesApiVersion: "2021-11-01"));
+        AzureServers: new("microsoft.sql/servers", DatabasesApiVersion: "2021-11-01"),
+        GridEditUnavailable: null,
+        OffersTableDdl: true);
 
     /// <summary>MySQL and MariaDB — one engine id, one dialect, one set of traits.</summary>
     public static ProviderTraits MySql { get; } = new(
@@ -78,14 +131,50 @@ public sealed record ProviderTraits(
         EntraTakesUser: true,
         // Flexible server only: single server was retired in September 2024. Azure has no managed MariaDB
         // any more (retired September 2025), so a MariaDB connection browses the MySQL list too.
-        AzureServers: new("microsoft.dbformysql/flexibleservers", DatabasesApiVersion: "2023-12-30"));
+        AzureServers: new("microsoft.dbformysql/flexibleservers", DatabasesApiVersion: "2023-12-30"),
+        GridEditUnavailable: null,
+        OffersTableDdl: true);
+
+    /// <summary>
+    /// Amazon DynamoDB, written in PartiQL. Read-focused: no grid editing and no table DDL to show.
+    /// <para>
+    /// The three Entra / Azure members are placeholders and are never read: every reader sits behind a
+    /// <see cref="CredentialKind.EntraToken"/> check (<see cref="EntraTokenProvider"/>, the connection dialog's
+    /// az-login box) or behind Browse Azure, and this engine offers neither
+    /// (<see cref="IDbProvider.SupportsEntraToken"/> is false). Empty rather than a plausible-looking audience, so
+    /// a path that did reach one would fail visibly instead of minting a token for some other service.
+    /// </para>
+    /// </summary>
+    public static ProviderTraits DynamoDb { get; } = new(
+        DynamoDbProvider.ProviderId,
+        PartiQlDialect.Instance,
+        // PartiQL shares the Postgres literal forms Bearing writes: '…' strings with '' doubled, and the
+        // true/false keywords. Binary has no PartiQL literal Bearing could write; "Copy as SQL INSERT" stays
+        // generic SQL on this engine (a known limitation in the spec), so nothing generated is sent as typed.
+        SqlLiteralStyle.Postgres,
+        EntraResource: "",
+        // What the Endpoint is for is said under that field itself (DynamoDbProvider.EndpointHint).
+        EndpointHint: "Region is an AWS region code such as eu-west-1. A blank AWS profile uses the AWS SDK's "
+                      + "default credential chain. A plain http:// endpoint is accepted for a loopback host only.",
+        EntraTakesUser: false,
+        AzureServers: new("", DatabasesApiVersion: ""),
+        GridEditUnavailable: "Read-only — editing isn't available on Amazon DynamoDB connections yet.",
+        OffersTableDdl: false)
+    {
+        WriteBoundary = "On Amazon DynamoDB the boundary is an IAM policy that grants no write actions "
+                        + "(PutItem, UpdateItem, DeleteItem and the like).",
+        ReadsContinueByToken = true,
+        SamplesAttributes = true,
+        // An endpoint (DynamoDB Local, a VPC endpoint) replaces the region's: a different service.
+        NetworkOptions = [DynamoDbConnectionFactory.EndpointOption],
+    };
 
     /// <summary>
     /// The traits for a provider id, matched the way the registry matches it (case-insensitively).
     /// <para>
     /// An id nothing here knows falls back to <see cref="Postgres"/> rather than throwing: these are text
     /// and copy decisions on paths that must not fail — paging a grid, rendering a preview — and Postgres
-    /// is what every one of them did before. The cost of the fallback is a wrong page suffix for a fourth
+    /// is what every one of them did before. The cost of the fallback is a wrong page suffix for a fifth
     /// engine that shipped a provider without adding an arm here; the cost of throwing is a crash in the
     /// results grid. Adding the arm is the fix, and <c>ProviderTraitsTests</c> asserts every registered
     /// provider has one.
@@ -100,6 +189,10 @@ public sealed record ProviderTraits(
         if (string.Equals(providerId, MySql.ProviderId, StringComparison.OrdinalIgnoreCase))
         {
             return MySql;
+        }
+        if (string.Equals(providerId, DynamoDb.ProviderId, StringComparison.OrdinalIgnoreCase))
+        {
+            return DynamoDb;
         }
         return Postgres;
     }

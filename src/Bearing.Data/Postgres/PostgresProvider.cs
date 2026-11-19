@@ -38,6 +38,18 @@ public sealed class PostgresProvider : IDbProvider
     /// Database for PostgreSQL expects it. This is the path EntraTokenProvider was built for.</summary>
     public bool SupportsEntraToken => true;
 
+    /// <inheritdoc />
+    public bool SupportsPasswordCredentials => true;
+
+    /// <inheritdoc />
+    public bool SupportsAwsProfile => false;
+
+    /// <inheritdoc />
+    public bool SupportsManualCommit => true;
+
+    /// <inheritdoc />
+    public bool SupportsTlsModes => true;
+
     public DbErrorKind Classify(QueryError error) => FromSqlState(error.SqlState);
 
     public DbErrorKind ClassifyException(Exception exception)
