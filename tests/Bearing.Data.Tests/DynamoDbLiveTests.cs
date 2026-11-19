@@ -22,6 +22,38 @@ public class DynamoDbLiveTests
 {
     private static readonly DynamoDbProvider Provider = DynamoDbTestServer.Provider;
 
+    // ---- what Limit means (measured, PR #192 review) ------------------------------------------------
+
+    /// <summary>
+    /// <c>ExecuteStatement</c>'s <c>Limit</c> caps the items DynamoDB <em>evaluates</em>, not the items it returns:
+    /// with a filter matching one item in a hundred, <c>Limit 10</c> comes back with no items and a token. Asserted
+    /// through the SDK's own client, so the paging design rests on what the server does rather than on the docs.
+    /// </summary>
+    [SkippableFact]
+    public async Task Limit_bounds_the_items_evaluated_not_the_items_returned()
+    {
+        await DynamoDbTestServer.RequireAsync();
+        await using var table = await LiveTable.CreateAsync("limit", keys: [("id", ScalarAttributeType.S, KeyType.HASH)]);
+        await table.PutAsync(Enumerable.Range(0, 100)
+            .Select(i => Item(("id", S($"k{i:000}")), ("v", N(i.ToString(System.Globalization.CultureInfo.InvariantCulture)))))
+            .ToArray());
+        using var client = DynamoDbTestServer.Client();
+
+        var limited = await client.ExecuteStatementAsync(new ExecuteStatementRequest
+        {
+            Statement = $"select * from \"{table.Name}\" where v = 57",
+            Limit = 10,
+        });
+        var unlimited = await client.ExecuteStatementAsync(new ExecuteStatementRequest
+        {
+            Statement = $"select * from \"{table.Name}\" where v = 57",
+        });
+
+        Assert.Empty(limited.Items ?? []);
+        Assert.False(string.IsNullOrEmpty(limited.NextToken));
+        Assert.Single(unlimited.Items);
+    }
+
     // ---- SC7: schema -------------------------------------------------------------------------------
 
     [SkippableFact]
@@ -260,8 +292,9 @@ public class DynamoDbLiveTests
             "overflow",
             keys: [("id", ScalarAttributeType.S, KeyType.HASH), ("seq", ScalarAttributeType.N, KeyType.RANGE)]);
 
-        // A query on one partition comes back in sort-key order, so "late" is on page two by construction —
-        // a scan's order is the service's, and could not promise that.
+        // One partition, so even a scan reads it in sort-key order and "late" is on page two by construction. No
+        // WHERE, so the read sends Limit and the page boundary is exactly 100 (a filtered read sends none, and its
+        // page would run to DynamoDB's 1 MB).
         await table.PutAsync(Enumerable.Range(1, 150)
             .Select(i => i <= 100
                 ? Item(("id", S("p")), ("seq", N(i.ToString())), ("v", S("early")))
@@ -270,7 +303,7 @@ public class DynamoDbLiveTests
         await using var factory = DynamoDbTestServer.Factory();
         var executor = Provider.CreateQueryExecutor(factory);
 
-        var first = await SelectAsync(executor, $"select * from \"{table.Name}\" where \"id\" = 'p'", maxRows: 100);
+        var first = await SelectAsync(executor, $"select * from \"{table.Name}\"", maxRows: 100);
 
         Assert.Equal(100, first.Rows.Count);
         Assert.NotNull(first.Continuation);

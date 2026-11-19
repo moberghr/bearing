@@ -92,6 +92,78 @@ internal static class PartiQlBatch
     }
 
     /// <summary>
+    /// True when <paramref name="statement"/> has a top-level <c>WHERE</c> after its <c>FROM</c> — a filter, or a key
+    /// condition, either of which can make DynamoDB evaluate more items than it returns. False when there is no
+    /// <c>FROM</c> or no <c>WHERE</c> at depth zero (a <c>WHERE</c> inside parentheses is not the statement's).
+    /// </summary>
+    public static bool HasWhere(string statement)
+    {
+        ArgumentNullException.ThrowIfNull(statement);
+
+        var tokens = Lex(statement)
+            .Where(t => t.Kind != TokenKind.Semicolon)
+            .ToList();
+
+        var from = IndexOfFrom(tokens);
+        if (from < 0) return false;
+
+        var depth = 0;
+        for (var i = from; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+
+            if (token.Kind == TokenKind.Other && token.Text == "(") depth++;
+            else if (token.Kind == TokenKind.Other && token.Text == ")") depth--;
+            else if (depth == 0 && IsWord(token, "WHERE")) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The attribute names a <c>SELECT</c> projects, in the order written, when every projected item is one plain
+    /// or quoted name (<c>SELECT pk, "Order Date" FROM t</c>). Null for <c>SELECT *</c>, for a statement that is
+    /// not a <c>SELECT</c>, and for any item this does not read as one name — a path (<c>a.b</c>, <c>a[0]</c>), a
+    /// function, an alias: null is "could not tell", and the layout then goes by what the items hold.
+    /// </summary>
+    public static IReadOnlyList<string>? Projection(string statement)
+    {
+        ArgumentNullException.ThrowIfNull(statement);
+
+        var tokens = Lex(statement)
+            .Where(t => t.Kind != TokenKind.Semicolon)
+            .ToList();
+
+        if (tokens.Count < 2 || !IsWord(tokens[0], "SELECT")) return null;
+
+        var from = IndexOfFrom(tokens);
+        if (from < 0) return null;
+
+        var names = new List<string>();
+        var item = new List<Token>();
+
+        // tokens[from - 1] is FROM itself; the projection is everything between SELECT and it.
+        for (var i = 1; i <= from - 1; i++)
+        {
+            var atEnd = i == from - 1;
+            var token = tokens[i];
+
+            if (!atEnd && !(token.Kind == TokenKind.Other && token.Text == ","))
+            {
+                item.Add(token);
+                continue;
+            }
+
+            if (item is not [{ Kind: TokenKind.Word or TokenKind.QuotedName, Text.Length: > 0 } only]) return null;
+
+            names.Add(only.Text);
+            item.Clear();
+        }
+
+        return names.Count == 0 ? null : names;
+    }
+
+    /// <summary>
     /// The table and index <paramref name="statement"/> names, or null when the text is not a shape this reads
     /// (no <c>FROM</c>, no name after it, an unknown lead verb). Null is "could not tell", never "none".
     /// </summary>

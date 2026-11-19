@@ -42,12 +42,33 @@ internal sealed record DynamoDbColumnLayout(IReadOnlyList<DynamoDbColumn> Column
         if (HasOverflow)
         {
             descriptors.Add(new ColumnDescriptor(
-                DynamoDbValues.OtherAttributes,
+                OverflowName,
                 DynamoDbValues.TypeName(DynamoDbColumnType.Text),
                 typeof(string)));
         }
 
         return descriptors;
+    }
+
+    /// <summary>
+    /// The overflow column's name: <see cref="DynamoDbValues.OtherAttributes"/>, unless an item has a real
+    /// attribute of that name — then <c>(other attributes 2)</c>, <c>3</c>, … whichever no data column holds, so a
+    /// result never carries two columns of one name. Derived from <see cref="Columns"/> alone, which travel in the
+    /// continuation, so every page of a result agrees.
+    /// </summary>
+    public string OverflowName
+    {
+        get
+        {
+            var taken = Columns.Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
+            if (!taken.Contains(DynamoDbValues.OtherAttributes)) return DynamoDbValues.OtherAttributes;
+
+            for (var n = 2; ; n++)
+            {
+                var candidate = $"(other attributes {n})";
+                if (!taken.Contains(candidate)) return candidate;
+            }
+        }
     }
 }
 
@@ -67,7 +88,8 @@ internal sealed record DynamoDbColumnLayout(IReadOnlyList<DynamoDbColumn> Column
 /// </summary>
 internal static partial class DynamoDbValues
 {
-    /// <summary>The exact name of the trailing overflow column.</summary>
+    /// <summary>The trailing overflow column's name — unless a real attribute holds it
+    /// (<see cref="DynamoDbColumnLayout.OverflowName"/>).</summary>
     public const string OtherAttributes = "(other attributes)";
 
     // The strict JSON number grammar. DynamoDB writes numbers like 100, -1.5 and 1E+126; anything else (it
@@ -165,11 +187,17 @@ internal static partial class DynamoDbValues
     /// given), then every other attribute seen, ordinal-alphabetical. A key attribute is a column even when this
     /// page has no value for it. A column's type is that of its first non-null value, or text when its values
     /// disagree (or are all null).
+    /// <para>
+    /// <paramref name="projected"/> — the names a <c>SELECT</c> projects (<see cref="PartiQlBatch.Projection"/>) —
+    /// are columns too, whether or not the first page showed them: a filtered read's first page can come back empty
+    /// with a token, and a layout fixed from nothing would push every later attribute into the overflow column.
+    /// </para>
     /// </summary>
     public static DynamoDbColumnLayout Layout(
         IEnumerable<IReadOnlyDictionary<string, AttributeValue>> firstPage,
         IReadOnlyList<string> keyAttributes,
-        bool hasOverflow)
+        bool hasOverflow,
+        IReadOnlyList<string>? projected = null)
     {
         ArgumentNullException.ThrowIfNull(firstPage);
         ArgumentNullException.ThrowIfNull(keyAttributes);
@@ -181,6 +209,7 @@ internal static partial class DynamoDbValues
 
         var others = items
             .SelectMany(item => item.Keys)
+            .Concat(projected ?? [])
             .Distinct(StringComparer.Ordinal)
             .Where(name => !names.Contains(name, StringComparer.Ordinal))
             .Order(StringComparer.Ordinal);

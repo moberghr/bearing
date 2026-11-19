@@ -158,11 +158,11 @@ public sealed class CredentialResolver
                 return new Credential(null, null);
 
             case CredentialKind.AwsProfile:
-                // The AWS SDK resolves the profile itself (SSO, assumed role, or keys in ~/.aws) when the
-                // provider's factory builds its client, so there is nothing for Bearing to hand over. The
+                // The AWS SDK resolves the profile itself, in this process (SSO, assumed role, or keys in
+                // ~/.aws) when the provider's factory builds its client, so there is nothing for Bearing to hand over. The
                 // Integrated arrangement for the same reason: ahead of any store or prompt code, because this
                 // kind must never read the secret store, never write to it, and never ask the user for
-                // anything — Bearing holds no AWS secret at all (§1.1). No expiry: the SDK refreshes what it
+                // anything — no Bearing code holds an AWS secret (§1.1, §1.9c). No expiry: the SDK refreshes what it
                 // resolved, so the session manager has no disconnect-before-expiry to schedule.
                 return new Credential(null, null);
 

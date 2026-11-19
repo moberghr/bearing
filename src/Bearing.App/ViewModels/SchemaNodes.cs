@@ -1335,9 +1335,21 @@ public sealed class RelationNodeViewModel : SchemaNodeViewModel
     /// <summary>
     /// The attribute sample, for an engine whose tables declare only their keys (DynamoDB). Started here, once the
     /// columns are attached, because it adds rows (§9.8) — and so only when the user expands the table: nothing is
-    /// read from a table before that. An engine that does not sample answers null and the rows are unchanged.
+    /// read from a table before that. Only on an engine that samples (<see cref="ProviderTraits.SamplesAttributes"/>):
+    /// any other is not asked at all — asking would build a reader, which may connect or prompt, and a failure
+    /// there would put a "couldn't sample" row under a table whose columns the catalog already gave.
     /// </summary>
-    protected override void OnChildrenAttached() => _ = FillSampledAttributesAsync();
+    protected override void OnChildrenAttached()
+    {
+        if (ProviderTraits.For(_connection).SamplesAttributes)
+        {
+            _ = FillSampledAttributesAsync();
+        }
+        else
+        {
+            AttributesSampled?.Invoke();
+        }
+    }
 
     /// <summary>
     /// Read the sample and insert its rows after the key columns. A read from a load that has since been replaced
@@ -1368,7 +1380,7 @@ public sealed class RelationNodeViewModel : SchemaNodeViewModel
     }
 
     /// <summary>Raised once the attribute sample has answered (whether or not it added rows) for the current
-    /// load. For tests; nothing in the app waits.</summary>
+    /// load — at once on an engine that does not sample. For tests; nothing in the app waits.</summary>
     internal Action? AttributesSampled { get; set; }
 
     /// <summary>

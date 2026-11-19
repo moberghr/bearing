@@ -15,11 +15,11 @@ namespace Bearing.App.Tests.Ui;
 
 /// <summary>
 /// The full-scan confirmation (W4), realized: Cancel is both the Esc and the Enter button, so neither key is a way
-/// into a scan; the confirm button is neither; and a run Bearing could not check is headed "could not check", never
-/// a scan.
+/// into a scan, and the confirm button is neither — claims only a shown window holds. What the heading and title say
+/// is pure (<see cref="ScanQuestion"/>) and pinned in <c>ScanConfirmationTests</c>, not here (§4.3).
 /// <para>
-/// Nothing here claims a visual (§0.2/§4.3): these read button flags and a TextBlock's text off a shown window.
-/// Whether the dialog reads well still needs eyeball QA.
+/// Nothing here claims a visual (§0.2/§4.3): these read button flags off a shown window. Whether the dialog reads
+/// well still needs eyeball QA.
 /// </para>
 /// </summary>
 [Collection(UiTestCollection.Name)]
@@ -86,38 +86,6 @@ public class ConfirmScanDialogTests
             Assert.False(proceed.IsDefault);
             Assert.True(cancel.IsEffectivelyVisible);
             Assert.True(proceed.IsEffectivelyVisible);
-        }
-        finally
-        {
-            dialog.Close();
-        }
-    });
-
-    [Fact]
-    public Task A_known_scan_is_headed_as_one() => _ui.Run(() =>
-    {
-        var dialog = Show(Question(ScanVerdictKind.FullScan));
-        try
-        {
-            Assert.Equal("Read a whole table on orders-prod · production?", HeadingText(dialog));
-            Assert.Equal("Confirm full table scan", dialog.Title);
-        }
-        finally
-        {
-            dialog.Close();
-        }
-    });
-
-    [Fact]
-    public Task A_read_bearing_could_not_check_says_so_and_never_calls_it_a_scan() => _ui.Run(() =>
-    {
-        var dialog = Show(Question(ScanVerdictKind.Undetermined));
-        try
-        {
-            var heading = HeadingText(dialog);
-            Assert.Contains("could not check", heading);
-            Assert.DoesNotContain("scan", heading, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("scan", dialog.Title ?? "", StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

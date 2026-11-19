@@ -38,6 +38,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
         SourceSql = pageable ? sourceSql : null;
         ExecutedSql = string.IsNullOrWhiteSpace(sourceSql) ? null : sourceSql.Trim();
         Continuation = result.Continuation;
+        _arrivedWithToken = result.Continuation is not null;
         // A token, when there is one, is the answer to "is there more" — not whether the page came back full.
         _hasMore = pageable && (Continuation is not null || result.Truncated);
         ColumnLayout = new ColumnLayout(Columns.Count);
@@ -147,6 +148,14 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// </summary>
     public string? Continuation { get; private set; }
 
+    /// <summary>
+    /// The session (connection + database) this result was read from — set by <c>ResultSetBuilder</c>. A
+    /// <see cref="Continuation"/> is only ever sent back to this session: the token carries its statement, so
+    /// sending it to whatever the tab is on now would run that statement there and append another server's rows
+    /// to this grid. Null for a set built without one, which is then never continued (fail closed).
+    /// </summary>
+    public SessionKey? SourceSession { get; init; }
+
     /// <summary>The run that produced this set may read a whole table — it was confirmed as a possible scan, or
     /// it held an unfiltered scan whose first page ran unasked — so a fetch all or export of it asks. Set by the
     /// run after the result sets are built.</summary>
@@ -162,8 +171,15 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// <summary>Rows loaded so far — also the offset for the next page.</summary>
     public int Loaded => Rows.Count;
 
-    /// <summary>The [Count] button is offered only while the total is still unknown.</summary>
-    public bool CanCount => IsPageable && TotalCount is null;
+    /// <summary>
+    /// The [Count] button is offered only while the total is still unknown, and only where a count can answer:
+    /// never on an engine whose reads continue by token (<see cref="ProviderTraits.ReadsContinueByToken"/> —
+    /// DynamoDB has no count short of reading every match, and its executor always answers "unavailable"), nor
+    /// for a result that arrived with a token, whose read the token — not an offset query — continues.
+    /// </summary>
+    public bool CanCount => IsPageable && TotalCount is null && !_arrivedWithToken && !Traits.ReadsContinueByToken;
+
+    private readonly bool _arrivedWithToken;
 
     /// <summary>Canonical live row-count phrase, e.g. "100 rows" or "200 of 1,000 rows". Every surface
     /// (meta row, footer, status bar) derives from this so the counts never drift out of sync.</summary>

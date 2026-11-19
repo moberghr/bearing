@@ -49,8 +49,9 @@ which runs keyed `SELECT`s only.
    - Read-only, Confirm writes, statement timeout, environment and folder work as on other engines. The
      read-only note uses the "Bearing refuses, the server does not" wording (`EnforcesReadOnlyOnServer` =
      false) and names IAM as the real boundary.
-2. **Sign-in.** The AWS SDK resolves the profile (SSO, assumed role, or static keys in `~/.aws`). Bearing
-   never reads, stores, prompts for or logs an AWS secret. When the SDK cannot produce credentials (expired
+2. **Sign-in.** The AWS SDK resolves the profile (SSO, assumed role, or static keys in `~/.aws`). It does
+   so inside Bearing's process (a named profile when the client is built); Bearing's own code never reads, stores,
+   prompts for or logs an AWS secret (corrected after review, §1.9c). When the SDK cannot produce credentials (expired
    SSO session, unknown profile) the error is classified `Authentication` and the message names the profile
    and the command to run (`aws sso login --profile <name>`). Bearing does not launch that command.
 3. **Endpoint rule.** An `http://` endpoint is accepted only for a loopback host; `http://` to any other

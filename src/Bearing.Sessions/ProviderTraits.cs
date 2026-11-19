@@ -68,6 +68,22 @@ public sealed record ProviderTraits(
     /// </summary>
     public bool ReadsContinueByToken { get; init; }
 
+    /// <summary>
+    /// Whether expanding one of this engine's tables in the tree reads a small sample of its items
+    /// (<see cref="IMetadataReader.SampleAttributesAsync"/>): an engine whose tables declare no columns beyond
+    /// their keys. False everywhere else, and then nothing is asked for — no reader is built, so no connect, no
+    /// prompt and no "couldn't sample" row under a table whose columns the catalog already gave.
+    /// </summary>
+    public bool SamplesAttributes { get; init; }
+
+    /// <summary>
+    /// Keys of <see cref="ConnectionInfo.Options"/> that decide <em>which service is reached</em>, the way
+    /// <see cref="ConnectionInfo.Host"/> does — so a connection whose value for one of them changes is a different
+    /// network identity (the App's <c>SameNetwork</c>: a new tree, a new schema, a new pool). Compared trimmed, blank
+    /// as absent. Empty for an engine whose options bag only tunes a connection to the same server.
+    /// </summary>
+    public IReadOnlyList<string> NetworkOptions { get; init; } = [];
+
     /// <summary>PostgreSQL — the behaviour every caller had when there was one engine, so it is also the
     /// fallback below.</summary>
     public static ProviderTraits Postgres { get; } = new(
@@ -148,6 +164,9 @@ public sealed record ProviderTraits(
         WriteBoundary = "On Amazon DynamoDB the boundary is an IAM policy that grants no write actions "
                         + "(PutItem, UpdateItem, DeleteItem and the like).",
         ReadsContinueByToken = true,
+        SamplesAttributes = true,
+        // An endpoint (DynamoDB Local, a VPC endpoint) replaces the region's: a different service.
+        NetworkOptions = [DynamoDbConnectionFactory.EndpointOption],
     };
 
     /// <summary>

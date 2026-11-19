@@ -697,6 +697,31 @@ public class SchemaNodeTests
     });
 
     [Fact]
+    public Task An_engine_that_does_not_sample_is_never_asked_even_by_a_browser_that_would_fail() => Task.Run(async () =>
+    {
+        // The review's case: a Postgres table under a browser whose reader build fails (a cancelled prompt). Asking
+        // would put "Couldn't sample attributes" under a table whose columns the catalog already gave.
+        var browser = new SamplingBrowser
+        {
+            Answer = _ => Task.FromException<AttributeSample?>(new OperationCanceledException("The prompt was cancelled.")),
+        };
+        var connection = new ConnectionInfo { Id = Guid.NewGuid(), Name = "pg", ProviderId = "postgres", Host = "h" };
+        TableInfo[] tables = [new(1, "public", "film", RelationKind.Table)];
+        ColumnInfo[] columns = [new(1, 1, "film_id", "integer", NotNull: true, IsPrimaryKey: true)];
+        var snapshot = new SchemaSnapshot("app", ["public"], tables, columns, Array.Empty<ForeignKeyInfo>());
+        var node = new RelationNodeViewModel(connection, "app", tables[0], snapshot, browser, "public");
+        var raised = 0;
+        node.AttributesSampled = () => raised++;
+
+        await node.EnsureChildrenAsync();
+
+        Assert.Empty(browser.Sampled);
+        Assert.Equal(1, raised);
+        Assert.DoesNotContain(node.Children, c => c.Title.StartsWith("Couldn't sample", StringComparison.Ordinal));
+        Assert.Equal("film_id", node.Children[0].Title);
+    });
+
+    [Fact]
     public Task A_sample_from_a_load_since_refreshed_is_discarded() => Task.Run(async () =>
     {
         var stale = new TaskCompletionSource<AttributeSample?>();

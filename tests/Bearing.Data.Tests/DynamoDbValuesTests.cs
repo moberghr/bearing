@@ -441,4 +441,40 @@ public class DynamoDbValuesTests
         Assert.IsAssignableFrom<FormatException>(ex);
         Assert.DoesNotContain("secret", ex.Message, StringComparison.Ordinal);
     }
+
+    // ---- the overflow column's name ---------------------------------------------------------------
+
+    [Fact]
+    public void A_real_attribute_named_like_the_overflow_column_does_not_collide_with_it()
+    {
+        var layout = DynamoDbValues.Layout(
+            [Item(("pk", S("a")), (DynamoDbValues.OtherAttributes, S("real")))], ["pk"], hasOverflow: true);
+
+        Assert.Equal(
+            ["pk", DynamoDbValues.OtherAttributes, "(other attributes 2)"],
+            layout.Descriptors().Select(d => d.Name));
+
+        var row = DynamoDbValues.Row(Item(("pk", S("b")), (DynamoDbValues.OtherAttributes, S("x")), ("late", S("y"))), layout);
+
+        Assert.Equal("x", row[1]);
+        Assert.Contains("\"late\"", (string)row[2]!);
+    }
+
+    [Fact]
+    public void Without_a_clash_the_overflow_column_keeps_its_name()
+    {
+        var layout = DynamoDbValues.Layout([Item(("pk", S("a")))], ["pk"], hasOverflow: true);
+
+        Assert.Equal(DynamoDbValues.OtherAttributes, layout.OverflowName);
+    }
+
+    // ---- projected names fix columns ---------------------------------------------------------------
+
+    [Fact]
+    public void Projected_names_are_columns_even_when_the_first_page_is_empty()
+    {
+        var layout = DynamoDbValues.Layout([], ["pk"], hasOverflow: true, projected: ["total", "pk", "status"]);
+
+        Assert.Equal(["pk", "status", "total"], layout.Columns.Select(c => c.Name));
+    }
 }

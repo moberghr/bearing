@@ -13,12 +13,21 @@ namespace Bearing.Data.DynamoDb;
 /// <see cref="QueryResult.Continuation"/>, so a row already on screen is never read (or billed) twice.
 /// <para>
 /// <b>The page rules.</b> A page ends when it holds the caller's row cap, when DynamoDB reports no
-/// <c>NextToken</c>, or after <see cref="RequestBudget"/> requests — whichever comes first. Each request is
-/// sent with <c>Limit</c> set to the rows still wanted, so DynamoDB never returns more than the page can hold
-/// (<c>Limit</c> bounds the items <em>evaluated</em>, and a match past it would otherwise have to be dropped
-/// or re-read). The budget is what keeps one page of a selective filter from reading a whole table; a page
-/// it cut short says so in <see cref="QueryResult.Message"/>. <see cref="QueryResult.Truncated"/> is "a
-/// token remains" — whether more rows exist comes from the token, never from the row count.
+/// <c>NextToken</c>, or after <see cref="RequestBudget"/> requests — whichever comes first. The budget is what
+/// keeps one page of a selective filter from reading a whole table; a page it cut short says so in
+/// <see cref="QueryResult.Message"/>. <see cref="QueryResult.Truncated"/> is "a token remains" — whether more
+/// rows exist comes from the token, never from the row count.
+/// </para>
+/// <para>
+/// <b><c>Limit</c> only on a read without <c>WHERE</c></b> (decided on the PR #192 review, measured in
+/// <c>DynamoDbLiveTests.Limit_bounds_the_items_evaluated_not_the_items_returned</c>). DynamoDB's <c>Limit</c> caps
+/// the items it <em>evaluates</em>, not the items it returns. Where every item evaluated is returned — no
+/// <c>WHERE</c> — each request is sent with <c>Limit</c> set to the rows still wanted, so the page is exact and an
+/// unfiltered scan's first page reads about one page of items. Where a <c>WHERE</c> can reject items, a
+/// <c>Limit</c> would make a selective filter return almost nothing per page, so none is sent: each request
+/// evaluates up to DynamoDB's 1 MB and returns every match. Such a page can hold more rows than the cap — by at
+/// most one request's matches — and nothing is dropped, so the token stays exact. A caller that must hold to a cap
+/// (the <c>bearing</c> command's <c>--max-rows</c>) trims, and says the result was truncated.
 /// </para>
 /// <para>
 /// <b>Columns are fixed by the first page</b> (§9.10: the grid never rebuilds its columns): the table's key
@@ -36,7 +45,8 @@ namespace Bearing.Data.DynamoDb;
 public sealed class DynamoDbQueryExecutor : IQueryExecutor
 {
     /// <summary>The most requests one page may make before it stops and offers to continue. Each evaluates at
-    /// most 1 MB, so a page reads at most about 10 MB however few items match.</summary>
+    /// most 1 MB (or <c>Limit</c> items, on a read without <c>WHERE</c>), so a page evaluates at most about 10 MB
+    /// however few items match.</summary>
     internal const int RequestBudget = 10;
 
     internal const string OffsetPagingUnavailable =
@@ -161,13 +171,15 @@ public sealed class DynamoDbQueryExecutor : IQueryExecutor
         IReadOnlyList<ColumnDescriptor> columns = [];
         string? token = null;
         var yielded = 0;
+        var trimmed = false;
+        var limited = !PartiQlBatch.HasWhere(statement);
 
         do
         {
             if (max is { } limit && yielded + pending.Count >= limit) break;
 
             var request = new ExecuteStatementRequest { Statement = statement, NextToken = token };
-            if (max is { } ceiling)
+            if (limited && max is { } ceiling)
             {
                 request.Limit = Math.Max(1, ceiling - yielded - pending.Count);
             }
@@ -176,10 +188,18 @@ public sealed class DynamoDbQueryExecutor : IQueryExecutor
             if (response.Items is { } items) pending.AddRange(items);
             token = TokenOf(response);
 
+            // A filtered request has no Limit and may return more than the cap; a stream's cap is exact, so the
+            // excess is dropped here and the tail says the read was cut.
+            if (max is { } most && yielded + pending.Count > most)
+            {
+                pending.RemoveRange(most - yielded, yielded + pending.Count - most);
+                trimmed = true;
+            }
+
             if (layout is null && (pending.Count >= batchSize || token is null))
             {
                 var keys = await KeyAttributesAsync(statement, pending, deadline, ct).ConfigureAwait(false);
-                layout = DynamoDbValues.Layout(pending, keys, hasOverflow: token is not null);
+                layout = DynamoDbValues.Layout(pending, keys, hasOverflow: token is not null, PartiQlBatch.Projection(statement));
                 columns = layout.Descriptors();
             }
 
@@ -197,14 +217,15 @@ public sealed class DynamoDbQueryExecutor : IQueryExecutor
         if (layout is null)
         {
             var keys = await KeyAttributesAsync(statement, pending, deadline, ct).ConfigureAwait(false);
-            layout = DynamoDbValues.Layout(pending, keys, hasOverflow: token is not null);
+            layout = DynamoDbValues.Layout(pending, keys, hasOverflow: token is not null, PartiQlBatch.Projection(statement));
             columns = layout.Descriptors();
         }
 
         var tail = pending.Select(item => DynamoDbValues.Row(item, layout)).ToList();
 
-        // The tail, always (§5.7). A token left over means the cap stopped the read, not the table's end.
-        yield return new RowBatch(columns, tail, Truncated: token is not null);
+        // The tail, always (§5.7). A token left over — or rows the cap dropped — means the cap stopped the read,
+        // not the table's end.
+        yield return new RowBatch(columns, tail, Truncated: token is not null || trimmed);
     }
 
     public Task<QueryResult> ExecutePageAsync(
@@ -240,7 +261,8 @@ public sealed class DynamoDbQueryExecutor : IQueryExecutor
             var cap = maxRows is { } m ? Math.Max(1, m) : (int?)null;
             var page = await ReadPageAsync(statement, null, cap, deadline.Token).ConfigureAwait(false);
             var keys = await KeyAttributesAsync(statement, page.Items, deadline, ct).ConfigureAwait(false);
-            var layout = DynamoDbValues.Layout(page.Items, keys, hasOverflow: page.NextToken is not null);
+            var layout = DynamoDbValues.Layout(
+                page.Items, keys, hasOverflow: page.NextToken is not null, PartiQlBatch.Projection(statement));
 
             return RowsResult(page, layout, statement, keys, index, sw);
         }
@@ -300,17 +322,19 @@ public sealed class DynamoDbQueryExecutor : IQueryExecutor
     private sealed record Page(List<Dictionary<string, AttributeValue>> Items, string? NextToken, bool StoppedByBudget);
 
     /// <summary>One page under the page rules (see the class remarks). <paramref name="cap"/> null means no
-    /// row cap — the budget and the token still end the page.</summary>
+    /// row cap — the budget and the token still end the page. A read with a <c>WHERE</c> sends no <c>Limit</c>, so
+    /// its page can exceed the cap by one request's matches; nothing is dropped.</summary>
     private async Task<Page> ReadPageAsync(string statement, string? startToken, int? cap, CancellationToken ct)
     {
         var items = new List<Dictionary<string, AttributeValue>>();
         var token = startToken;
         var requests = 0;
+        var limited = !PartiQlBatch.HasWhere(statement);
 
         do
         {
             var request = new ExecuteStatementRequest { Statement = statement, NextToken = token };
-            if (cap is { } max)
+            if (limited && cap is { } max)
             {
                 request.Limit = Math.Max(1, max - items.Count);
             }
@@ -352,7 +376,8 @@ public sealed class DynamoDbQueryExecutor : IQueryExecutor
     /// <summary>
     /// The key attributes a result leads with: the table's partition key, then its sort key. For
     /// <c>SELECT *</c> every item has them, so they are columns even on an empty first page; for a projection
-    /// only those the first page actually holds are (<i>Behaviour 5</i>: the attributes found). A table that is
+    /// those it names (<see cref="PartiQlBatch.Projection"/>) and those the first page actually holds are
+    /// (<i>Behaviour 5</i>: the attributes found). A table that is
     /// gone or whose description is refused, or a statement whose table cannot be read off, gives none — the
     /// columns are then alphabetical only.
     /// <para>
@@ -395,11 +420,14 @@ public sealed class DynamoDbQueryExecutor : IQueryExecutor
             throw surfaced;
         }
 
-        return PartiQlBatch.SelectsAll(statement)
-            ? keys
-            : keys
-                .Where(key => firstPage.Any(item => item.ContainsKey(key)))
-                .ToList();
+        if (PartiQlBatch.SelectsAll(statement)) return keys;
+
+        var projected = PartiQlBatch.Projection(statement);
+
+        return keys
+            .Where(key => (projected?.Contains(key, StringComparer.Ordinal) ?? false)
+                          || firstPage.Any(item => item.ContainsKey(key)))
+            .ToList();
     }
 
     // ---- requests, timeout, errors -----------------------------------------------------------------

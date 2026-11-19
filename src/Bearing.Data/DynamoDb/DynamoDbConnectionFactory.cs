@@ -16,10 +16,18 @@ namespace Bearing.Data.DynamoDb;
 /// <see cref="ConnectionInfo.Host"/>, the AWS profile is <see cref="ConnectionInfo.User"/> (blank = the SDK's
 /// default credential chain) and the endpoint is <c>Options["Endpoint"]</c>.
 /// <para>
-/// <b>Bearing never reads, stores, prompts for or logs an AWS secret</b> (§1.1). Credentials are an opaque
-/// <see cref="AWSCredentials"/> the SDK resolves itself — lazily, on the first request, so building a client
-/// connects to nothing, probes no metadata service and reads no token cache. No Bearing code calls
-/// <c>GetCredentials</c>.
+/// <b>No Bearing code reads, stores, prompts for or logs an AWS secret</b> (§1.1). Credentials are an opaque
+/// <see cref="AWSCredentials"/> the AWS SDK produces, in this process, and no Bearing code calls
+/// <c>GetCredentials</c>. What that does and does not mean, measured rather than assumed:
+/// <list type="bullet">
+/// <item>A <b>named profile</b> is read by the SDK when the client is built: the SDK opens the AWS config and
+/// credentials files and, for a profile holding static keys, loads the access key and secret into the
+/// <see cref="AWSCredentials"/> it returns. The secret is in Bearing's process memory, inside the SDK; it never
+/// passes through Bearing code, a Bearing store, a log line or a message. An SSO or role profile is resolved by
+/// the SDK on the first request (its token cache, its STS call).</item>
+/// <item>A <b>blank profile</b> leaves the SDK's default chain to resolve on the first request, so building the
+/// client connects to nothing and probes no metadata service.</item>
+/// </list>
 /// </para>
 /// <para>
 /// <b>The endpoint rule.</b> <c>https://</c> to any host is accepted. <c>http://</c> is accepted only for a
@@ -32,7 +40,8 @@ namespace Bearing.Data.DynamoDb;
 /// </para>
 /// <para>
 /// <b>A setting that cannot be honoured fails the connect, not the constructor.</b> The constructor never
-/// throws for one; the sentence is thrown by <see cref="TestConnectionAsync"/> and by every later use of
+/// throws for one — nor for anything the SDK throws while building the client, such as a config or credentials
+/// file it cannot parse; the sentence is thrown by <see cref="TestConnectionAsync"/> and by every later use of
 /// <see cref="Api"/>, so it reaches the user through the same "Could not connect to …" the other engines'
 /// failures do, and nothing is built from a setting that was refused.
 /// </para>
@@ -77,6 +86,13 @@ public sealed class DynamoDbConnectionFactory : IDbConnectionFactory
             // Held, not thrown: see the class remarks.
             _failure = e;
         }
+        catch (Exception e)
+        {
+            // Anything else the SDK threw while building (a malformed AWS config or credentials file, a profile
+            // setting it rejects). Held like the two above; scrubbed, and without the original as its inner
+            // exception, because a parse error may quote a line of a file that holds keys.
+            _failure = BuildFailure(e, _profile);
+        }
     }
 
     /// <summary>A factory over an API someone else made — the fake, in the executor's and reader's tests.</summary>
@@ -100,7 +116,8 @@ public sealed class DynamoDbConnectionFactory : IDbConnectionFactory
     internal int StatementTimeoutSeconds { get; }
 
     /// <summary>The DynamoDB calls this connection may make. Throws the sentence for a setting that was
-    /// refused (an endpoint, a region, a profile the SDK cannot find) — on every use, not just the first.</summary>
+    /// refused (an endpoint, a region, a profile the SDK cannot find or cannot sign in with) — on every use, not
+    /// just the first.</summary>
     internal IDynamoDbApi Api
         => _failure is not null
             ? throw new InvalidOperationException(_failure.Message, _failure)
@@ -240,6 +257,21 @@ public sealed class DynamoDbConnectionFactory : IDbConnectionFactory
             || (IPAddress.TryParse(name, out var address) && IPAddress.IsLoopback(address));
     }
 
+    /// <summary>What an unexpected exception from building the client is held as: the sign-in sentence when it is
+    /// a sign-in failure, otherwise a configuration sentence carrying the SDK's message scrubbed, with no inner
+    /// exception (<see cref="DynamoDbErrors.ForCaller"/>'s rule).</summary>
+    internal static Exception BuildFailure(Exception e, string? profile)
+    {
+        if (DynamoDbErrors.IsSignInFailure(e))
+        {
+            return DynamoDbErrors.Translate(e, profile);
+        }
+
+        var detail = string.IsNullOrWhiteSpace(e.Message) ? e.GetType().Name : DynamoDbErrors.Scrub(e.Message);
+        return new DynamoDbConfigurationException(
+            $"The AWS SDK could not set up a client for this connection: {detail}");
+    }
+
     private static IDynamoDbApi Build(ConnectionInfo info, string? profile, string? profilesLocation)
     {
         var endpoint = ResolveEndpoint(info);
@@ -265,12 +297,19 @@ public sealed class DynamoDbConnectionFactory : IDbConnectionFactory
         AmazonDynamoDBClient client;
         if (profile is not null)
         {
+            // The SDK reads the named profile here, in this process (see the class remarks). Two questions, so
+            // each failure says only what was found: is the profile there, and does it hold credentials the SDK
+            // can build. (CredentialProfileStoreChain.TryGetAWSCredentials answers both with one false.)
             var chain = profilesLocation is null
                 ? new CredentialProfileStoreChain()
                 : new CredentialProfileStoreChain(profilesLocation);
-            if (!chain.TryGetAWSCredentials(profile, out var credentials))
+            if (!chain.TryGetProfile(profile, out var found))
             {
-                throw new DynamoDbSignInException(profile, profileMissing: true);
+                throw new DynamoDbSignInException(profile, DynamoDbSignInProblem.ProfileNotFound);
+            }
+            if (!AWSCredentialsFactory.TryGetAWSCredentials(found, found.CredentialProfileStore, out var credentials))
+            {
+                throw new DynamoDbSignInException(profile, DynamoDbSignInProblem.ProfileHasNoCredentials);
             }
             client = new AmazonDynamoDBClient(credentials, config);
         }

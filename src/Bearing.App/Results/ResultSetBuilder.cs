@@ -21,7 +21,8 @@ internal static class ResultSetBuilder
     /// result off it is editable and the lock chip says so.</param>
     public static List<ResultSetViewModel> BuildResultSets(
         IReadOnlyList<QueryResult> results, string sql, ISchemaSnapshot? snapshot,
-        ProviderTraits? traits = null, bool connectionReadOnly = false, PreparedRun? run = null)
+        ProviderTraits? traits = null, bool connectionReadOnly = false, PreparedRun? run = null,
+        SessionKey? sourceSession = null)
     {
         var pageable = results.Count == 1 && results[0].Success && results[0].Columns.Count > 0;
         // With variables the text sent has driver placeholders in it (`@bearing_id`), which is no answer to
@@ -57,6 +58,7 @@ internal static class ResultSetBuilder
                     EditTarget = target,
                     LockReason = target is null ? reason : null,
                     SourceParameters = bound?.Parameters ?? [],
+                    SourceSession = sourceSession,
                 };
                 if (vm.IsEditable) vm.CaptureOriginals();
                 return vm;

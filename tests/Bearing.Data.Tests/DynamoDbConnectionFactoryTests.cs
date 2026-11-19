@@ -302,6 +302,76 @@ public class DynamoDbConnectionFactoryTests
         }
     }
 
+    /// <summary>The review's case: a profile that is there but sets no credentials (only a region) is not "not
+    /// found" — the sentence says what was established, and nothing more (§1.1's rule).</summary>
+    [Fact]
+    public async Task A_profile_that_exists_without_credentials_is_not_called_missing()
+    {
+        var path = WriteProfiles("""
+            [region-only]
+            region = eu-west-1
+            """);
+        try
+        {
+            await using var factory = new DynamoDbConnectionFactory(Info(user: "region-only"), path);
+
+            var failure = await Assert.ThrowsAsync<DynamoDbSignInException>(
+                () => factory.TestConnectionAsync(WithTimeout()));
+
+            Assert.Equal(DynamoDbSignInProblem.ProfileHasNoCredentials, failure.Problem);
+            Assert.False(failure.ProfileMissing);
+            Assert.Equal(DbErrorKind.Authentication, DynamoDbErrors.Classify(failure));
+            Assert.Contains("'region-only' was found", failure.Message);
+            Assert.DoesNotContain("was not found", failure.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>The same distinction survives the grid's path, where the held failure arrives wrapped.</summary>
+    [Fact]
+    public void A_held_sign_in_problem_keeps_its_own_sentence_in_a_query_error()
+    {
+        var held = new DynamoDbSignInException("region-only", DynamoDbSignInProblem.ProfileHasNoCredentials);
+        var wrapped = new InvalidOperationException(held.Message, held);
+
+        var error = DynamoDbErrors.ToQueryError(wrapped, "region-only", timeoutSeconds: 0);
+
+        Assert.Equal(DynamoDbErrors.SignInSentence("region-only", DynamoDbSignInProblem.ProfileHasNoCredentials), error.Message);
+    }
+
+    /// <summary>
+    /// An unexpected SDK exception while building (a config or credentials file it cannot parse) is held, not
+    /// thrown from the constructor — and held scrubbed, without the original as its inner exception, since a
+    /// parse error may quote a line holding a key.
+    /// </summary>
+    [Fact]
+    public void An_unexpected_build_failure_is_held_scrubbed_and_without_the_original()
+    {
+        var sdk = new Amazon.Runtime.AmazonClientException(
+            "Invalid line in credentials file: aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYFAKESECRET");
+
+        var held = DynamoDbConnectionFactory.BuildFailure(sdk, "dev");
+
+        var configuration = Assert.IsType<DynamoDbConfigurationException>(held);
+        Assert.Null(configuration.InnerException);
+        Assert.StartsWith("The AWS SDK could not set up a client for this connection:", configuration.Message);
+        Assert.DoesNotContain("wJalrXUtnFEMI", configuration.Message);
+    }
+
+    [Fact]
+    public void A_sign_in_failure_while_building_is_held_as_the_sign_in_sentence()
+    {
+        var sdk = new Amazon.Runtime.AmazonClientException("Unable to find a profile named dev");
+
+        var held = DynamoDbConnectionFactory.BuildFailure(sdk, "dev");
+
+        var signIn = Assert.IsType<DynamoDbSignInException>(held);
+        Assert.Equal(DynamoDbSignInProblem.ProfileNotFound, signIn.Problem);
+    }
+
     [Fact]
     public async Task A_profile_with_static_keys_builds_a_client_without_connecting()
     {

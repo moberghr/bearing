@@ -19,8 +19,10 @@ public class DynamoDbQueryExecutorTests
     [Fact]
     public async Task A_filter_matching_nothing_stops_after_exactly_ten_requests_with_a_continuation()
     {
+        // Larger than ten requests can evaluate (the fake's 1 MB is 1,000 items), so the budget, not the table's
+        // end, stops the page.
         var api = new FakeDynamoDbApi();
-        api.AddTable("Orders", Enumerable.Range(0, 10_000).Select(i => FakeDynamoDbApi.Item(("pk", N(i)))), "pk");
+        api.AddTable("Orders", Enumerable.Range(0, 20_000).Select(i => FakeDynamoDbApi.Item(("pk", N(i)))), "pk");
         api.Filter = _ => false;
 
         var result = Single(await Executor(api).ExecuteAsync(
@@ -28,6 +30,7 @@ public class DynamoDbQueryExecutorTests
 
         Assert.True(result.Success);
         Assert.Equal(DynamoDbQueryExecutor.RequestBudget, api.Requests.Count);
+        Assert.All(api.Requests, r => Assert.Null(r.Limit)); // a filtered read sends no Limit
         Assert.Empty(result.Rows);
         Assert.True(result.Truncated);
         Assert.NotNull(result.Continuation);
@@ -35,20 +38,132 @@ public class DynamoDbQueryExecutorTests
         Assert.Equal(["pk", DynamoDbValues.OtherAttributes], result.Columns.Select(c => c.Name));
     }
 
+    /// <summary>
+    /// The review's case: a filtered read whose first page comes back empty with a token. A projection names its
+    /// columns, so they are fixed from it rather than from nothing — and a later page's values land in them, not in
+    /// the overflow column.
+    /// </summary>
+    [Fact]
+    public async Task A_projection_whose_first_page_is_empty_still_fixes_its_named_columns()
+    {
+        var api = new FakeDynamoDbApi();
+        api.AddTable("Orders", Enumerable.Range(0, 20_000).Select(i =>
+            FakeDynamoDbApi.Item(("pk", N(i)), ("status", S("open")), ("total", N(i)))), "pk");
+        api.Filter = _ => false;
+        var executor = Executor(api);
+
+        var first = Single(await executor.ExecuteAsync(
+            "select pk, total, \"status\" from \"Orders\" where note = 'x'", new QueryOptions { MaxRows = 100 }, CancellationToken.None));
+
+        Assert.Empty(first.Rows);
+        Assert.NotNull(first.Continuation);
+        Assert.Equal(["pk", "status", "total", DynamoDbValues.OtherAttributes], first.Columns.Select(c => c.Name));
+
+        api.Filter = item => item["pk"].N == "15000";
+        var second = await executor.ExecuteContinuationAsync(first.Continuation!, 100, CancellationToken.None);
+
+        var row = Assert.Single(second.Rows);
+        Assert.NotNull(row[0]);
+        Assert.NotNull(row[1]);
+        Assert.NotNull(row[2]);
+        Assert.Null(row[3]); // nothing spilled
+    }
+
+    [Theory]
+    [InlineData("select * from T where pk = 'a'", true)]
+    [InlineData("SELECT * FROM \"T\".\"byStatus\" WHERE status = 'open'", true)]
+    [InlineData("select * from T", false)]
+    [InlineData("select * from \"where\"", false)]
+    [InlineData("select * from T -- where pk = 'a'", false)]
+    [InlineData("select * from T where", true)]
+    [InlineData("select a from T", false)]
+    public void Where_is_found_only_at_the_top_level_after_from(string sql, bool expected)
+        => Assert.Equal(expected, PartiQlBatch.HasWhere(sql));
+
+    /// <summary>A projection is read only when every item is one plain or quoted name; anything else is "could not
+    /// tell" (null), and the layout then goes by the items alone.</summary>
+    [Theory]
+    [InlineData("select pk, total from T", "pk|total")]
+    [InlineData("SELECT \"Order Date\", pk FROM \"T\" WHERE pk = 'a'", "Order Date|pk")]
+    [InlineData("select pk from T.\"byStatus\"", "pk")]
+    [InlineData("select * from T", null)]
+    [InlineData("select a.b from T", null)]
+    [InlineData("select a[0] from T", null)]
+    [InlineData("select size(a) from T", null)]
+    [InlineData("select a as b from T", null)]
+    [InlineData("select pk from", "pk")]
+    [InlineData("select pk", null)]
+    [InlineData("update T set a = 1 where pk = 'x'", null)]
+    [InlineData("select , from T", null)]
+    public void A_projection_is_read_only_when_every_item_is_one_name(string sql, string? expected)
+    {
+        var projection = PartiQlBatch.Projection(sql);
+
+        Assert.Equal(expected, projection is null ? null : string.Join('|', projection));
+    }
+
     [Fact]
     public async Task Every_request_asks_for_no_more_items_than_the_page_still_has_room_for()
     {
+        // No WHERE: every item evaluated is returned, so Limit = the rows still wanted makes the page exact.
         var api = new FakeDynamoDbApi();
         api.AddTable("T", Enumerable.Range(0, 1_000).Select(i => FakeDynamoDbApi.Item(("pk", N(i)))), "pk");
-        api.Filter = item => int.Parse(item["pk"].N, CultureInfo.InvariantCulture) % 2 == 0;
 
         var result = Single(await Executor(api).ExecuteAsync(
-            "select * from T where x = 1", new QueryOptions { MaxRows = 3 }, CancellationToken.None));
+            "select * from T", new QueryOptions { MaxRows = 3 }, CancellationToken.None));
 
         Assert.Equal(3, result.Rows.Count);
-        // 0..2 evaluated (0 and 2 match), then one item at a time until the third match.
-        Assert.Equal([3, 1, 1], api.Requests.Select(r => r.Limit));
+        Assert.Equal([3], api.Requests.Select(r => r.Limit));
+        Assert.NotNull(result.Continuation);
         Assert.Null(result.Message);
+    }
+
+    /// <summary>
+    /// A WHERE can reject items, and Limit bounds the items evaluated, so a filtered read sends none (PR #192
+    /// review): one request returns every match it evaluated, even past the cap. Nothing is dropped — the token
+    /// continues after the last row returned, so a row is never skipped or read twice.
+    /// </summary>
+    [Fact]
+    public async Task A_filtered_read_sends_no_limit_and_keeps_every_match_of_its_request()
+    {
+        var api = new FakeDynamoDbApi();
+        api.AddTable("T", Enumerable.Range(0, 2_000).Select(i => FakeDynamoDbApi.Item(("pk", N(i)))), "pk");
+        api.Filter = item => int.Parse(item["pk"].N, CultureInfo.InvariantCulture) % 2 == 0;
+        var executor = Executor(api);
+
+        var first = Single(await executor.ExecuteAsync(
+            "select * from T where x = 1", new QueryOptions { MaxRows = 3 }, CancellationToken.None));
+
+        Assert.Equal([(int?)null], api.Requests.Select(r => r.Limit));
+        Assert.Equal(500, first.Rows.Count); // the request's 1,000 evaluated items, every even one
+        Assert.NotNull(first.Continuation);
+
+        var second = await executor.ExecuteContinuationAsync(first.Continuation!, 3, CancellationToken.None);
+
+        var keys = first.Rows.Concat(second.Rows).Select(r => Convert.ToInt32(r[0], CultureInfo.InvariantCulture)).ToList();
+        Assert.Equal(Enumerable.Range(0, 1_000).Select(i => i * 2), keys);
+        Assert.Null(second.Continuation);
+    }
+
+    /// <summary>A stream's cap is exact even where a request overshoots it: the excess is dropped and the tail says
+    /// the read was cut.</summary>
+    [Fact]
+    public async Task A_filtered_stream_holds_its_cap_exactly_and_says_it_was_cut()
+    {
+        var api = new FakeDynamoDbApi();
+        api.AddTable("T", Enumerable.Range(0, 2_000).Select(i => FakeDynamoDbApi.Item(("pk", N(i)))), "pk");
+        api.Filter = item => int.Parse(item["pk"].N, CultureInfo.InvariantCulture) % 2 == 0;
+
+        var batches = new List<RowBatch>();
+        await foreach (var batch in Executor(api).StreamRowsAsync(
+                           "select * from T where x = 1", new QueryOptions { MaxRows = 7, BatchRows = 5 }, CancellationToken.None))
+        {
+            batches.Add(batch);
+        }
+
+        Assert.Equal(7, batches.Sum(b => b.Rows.Count));
+        Assert.True(batches[^1].Truncated);
+        Assert.All(api.Requests, r => Assert.Null(r.Limit));
     }
 
     // ---- SC11: paging by continuation -------------------------------------------------------------

@@ -193,12 +193,16 @@ public sealed class ScanConfirmation
     /// items and runs unasked. A run holding an unfiltered scan is still marked, so Fetch all and Export ask. Cancel
     /// — or no window to ask in — runs nothing.
     /// </summary>
-    public async Task<ScanDecision> ConfirmRunAsync(ConnectionInfo info, ISqlDialect dialect, string sql)
+    /// <param name="ct">The user's own cancel (Esc on the tab the check runs for): thrown as
+    /// <see cref="OperationCanceledException"/>, never read as an answer. The lookup budget is separate.</param>
+    public async Task<ScanDecision> ConfirmRunAsync(
+        ConnectionInfo info, ISqlDialect dialect, string sql, CancellationToken ct = default)
     {
         if (TargetsToCheck(info, dialect, sql) is not { } targets) return ScanDecision.NotAsked;
 
-        _status("Checking whether this reads a whole table…");
-        var verdicts = await ClassifyAsync(info, targets);
+        _status("Checking whether this reads a whole table… (Esc to stop)");
+        var verdicts = await ClassifyAsync(info, targets, ct);
+        ct.ThrowIfCancellationRequested();
         if (QuestionFor(info, verdicts) is not { } question)
         {
             return verdicts.Any(v => v.Unfiltered) ? ScanDecision.UnfilteredScan : ScanDecision.NotAsked;
@@ -255,7 +259,8 @@ public sealed class ScanConfirmation
     /// Sessions helper both hosts call (<see cref="ScanFacts.ClassifyAsync"/>), connecting here (bounded, never
     /// cancelling the shared connect or schema load) and naming item counts beside a scan.
     /// </summary>
-    internal Task<IReadOnlyList<ScanVerdict>> ClassifyAsync(ConnectionInfo info, IReadOnlyList<ScanTarget> targets)
+    internal Task<IReadOnlyList<ScanVerdict>> ClassifyAsync(
+        ConnectionInfo info, IReadOnlyList<ScanTarget> targets, CancellationToken ct = default)
         => ScanFacts.ClassifyAsync(
-            _sessions, info, targets, Budget, withItemCounts: true, connected: null, CancellationToken.None);
+            _sessions, info, targets, Budget, withItemCounts: true, connected: null, ct);
 }

@@ -130,9 +130,13 @@ holds before selecting `*` or an options bag.
   name scan. `SqlLiteralStyle.MySql` escapes backslashes.
 
 ### §1.9c — DynamoDB
-- **No AWS secret is ever read, stored, prompted for or logged** (§1.1). `CredentialKind.AwsProfile`: the resolver
-  returns a credential with a null secret, nothing touches `ISecretStore`, the user is never prompted, and no Bearing
-  code calls `GetCredentials` — the SDK resolves the profile (or its default chain) itself, on the first request.
+- **No Bearing code reads, stores, prompts for or logs an AWS secret** (§1.1). `CredentialKind.AwsProfile`: the
+  resolver returns a credential with a null secret, nothing touches `ISecretStore`, the user is never prompted, and no
+  Bearing code calls `GetCredentials`. **The AWS SDK does read the profile in Bearing's process**: a named profile when
+  the factory builds the client (`CredentialProfileStoreChain` opens the config *and* credentials files, and a
+  static-key profile's secret sits in the SDK's `AWSCredentials`); a blank profile's default chain on the first
+  request. Never word this as "Bearing never touches the secret" or "never opens `~/.aws/credentials`" — say what the
+  SDK does. Not found (`TryGetProfile`) and found-without-credentials are two sentences (`DynamoDbSignInProblem`).
   It is not `Integrated`, whose copy is about the OS identity. `IDbProvider.SupportsPasswordCredentials` false means
   the dialog offers no password box and neither password kind.
 - Error text: a sign-in failure is classified `Authentication` and **built from the profile name alone** — it names
@@ -174,8 +178,9 @@ holds before selecting `*` or an options bag.
   2026-11-19). `AwsConfigProfiles` opens `AWS_CONFIG_FILE` or `~/.aws/config` (bounded at 1 MB, failures → empty
   list, contents never logged), parses it itself, and keeps **profile names and their `region`** — no other key's
   value. DO NOT switch to the SDK's listing APIs (`CredentialProfileStoreChain.ListProfiles`, `SharedCredentialsFile`,
-  `NetSDKCredentialsFile`): they read `~/.aws/credentials` into Bearing's memory. A profile only in the credentials
-  file is not listed and stays typeable. Regions come from the SDK's built-in table (`AwsRegions`), no file or network.
+  `NetSDKCredentialsFile`): they read `~/.aws/credentials` into Bearing's memory just to fill a list. (Connecting with
+  a named profile does have the SDK read it — the line is the editor, not the process.) A profile only in the
+  credentials file is not listed and stays typeable. Regions come from the SDK's built-in table (`AwsRegions`), no file or network.
 
 ## §1.10 — Manual commit (#131)
 `ConnectionInfo.ManualCommit`: a **write** opens a transaction held until Commit/Rollback. `CommitPolicy`;

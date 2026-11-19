@@ -77,6 +77,11 @@ internal sealed class ContinuationPaging
         using var lease = _resolveLease();
         if (lease is null) return;
         var session = lease.Session;
+        if (!ReadFrom(rs, session))
+        {
+            _runFinished(tab, ReadElsewhere);
+            return;
+        }
 
         await _runExclusive(tab, async ct =>
         {
@@ -118,6 +123,11 @@ internal sealed class ContinuationPaging
         using var lease = _resolveLease();
         if (lease is null) return false;
         var session = lease.Session;
+        if (!ReadFrom(rs, session))
+        {
+            _runFinished(tab, ReadElsewhere);
+            return false;
+        }
         var cap = Math.Max(1, _ctx.Settings.ResultFetchAllMaxRows);
         var complete = false;
 
@@ -157,6 +167,20 @@ internal sealed class ContinuationPaging
 
         return complete;
     }
+
+    /// <summary>
+    /// Whether <paramref name="session"/> is the one <paramref name="rs"/> was read from. The lease is the tab's
+    /// <em>current</em> session, and switching a tab's connection or database leaves its results on screen; a
+    /// token sent to the new one would run its statement there (dev's scan continued on prod, prod's rows appended
+    /// to dev's grid). A set with no recorded source is never continued.
+    /// </summary>
+    internal static bool ReadFrom(ResultSetViewModel rs, ConnectionSession session)
+        => rs.SourceSession is { } source && source == session.Key;
+
+    /// <summary>What a load more or fetch all says when the tab has moved since the result was read.</summary>
+    internal const string ReadElsewhere =
+        "This result was read on another connection or database than the tab is on now, so nothing was sent. "
+        + "Run the statement again to read on here.";
 
     /// <summary>The engine's own sentence for a page its request budget cut short — carried in
     /// <see cref="QueryResult.Message"/> on a result that can still continue — with this host's way to read on

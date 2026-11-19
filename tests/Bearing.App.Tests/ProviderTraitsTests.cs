@@ -174,6 +174,28 @@ public class ProviderTraitsEditorFactsTests
     public void Only_dynamodb_reads_continue_by_token(string providerId, bool continues)
         => Assert.Equal(continues, ProviderTraits.For(providerId).ReadsContinueByToken);
 
+    /// <summary>Only an engine whose tables declare no columns beyond their keys samples on expand; every other is
+    /// never asked (the review's "Couldn't sample attributes" under a Postgres table).</summary>
+    [Theory]
+    [InlineData("postgres", false)]
+    [InlineData("sqlserver", false)]
+    [InlineData("mysql", false)]
+    [InlineData("dynamodb", true)]
+    [InlineData("no-such-engine", false)]
+    public void Only_dynamodb_samples_attributes(string providerId, bool samples)
+        => Assert.Equal(samples, ProviderTraits.For(providerId).SamplesAttributes);
+
+    /// <summary>The options-bag keys that name the service reached are the provider's to declare, so shared code
+    /// (<c>SameNetwork</c>) names none of them.</summary>
+    [Fact]
+    public void Only_dynamodb_has_an_option_that_names_the_service()
+    {
+        Assert.Equal([Bearing.Data.DynamoDb.DynamoDbConnectionFactory.EndpointOption], ProviderTraits.DynamoDb.NetworkOptions);
+        Assert.Empty(ProviderTraits.Postgres.NetworkOptions);
+        Assert.Empty(ProviderTraits.SqlServer.NetworkOptions);
+        Assert.Empty(ProviderTraits.MySql.NetworkOptions);
+    }
+
     [Fact]
     public void An_unknown_engine_asks_no_scan_question()
         => Assert.False(ProviderTraits.For("no-such-engine").AsksFullScanQuestion);

@@ -303,6 +303,47 @@ public class DynamoDbExposureTests : IAsyncLifetime
         Assert.Equal([5], _provider.Executor.ContinuationAsks);
     }
 
+    /// <summary>
+    /// A filtered DynamoDB read sends no <c>Limit</c>, so a page can hold more than the rows still wanted (PR #192
+    /// review). <c>--max-rows</c> is the caller's, so it holds exactly — on a plain query and on both export paths —
+    /// and the result says it was cut.
+    /// </summary>
+    [Theory]
+    [InlineData("orders.csv")]
+    [InlineData("orders.xlsx")]
+    public async Task An_export_holds_max_rows_exactly_when_a_page_overshoots_it(string file)
+    {
+        var host = await HostAsync();
+        _provider.Executor.OvershootsCap = true;
+        var path = Path.Combine(_root, file);
+
+        var export = (ExportResponse)await host.QueryAsync(
+            new RunRequest(Name, """select * from "Orders" where "customerId" = 'c1'""")
+            {
+                OutPath = path,
+                MaxRows = 15,
+            },
+            CancellationToken.None);
+
+        Assert.Equal(15, export.Rows);
+        Assert.True(export.Truncated);
+    }
+
+    [Fact]
+    public async Task A_query_holds_max_rows_exactly_when_the_first_page_overshoots_it()
+    {
+        var host = await HostAsync();
+        _provider.Executor.OvershootsCap = true;
+
+        var response = (QueryResponse)await host.QueryAsync(
+            new RunRequest(Name, """select * from "Orders" where "customerId" = 'c1'""") { MaxRows = 3 },
+            CancellationToken.None);
+
+        var set = Assert.Single(response.Results);
+        Assert.Equal(3, set.RowCount);
+        Assert.True(set.Truncated);
+    }
+
     /// <summary>A continuation that fails mid-read leaves no file — a fraction of the answer would look like
     /// the whole of it — and the failure is in the history.</summary>
     [Theory]
@@ -712,6 +753,10 @@ internal sealed class FakeDynamoExecutor : IQueryExecutor
     /// <summary>Set to make every continuation call come back as an error result.</summary>
     public bool FailContinuation { get; set; }
 
+    /// <summary>Set to page as a filtered DynamoDB read does: a full page whatever the cap asked (no <c>Limit</c>
+    /// is sent, so one request can return more than the rows still wanted).</summary>
+    public bool OvershootsCap { get; set; }
+
     /// <summary>Set to answer the first-page call with this result instead of a page of the fixed table.</summary>
     public QueryResult? FirstPage { get; set; }
 
@@ -720,7 +765,8 @@ internal sealed class FakeDynamoExecutor : IQueryExecutor
         Executes++;
         ExecuteAsks.Add(options.MaxRows);
 
-        return Task.FromResult<IReadOnlyList<QueryResult>>([FirstPage ?? Page(0, options.MaxRows ?? PageSize)]);
+        return Task.FromResult<IReadOnlyList<QueryResult>>(
+            [FirstPage ?? Page(0, OvershootsCap ? PageSize : options.MaxRows ?? PageSize)]);
     }
 
     /// <summary>The executor's sentence for a page its request budget ended (DynamoDbQueryExecutor.BudgetNotice).</summary>
@@ -749,7 +795,7 @@ internal sealed class FakeDynamoExecutor : IQueryExecutor
                 [], [], 0, TimeSpan.Zero, null, new QueryError(ContinuationFailure, null, null), Truncated: false));
         }
 
-        return Task.FromResult(Page(int.Parse(continuation["page:".Length..]), maxRows));
+        return Task.FromResult(Page(int.Parse(continuation["page:".Length..]), OvershootsCap ? PageSize : maxRows));
     }
 
     public IAsyncEnumerable<RowBatch> StreamRowsAsync(string sql, QueryOptions options, CancellationToken ct)

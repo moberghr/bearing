@@ -242,7 +242,8 @@ an xlsx is built from every row.
 statement.
 
 DynamoDB connections sign in with an AWS profile (or the SDK's default credential chain), which the command
-resolves exactly as the app does; it asks for no AWS secret and the keychain holds none. A profile that needs
+resolves exactly as the app does: the AWS SDK reads the profile in-process, and the command asks for no AWS secret
+and the keychain holds none. A profile that needs
 signing in again fails with the profile's name and the `aws sso login --profile <name>` to run. And `tables` and
 `describe` list the region's tables and their declared key attributes, as they list tables elsewhere.
 

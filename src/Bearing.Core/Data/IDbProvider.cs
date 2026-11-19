@@ -327,10 +327,16 @@ public interface IQueryExecutor
     Task<IReadOnlyList<QueryResult>> ExecuteWriteAsync(IReadOnlyList<SqlWriteCommand> commands, CancellationToken ct);
 
     /// <summary>
-    /// The next chunk of a read that returned a <see cref="QueryResult.Continuation"/>: at most
+    /// The next chunk of a read that returned a <see cref="QueryResult.Continuation"/>: about
     /// <paramref name="maxRows"/> more rows, as one <see cref="QueryResult"/> whose own
     /// <see cref="QueryResult.Continuation"/> is null once the read is exhausted. The token is the one the
     /// previous result carried, passed back untouched.
+    /// <para>
+    /// <b>"About", not "at most".</b> An engine whose server cannot stop mid-request may return more — DynamoDB on
+    /// a filtered read, by at most one request's matches — rather than drop rows the token has already passed. The
+    /// same holds for the first page of such a read (<see cref="QueryOptions.MaxRows"/>). A caller that must hold
+    /// to a cap trims, and reports the result as truncated.
+    /// </para>
     /// <para>
     /// A default member that throws, the shape of the overloads above, because only an engine whose reads are
     /// continued by a server-side token (not by <c>LIMIT</c>/<c>OFFSET</c>) overrides it — and a caller

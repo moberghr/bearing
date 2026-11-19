@@ -20,8 +20,8 @@ namespace Bearing.Data.DynamoDb;
 /// <b>Everything else the SDK says is scrubbed</b> before it is shown (<see cref="Scrub"/>): an access-key id
 /// or a "secret=…" fragment in a service message is redacted, as <see cref="SafeErrorText"/> does for a
 /// password in a connection string — in a grid's error (<see cref="ToQueryError"/>) and in every exception the
-/// provider rethrows (<see cref="ForCaller"/>: the connection test, the streamed read, the catalog reads). Bearing never reads an AWS secret, so this is a second line, not the
-/// first.
+/// provider rethrows (<see cref="ForCaller"/>: the connection test, the streamed read, the catalog reads). No Bearing
+/// code handles an AWS secret, so this is a second line, not the first.
 /// </para>
 /// </summary>
 internal static class DynamoDbErrors
@@ -114,6 +114,18 @@ internal static class DynamoDbErrors
         return false;
     }
 
+    /// <summary>
+    /// Which sign-in failure <paramref name="exception"/> is, for its sentence: the one a
+    /// <see cref="DynamoDbSignInException"/> in the chain already settled, else a profile the SDK could not find
+    /// (<see cref="IsProfileMissing"/>), else a sign-in that failed.
+    /// </summary>
+    internal static DynamoDbSignInProblem ProblemOf(Exception exception)
+        => Chain(exception).OfType<DynamoDbSignInException>().FirstOrDefault() is { } settled
+            ? settled.Problem
+            : IsProfileMissing(exception)
+                ? DynamoDbSignInProblem.ProfileNotFound
+                : DynamoDbSignInProblem.CouldNotSignIn;
+
     /// <summary>True when the SDK could not find the named profile at all (as opposed to finding it and
     /// failing to use it) — the sentence differs, since "run aws sso login" is not the first thing to try.</summary>
     internal static bool IsProfileMissing(Exception exception)
@@ -121,7 +133,7 @@ internal static class DynamoDbErrors
         foreach (var e in Chain(exception))
         {
             if (e is ProfileNotFoundException
-                || (e is DynamoDbSignInException { ProfileMissing: true })
+                || (e is DynamoDbSignInException { Problem: DynamoDbSignInProblem.ProfileNotFound })
                 || (e is AmazonClientException client
                     && (client.Message.Contains("Unable to find a profile named", StringComparison.OrdinalIgnoreCase)
                         || (client.Message.Contains("Source profile [", StringComparison.OrdinalIgnoreCase)
@@ -136,8 +148,10 @@ internal static class DynamoDbErrors
     /// <summary>
     /// The sentence for a failed sign-in: which profile, and the command that fixes the common case. Bearing
     /// does not launch the command. A blank profile means the SDK's default credential chain, and says so.
+    /// Each <see cref="DynamoDbSignInProblem"/> has its own sentence, naming only what was established: a
+    /// profile that is there but sets no credentials is not "not found".
     /// </summary>
-    internal static string SignInSentence(string? profile, bool profileMissing = false)
+    internal static string SignInSentence(string? profile, DynamoDbSignInProblem problem = DynamoDbSignInProblem.CouldNotSignIn)
     {
         if (string.IsNullOrWhiteSpace(profile))
         {
@@ -146,11 +160,19 @@ internal static class DynamoDbErrors
         }
 
         var name = profile.Trim();
-        return profileMissing
-            ? $"AWS profile '{name}' was not found. Check its name in your AWS config, "
-                + $"or run \"aws sso login --profile {name}\" if it is an SSO profile."
-            : $"Could not sign in to AWS with profile '{name}'. If it is an SSO profile, run "
-                + $"\"aws sso login --profile {name}\" and try again; otherwise check the profile in your AWS config.";
+        return problem switch
+        {
+            DynamoDbSignInProblem.ProfileNotFound =>
+                $"AWS profile '{name}' was not found. Check its name in your AWS config, "
+                + $"or run \"aws sso login --profile {name}\" if it is an SSO profile.",
+            DynamoDbSignInProblem.ProfileHasNoCredentials =>
+                $"AWS profile '{name}' was found, but the AWS SDK could not read a complete set of credential settings "
+                + "from it (access keys, SSO, a role or a credential process). A profile that only sets a region "
+                + "cannot sign in; check the profile in your AWS config.",
+            _ =>
+                $"Could not sign in to AWS with profile '{name}'. If it is an SSO profile, run "
+                + $"\"aws sso login --profile {name}\" and try again; otherwise check the profile in your AWS config.",
+        };
     }
 
     /// <summary>
@@ -173,7 +195,7 @@ internal static class DynamoDbErrors
         }
         if (IsSignInFailure(exception))
         {
-            return new QueryError(SignInSentence(profile, IsProfileMissing(exception)), SignInCode, null);
+            return new QueryError(SignInSentence(profile, ProblemOf(exception)), SignInCode, null);
         }
         if (Chain(exception).Any(e => e is OperationCanceledException))
         {
@@ -243,7 +265,7 @@ internal static class DynamoDbErrors
     internal static Exception Translate(Exception exception, string? profile)
         => exception is DynamoDbSignInException || !IsSignInFailure(exception)
             ? exception
-            : new DynamoDbSignInException(profile, IsProfileMissing(exception), exception);
+            : new DynamoDbSignInException(profile, ProblemOf(exception), exception);
 
     // An access-key id has a fixed shape (four letters naming the principal type, then 16 more); a secret or
     // token is only recognisable by what precedes it, so those are redacted by label.
@@ -300,15 +322,32 @@ internal sealed class DynamoDbSignInException : Exception
 {
     public string? Profile { get; }
 
-    /// <summary>True when the profile does not exist, as opposed to existing and failing.</summary>
-    public bool ProfileMissing { get; }
+    /// <summary>Which failure this is — each has its own sentence.</summary>
+    public DynamoDbSignInProblem Problem { get; }
 
-    public DynamoDbSignInException(string? profile, bool profileMissing, Exception? inner = null)
-        : base(DynamoDbErrors.SignInSentence(profile, profileMissing), inner)
+    /// <summary>True when the profile does not exist, as opposed to existing and failing.</summary>
+    public bool ProfileMissing => Problem == DynamoDbSignInProblem.ProfileNotFound;
+
+    public DynamoDbSignInException(string? profile, DynamoDbSignInProblem problem, Exception? inner = null)
+        : base(DynamoDbErrors.SignInSentence(profile, problem), inner)
     {
         Profile = profile;
-        ProfileMissing = profileMissing;
+        Problem = problem;
     }
+}
+
+/// <summary>What is known about a failed sign-in — no more than was checked (§1.1's rule).</summary>
+internal enum DynamoDbSignInProblem
+{
+    /// <summary>Credentials were found and failed, or could not be produced, for a reason the SDK did not settle.</summary>
+    CouldNotSignIn,
+
+    /// <summary>No profile of that name in the AWS config or credentials file.</summary>
+    ProfileNotFound,
+
+    /// <summary>The profile exists, but the SDK found no complete set of credential settings in it (a profile
+    /// that only sets <c>region</c>, an access key without its secret).</summary>
+    ProfileHasNoCredentials,
 }
 
 /// <summary>

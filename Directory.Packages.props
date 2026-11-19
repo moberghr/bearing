@@ -38,7 +38,9 @@
     <PackageVersion Include="AWSSDK.SSO" Version="4.1.0.2" />
     <PackageVersion Include="AWSSDK.SSOOIDC" Version="4.1.0.2" />
     <PackageVersion Include="AWSSDK.SecurityToken" Version="4.1.0.2" />
-    <!-- Transitive via the four above; pinned so they cannot drift apart. -->
+    <!-- Transitive via the four above; pinned so they cannot drift apart. The numbers differ on purpose: AWS
+         versions Core separately from the service packages, and each 4.1.0.2 service package above declares
+         AWSSDK.Core [4.1.1.1, 5.0.0) — so 4.1.1.1 is exactly their floor, not a mismatch. -->
     <PackageVersion Include="AWSSDK.Core" Version="4.1.1.1" />
   </ItemGroup>
 

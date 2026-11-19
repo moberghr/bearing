@@ -39,18 +39,33 @@ connection, no password and no pool. Everything is behind `IDynamoDbApi` (the th
 - Attribute sample (`SampleAttributesAsync`, 2026-11-19): **only on a table's expand**, one `ExecuteStatement`
   with `Limit` 20 and no continuation, keys left out, rows marked `sampled` — a sample, never the schema. Refusals
   are typed (`AttributeSample.Refused`, scrubbed), only successes are cached until the next snapshot; it never feeds
-  completion or the snapshot (the key ordinals drive the scan check). Other engines answer null.
+  completion or the snapshot (the key ordinals drive the scan check). Other engines are **never asked**
+  (`ProviderTraits.SamplesAttributes`, checked in the node and in `SchemaBrowser` before a reader is built — asking
+  would connect, and a failure would hang "couldn't sample" under a table the catalog already described).
 - **No `LIMIT`/`OFFSET`.** A read continues from DynamoDB's `NextToken`, carried opaquely in
   `QueryResult.Continuation` and handed back to `IQueryExecutor.ExecuteContinuationAsync`; `Truncated` means "a
   token remains", never a row count. The token holds statement text and a server token: **in memory only — never
   logged, persisted or shown** (§1.3), and decoding refuses anything but a token the class wrote.
-- A page ends at the row cap, when DynamoDB sends no `NextToken`, or after 10 requests — whichever is first; each
-  request sets `Limit` to the rows still wanted. A page cut short by the 10 says so in `Message`. Fetch all reads to
-  the end with no request budget.
-- Columns are fixed by the first page (§9.10): key attributes first, then the rest alphabetically. A result that
-  **continues** always ends with an `(other attributes)` JSON column — projections included — because a later page
-  can bring an attribute the first did not show, or a value the first page's column type cannot hold; a result that
-  fits one page never has it.
+- A page ends at the row cap, when DynamoDB sends no `NextToken`, or after 10 requests — whichever is first. A page
+  cut short by the 10 says so in `Message`. Fetch all reads to the end with no request budget.
+- **`Limit` only on a read without `WHERE`** (user decision 2026-11-19, PR #192 review; measured by
+  `DynamoDbLiveTests.Limit_bounds_the_items_evaluated_not_the_items_returned`). `Limit` caps items *evaluated*, not
+  returned. No `WHERE` (`PartiQlBatch.HasWhere` false): `Limit` = rows still wanted, the page is exact, and an
+  unfiltered scan's first page reads about one page of items (§1.9c). Any `WHERE`: no `Limit`, each request evaluates
+  up to 1 MB and returns every match, so a page can exceed the cap by one request's matches — **never drop them**,
+  the token is past them. `ExecuteContinuationAsync` therefore promises *about* `maxRows`. Whoever must hold a cap
+  trims and says truncated: `StreamRowsAsync` (exact), the `bearing` command's `--max-rows` (`BearingHost.Capped`,
+  both export paths). The App shows the overshoot.
+- Columns are fixed by the first page (§9.10): key attributes first, then the rest alphabetically — plus every name
+  a plain projection lists (`PartiQlBatch.Projection`: one name per item, else null), so a filtered read whose first
+  page is empty still gets its columns. `SELECT *` with an empty first page has nothing to name them from: key
+  columns only, the rest in the overflow column (known limitation). A result that **continues** always ends with an
+  `(other attributes)` JSON column — projections included — because a later page can bring an attribute the first
+  did not show, or a value the first page's column type cannot hold; a result that fits one page never has it. A real
+  attribute of that name pushes the overflow column to `(other attributes 2)` (`DynamoDbColumnLayout.OverflowName`).
+- A continuation goes back only to the session that issued it: `ResultSetViewModel.SourceSession`, compared in
+  `ContinuationPaging`; a set without one is never continued. Count is never offered on a token result
+  (`ResultSetViewModel.CanCount`).
 - Values: `S` text; `N` a decimal when every value in the column fits one exactly, else text; `BOOL`; `B` bytes;
   `M`, `L` and the sets as JSON text. A missing attribute and a DynamoDB `NULL` both read as null (a known
   limitation — keep them indistinguishable on purpose, never invent a difference).

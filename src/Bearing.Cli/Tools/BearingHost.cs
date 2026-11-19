@@ -124,9 +124,9 @@ public sealed class BearingHost(
         var wall = Stopwatch.StartNew();
         try
         {
-            results = await lease.Session.Executor
+            results = Capped(await lease.Session.Executor
                 .ExecuteAsync(sql, new QueryOptions { MaxRows = Rows(request) }, ct)
-                .ConfigureAwait(false);
+                .ConfigureAwait(false), Rows(request));
 
             // A plain query answers with the first page and its Truncated flag, as on every engine. An export
             // is the whole answer (unlimited unless capped, §1.11e), so a result that can be continued is
@@ -513,6 +513,29 @@ public sealed class BearingHost(
     /// </summary>
     private static bool ContinuesByToken(ProviderTraits traits) => traits.ReadsContinueByToken;
 
+    /// <summary>
+    /// <paramref name="results"/> held to <paramref name="maxRows"/>: a result with more rows keeps the first
+    /// <paramref name="maxRows"/> and says it was truncated. Only an engine whose page can overshoot its cap
+    /// (DynamoDB on a filtered read, see <see cref="IQueryExecutor.ExecuteContinuationAsync"/>) ever has more; for
+    /// the rest this changes nothing. Its continuation is dropped with the rows: what follows the token is no longer
+    /// what follows the rows kept.
+    /// </summary>
+    internal static IReadOnlyList<QueryResult> Capped(IReadOnlyList<QueryResult> results, int? maxRows)
+        => maxRows is not { } cap || results.All(r => r.Rows.Count <= cap)
+            ? results
+            : results.Select(r => Capped(r, cap)).ToList();
+
+    private static QueryResult Capped(QueryResult result, int cap)
+        => result.Rows.Count <= cap
+            ? result
+            : result with
+            {
+                Rows = result.Rows.Take(Math.Max(0, cap)).ToList(),
+                RowCount = Math.Max(0, cap),
+                Truncated = true,
+                Continuation = null,
+            };
+
     private static int ChunkFor(int? maxRows, long taken)
         => maxRows is { } cap
             ? (int)Math.Max(1, Math.Min(ContinuationChunkRows, cap - taken))
@@ -562,15 +585,19 @@ public sealed class BearingHost(
                 next = page.Continuation;
             }
 
+            // A page can overshoot the cap (a filtered DynamoDB read); the cap is the caller's, so it is held here.
+            var trimmed = maxRows is { } held && rows.Count > held;
+            if (trimmed) rows.RemoveRange(maxRows!.Value, rows.Count - maxRows.Value);
+
             // The first page's message described that page (the engine's request-budget notice), and is no longer
-            // true of the whole. Truncated is the cap stopping the read with a token still in hand.
+            // true of the whole. Truncated is the cap stopping the read — a token still in hand, or rows dropped.
             followed.Add(result with
             {
                 Rows = rows,
                 RowCount = rows.Count,
                 Duration = duration,
                 Message = null,
-                Truncated = next is not null,
+                Truncated = next is not null || trimmed,
                 Continuation = null,
             });
         }
@@ -617,15 +644,21 @@ public sealed class BearingHost(
         {
             if (page.Error is { } error) throw new InvalidOperationException(error.Message);
 
-            taken += page.Rows.Count;
-            var next = page.Continuation is { } token && (maxRows is not { } cap || taken < cap) ? token : null;
+            // A page can overshoot the cap (a filtered DynamoDB read): the rows past it are dropped and the tail
+            // says the read was cut, as when the cap stops it with a token in hand.
+            var rows = page.Rows;
+            var over = maxRows is { } held && taken + rows.Count > held;
+            if (over) rows = rows.Take((int)(maxRows!.Value - taken)).ToList();
+
+            taken += rows.Count;
+            var next = !over && page.Continuation is { } token && (maxRows is not { } cap || taken < cap) ? token : null;
             if (next is null)
             {
-                yield return new RowBatch(columns, page.Rows, Truncated: page.Continuation is not null);
+                yield return new RowBatch(columns, rows, Truncated: page.Continuation is not null || over);
                 yield break;
             }
 
-            yield return new RowBatch(columns, page.Rows, Truncated: false);
+            yield return new RowBatch(columns, rows, Truncated: false);
 
             page = await executor.ExecuteContinuationAsync(next, ChunkFor(maxRows, taken), ct).ConfigureAwait(false);
         }

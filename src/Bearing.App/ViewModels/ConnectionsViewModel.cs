@@ -13,7 +13,6 @@ using Bearing.App.Workspace;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
 using Bearing.Core.Workspace;
-using Bearing.Data.DynamoDb;
 using Bearing.Data.Postgres;
 using Bearing.Persistence.Import;
 using Bearing.Sessions;
@@ -1253,16 +1252,16 @@ public sealed partial class ConnectionsViewModel : ObservableObject
            // Who logs in, like User: switching to the az account is a different role, so a different tree.
            && a.UserFromEntraLogin == b.UserFromEntraLogin
            && TlsPolicy.Resolve(a) == TlsPolicy.Resolve(b)
-           // Which service is reached, like Host: a DynamoDB connection's region names the AWS service, but an
-           // endpoint (DynamoDB Local, a VPC endpoint) replaces it. Without it an endpoint-only edit kept the old
-           // endpoint's schema and its live pool, so Load more / Fetch all went on reading the old service.
-           // SamePool inherits it from here.
-           && string.Equals(EndpointOf(a), EndpointOf(b), StringComparison.Ordinal);
+           // Which service is reached, like Host, for the options the engine says carry it
+           // (ProviderTraits.NetworkOptions — DynamoDB's endpoint, which replaces the region's). Without it an
+           // endpoint-only edit kept the old endpoint's schema and its live pool, so Load more / Fetch all went on
+           // reading the old service. SamePool inherits it from here.
+           && ProviderTraits.For(a).NetworkOptions.All(key =>
+               string.Equals(OptionOf(a, key), OptionOf(b, key), StringComparison.Ordinal));
 
-    /// <summary>The endpoint option as the factory reads it (trimmed; blank = none), for <see cref="SameNetwork"/>.</summary>
-    private static string? EndpointOf(ConnectionInfo info)
-        => info.Options.TryGetValue(DynamoDbConnectionFactory.EndpointOption, out var value)
-           && !string.IsNullOrWhiteSpace(value)
+    /// <summary>One options-bag value as a factory reads it (trimmed; blank = none), for <see cref="SameNetwork"/>.</summary>
+    private static string? OptionOf(ConnectionInfo info, string key)
+        => info.Options.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
             ? value.Trim()
             : null;
 

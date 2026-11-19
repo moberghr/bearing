@@ -10,6 +10,7 @@ using Bearing.Core.Data;
 using Bearing.Core.Schema;
 using Bearing.Core.Workspace;
 using Bearing.Persistence;
+using Bearing.App.Results;
 using Bearing.Results;
 using Bearing.Sessions;
 using Bearing.Sql;
@@ -132,6 +133,58 @@ public class ScanConfirmationTests : IDisposable
         Assert.Equal("Cancelled — nothing ran.", h.Status());
     }
 
+    /// <summary>
+    /// The review's case: the check runs before the statement, for up to the lookup budget plus the dialog. The tab
+    /// is busy for all of it, so a second Run while the question is open neither starts a second lookup nor asks a
+    /// second time, and the tab is idle again once it is answered.
+    /// </summary>
+    [Fact]
+    public async Task The_tab_is_busy_while_the_scan_check_asks_and_a_second_run_does_not_ask_again()
+    {
+        var h = Build();
+        const string sql = "select * from \"Orders\" where status = 'open'";
+        bool? runningWhenAsked = null;
+        Task? second = null;
+        h.Dialogs.OnConfirmScan = _ =>
+        {
+            runningWhenAsked = h.Tab.IsRunning;
+            second ??= h.Exec.ExecuteAsync(sql);
+        };
+
+        await h.Exec.ExecuteAsync(sql);
+        await second!;
+
+        Assert.True(runningWhenAsked);
+        Assert.Single(h.Dialogs.ScanQuestions);
+        Assert.Equal(0, h.Executor.ExecuteCalls);
+        Assert.False(h.Tab.IsRunning);
+    }
+
+    /// <summary>Esc during the lookup stops it: nothing is asked and nothing runs.</summary>
+    [Fact]
+    public async Task Esc_during_the_scan_lookup_cancels_the_run()
+    {
+        var h = Build();
+        h.Provider.ConnectGate = new TaskCompletionSource<bool>();
+        try
+        {
+            var run = h.Exec.ExecuteAsync("select * from \"Orders\" where status = 'open'");
+            Assert.True(h.Tab.IsRunning);
+
+            h.Exec.CancelExecution();
+            await run;
+
+            Assert.Empty(h.Dialogs.ScanQuestions);
+            Assert.Equal(0, h.Executor.ExecuteCalls);
+            Assert.False(h.Tab.IsRunning);
+            Assert.Equal("Cancelled — nothing ran.", h.Status());
+        }
+        finally
+        {
+            h.Provider.ConnectGate.TrySetResult(true);
+        }
+    }
+
     /// <summary>Any WHERE that does not pin the partition key asks: one page of it may evaluate up to ten requests'
     /// worth of items.</summary>
     [Theory]
@@ -209,6 +262,9 @@ public class ScanConfirmationTests : IDisposable
         Assert.Contains("could not check", question.Text);
         Assert.DoesNotContain("would read the whole", question.Text);
         Assert.Contains("could not check", question.Heading);
+        // Moved from the headless dialog test: never called a scan, in the heading or the title.
+        Assert.DoesNotContain("scan", question.Heading, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("scan", question.Title, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, h.Executor.ExecuteCalls);
     }
 
@@ -491,6 +547,58 @@ public class ScanConfirmationTests : IDisposable
         Assert.Single(h.Dialogs.ScanQuestions);
         var lines = File.ReadAllText(h.Dialogs.ExportPath).TrimEnd('\r', '\n').Split("\r\n");
         Assert.Equal(26, lines.Length);
+    }
+
+    /// <summary>A second scan result of the same run, continuing from its own token, beside the first.</summary>
+    private static ResultSetViewModel SecondScanResult(ResultSetViewModel first)
+    {
+        var second = ResultSetBuilder.BuildResultSets(
+            [new QueryResult([new ColumnDescriptor("n", "N", typeof(int))], [[1]], 1, TimeSpan.Zero, null, null, Truncated: true)
+            {
+                Continuation = "t9",
+            }],
+            "select * from \"Orders\" where status = 'shipped'", null, ProviderTraits.DynamoDb,
+            sourceSession: first.SourceSession)[0];
+        ScanConfirmation.Mark([second], isFullScan: true);
+
+        return second;
+    }
+
+    /// <summary>The review's case: a workbook export of a run with several scan results asks once, not once per
+    /// result.</summary>
+    [Fact]
+    public async Task A_workbook_export_of_several_scan_results_asks_once()
+    {
+        var h = await ConfirmedScan();
+        var first = h.Tab.LastResult!;
+        h.Tab.SetRunResults([first, SecondScanResult(first)]);
+        h.Dialogs.ConfirmScanAnswer = false;
+        h.Dialogs.ExportPath = Path.Combine(_root, "orders.xlsx");
+
+        await h.Exec.ExportRunAsync();
+
+        var question = Assert.Single(h.Dialogs.ScanQuestions);
+        Assert.Equal(ScanQuestionKind.FetchAll, question.Kind);
+        Assert.Empty(h.Dialogs.ExportPickers); // the default answer is Cancel: nothing written
+        Assert.Empty(h.Executor.Continued);
+    }
+
+    [Fact]
+    public async Task A_workbook_export_confirmed_once_reads_every_scan_result_on()
+    {
+        var h = await ConfirmedScan();
+        var first = h.Tab.LastResult!;
+        var second = SecondScanResult(first);
+        h.Tab.SetRunResults([first, second]);
+        h.Dialogs.ConfirmScanAnswer = true;
+        h.Dialogs.ExportPath = Path.Combine(_root, "orders.xlsx");
+
+        await h.Exec.ExportRunAsync();
+
+        Assert.Single(h.Dialogs.ScanQuestions);
+        Assert.Contains("t9", h.Executor.Continued);
+        Assert.False(first.HasMore);
+        Assert.False(second.HasMore);
     }
 
     [Fact]

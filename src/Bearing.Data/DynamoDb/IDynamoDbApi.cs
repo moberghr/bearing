@@ -26,7 +26,7 @@ internal interface IDynamoDbApi : IDisposable
 
 /// <summary>
 /// <see cref="IDynamoDbApi"/> over a real <see cref="AmazonDynamoDBClient"/>. Holds no logic: every call is a
-/// pass-through, so what the SDK does with credentials (resolve lazily, on the first request), retries and
+/// pass-through, so what the SDK does with credentials (see <see cref="DynamoDbConnectionFactory"/>), retries and
 /// signing is exactly what the SDK does, and the errors it raises reach <c>DynamoDbErrors</c> untouched.
 /// </summary>
 internal sealed class AmazonDynamoDbApi : IDynamoDbApi

@@ -542,7 +542,16 @@ public sealed partial class ExecutionViewModel : ObservableObject
         }
 
         // A read that may cover a whole table asks first (DynamoDB only; every other engine returns at once).
-        var scan = await _scanConfirmation.ConfirmRunAsync(info, traits.Dialect, sql);
+        // The check can take the lookup budget plus the dialog, so the tab is busy for it: Esc cancels the
+        // lookup, and a second Run while it is out does not start a second lookup and a second dialog.
+        var scan = ScanDecision.NotAsked;
+        if (ScanConfirmation.TargetsToCheck(info, traits.Dialect, sql) is not null)
+        {
+            var checking = tab.BeginRun();
+            try { scan = await _scanConfirmation.ConfirmRunAsync(info, traits.Dialect, sql, checking); }
+            catch (OperationCanceledException) { RunStatus(tab, "Cancelled — nothing ran."); return; }
+            finally { tab.EndRun(); }
+        }
         if (!scan.Proceed) return;
 
         if (beforeRun is not null && !await beforeRun())
@@ -784,7 +793,8 @@ public sealed partial class ExecutionViewModel : ObservableObject
             // A tab that has since been closed (or dropped by a project switch) is dead but harmless to
             // assign to — RunFinished is what tells the user the run ended, with TabStillOpen false.
             var sets = ResultSetBuilder.BuildResultSets(
-                results, sql, session.Snapshot, ProviderTraits.For(info), SessionPolicy.IsReadOnly(info), run);
+                results, sql, session.Snapshot, ProviderTraits.For(info), SessionPolicy.IsReadOnly(info), run,
+                session.Key);
             ScanConfirmation.Mark(sets, fullScan);
             tab.SetRunResults(sets);
             LogExecution(info, run.LogSql, results, _ctx.Transactions.For(tab)?.Id, run.LogParameters);
@@ -1047,14 +1057,19 @@ public sealed partial class ExecutionViewModel : ObservableObject
         return plan;
     }
 
-    public async Task<bool> FetchAllAsync(ResultSetViewModel rs)
+    public Task<bool> FetchAllAsync(ResultSetViewModel rs) => FetchAllAsync(rs, askAboutScan: true);
+
+    /// <param name="askAboutScan">False only where the caller has already asked the scan question for this read
+    /// — the multi-result export, which asks once for the whole workbook.</param>
+    private async Task<bool> FetchAllAsync(ResultSetViewModel rs, bool askAboutScan)
     {
         // Both fetch paths refuse without an idle tab; refusing first means nobody is asked about a fetch that
         // would not happen.
         if (Selected is null or { IsRunning: true }) return false;
         // Export enters here too, so a confirmed scan is asked about once more on either path — with or without a
         // connection it can still name (fail closed).
-        if (!await _scanConfirmation.ConfirmFetchAllAsync(rs, SelectedConnection, _ctx.Settings.ResultFetchAllMaxRows))
+        if (askAboutScan
+            && !await _scanConfirmation.ConfirmFetchAllAsync(rs, SelectedConnection, _ctx.Settings.ResultFetchAllMaxRows))
             return false;
         if (rs.Continuation is not null) return await _continuationPaging.FetchAllAsync(rs);
         var tab = Selected;
@@ -1225,9 +1240,16 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
         // Every set, before the file dialog: being asked where to save and *then* told the export cannot
         // happen is the wrong order to find out in.
-        foreach (var rs in results.Where(r => r.HasGrid && r.HasMore))
+        var pending = results.Where(r => r.HasGrid && r.HasMore).ToList();
+        // One scan question for the whole workbook: asked per set, N scan results would raise N identical
+        // "Keep reading the whole table?" dialogs. Cancel writes nothing, as any other stop here does.
+        if (pending.FirstOrDefault(r => r.IsFullScan) is { } scanned
+            && !await _scanConfirmation.ConfirmFetchAllAsync(scanned, SelectedConnection, _ctx.Settings.ResultFetchAllMaxRows))
+            return;
+
+        foreach (var rs in pending)
         {
-            if (await FetchAllAsync(rs)) continue;
+            if (await FetchAllAsync(rs, askAboutScan: false)) continue;
             _ctx.SetStatus("Export stopped — a result isn't fully loaded, and a workbook missing a sheet is "
                          + "worse than no workbook.");
             return;
@@ -1297,7 +1319,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             var info = _ctx.EffectiveConnection(tab);
             (into ?? tab).Push(ResultSetBuilder.BuildResultSets(
                 results, sql, session.Snapshot, ProviderTraits.For(session.Info),
-                info is not null && SessionPolicy.IsReadOnly(info)));
+                info is not null && SessionPolicy.IsReadOnly(info), sourceSession: session.Key));
             // The connection has to travel here too, or a 57014 from its own statement timeout reads as
             // "nothing in Bearing asked for this" — a confident wrong answer about a limit we set (#105).
             RunFinished(tab, ResultSetBuilder.DescribeResults(

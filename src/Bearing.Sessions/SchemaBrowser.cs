@@ -92,6 +92,9 @@ public sealed class SchemaBrowser : ISchemaBrowser
     public async Task<AttributeSample?> SampleAttributesAsync(
         ConnectionInfo connection, string database, TableInfo table, int items, CancellationToken ct)
     {
+        // Answered before a reader is built: an engine that does not sample must not connect (or prompt) to say so.
+        if (!ProviderTraits.For(connection).SamplesAttributes) return null;
+
         var reader = await GetReaderAsync(connection, database, ct);
         return await reader.Metadata.SampleAttributesAsync(table, items, ct);
     }

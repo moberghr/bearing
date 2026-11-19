@@ -10,8 +10,8 @@ namespace Bearing.Data.DynamoDb;
 /// passwords. The SQL text belongs to <c>Bearing.Sql</c>'s <c>PartiQlDialect</c>, paired with this provider by
 /// <see cref="Id"/>.
 /// <para>
-/// Sign-in is an AWS profile and nothing else (<see cref="CredentialKind.AwsProfile"/>): the SDK resolves it,
-/// and Bearing never reads, stores, prompts for or logs an AWS secret (§1.1). Region is
+/// Sign-in is an AWS profile and nothing else (<see cref="CredentialKind.AwsProfile"/>): the AWS SDK resolves it
+/// in this process, and no Bearing code reads, stores, prompts for or logs an AWS secret (§1.1, §1.9c). Region is
 /// <see cref="ConnectionInfo.Host"/>, the profile <see cref="ConnectionInfo.User"/>, the endpoint
 /// <c>Options["Endpoint"]</c> — see <see cref="DynamoDbConnectionFactory"/>.
 /// </para>

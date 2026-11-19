@@ -13,6 +13,7 @@ using Bearing.Core.Data;
 using Bearing.Core.Workspace;
 using Bearing.Persistence;
 using Bearing.Results;
+using Bearing.Sessions;
 using Xunit;
 
 namespace Bearing.App.Tests;
@@ -108,6 +109,80 @@ public class ContinuationPagingTests : IDisposable
         Assert.True(await h.Exec.FetchAllAsync(h.Result));
         Assert.Empty(h.Executor.Continued);
         Assert.Equal(0, h.Executor.OffsetCalls);
+    }
+
+    // ---- the token goes back only where it came from ------------------------------------------------
+
+    /// <summary>
+    /// The review's case: run a scan on one database, switch the tab to another and scroll. The token carries its
+    /// statement, so sending it to the tab's current session would run that statement there and append its rows
+    /// to this grid. Neither load more nor fetch all sends it.
+    /// </summary>
+    [Fact]
+    public async Task A_result_is_never_continued_on_a_database_the_tab_has_moved_to()
+    {
+        var h = await RunOnce(totalRows: 25);
+        var first = h.Result;
+        Assert.NotNull(first.SourceSession);
+
+        h.Tab.DatabaseName = "other";
+        await h.Exec.ExecuteAsync("select 1");   // the tab's new database is now live
+        var executesBefore = h.Executor.ExecuteCalls;
+
+        await h.Exec.LoadMoreAsync(first);
+        Assert.Equal(ContinuationPaging.ReadElsewhere, h.Status());
+        Assert.False(await h.Exec.FetchAllAsync(first));
+
+        Assert.Empty(h.Executor.Continued);
+        Assert.Equal(executesBefore, h.Executor.ExecuteCalls);
+        Assert.Equal(Page, first.Loaded);
+        Assert.Equal("t1", first.Continuation); // untouched: switching back reads on
+    }
+
+    [Fact]
+    public async Task A_result_built_without_a_source_is_never_continued()
+    {
+        var h = await RunOnce(totalRows: 25);
+        var orphan = new ResultSetViewModel(
+            new QueryResult([new ColumnDescriptor("n", "N", typeof(int))], [], 0, TimeSpan.Zero, null, null, Truncated: true)
+            {
+                Continuation = "t1",
+            },
+            "select 1",
+            pageable: true);
+
+        await h.Exec.LoadMoreAsync(orphan);
+
+        Assert.Empty(h.Executor.Continued);
+        Assert.Equal(ContinuationPaging.ReadElsewhere, h.Status());
+    }
+
+    // ---- count -----------------------------------------------------------------------------------
+
+    /// <summary>A result continued by token offers no [Count]: on DynamoDB it could only ever answer "unavailable".
+    /// Nor after its token is gone.</summary>
+    [Fact]
+    public async Task A_result_continued_by_token_never_offers_count()
+    {
+        var h = await RunOnce(totalRows: 15);
+        Assert.False(h.Result.CanCount);
+
+        await h.Exec.LoadMoreAsync(h.Result);
+        Assert.Null(h.Result.Continuation);
+        Assert.False(h.Result.CanCount);
+    }
+
+    [Fact]
+    public void A_one_page_result_on_an_engine_that_continues_by_token_never_offers_count()
+    {
+        var single = new QueryResult(
+            [new ColumnDescriptor("n", "N", typeof(int))], [[1]], 1, TimeSpan.Zero, null, null, Truncated: false);
+
+        var dynamo = ResultSetBuilder.BuildResultSets([single], "select * from T", null, ProviderTraits.DynamoDb)[0];
+        var postgres = ResultSetBuilder.BuildResultSets([single], "select * from t", null, ProviderTraits.Postgres)[0];
+
+        Assert.False(dynamo.CanCount);
+        Assert.True(postgres.CanCount);
     }
 
     // ---- load more -------------------------------------------------------------------------------

@@ -819,9 +819,13 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
     /// <summary>Every full-scan confirmation raised, in order.</summary>
     public List<Bearing.App.Services.ScanQuestion> ScanQuestions { get; } = new();
 
+    /// <summary>Invoked with each full-scan question as it is asked, before it is answered.</summary>
+    public Action<Bearing.App.Services.ScanQuestion>? OnConfirmScan { get; set; }
+
     public Task<bool> ConfirmScanAsync(Bearing.App.Services.ScanQuestion request)
     {
         ScanQuestions.Add(request);
+        OnConfirmScan?.Invoke(request);
         return Task.FromResult(ConfirmScanAnswer);
     }
 
