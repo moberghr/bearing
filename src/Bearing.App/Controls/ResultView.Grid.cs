@@ -8,6 +8,7 @@ using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 using Avalonia.Media;
 using Bearing.App.Input;
+using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using static Bearing.App.Controls.Tokens;
 
@@ -119,13 +120,25 @@ public sealed partial class ResultView
         result.ColumnLayout.Changed += OnLayoutChanged;
         _layoutSubscriptions.Add((result.ColumnLayout, OnLayoutChanged));
 
-        // A new filter or sort clears the selection (design v4 §8): a selection over rows that moved or vanished
-        // means nothing, and Copy must never act on cells the user can no longer see. Restyled either way, so the
-        // sorted column's wash follows the sort.
+        // A new filter or sort clears this result's selection (design v4 §8): a selection over rows that moved or
+        // vanished means nothing, and Copy must never act on cells the user can no longer see. A selection in
+        // another result is left alone, but the cells are restyled either way, so the sorted column's wash
+        // follows the sort even when the view's order didn't change.
+        var lastSort = result.Filter.Sort;
         void OnViewChanged()
         {
             if (ReferenceEquals(_selection.Model.Result, result) || _selection.Model.Result is null)
                 _selection.ClearAndNotify();
+            else
+                _selection.Restyle();
+
+            // A new sort on a part-fetched result says it covers the loaded rows only (#106), in the sentence a
+            // column selection uses.
+            var sort = result.Filter.Sort;
+            if (sort is not null && sort != lastSort
+                && LoadedOnlyNotice.For(result, LoadedOnlyNotice.Sorted(result, sort)) is { } notice)
+                Status?.Invoke(notice);
+            lastSort = sort;
         }
         result.Filter.ViewChanged += OnViewChanged;
         _filterSubscriptions.Add((result.Filter, OnViewChanged));
@@ -251,10 +264,10 @@ public sealed partial class ResultView
             case GridPressTarget.RowHeader:
             case GridPressTarget.Corner:
             case GridPressTarget.ScrollBar:
+            case GridPressTarget.HeaderChrome:
                 return;
             case GridPressTarget.ColumnHeader:
-                if (result is { IsPageable: true, HasMore: true })
-                    Status?.Invoke($"Column selected over the loaded rows only ({result.RowCountText}) — ⤓ all fetches the rest.");
+                if (LoadedOnlyNotice.For(result, "Column selected") is { } notice) Status?.Invoke(notice);
                 return;
             default:
                 if (_selection.Model.Cells.Count > 0) _selection.ClearAndNotify();
@@ -347,7 +360,9 @@ public sealed partial class ResultView
         // guard is true by the time it is asked (#147/#148).
         var inCellEditor = e.Source is TextBox;
         if (inCellEditor && !ResolvesToCommitFirst(e)) return;
-        if (!result.HasGrid || result.ViewRows.Count == 0) return;
+        // Commands run with no rows on screen too: a filter that matches nothing is exactly when Escape (clear the
+        // filters, #106) and Ctrl+F are wanted. Only the spatial motion below needs a row to move to.
+        if (!result.HasGrid) return;
         if (inCellEditor) CommitOpenEdit(grid);
 
         _keyStrokeTarget = (grid, result);
@@ -357,6 +372,7 @@ public sealed partial class ResultView
         finally { _keyStrokeTarget = null; }
         if (handled) return;
         if (inCellEditor) return;                        // the rest of the keyboard is the editor's
+        if (result.ViewRows.Count == 0) return;
 
         // Everything below is spatial cell-cursor motion — intrinsic grid navigation, not a rebindable
         // command (mirrors how the editor's caret motion isn't in the keymap).

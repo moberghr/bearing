@@ -90,7 +90,7 @@ internal static class ResultsHarness
     /// <summary>An editable result wide and tall enough that the grid scrolls in both directions: an
     /// <c>id</c> primary key plus <paramref name="columns"/> text columns of padded values.</summary>
     public static (ResultSetViewModel Result, ObservableCollection<object?[]> Rows) WideEditableResult(
-        int columns = 12, int rows = 40)
+        int columns = 12, int rows = 40, bool pageable = false)
     {
         var descriptors = new List<ColumnDescriptor> { new("id", "int4", typeof(int)) };
         var editable = new List<EditableColumn> { new(0, "id", IsPrimaryKey: true, NotNull: true) };
@@ -110,7 +110,7 @@ internal static class ResultsHarness
         }
 
         var result = new QueryResult(descriptors, data, data.Count, TimeSpan.Zero, null, null, false);
-        var rs = new ResultSetViewModel(result, "select * from wide", pageable: false)
+        var rs = new ResultSetViewModel(result, "select * from wide", pageable)
         {
             PrimaryKeyColumns = [0],
             EditTarget = new EditTarget("public", "wide", editable),

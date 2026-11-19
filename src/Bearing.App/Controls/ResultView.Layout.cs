@@ -276,7 +276,7 @@ public sealed partial class ResultView
         if (result.IsPageable) AddPagingButtons(left, result);
 
         // ⌕ Filter, after ⤓ all (design v4 §2). Hidden while the bar is open — the bar is its own control.
-        var filterBtn = ResultChrome.SubtleButton("⌕ Filter", "Filter and sort the loaded rows (Ctrl+F in the grid)");
+        var filterBtn = ResultChrome.SubtleIconButton("Icon.Search", "Filter", "Filter and sort the loaded rows (Ctrl+F in the grid)");
         filterBtn.Margin = new Thickness(4, 0, 0, 0);
         filterBtn.DataContext = result.Filter;
         filterBtn.Bind(Visual.IsVisibleProperty, new Binding(nameof(ResultFilterViewModel.IsFilterOpen))
@@ -298,7 +298,7 @@ public sealed partial class ResultView
 
         // ⤓ all pages the result to the end in one action instead of scrolling for it. Bound to HasMore, so it
         // retires by itself the moment the last page lands (whether it got there by scrolling or by this).
-        var fetchAllBtn = ResultChrome.SubtleButton("⤓ all", "Fetch every remaining row (Esc to stop)");
+        var fetchAllBtn = ResultChrome.SubtleIconButton("Icon.FetchAll", "all", "Fetch every remaining row (Esc to stop)");
         fetchAllBtn.Margin = new Thickness(4, 0, 0, 0);
         fetchAllBtn.DataContext = result;
         fetchAllBtn.Bind(Visual.IsVisibleProperty, new Binding(nameof(ResultSetViewModel.HasMore)));

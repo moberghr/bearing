@@ -19,7 +19,8 @@ public sealed record RowSort(int Column, SortDirection Direction);
 /// <item><b>Loaded rows only.</b> Nothing is re-queried; the caller says so on screen.</item>
 /// <item><b>Quick filter</b>: case-insensitive substring over every column's text (json as its text).</item>
 /// <item><b>Column filters</b> (<see cref="ColumnFilter"/>), AND-ed with each other and the quick filter.</item>
-/// <item><b>Sort</b>: one column; nulls last in either direction; stable, so ties keep load order.</item>
+/// <item><b>Sort</b>: one column; nulls last ascending and first descending (Postgres's default); stable, so
+/// ties keep load order.</item>
 /// <item><b>New unsaved rows</b> are always shown, pinned at the bottom in insertion order — a filter never
 /// hides a pending insert, and a sort never moves one.</item>
 /// </list>
@@ -52,15 +53,15 @@ public static class RowView
 
         if (sort is not null)
         {
-            // OrderBy is stable, which is the "ties keep load order" rule. Nulls are partitioned out first so
-            // they land last whichever way the rest is ordered.
+            // OrderBy is stable, which is the "ties keep load order" rule. Nulls are partitioned out first and
+            // placed the way Postgres places them by default — last ascending, first descending — so the local
+            // order matches the same ORDER BY run on the server, nulls included.
             var withValue = loaded.Where(r => Value(r, sort.Column) is not null);
             var nulls = loaded.Where(r => Value(r, sort.Column) is null);
             var comparer = Comparer<object?>.Create(CompareValues);
-            var ordered = sort.Direction == SortDirection.Ascending
-                ? withValue.OrderBy(r => Value(r, sort.Column), comparer)
-                : withValue.OrderByDescending(r => Value(r, sort.Column), comparer);
-            loaded = ordered.Concat(nulls).ToList();
+            loaded = sort.Direction == SortDirection.Ascending
+                ? withValue.OrderBy(r => Value(r, sort.Column), comparer).Concat(nulls).ToList()
+                : nulls.Concat(withValue.OrderByDescending(r => Value(r, sort.Column), comparer)).ToList();
         }
 
         loaded.AddRange(pinned);
@@ -79,19 +80,46 @@ public static class RowView
          : null;
 
     /// <summary>
-    /// Order two non-null values: by their own comparison when they are the same comparable type (numbers,
-    /// dates, booleans), else numerically when both read as numbers, else culture-aware and case-insensitive
-    /// over their text.
+    /// Order two values. A <b>total</b> order, so a sort's output is the same every time — it must be, since
+    /// one column can hold numbers, number-like text and plain text at once (an edited cell, a varchar of
+    /// codes). Comparing pair by pair — numerically when both sides read as numbers, else as text — is not
+    /// transitive: 9 &lt; 10 as numbers, "10" &lt; "1a" and "1a" &lt; "9" as text, a cycle that leaves the sort
+    /// arbitrary. So each value is first put in a class, and classes never interleave:
+    /// <list type="number">
+    /// <item><b>Numbers</b> — a numeric CLR value, or text that reads as an invariant number — by value.</item>
+    /// <item><b>Other comparable values</b> (dates, booleans, GUIDs, a double too large for a decimal) by their
+    /// own comparison; two different types are kept apart by type name.</item>
+    /// <item><b>Text</b> and everything else, by its text: invariant, so every machine sorts the same, and
+    /// case-insensitive, so "a" and "A" tie and keep load order.</item>
+    /// </list>
+    /// Null sorts after everything; <see cref="Apply"/> places nulls itself.
     /// </summary>
     public static int CompareValues(object? a, object? b)
     {
         if (a is null || b is null) return a is null ? (b is null ? 0 : 1) : -1;
-        // Strings skip their own CompareTo, which is case-sensitive: "10" vs "9" should read as numbers, and
-        // "a" vs "A" should tie (and keep load order) rather than split on case.
-        if (a is not string && a.GetType() == b.GetType() && a is IComparable ca) return ca.CompareTo(b);
-        if (ColumnFilter.TryNumber(a, out var x) && ColumnFilter.TryNumber(b, out var y)) return x.CompareTo(y);
-        return string.Compare(Text(a), Text(b), CultureInfo.CurrentCulture, CompareOptions.IgnoreCase);
+        var (ka, kb) = (Kind(a), Kind(b));
+        if (ka != kb) return ka.CompareTo(kb);
+        switch (ka)
+        {
+            case ValueKind.Number:
+                ColumnFilter.TryNumber(a, out var x);
+                ColumnFilter.TryNumber(b, out var y);
+                return x.CompareTo(y);
+            case ValueKind.Comparable:
+                return a.GetType() == b.GetType()
+                    ? ((IComparable)a).CompareTo(b)
+                    : string.CompareOrdinal(a.GetType().FullName, b.GetType().FullName);
+            default:
+                return string.Compare(Text(a), Text(b), CultureInfo.InvariantCulture, CompareOptions.IgnoreCase);
+        }
     }
+
+    private enum ValueKind { Number, Comparable, Text }
+
+    private static ValueKind Kind(object value)
+        => ColumnFilter.TryNumber(value, out _) ? ValueKind.Number
+         : value is not string and IComparable ? ValueKind.Comparable
+         : ValueKind.Text;
 
     private static bool MatchesQuick(object?[] row, string text)
     {

@@ -44,8 +44,7 @@ internal sealed class ResultFilterBar : Border
 
         var clear = new Button
         {
-            Content = "✕",
-            FontSize = 10,
+            Content = ResultChrome.Icon("Icon.Clear", 10),
             Padding = new Thickness(4, 0),
             MinWidth = 0,
             Background = Brushes.Transparent,
@@ -97,15 +96,7 @@ internal sealed class ResultFilterBar : Border
             Margin = new Thickness(3, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
-        var funnel = new Path
-        {
-            Data = Geometry.Parse("M1,1.5 L11,1.5 L7,6 L7,10.5 L5,9.5 L5,6 Z"),
-            StrokeThickness = 1.2,
-            StrokeJoin = PenLineJoin.Round,
-            Width = 12,
-            Height = 12,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
+        var funnel = ResultChrome.Icon("Icon.Filter", 12);
         var funnelContent = new StackPanel { Orientation = Orientation.Horizontal };
         funnelContent.Children.Add(funnel);
         funnelContent.Children.Add(_badge);
@@ -124,19 +115,21 @@ internal sealed class ResultFilterBar : Border
         AutomationProperties_SetName(_columns, "Filter by column");
         _columns.Bind(ToggleButton.IsCheckedProperty,
             new Binding(nameof(ResultFilterViewModel.IsColumnFilterRowOpen)) { Mode = BindingMode.TwoWay });
+        // The funnel is stroked in the toggle's Foreground.
         _columns.IsCheckedChanged += (_, _) =>
-            funnel.Stroke = _columns.IsChecked == true ? Res("Text.Primary") : Res("Text.Muted");
-        funnel.Stroke = Res("Text.Muted");
+            _columns.Foreground = _columns.IsChecked == true ? Res("Text.Primary") : Res("Text.Muted");
+        _columns.Foreground = Res("Text.Muted");
 
         _match = new TextBlock { FontSize = 11, Foreground = Res("Text.Muted"), VerticalAlignment = VerticalAlignment.Center };
 
+        // Clears every filter and closes: a funnel with a cross, not a bare ✕ — it removes filters, it doesn't
+        // only dismiss a panel. Drawn: the ✕ glyph rendered clipped, reading as "›".
         var close = new Button
         {
-            Content = "✕",
-            Width = 22,
+            Content = ResultChrome.Icon("Icon.FilterClear", 14),
+            Width = 24,
             Height = 22,
             Padding = new Thickness(0),
-            FontSize = 11,
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center,
             Background = Brushes.Transparent,

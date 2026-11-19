@@ -216,10 +216,23 @@ objects, not sub-groups.
   by `RowView.Apply`; `AppendPage` defers to one rebuild; new rows pin at the bottom (mark `_newRows` *before*
   `Rows.Add`); `ReplaceRow` keeps its place. Auto-load is off while active; ⤓ all still loads.
 - Header click still selects the column (#6). The sort glyph and the header filter input carry
-  `ResultColumnHeader.ChromeClass`: they don't select (`GridPressTarget.ScrollBar`), don't auto-fit on double-tap,
-  and focus in a header doesn't seed the cursor. Header filter inputs swallow Enter/Esc/arrows.
-- The header template keeps a ≥32px right column for its own sort arrow; `ResultColumnHeader` sizes itself
-  from the header width and left-aligns to run over it. Find the cell editor with `ResultsHarness.CellEditor`,
-  never "the TextBox in the grid".
+  `ResultColumnHeader.ChromeClass`: they don't select (`GridPressTarget.HeaderChrome`), don't auto-fit on
+  double-tap, and focus in a header doesn't seed the cursor. Header filter inputs swallow Enter/Esc/arrows. The
+  header's right-click menu (`ResultColumnMenu`) also sorts and clears.
+- Sort is a **total order** (`RowView.CompareValues`): numbers (incl. number-like text) before other comparables
+  before text — never pair-by-pair, which cycles. Text is invariant-culture, case-insensitive. NULLs last
+  ascending, first descending (Postgres's default).
+- A sort on a part-fetched result says so via `LoadedOnlyNotice`, the sentence column selection uses.
+- Typed filters on a result over `DebounceCells` wait for a pause (`ResultFilterViewModel.DefaultDebouncer`, set in
+  `App`); any other rebuild cancels the wait. Export says when it ignored an active filter or sort.
+- The header template keeps a ≥32px right column for its own sort arrow; `ResultColumnHeader` runs over it with
+  a negative right margin (`TemplateSortColumn`). **Never copy the header's width onto its content**: under an
+  auto-sized column the header's width comes from that content, and the two grow each other on every layout
+  pass. The sort glyph isn't focusable (a held focus kept it visible). Find the cell editor with
+  `ResultsHarness.CellEditor`, never "the TextBox in the grid".
+- Escape in the grid (`grid.clearSelection`) clears the selection, then the filters (not the sort). Grid
+  commands dispatch even with no rows on screen; only spatial motion needs one.
+- Result chrome icons are drawn (`ResultChrome.Icon`, `Icons.axaml`), never ⤓ ⌕ ✕ glyphs — they render clipped.
 - NULL matches no column filter (`!=` included). Docs (json/jsonb/xml) filter but don't sort. Changing filter
-  or sort clears the selection. §5 "→ SQL" push-to-server is not built yet.
+  or sort clears this result's selection (deliberately not kept) and restyles every cell. §5 "→ SQL"
+  push-to-server is not built yet.

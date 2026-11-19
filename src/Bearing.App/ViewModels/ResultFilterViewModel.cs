@@ -93,6 +93,46 @@ public sealed partial class ResultFilterViewModel : ObservableObject
         Sort = RowView.Next(Sort, column);
     }
 
+    /// <summary>The header menu's Sort ascending / Sort descending: this column, this way.</summary>
+    public void SortBy(int column, SortDirection direction)
+    {
+        if (IsSortable(column)) Sort = new RowSort(column, direction);
+    }
+
+    /// <summary>
+    /// Set by the app: how a rebuild caused by typing is put off until the typing pauses — given the delay and
+    /// the work, it returns a handle that cancels it. Each filter starts from this; null rebuilds at once.
+    /// </summary>
+    public static Func<TimeSpan, Action, IDisposable>? DefaultDebouncer { get; set; }
+
+    /// <summary>This filter's debouncer (<see cref="DefaultDebouncer"/> unless a test hands it its own).</summary>
+    public Func<TimeSpan, Action, IDisposable>? Debouncer { get; set; } = DefaultDebouncer;
+
+    /// <summary>Loaded cells (rows × columns) above which a typed filter waits for a pause. Below it a rebuild is
+    /// cheaper than a keystroke; above it, every keystroke formatting every cell is what makes typing lag.</summary>
+    internal const int DebounceCells = 50_000;
+
+    internal static readonly TimeSpan DebounceDelay = TimeSpan.FromMilliseconds(150);
+
+    private IDisposable? _pendingTyped;
+
+    /// <summary>A filter's text changed: rebuild now, or once typing pauses on a large result.</summary>
+    private void RefreshTyped()
+    {
+        _pendingTyped?.Dispose();
+        _pendingTyped = null;
+        if (Debouncer is not { } debounce || _rows.Count * Math.Max(1, _columns.Count) < DebounceCells)
+        {
+            Refresh(changedView: true);
+            return;
+        }
+        _pendingTyped = debounce(DebounceDelay, () =>
+        {
+            _pendingTyped = null;
+            Refresh(changedView: true);
+        });
+    }
+
     public void SetColumnFilter(int column, string? text)
     {
         var had = ColumnFilterText(column);
@@ -102,7 +142,7 @@ public sealed partial class ResultFilterViewModel : ObservableObject
         OnPropertyChanged(nameof(ColumnFilters));
         OnPropertyChanged(nameof(ActiveColumnFilterCount));
         OnPropertyChanged(nameof(HasColumnFilters));
-        Refresh(changedView: true);
+        RefreshTyped();
     }
 
     /// <summary>Ctrl/⌘+F or the toolbar button: open the bar, and put the caret in its input even when it was
@@ -150,7 +190,7 @@ public sealed partial class ResultFilterViewModel : ObservableObject
 
     partial void OnQuickFilterChanged(string value)
     {
-        if (!_clearing) Refresh(changedView: true);
+        if (!_clearing) RefreshTyped();
     }
 
     partial void OnSortChanged(RowSort? value) => Refresh(changedView: true);
@@ -213,6 +253,9 @@ public sealed partial class ResultFilterViewModel : ObservableObject
     {
         if (_deferDepth > 0) { _dirty = true; return; }
         _dirty = false;
+        // This rebuild reads the current text, so a typed rebuild still waiting would only repeat it.
+        _pendingTyped?.Dispose();
+        _pendingTyped = null;
         if (IsActive) ViewRows.ResetTo(RowView.Apply(_rows, _isNew, QuickFilter, _columnFilters, Sort));
         else if (!ViewRows.SequenceEqual(_rows)) ViewRows.ResetTo(_rows);
         RaiseCounts();

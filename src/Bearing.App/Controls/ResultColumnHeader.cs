@@ -66,10 +66,14 @@ internal sealed class ResultColumnHeader : StackPanel
         _name = result.Columns[index].Name;
         Orientation = Orientation.Vertical;
         VerticalAlignment = VerticalAlignment.Center;
-        // Left, with a width of its own (TrackHeaderWidth): the template gives content a "*" column and keeps
-        // an Auto column of ≥32px on the right for its own sort arrow, which this grid never shows. The
-        // indicator belongs in that strip — so this starts at the content's left edge and runs over it.
-        HorizontalAlignment = HorizontalAlignment.Left;
+        // The template gives content a "*" column and keeps an Auto column of ≥32px on its right for its own
+        // sort arrow, which this grid never shows. The indicator belongs at the header's edge, in that strip, so
+        // the content runs over it with a negative right margin. A margin, not a width copied from the header:
+        // under an auto-sized column (double-click to fit) the header's width comes from this content, and a
+        // width that followed the header fed back into it — the column grew on every layout pass, scrolling
+        // included, and the copied width lagged so the indicator stood off the edge.
+        HorizontalAlignment = HorizontalAlignment.Stretch;
+        Margin = new Thickness(0, 0, -TemplateSortColumn, 0);
 
         var line = new DockPanel { LastChildFill = true, Background = Brushes.Transparent };
 
@@ -92,7 +96,10 @@ internal sealed class ResultColumnHeader : StackPanel
                 HorizontalAlignment = HorizontalAlignment.Right,
                 HorizontalContentAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
-                Focusable = true,
+                // Not focusable: a click left it holding focus, and the "show while focused" rule then kept the
+                // idle glyph on screen after the sort was cycled off. The header menu is the keyboard-free
+                // alternative, and Ctrl+F's bar covers the keyboard path into filtering.
+                Focusable = false,
                 Cursor = new Cursor(StandardCursorType.Hand),
             };
             _sort.Click += (_, e) => { _filter.CycleSort(_index); e.Handled = true; };
@@ -167,45 +174,14 @@ internal sealed class ResultColumnHeader : StackPanel
         {
             _filter.PropertyChanged -= OnFilterChanged;
             _filter.PropertyChanged += OnFilterChanged;
-            TrackHeaderWidth();
             Sync();
         };
-        DetachedFromVisualTree += (_, _) => { _headerWidth?.Dispose(); _headerWidth = null; };
-        // Attach can come before the header's template has put this under the header; Loaded is after.
-        Loaded += (_, _) => { if (_headerWidth is null) TrackHeaderWidth(); };
         Sync();
     }
 
-    private System.IDisposable? _headerWidth;
-
-    /// <summary>
-    /// Take the header's full inner width. The DataGridColumnHeader template keeps a ≥32px column at its right
-    /// for a sort arrow we never show, so stretched content stopped 32px short — which put the indicator in the
-    /// middle of a narrow header, exactly where a column-selecting click lands (#6). The header's own width
-    /// comes from the column, never from this content, so following it cannot feed back into it.
-    /// </summary>
-    private void TrackHeaderWidth()
-    {
-        _headerWidth?.Dispose();
-        if (this.FindAncestorOfType<DataGridColumnHeader>() is not { } header) return;
-        void Apply()
-        {
-            var inner = header.Bounds.Width - header.Padding.Left - header.Padding.Right - 2;
-            if (inner > 0 && (double.IsNaN(Width) || System.Math.Abs(Width - inner) > 0.5)) Width = inner;
-        }
-        void OnHeaderChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
-        {
-            if (e.Property == BoundsProperty || e.Property == TemplatedControl.PaddingProperty) Apply();
-        }
-        header.PropertyChanged += OnHeaderChanged;
-        _headerWidth = new Unsubscribe(() => header.PropertyChanged -= OnHeaderChanged);
-        Apply();
-    }
-
-    private sealed class Unsubscribe(System.Action undo) : System.IDisposable
-    {
-        public void Dispose() => undo();
-    }
+    /// <summary>The width of the DataGridColumnHeader template's sort-arrow column (its <c>MinWidth</c>), which
+    /// this content runs over to reach the header's right edge.</summary>
+    internal const double TemplateSortColumn = 32;
 
     /// <summary>The column's filter input — for tests and the keyboard path into the row.</summary>
     internal TextBox FilterInput => _input;
@@ -244,8 +220,8 @@ internal sealed class ResultColumnHeader : StackPanel
         {
             _glyph.Data = sort is null ? Unsorted : sort.Direction == SortDirection.Ascending ? Ascending : Descending;
             _glyph.Fill = sort is null ? Res("Text.Dim") : Res("Syntax.Func");
-            // The idle glyph shows on hover or keyboard focus only — minimal at rest.
-            _sort.Opacity = sort is not null || _hovered || _sort.IsFocused ? 1 : 0;
+            // The idle glyph shows on hover only — minimal at rest.
+            _sort.Opacity = sort is not null || _hovered ? 1 : 0;
             var next = sort is null ? "ascending" : sort.Direction == SortDirection.Ascending ? "descending" : "unsorted";
             ToolTip.SetTip(_sort, $"Sort by {_name} — click for {next}");
         }

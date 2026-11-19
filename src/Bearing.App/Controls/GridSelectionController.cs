@@ -26,10 +26,13 @@ public enum GridPressTarget
     /// clears the selection on this one.</summary>
     None,
 
-    /// <summary>A scroll bar, or a header's own control (sort indicator, column filter input, #106). Neither is a
-    /// click-away: dragging the thumb to look along a highlighted row must leave the highlight alone (#183), and
-    /// sorting or typing a filter must not select the column under it.</summary>
+    /// <summary>A scroll bar. Scrolling is not a click-away: dragging the thumb to look along a highlighted
+    /// row must leave the highlight alone (#183).</summary>
     ScrollBar,
+
+    /// <summary>A header's own control — the sort indicator or the column filter input (#106). It acts on its
+    /// own: sorting or typing a filter neither selects the column under it nor clears the selection.</summary>
+    HeaderChrome,
 
     /// <summary>The corner above the row-number gutter: the whole result is now selected, as the same
     /// corner does in every spreadsheet.</summary>
@@ -80,6 +83,10 @@ public sealed class GridSelectionController
         Model.CellRestyle?.Invoke();
         Changed?.Invoke();
     }
+
+    /// <summary>Re-render each realized cell without touching the selection — for a change to what a cell
+    /// draws besides its ring (the sorted column's wash, #106).</summary>
+    public void Restyle() => Model.CellRestyle?.Invoke();
 
     /// <summary>Drop the selection without notifying — for callers that rebuild the visuals anyway.</summary>
     public void Clear() => Model.Clear();
@@ -218,7 +225,7 @@ public sealed class GridSelectionController
             if (visual is ScrollBar) return GridPressTarget.ScrollBar;
             // The sort indicator and the column filter input act on their own (#106).
             if (visual is StyledElement el && el.Classes.Contains(ResultColumnHeader.ChromeClass))
-                return GridPressTarget.ScrollBar;
+                return GridPressTarget.HeaderChrome;
             // Tested before the DataGridColumnHeader case below, because in the DataGrid's template the
             // corner *is* one — it just has no column, so it fell through to "chrome" and cleared the
             // selection instead of selecting everything (#55).

@@ -330,7 +330,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
         foreach (var row in _edited.Concat(_editedUnderDelete))
             if (_originals.TryGetValue(row, out var original))
                 Array.Copy(original, row, Math.Min(original.Length, row.Length));
-        foreach (var row in _newRows.ToList())
+        foreach (var row in _newRows)
         {
             Rows.Remove(row);
             _originals.Remove(row);

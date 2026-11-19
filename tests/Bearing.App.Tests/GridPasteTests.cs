@@ -229,4 +229,30 @@ public class GridPasteTests
         var changes = ResultEditModel.BuildPendingChanges(rs, Target);
         Assert.Contains("42", ResultEditModel.InlineParameters(changes.Single().Command));
     }
+
+    // ---- order on screen under a client-side sort or filter (#106) ----------------------------------
+
+    [Fact]
+    public void A_block_pastes_down_the_rows_in_view_order_under_a_sort()
+    {
+        var rs = ThreeRows();
+        rs.Filter.Sort = new RowSort(0, SortDirection.Descending);   // view: 3, 2, 1
+        var top = rs.ViewRows[0];
+
+        var writes = GridPaste.Plan(rs, GridPaste.Parse("a\nb"), (top, 1), []);
+
+        Assert.Equal([(3, "a"), (2, "b")], writes.Select(w => ((int)w.Row[0]!, w.Text)).ToArray());
+    }
+
+    [Fact]
+    public void A_block_skips_rows_the_filter_hides()
+    {
+        var rs = ThreeRows();
+        rs.Filter.SetColumnFilter(1, "!= two");   // view: 1, 3
+
+        var writes = GridPaste.Plan(rs, GridPaste.Parse("a\nb"), (rs.ViewRows[0], 1), []);
+
+        Assert.Equal([(1, "a"), (3, "b")], writes.Select(w => ((int)w.Row[0]!, w.Text)).ToArray());
+    }
 }
+

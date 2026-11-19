@@ -251,4 +251,208 @@ public class ResultFilterSortUiTests
         Assert.Equal(10, header.Glyph.Bounds.Height);
         window.Close();
     });
+
+    // ---- header menu, loaded-only notice, wash beside another result's selection -------------------------
+
+    private static MenuItem MenuItemNamed(MenuFlyout menu, string header)
+        => menu.Items.OfType<MenuItem>().Single(i => (string)i.Header! == header);
+
+    [Fact]
+    public Task The_header_menu_sorts_and_clears_and_offers_only_what_changes_something() => _ui.Run(() =>
+    {
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: 3, rows: 6);
+        var (window, _) = ResultsHarness.Show(rs);
+
+        var menu = ResultColumnMenu.Build(rs, 1, frozenThroughHere: 2);
+        Assert.False(MenuItemNamed(menu, "Clear sort").IsEnabled);   // nothing sorted yet
+        MenuItemNamed(menu, "Sort descending").RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
+        Assert.Equal(new RowSort(1, SortDirection.Descending), rs.Filter.Sort);
+        Assert.Same(rows[^1], rs.ViewRows[0]);
+
+        var again = ResultColumnMenu.Build(rs, 1, frozenThroughHere: 2);
+        Assert.True(MenuItemNamed(again, "Sort ascending").IsEnabled);
+        Assert.False(MenuItemNamed(again, "Sort descending").IsEnabled);   // already this way
+
+        // From another column's header, Clear sort names the column it clears.
+        var other = ResultColumnMenu.Build(rs, 2, frozenThroughHere: 3);
+        MenuItemNamed(other, "Clear sort (“col1”)").RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
+        Assert.Null(rs.Filter.Sort);
+        window.Close();
+    });
+
+    [Fact]
+    public Task Sorting_a_part_fetched_result_says_it_covers_the_loaded_rows_only() => _ui.Run(() =>
+    {
+        var (rs, _) = ResultsHarness.WideEditableResult(columns: 3, rows: 6, pageable: true);
+        rs.HasMore = true;
+        var (window, view) = ResultsHarness.Show(rs);
+        string? status = null;
+        view.Status = s => status = s;
+
+        Press(window, Header(view, 1).SortButton!);
+
+        Assert.NotNull(status);
+        Assert.StartsWith("Sorted by “col1” ascending over the loaded rows only (", status);
+
+        status = null;
+        rs.HasMore = false;
+        Press(window, Header(view, 1).SortButton!);   // → descending, over every row: nothing to say
+        Assert.Null(status);
+        window.Close();
+    });
+
+    /// <summary>
+    /// Turning a sort off when the load order already was the sorted order leaves the view's rows as they are —
+    /// no reset re-realizes the cells. With the selection in another result (so this one's isn't cleared and
+    /// notified), the wash stayed on the formerly sorted column.
+    /// </summary>
+    [Fact]
+    public Task The_wash_follows_the_sort_while_another_result_holds_the_selection() => _ui.Run(() =>
+    {
+        var (a, aRows) = ResultsHarness.WideEditableResult(columns: 2, rows: 3);
+        var (b, _) = ResultsHarness.WideEditableResult(columns: 2, rows: 3);
+        var (window, view) = ResultsHarness.Show(a, b);
+        Press(window, ResultsHarness.RequireCell(view, aRows[0], 1));
+        Assert.Same(a, view.Selection.Model.Result);
+
+        b.Filter.Sort = new RowSort(0, SortDirection.Ascending);   // ids are already ascending
+        ResultsHarness.Pump(window);
+        Assert.True(ResultsHarness.RequireCell(view, b.ViewRows[0], 0).Background is ISolidColorBrush { Color.A: > 0 });
+
+        b.Filter.Sort = null;
+        ResultsHarness.Pump(window);
+        Assert.True(ResultsHarness.RequireCell(view, b.ViewRows[0], 0).Background is ISolidColorBrush { Color.A: 0 } or null,
+            "the wash should leave with the sort");
+        Assert.Same(a, view.Selection.Model.Result);                // the other result's selection is kept
+        Assert.NotEmpty(view.Selection.Model.Cells);
+        window.Close();
+    });
+
+    // ---- eyeball-QA regressions -----------------------------------------------------------------------
+
+    /// <summary>The idle indicator hides again once the pointer leaves, after a full cycle back to unsorted.
+    /// A click left the button holding focus, and "show while focused" kept it on screen for good.</summary>
+    [Fact]
+    public Task After_a_full_cycle_the_idle_indicator_hides_when_the_pointer_leaves() => _ui.Run(() =>
+    {
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: 3, rows: 6);
+        var (window, view) = ResultsHarness.Show(rs);
+        var header = Header(view, 1);
+
+        for (var i = 0; i < 3; i++) Press(window, header.SortButton!);   // asc → desc → off
+        Assert.Null(rs.Filter.Sort);
+        Assert.False(header.SortButton!.IsFocused);
+
+        var away = ResultsHarness.RequireCell(view, rows[^1], 3);
+        window.MouseMove(away.TranslatePoint(new Point(4, 4), window)!.Value);
+        ResultsHarness.Pump(window);
+        Assert.Equal(0, header.SortButton.Opacity);
+        window.Close();
+    });
+
+    private static double IndicatorGap(ResultColumnHeader header)
+    {
+        var dh = header.FindAncestorOfType<DataGridColumnHeader>()!;
+        var right = header.SortButton!.TranslatePoint(new Point(header.SortButton.Bounds.Width, 0), dh)!.Value.X;
+        return dh.Bounds.Width - right;
+    }
+
+    /// <summary>
+    /// Double-click auto-fit (Width = Auto) fits once and stays put: the header copied its own width from the
+    /// column, so under an auto-sized column the two fed each other — every layout pass, horizontal scrolling
+    /// included, widened it — and the copied width lagged, leaving the indicator standing off the right edge.
+    /// </summary>
+    [Fact]
+    public Task Auto_fit_is_stable_and_keeps_the_indicator_at_the_right_edge() => _ui.Run(() =>
+    {
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: 8, rows: 6);
+        var (window, view) = ResultsHarness.Show(rs);
+        var grid = ResultsHarness.Grid(view);
+        var column = grid.Columns[1];
+        Assert.InRange(IndicatorGap(Header(view, 1)), 0, 16);
+
+        column.Width = DataGridLength.Auto;
+        ResultsHarness.Pump(window);
+        var fitted = column.ActualWidth;
+
+        grid.ScrollIntoView(rows[0], grid.Columns[^1]);    // horizontal scrolling re-lays the headers out
+        ResultsHarness.Pump(window);
+        grid.ScrollIntoView(rows[0], grid.Columns[0]);
+        ResultsHarness.Pump(window);
+        column.Width = DataGridLength.Auto;                 // a second double-click
+        ResultsHarness.Pump(window);
+        ResultsHarness.Pump(window);
+
+        Assert.Equal(fitted, column.ActualWidth, 1);
+        Assert.InRange(IndicatorGap(Header(view, 1)), 0, 16);
+        window.Close();
+    });
+
+    private static void Key_(Window window, Key key, PhysicalKey physical)
+    {
+        window.KeyPress(key, RawInputModifiers.None, physical, "");
+        window.KeyRelease(key, RawInputModifiers.None, physical, "");
+        ResultsHarness.Pump(window);
+    }
+
+    /// <summary>Escape in the grid steps back a layer at a time: the selection, then the filters (the bar's
+    /// clear-and-close; the sort stays). It also works when the filter left no row on screen.</summary>
+    [Fact]
+    public Task Escape_in_the_grid_clears_the_selection_then_the_filters() => _ui.Run(() =>
+    {
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: 3, rows: 6);
+        var (window, view) = ResultsHarness.Show(rs);
+        var registry = new CommandRegistry();
+        view.RegisterGridCommands(registry);
+        view.CommandDispatcher = new KeyDispatcher(KeymapDefaults.Build(), registry);
+        var grid = ResultsHarness.Grid(view);
+
+        rs.Filter.Open();
+        rs.Filter.SetColumnFilter(1, "r");          // every row still matches
+        rs.Filter.Sort = new RowSort(0, SortDirection.Descending);
+        ResultsHarness.Pump(window);
+        Press(window, ResultsHarness.RequireCell(view, rs.ViewRows[0], 1));
+        Assert.True(grid.IsKeyboardFocusWithin);
+        Assert.NotEmpty(view.Selection.Model.Cells);
+
+        Key_(window, Key.Escape, PhysicalKey.Escape);
+        Assert.Empty(view.Selection.Model.Cells);
+        Assert.True(rs.Filter.IsFiltered);           // one layer per press
+
+        Key_(window, Key.Escape, PhysicalKey.Escape);
+        Assert.False(rs.Filter.IsFiltered);
+        Assert.False(rs.Filter.IsFilterOpen);
+        Assert.NotNull(rs.Filter.Sort);              // the sort has its own control
+
+        // A filter that leaves nothing on screen: Escape still reaches it.
+        rs.Filter.Open();
+        rs.Filter.SetColumnFilter(1, "no such value");
+        ResultsHarness.Pump(window);
+        Assert.Empty(rs.ViewRows);
+        grid.Focus();
+        ResultsHarness.Pump(window);
+        Key_(window, Key.Escape, PhysicalKey.Escape);
+        Assert.False(rs.Filter.IsFiltered);
+        Assert.Equal(6, rs.ViewRows.Count);
+        window.Close();
+    });
+
+    /// <summary>The meta row's and the bar's icons are drawn geometry, not font glyphs that render clipped.</summary>
+    [Fact]
+    public Task The_filter_and_fetch_buttons_draw_their_icons() => _ui.Run(() =>
+    {
+        var (rs, _) = ResultsHarness.WideEditableResult(columns: 3, rows: 6);
+        var (window, view) = ResultsHarness.Show(rs);
+        rs.Filter.Open();
+        rs.Filter.QuickFilter = "r1";
+        ResultsHarness.Pump(window);
+
+        var texts = view.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text ?? "").ToList();
+        Assert.DoesNotContain(texts, t => t.Contains('⌕') || t.Contains('⤓') || t.Contains('✕'));
+        var icons = view.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>()
+            .Where(p => p.IsEffectivelyVisible && p.Data is not null && p.Stroke is not null).ToList();
+        Assert.Contains(icons, p => ReferenceEquals(p.Data, Application.Current!.FindResource("Icon.FilterClear")));
+        window.Close();
+    });
 }
+
