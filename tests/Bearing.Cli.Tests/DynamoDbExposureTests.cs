@@ -275,7 +275,10 @@ public class DynamoDbExposureTests : IAsyncLifetime
 
         Assert.Equal(15, export.Rows);
         Assert.True(export.Truncated);
-        Assert.All(_provider.Executor.ContinuationAsks, asked => Assert.True(asked <= 15));
+        // The exact asks: the first page is offered the whole cap (the fake pages at 10), and the one continuation
+        // only the 5 rows still owed — never a full chunk past the cap.
+        Assert.Equal([15], _provider.Executor.ExecuteAsks);
+        Assert.Equal([5], _provider.Executor.ContinuationAsks);
     }
 
     /// <summary>A continuation that fails mid-read leaves no file — a fraction of the answer would look like
@@ -296,6 +299,176 @@ public class DynamoDbExposureTests : IAsyncLifetime
         Assert.Contains(FakeDynamoExecutor.ContinuationFailure, failure.Message);
         Assert.False(File.Exists(path));
         Assert.False(Assert.Single(_log.Entries).Success);
+    }
+
+    // ---- a page the request budget ended (W1b) -----------------------------------------------------
+
+    /// <summary>DynamoDB ends a page after 10 requests however few rows it found. That page is as partial as one
+    /// the cap ended — <c>truncated</c> stays true — but no row limit was reached, and the answer says what did
+    /// stop it and how to read on, in the JSON and in the text.</summary>
+    [Fact]
+    public async Task A_page_the_request_budget_ended_says_so_and_never_claims_a_row_limit()
+    {
+        _provider.Executor.FirstPage = FakeDynamoExecutor.BudgetStoppedPage();
+        var host = await HostAsync();
+
+        var response = (QueryResponse)await host.QueryAsync(
+            new RunRequest(Name, """select * from "Orders" where "customerId" = 'c1'"""), CancellationToken.None);
+
+        var set = Assert.Single(response.Results);
+        Assert.Equal(3, set.RowCount);
+        Assert.True(set.Truncated);
+        Assert.Equal(ResultSet.RequestBudget, set.StoppedBy);
+        Assert.Equal(FakeDynamoExecutor.BudgetNotice, set.Message);
+
+        Assert.Contains("\"stopped_by\": \"request_budget\"", CliRunner.Serialize(response));
+
+        var text = TextTable.Render(response);
+        Assert.Contains("(3 rows in 1 ms, stopped by the engine's request budget; use --out to read on)", text);
+        Assert.DoesNotContain("row limit", text);
+    }
+
+    [Fact]
+    public async Task A_page_the_cap_ended_still_says_the_row_limit_and_names_no_budget()
+    {
+        var host = await HostAsync();
+
+        var response = (QueryResponse)await host.QueryAsync(
+            new RunRequest(Name, """select * from "Orders" where "customerId" = 'c1'"""), CancellationToken.None);
+
+        var set = Assert.Single(response.Results);
+        Assert.True(set.Truncated);
+        Assert.Null(set.StoppedBy);
+        Assert.DoesNotContain("stopped_by", CliRunner.Serialize(response));
+        Assert.Contains("cut short at the row limit", TextTable.Render(response));
+    }
+
+    // ---- describe a dotted table name (W2) -----------------------------------------------------------
+
+    [Theory]
+    [InlineData("app.orders")]
+    [InlineData("\"app.orders\"")]
+    [InlineData("  app.orders ")]
+    public async Task A_table_whose_name_holds_a_dot_is_described_by_its_whole_name(string asked)
+    {
+        var host = await HostAsync();
+
+        var table = (TableResponse)await host.DescribeTableAsync(Name, asked, CancellationToken.None);
+
+        Assert.Equal(FakeDynamoProvider.DottedTable, table.Name);
+        Assert.Equal("id", Assert.Single(table.Columns).Name);
+    }
+
+    [Fact]
+    public async Task A_dotted_name_that_is_no_table_either_way_is_still_not_found()
+    {
+        var host = await HostAsync();
+
+        var failure = await Assert.ThrowsAsync<CommandFailure>(
+            () => host.DescribeTableAsync(Name, "app.missing", CancellationToken.None));
+
+        Assert.StartsWith("'app.missing' is not a table or view on 'agent-dynamo'.", failure.Message);
+    }
+
+    // ---- an export of a read that found nothing (SF3) ------------------------------------------------
+
+    /// <summary>A SELECT that found no item, on a table whose key attributes could not be named, has no column
+    /// to write a header from. The streamed CSV and the materialised xlsx refuse it in the same words — the
+    /// executor's own "returned no items" included — and the file already at the path is left alone.</summary>
+    [Theory]
+    [InlineData("empty.csv")]
+    [InlineData("empty.xlsx")]
+    public async Task An_export_of_a_select_that_found_nothing_says_so_the_same_way_on_both_paths(string file)
+    {
+        _provider.Executor.FirstPage = FakeDynamoExecutor.NoItemsPage();
+        var host = await HostAsync();
+        Directory.CreateDirectory(_root);
+        var path = Path.Combine(_root, file);
+        await File.WriteAllTextAsync(path, "keep me");
+
+        var failure = await Assert.ThrowsAsync<CommandFailure>(() => host.QueryAsync(
+            new RunRequest(Name, """select "total" from "Orders" where "customerId" = 'nobody'""") { OutPath = path },
+            CancellationToken.None));
+
+        Assert.Equal(
+            "agent-dynamo: that statement returned no rows to write. The SELECT returned no items.",
+            failure.Message);
+        Assert.Equal("keep me", await File.ReadAllTextAsync(path));
+        Assert.Equal(1, _provider.Executor.Executes);
+        Assert.Equal(0, _provider.Executor.Streams);
+    }
+
+    // ---- a batch the guard cannot read (S3) ----------------------------------------------------------
+
+    /// <summary><c>$$</c> is a form the PostgreSQL lexer reads differently from DynamoDB, so the batch cannot be
+    /// read safely. It is refused — never sent — in the sentence that is true of it: nobody found a write in
+    /// it, and the refusal must not say one was.</summary>
+    [Fact]
+    public async Task A_batch_the_guard_cannot_read_is_refused_as_unreadable_not_as_a_write()
+    {
+        var host = await HostAsync();
+        const string sql = """select * from "Orders" where "customerId" = $$c1$$""";
+
+        var failure = await Assert.ThrowsAsync<CommandFailure>(
+            () => host.QueryAsync(new RunRequest(Name, sql), CancellationToken.None));
+
+        Assert.Equal(
+            "agent-dynamo: Bearing could not read this statement safely in this engine's SQL, so it was not run. "
+            + "A connection exposed to external tools runs only statements Bearing can read as reads.",
+            failure.Message);
+        Assert.DoesNotContain("writes", failure.Message);
+        Assert.DoesNotContain("dialect not parsed", failure.Message);
+        AssertRefusalLogged(sql, failure.Message);
+        Assert.Equal(0, _provider.Executor.Calls);
+    }
+
+    // ---- refusals around an export and a slow catalog (TC6) ------------------------------------------
+
+    [Theory]
+    [InlineData("orders.csv")]
+    [InlineData("orders.xlsx")]
+    public async Task An_unkeyed_select_with_an_export_path_is_refused_and_writes_no_file(string file)
+    {
+        var host = await HostAsync(confirmFullScans: false);
+        var path = Path.Combine(_root, file);
+        const string sql = """select * from "Orders" where "status" = 'open'""";
+
+        var failure = await Assert.ThrowsAsync<CommandFailure>(
+            () => host.QueryAsync(new RunRequest(Name, sql) { OutPath = path }, CancellationToken.None));
+
+        Assert.Contains("would read the whole of \"Orders\"", failure.Message);
+        Assert.False(File.Exists(path));
+        AssertRefusalLogged(sql, failure.Message);
+        Assert.Equal(0, _provider.Executor.Calls);
+    }
+
+    /// <summary>A table list that never arrives is waited for only as long as <see cref="ScanGuard.Budget"/>, and
+    /// then the statement is refused as one Bearing could not check — not left hanging, and not run.</summary>
+    [Fact]
+    public async Task A_catalog_that_hangs_past_the_budget_is_refused_as_unchecked_within_the_budget()
+    {
+        _provider.SnapshotHangs = true;
+        try
+        {
+            var host = await HostAsync(confirmFullScans: false);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+
+            var failure = await Assert.ThrowsAsync<CommandFailure>(() => host.QueryAsync(
+                new RunRequest(Name, """select * from "Orders" where "customerId" = 'c1'"""), CancellationToken.None));
+            clock.Stop();
+
+            Assert.Equal(
+                "'agent-dynamo': Bearing could not check whether this SELECT on \"Orders\" is keyed: the table list for "
+                + "this connection was not loaded. The bearing command runs keyed reads only, so it was not run; run it "
+                + "in Bearing.",
+                failure.Message);
+            Assert.InRange(clock.Elapsed, ScanGuard.Budget - TimeSpan.FromMilliseconds(250), ScanGuard.Budget + TimeSpan.FromSeconds(3));
+            Assert.Equal(0, _provider.Executor.Calls);
+        }
+        finally
+        {
+            _provider.ReleaseSnapshot();
+        }
     }
 
     // ---- fixtures -----------------------------------------------------------------------------
@@ -353,6 +526,22 @@ internal sealed class FakeDynamoProvider : IDbProvider, IProviderRegistry
     /// <summary>Set to make the catalog read fail, as a table list that cannot be loaded.</summary>
     public bool SnapshotThrows { get; set; }
 
+    /// <summary>Set to make the catalog read hang until <see cref="ReleaseSnapshot"/> — a table list that never
+    /// arrives within <see cref="ScanGuard.Budget"/>.</summary>
+    public bool SnapshotHangs { get; set; }
+
+    private readonly TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Let a hanging catalog read end (as a failure), so nothing is left waiting after the test.</summary>
+    public void ReleaseSnapshot() => _released.TrySetResult();
+
+    private async Task<ISchemaSnapshot> HangingSnapshotAsync()
+    {
+        await _released.Task;
+
+        throw new InvalidOperationException("ListTables never answered.");
+    }
+
     public string Id => DynamoDbProvider.ProviderId;
     public string DisplayName => "Amazon DynamoDB";
     public IReadOnlyList<ConnectionField> ConnectionFields => [];
@@ -381,14 +570,23 @@ internal sealed class FakeDynamoProvider : IDbProvider, IProviderRegistry
 
     public IServerActivity CreateServerActivity(IDbConnectionFactory factory) => new NoActivity();
 
+    /// <summary>A table whose name holds a dot — legal on DynamoDB, which has no schema to qualify with.</summary>
+    public const string DottedTable = "app.orders";
+
+    private const long DottedId = 2;
+
     private static readonly SchemaSnapshot Snapshot = new(
         "eu-west-1",
         [""],
-        [new TableInfo(OrdersId, "", "Orders", RelationKind.Table)],
+        [
+            new TableInfo(OrdersId, "", "Orders", RelationKind.Table),
+            new TableInfo(DottedId, "", DottedTable, RelationKind.Table),
+        ],
         [
             new ColumnInfo(OrdersId, 1, "customerId", "S", NotNull: true, IsPrimaryKey: true),
             new ColumnInfo(OrdersId, 2, "orderDate", "S", NotNull: true, IsPrimaryKey: true),
             new ColumnInfo(OrdersId, 3, "status", "S", NotNull: false, IsPrimaryKey: false),
+            new ColumnInfo(DottedId, 1, "id", "S", NotNull: true, IsPrimaryKey: true),
         ],
         [],
         searchPath: [""]);
@@ -416,7 +614,9 @@ internal sealed class FakeDynamoProvider : IDbProvider, IProviderRegistry
         public Task<ISchemaSnapshot> LoadSnapshotAsync(string database, CancellationToken ct)
             => owner.SnapshotThrows
                 ? throw new InvalidOperationException("ListTables failed.")
-                : Task.FromResult<ISchemaSnapshot>(Snapshot);
+                : owner.SnapshotHangs
+                    ? owner.HangingSnapshotAsync()
+                    : Task.FromResult<ISchemaSnapshot>(Snapshot);
 
         public Task<TableDetails> GetTableDetailsAsync(long tableId, CancellationToken ct)
             => Task.FromResult(tableId == OrdersId ? OrdersDetails : new TableDetails([], [], [], []));
@@ -484,15 +684,37 @@ internal sealed class FakeDynamoExecutor : IQueryExecutor
     /// <summary>The row count each continuation call asked for, in order.</summary>
     public List<int> ContinuationAsks { get; } = [];
 
+    /// <summary>The row cap each first-page call was given, in order (null = none).</summary>
+    public List<int?> ExecuteAsks { get; } = [];
+
     /// <summary>Set to make every continuation call come back as an error result.</summary>
     public bool FailContinuation { get; set; }
+
+    /// <summary>Set to answer the first-page call with this result instead of a page of the fixed table.</summary>
+    public QueryResult? FirstPage { get; set; }
 
     public Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct)
     {
         Executes++;
+        ExecuteAsks.Add(options.MaxRows);
 
-        return Task.FromResult<IReadOnlyList<QueryResult>>([Page(0, options.MaxRows ?? PageSize)]);
+        return Task.FromResult<IReadOnlyList<QueryResult>>([FirstPage ?? Page(0, options.MaxRows ?? PageSize)]);
     }
+
+    /// <summary>The executor's sentence for a page its request budget ended (DynamoDbQueryExecutor.BudgetNotice).</summary>
+    public const string BudgetNotice =
+        "This page stopped after 10 requests to DynamoDB with 3 rows: the read has not reached the end yet.";
+
+    /// <summary>A first page of 3 rows that the request budget ended with a token still in hand — not the cap.</summary>
+    public static QueryResult BudgetStoppedPage() => Page(0, 3) with { Message = BudgetNotice };
+
+    /// <summary>A SELECT that found no item and could name no attribute: no columns, and the executor's own
+    /// sentence (DynamoDbQueryExecutor.NoItems).</summary>
+    public static QueryResult NoItemsPage() => new(
+        [], [], 0, TimeSpan.FromMilliseconds(1), "The SELECT returned no items.", null, Truncated: false)
+    {
+        StatementIndex = 0,
+    };
 
     public Task<QueryResult> ExecuteContinuationAsync(string continuation, int maxRows, CancellationToken ct)
     {

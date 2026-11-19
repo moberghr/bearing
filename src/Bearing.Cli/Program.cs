@@ -100,10 +100,7 @@ internal static class Program
         var secrets = await SecretStoreFactory.CreateAsync(ct).ConfigureAwait(false);
 
         var providers = new ProviderRegistry();
-        // No ICredentialPrompt, and that null is the whole posture of this host: nothing here can raise a
-        // dialog, so a kind that would have to is refused up front by ExternalAccessPolicy rather than
-        // failing deep inside a connect.
-        var credentials = new CredentialResolver(() => secrets, prompt: null, new EntraTokenProvider());
+        var credentials = Credentials(providers, () => secrets);
         // No idle sweep: the process outlives one command by milliseconds, and a background timer could only
         // race the teardown.
         var sessions = new ConnectionSessionManager(
@@ -118,6 +115,29 @@ internal static class Program
             sessions,
             log);
     }
+
+    /// <summary>
+    /// How this host resolves a connection's secret — the App's arrangement (<c>WorkspaceContext</c>) minus the
+    /// prompt.
+    /// <para>
+    /// No <see cref="ICredentialPrompt"/>, and that null is the whole posture of this host: nothing here can
+    /// raise a dialog, so a kind that would have to is refused up front by <see cref="ExternalAccessPolicy"/>
+    /// rather than failing deep inside a connect.
+    /// </para>
+    /// <para>
+    /// The registry says which engines take no password at all (DynamoDB): a hand-edited
+    /// <see cref="CredentialKind.StoredPassword"/> on one of those resolves to no secret without the keychain
+    /// being read (§1.1). An engine the registry does not know is assumed to take one, as before the flag.
+    /// </para>
+    /// </summary>
+    internal static CredentialResolver Credentials(IProviderRegistry providers, Func<ISecretStore?> secrets)
+        => new(
+            secrets,
+            prompt: null,
+            new EntraTokenProvider(),
+            takesPassword: info => providers.All
+                .FirstOrDefault(p => string.Equals(p.Id, info.ProviderId, StringComparison.OrdinalIgnoreCase))
+                ?.SupportsPasswordCredentials ?? true);
 
     /// <summary>
     /// The same SQLite log the app writes, opened on the same file — which is why it was built for two

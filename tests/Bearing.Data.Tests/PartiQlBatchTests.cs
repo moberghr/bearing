@@ -129,4 +129,49 @@ public class PartiQlBatchTests
 
         Assert.True(PartiQlBatch.Split(script).Count >= guard);
     }
+
+    /// <summary>
+    /// The executor's split and the guard's split side by side over a corpus of PartiQL's own punctuation (ARCH4):
+    /// wherever the guard reads the batch as PartiQL, the two find the same statements with the same lead verbs, in
+    /// order — so what the guard judged is what is sent. Where it cannot (a Postgres-only form), every statement is
+    /// marked unreadable and the executor's split is still never coarser.
+    /// </summary>
+    [Theory]
+    [InlineData("select * from \"T\" where pk = 1")]
+    [InlineData("select * from \"T\" where pk = 1; delete from \"T\" where pk = 1")]
+    [InlineData("insert into \"T\" value {'pk': 1, 'a': [1, 2], 'b': <<'x', 'y'>>}; select * from \"T\"")]
+    [InlineData("update \"T\" set a = {'k': 'v;w'} where pk = 'p;q'; select a from \"T\" where pk = ?")]
+    [InlineData("SELECT * FROM \"Orders\".\"byStatus\" WHERE status IN ['open', 'held'];\nexists(select * from \"T\")")]
+    [InlineData("-- lead\nselect * from \"a;b\" /* c; d */ where \"x\"\"y\" = 'it''s';  ;  select 2")]
+    [InlineData("begin transaction; commit")]
+    [InlineData("select * from \"T\" where pk = $$x; y$$; delete from \"T\"")]
+    [InlineData("/* /* */ select * from \"Big\"; delete from \"T\" /* */")]
+    public void The_split_and_the_guards_split_agree_statement_for_statement(string script)
+    {
+        var dialect = PartiQlDialect.Instance;
+        var split = PartiQlBatch.Split(script);
+        var spans = dialect.SplitStatements(script).Where(s => !string.IsNullOrWhiteSpace(Code(s.Text))).ToList();
+        // A bare `;` between statements is a statement to the guard (risky, by the conservative default) and
+        // nothing to the executor, which drops it unsent — so it is left out of the comparison, not argued away.
+        var guard = dialect.DescribeStatements(script).Where(s => s.Verb != ";").ToList();
+
+        Assert.True(split.Count >= spans.Count);
+        Assert.True(split.Count >= guard.Count);
+
+        if (guard.All(s => s.GuardIsDialectAware))
+        {
+            Assert.Equal(spans.Count, split.Count);
+            Assert.Equal(guard.Count, split.Count);
+            Assert.Equal(guard.Select(s => s.Verb), split.Select(PartiQlBatch.LeadVerb));
+        }
+        else
+        {
+            Assert.All(guard, s => Assert.False(s.GuardIsDialectAware));
+        }
+
+        // What is left of a span once its comments and separators are taken away — empty for a span that holds
+        // only those, which the executor never sends.
+        static string Code(string text)
+            => string.Concat(PartiQlBatch.Split(text)).Trim();
+    }
 }

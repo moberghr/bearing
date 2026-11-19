@@ -33,21 +33,23 @@ public class DynamoDbConnectionFactoryTests
     // ---- SC6: the endpoint rule --------------------------------------------------------------------
 
     [Theory]
-    [InlineData("http://localhost:8000")]
-    [InlineData("http://LOCALHOST:8000")]
-    [InlineData("http://127.0.0.1:8000")]
-    [InlineData("http://127.4.5.6:8000")]
-    [InlineData("http://[::1]:8000")]
-    [InlineData("https://dynamodb.eu-west-1.amazonaws.com")]
-    [InlineData("https://localhost:8000")]
-    [InlineData("https://vpce-0123456789abcdef-abcd.dynamodb.eu-west-1.vpce.amazonaws.com")]
-    [InlineData("  http://localhost:8000  ")]
-    public async Task An_endpoint_that_is_allowed_builds_a_client_without_connecting(string endpoint)
+    [InlineData("http://localhost:8000", "http://localhost:8000/")]
+    [InlineData("http://LOCALHOST:8000", "http://localhost:8000/")]
+    [InlineData("http://127.0.0.1:8000", "http://127.0.0.1:8000/")]
+    [InlineData("http://127.4.5.6:8000", "http://127.4.5.6:8000/")]
+    [InlineData("http://[::1]:8000", "http://[::1]:8000/")]
+    [InlineData("https://dynamodb.eu-west-1.amazonaws.com", "https://dynamodb.eu-west-1.amazonaws.com/")]
+    [InlineData("https://localhost:8000", "https://localhost:8000/")]
+    [InlineData(
+        "https://vpce-0123456789abcdef-abcd.dynamodb.eu-west-1.vpce.amazonaws.com",
+        "https://vpce-0123456789abcdef-abcd.dynamodb.eu-west-1.vpce.amazonaws.com/")]
+    [InlineData("  http://localhost:8000  ", "http://localhost:8000/")]
+    public async Task An_endpoint_that_is_allowed_builds_a_client_without_connecting(string endpoint, string resolved)
     {
         await using var factory = new DynamoDbConnectionFactory(Info(endpoint));
 
         Assert.NotNull(factory.Api);
-        Assert.NotNull(DynamoDbConnectionFactory.ResolveEndpoint(Info(endpoint)));
+        Assert.Equal(resolved, DynamoDbConnectionFactory.ResolveEndpoint(Info(endpoint))!.AbsoluteUri);
     }
 
     [Theory]
@@ -158,6 +160,77 @@ public class DynamoDbConnectionFactoryTests
         // The signing region is the connection's, not the endpoint's — a ServiceURL has none of its own.
         Assert.Contains("/eu-west-1/dynamodb/aws4_request", request, StringComparison.Ordinal);
         Assert.Contains("\"Limit\":1", request, StringComparison.Ordinal);
+    }
+
+    /// <summary>The placeholder keys are for this machine only. An https endpoint to anywhere else with no
+    /// profile signs with the SDK's default chain — the client is built with no credentials of Bearing's — so a
+    /// VPC endpoint never receives requests signed with keys that mean nothing.</summary>
+    [Theory]
+    [InlineData("https://vpce-0123456789abcdef-abcd.dynamodb.eu-west-1.vpce.amazonaws.com")]
+    [InlineData("https://dynamodb.eu-west-1.amazonaws.com")]
+    [InlineData(null)]
+    public async Task A_non_loopback_endpoint_with_no_profile_never_signs_with_the_placeholder_keys(string? endpoint)
+    {
+        await using var factory = new DynamoDbConnectionFactory(Info(endpoint));
+
+        Assert.Null(ExplicitCredentials(factory));
+    }
+
+    [Fact]
+    public async Task A_loopback_endpoint_with_no_profile_is_built_with_the_placeholder_keys()
+    {
+        await using var factory = new DynamoDbConnectionFactory(Info("http://localhost:8000"));
+
+        var credentials = Assert.IsType<Amazon.Runtime.BasicAWSCredentials>(ExplicitCredentials(factory));
+        Assert.Equal(DynamoDbConnectionFactory.PlaceholderAccessKey, credentials.GetCredentials().AccessKey);
+    }
+
+    /// <summary>A named profile wins over the placeholder even on a loopback endpoint: someone pointing a real
+    /// profile at a local endpoint (a proxy, a tunnel) asked for that profile. Seen in the signed request.</summary>
+    [Fact]
+    public async Task A_loopback_endpoint_with_a_named_profile_signs_with_the_profile()
+    {
+        var path = WriteProfiles("""
+            [local-dev]
+            aws_access_key_id = AKIALOCALDEVKEY12345
+            aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYLOCALDEV
+            """);
+        try
+        {
+            using var server = await FakeDynamoDb.StartAsync();
+            await using var factory = new DynamoDbConnectionFactory(
+                Info($"http://127.0.0.1:{server.Port}", user: "local-dev"), path);
+
+            Assert.True(await factory.TestConnectionAsync(WithTimeout()));
+
+            var request = await server.Request;
+            Assert.Contains("Credential=AKIALOCALDEVKEY12345/", request, StringComparison.Ordinal);
+            Assert.DoesNotContain(DynamoDbConnectionFactory.PlaceholderAccessKey, request, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    /// The credentials the factory handed the SDK client, or null when it handed none (the SDK's default chain).
+    /// Read by reflection, because neither the factory nor the client exposes them — and the SDK's own property,
+    /// not a resolve: nothing here asks the default chain for anything.
+    /// </summary>
+    private static Amazon.Runtime.AWSCredentials? ExplicitCredentials(DynamoDbConnectionFactory factory)
+    {
+        const System.Reflection.BindingFlags Any =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public
+            | System.Reflection.BindingFlags.NonPublic;
+
+        var api = factory.Api;
+        var client = api.GetType().GetField("_client", Any)?.GetValue(api)
+            ?? throw new InvalidOperationException("The factory's API no longer holds an SDK client in _client.");
+        var property = typeof(Amazon.Runtime.AmazonServiceClient).GetProperty("ExplicitAWSCredentials", Any)
+            ?? throw new InvalidOperationException("AmazonServiceClient.ExplicitAWSCredentials is gone.");
+
+        return (Amazon.Runtime.AWSCredentials?)property.GetValue(client);
     }
 
     // ---- SC5 against the real SDK: what a profile that cannot sign in says --------------------------

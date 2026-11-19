@@ -59,6 +59,15 @@ public sealed record ProviderTraits(
     /// </summary>
     public string? WriteBoundary { get; init; }
 
+    /// <summary>
+    /// Whether this engine's reads continue from a server-side token (<see cref="QueryResult.Continuation"/>)
+    /// rather than by re-running the statement with an offset — so a host that must read a result to its end
+    /// follows <see cref="IQueryExecutor.ExecuteContinuationAsync"/> instead of streaming from the start. Its own
+    /// fact rather than read off <see cref="AsksFullScanQuestion"/>: the two happen to be true of the same engine
+    /// (DynamoDB), and nothing makes the next engine with one also have the other.
+    /// </summary>
+    public bool ReadsContinueByToken { get; init; }
+
     /// <summary>PostgreSQL — the behaviour every caller had when there was one engine, so it is also the
     /// fallback below.</summary>
     public static ProviderTraits Postgres { get; } = new(
@@ -138,6 +147,7 @@ public sealed record ProviderTraits(
     {
         WriteBoundary = "On Amazon DynamoDB the boundary is an IAM policy that grants no write actions "
                         + "(PutItem, UpdateItem, DeleteItem and the like).",
+        ReadsContinueByToken = true,
     };
 
     /// <summary>

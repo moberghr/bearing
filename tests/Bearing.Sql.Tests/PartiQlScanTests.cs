@@ -61,6 +61,33 @@ public class PartiQlScanTests
     public void An_or_pins_only_what_every_branch_pins(string sql, params string[] expected)
         => AssertPins(sql, expected);
 
+    /// <summary><c>=</c> with no space either side is the same comparison — the lexer reads <c>=1</c> as an
+    /// operator and a number, as it reads <c>=?</c> as one operator above.</summary>
+    [Theory]
+    [InlineData("select * from \"Orders\" where pk=1")]
+    [InlineData("select * from \"Orders\" where pk='a'")]
+    [InlineData("select * from \"Orders\" where \"pk\"=1")]
+    public void An_equality_written_without_spaces_pins_it(string sql) => AssertPins(sql, "pk");
+
+    /// <summary>AWS's own example of an OR that still queries (ql-reference.select.html, checked 2026-11-19):
+    /// every branch pins the same partition key.</summary>
+    [Fact]
+    public void An_or_of_equalities_on_the_same_key_pins_it_as_aws_documents()
+        => AssertPins("SELECT * FROM \"Orders\" WHERE OrderID = 100 OR OrderID = 200", "OrderID");
+
+    /// <summary>AND binds tighter than OR, with no parentheses to say so: <c>a and b or c</c> is
+    /// <c>(a and b) or c</c>, and the branch <c>c</c> alone pins nothing the other does — so nothing is pinned,
+    /// whichever side the key is written on.</summary>
+    [Theory]
+    [InlineData("select * from \"Orders\" where pk = 1 and x = 2 or y = 3")]
+    [InlineData("select * from \"Orders\" where y = 3 or pk = 1 and x = 2")]
+    [InlineData("select * from \"Orders\" where pk = 1 and x = 2 or pk = 3 and y = 4 or z = 5")]
+    public void And_binds_tighter_than_or_so_a_branch_without_the_key_pins_nothing(string sql) => AssertPins(sql);
+
+    [Fact]
+    public void And_binds_tighter_than_or_so_every_branch_holding_the_key_pins_it()
+        => AssertPins("select * from \"Orders\" where pk = 1 and x = 2 or pk = 3 and y = 4", "pk");
+
     // ---- What pins nothing ----
 
     [Theory]

@@ -77,7 +77,11 @@ public sealed class BearingHost(
         var snapshot = await SnapshotAsync(info, lease.Session, ct).ConfigureAwait(false);
 
         var (schema, name) = SplitQualified(table);
+        // A dot is also just a character in a name: DynamoDB allows one in a table name (`app.orders`) and has no
+        // schemas to qualify with. When the split names nothing, the whole name is tried as one unqualified name
+        // before giving up — never instead of the split, which stays the reading on every engine with schemas.
         var found = snapshot.ResolveTable(schema, name)
+            ?? (schema is null ? null : snapshot.ResolveTable(null, Unsplit(table)))
             ?? throw new CommandFailure(
                 $"'{table}' is not a table or view on '{info.Name}'. "
                 + $"Run `bearing {Commands.Tables} {info.Name}` to see what is.");
@@ -108,11 +112,12 @@ public sealed class BearingHost(
         if (format == ExportFormat.Csv && traits.Dialect.SplitStatements(sql).Count == 1)
         {
             var executor = lease.Session.Executor;
+            var first = new FirstPage();
             var batches = ContinuesByToken(traits)
-                ? ContinuedRowsAsync(executor, sql, Rows(request), ct)
+                ? ContinuedRowsAsync(executor, sql, Rows(request), first, ct)
                 : executor.StreamRowsAsync(sql, new QueryOptions { MaxRows = Rows(request) }, ct);
 
-            return await StreamCsvAsync(info, sql, request.OutPath!, batches, ct).ConfigureAwait(false);
+            return await StreamCsvAsync(info, sql, request.OutPath!, batches, first, ct).ConfigureAwait(false);
         }
 
         IReadOnlyList<QueryResult> results;
@@ -142,7 +147,8 @@ public sealed class BearingHost(
         if (results.FirstOrDefault(r => !r.Success)?.Error is { } error)
             throw new CommandFailure($"{info.Name}: {error.Message}");
 
-        if (request.OutPath is { } path) return Export(results, path, format!.Value, info.Name);
+        if (request.OutPath is { } path)
+            return Export(results, path, format!.Value, info.Name, ContinuesByToken(traits) ? EmptyRead(results) : null);
 
         // One shape whatever the SQL was. A single statement is the overwhelming case, but a result that
         // is sometimes an object and sometimes a list is a shape a consumer has to branch on, and the
@@ -262,7 +268,18 @@ public sealed class BearingHost(
         //
         // Such a statement is still refused, by the allow-list below, in the words that are true of it:
         // "'DECLARE' is not a read". Falling through to it is the whole of the fix.
-        var named = risks.Where(r => r.NamesAWrite).Select(r => r.Label).Distinct(StringComparer.Ordinal).ToList();
+        //
+        // The same holds for a statement the guard could not read at all (GuardIsDialectAware false — on DynamoDB,
+        // PartiQL holding a form the lexer reads differently, such as `$$`): NamesAWrite is true of it so that it is
+        // held, but no write was found in it, and "so SELECT — dialect not parsed will not run" framed it as one.
+        // Only a verb the scan actually found (a risky verb, not the conservative default) is named here — which
+        // is NamesAWrite minus the unreadable case; the unreadable statement falls through to the allow-list,
+        // which refuses it as one that could not be read safely.
+        var named = risks
+            .Where(r => r.RiskyVerbs.Count > 0 && !r.FromConservativeDefault)
+            .Select(r => r.Label)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
         if (named.Count > 0 && WriteRefusal.Reason(info, risks) is not null)
         {
             throw Refused(
@@ -374,12 +391,14 @@ public sealed class BearingHost(
     /// still exports as one table.
     /// </para>
     /// </summary>
+    /// <param name="emptyRead">What a read that came back with no shape said for itself, on an engine whose reads
+    /// can (<see cref="EmptyRead"/>) — carried into the refusal so it reads the same as the streamed path's.</param>
     private static ExportResponse Export(
-        IReadOnlyList<QueryResult> results, string path, ExportFormat format, string connection)
+        IReadOnlyList<QueryResult> results, string path, ExportFormat format, string connection, string? emptyRead)
     {
         var grids = results.Where(r => r.Columns.Count > 0).ToList();
         if (grids.Count == 0)
-            throw new CommandFailure($"{connection}: that statement returned no rows to write.");
+            throw new CommandFailure(NothingToWrite(connection, emptyRead));
 
         if (format == ExportFormat.Csv && grids.Count > 1)
             throw new CommandFailure(
@@ -424,7 +443,12 @@ public sealed class BearingHost(
     /// </para>
     /// </summary>
     private async Task<ICliResponse> StreamCsvAsync(
-        ConnectionInfo info, string sql, string path, IAsyncEnumerable<RowBatch> batches, CancellationToken ct)
+        ConnectionInfo info,
+        string sql,
+        string path,
+        IAsyncEnumerable<RowBatch> batches,
+        FirstPage first,
+        CancellationToken ct)
     {
         var wall = Stopwatch.StartNew();
         ResultExport.StreamedCsv written;
@@ -460,7 +484,7 @@ public sealed class BearingHost(
         // contradicts.
         if (written.Columns == 0)
         {
-            var refusal = $"{info.Name}: that statement returned no rows to write.";
+            var refusal = NothingToWrite(info.Name, first.EmptyRead);
             Write(info, sql, wall.Elapsed, rows: 0, success: false, error: refusal);
             throw new CommandFailure(refusal);
         }
@@ -484,11 +508,10 @@ public sealed class BearingHost(
     /// <summary>
     /// Whether this engine's reads continue from a server-side token (<see cref="QueryResult.Continuation"/>)
     /// rather than by re-running with an offset. Asked only where it must be known before anything runs — the
-    /// streamed CSV picks its source up front. Read from the dialect, like
-    /// <see cref="ProviderTraits.AsksFullScanQuestion"/>: DynamoDB is the one engine with either property, and
-    /// the scan question exists <i>because</i> its reads are continued pages of a possible scan.
+    /// streamed CSV picks its source up front. The engine's own declared fact
+    /// (<see cref="ProviderTraits.ReadsContinueByToken"/>), not inferred from another one.
     /// </summary>
-    private static bool ContinuesByToken(ProviderTraits traits) => traits.AsksFullScanQuestion;
+    private static bool ContinuesByToken(ProviderTraits traits) => traits.ReadsContinueByToken;
 
     private static int ChunkFor(int? maxRows, long taken)
         => maxRows is { } cap
@@ -539,8 +562,8 @@ public sealed class BearingHost(
                 next = page.Continuation;
             }
 
-            // The first page's message described that page ("Load more continues…"), and is no longer true of
-            // the whole. Truncated is the cap stopping the read with a token still in hand.
+            // The first page's message described that page (the engine's request-budget notice), and is no longer
+            // true of the whole. Truncated is the cap stopping the read with a token still in hand.
             followed.Add(result with
             {
                 Rows = rows,
@@ -559,19 +582,34 @@ public sealed class BearingHost(
     /// The streamed form of <see cref="FollowContinuationsAsync"/> for one statement: the first page from
     /// <see cref="IQueryExecutor.ExecuteAsync"/>, then each continuation as it lands, one page in memory at a
     /// time. Honours <see cref="RowBatch"/>'s contract (§5.7): every batch carries the first page's columns, a
-    /// row-returning read always ends with a tail batch, a statement with no shape yields nothing, and only the
-    /// tail says <c>Truncated</c> — when <paramref name="maxRows"/> stopped the read with a token still in hand.
-    /// A failure is thrown, as a stream reports one.
+    /// read always ends with a tail batch, and only the tail says <c>Truncated</c> — when
+    /// <paramref name="maxRows"/> stopped the read with a token still in hand. A failure is thrown, as a stream
+    /// reports one.
+    /// <para>
+    /// <b>The statement here is a read</b> — the allow-list admitted nothing else (§1.11a) — so its result is a
+    /// row result even when it names no column: a DynamoDB <c>SELECT</c> that found no item, on a table whose key
+    /// attributes could not be read, has none to name. It still yields its (empty) tail rather than nothing, which
+    /// is the shape of a statement that returns no rows at all; what the read said for itself goes to
+    /// <paramref name="first"/> so the refusal can say it.
+    /// </para>
     /// </summary>
     private static async IAsyncEnumerable<RowBatch> ContinuedRowsAsync(
-        IQueryExecutor executor, string sql, int? maxRows, [EnumeratorCancellation] CancellationToken ct)
+        IQueryExecutor executor,
+        string sql,
+        int? maxRows,
+        FirstPage first,
+        [EnumeratorCancellation] CancellationToken ct)
     {
         var results = await executor
             .ExecuteAsync(sql, new QueryOptions { MaxRows = maxRows }, ct)
             .ConfigureAwait(false);
 
-        var page = results.FirstOrDefault(r => !r.Success) ?? results.FirstOrDefault(r => r.Columns.Count > 0);
+        var page = results.FirstOrDefault(r => !r.Success)
+                   ?? results.FirstOrDefault(r => r.Columns.Count > 0)
+                   ?? results.FirstOrDefault();
         if (page is null) yield break;
+
+        first.EmptyRead = EmptyRead([page]);
 
         var columns = page.Columns;
         long taken = 0;
@@ -592,6 +630,27 @@ public sealed class BearingHost(
             page = await executor.ExecuteContinuationAsync(next, ChunkFor(maxRows, taken), ct).ConfigureAwait(false);
         }
     }
+
+    /// <summary>What <see cref="ContinuedRowsAsync"/> learned about the read's first page that the row stream
+    /// cannot carry. Written before the first batch is yielded, read after the stream ends.</summary>
+    private sealed class FirstPage
+    {
+        public string? EmptyRead { get; set; }
+    }
+
+    /// <summary>The sentence a successful read with no shape gave for itself (DynamoDB: "The SELECT returned no
+    /// items."), or null.</summary>
+    private static string? EmptyRead(IEnumerable<QueryResult> results)
+        => results.FirstOrDefault(r => r.Success && r.Columns.Count == 0)?.Message is { Length: > 0 } said
+            ? said.Trim()
+            : null;
+
+    /// <summary>The one refusal for an export with nothing to write, the same from the streamed and the
+    /// materialised path: the generic sentence, then what the read said for itself when it said something.</summary>
+    private static string NothingToWrite(string connection, string? emptyRead)
+        => emptyRead is null
+            ? $"{connection}: that statement returned no rows to write."
+            : $"{connection}: that statement returned no rows to write. {emptyRead}";
 
     // ---- the record -----------------------------------------------------------------------------
 
@@ -747,4 +806,8 @@ public sealed class BearingHost(
             ? (null, trimmed)
             : (trimmed[..dot].Trim('"'), trimmed[(dot + 1)..].Trim('"'));
     }
+
+    /// <summary>The name as one unqualified name, dots and all — the outer quotes and whitespace
+    /// <see cref="SplitQualified"/> trims, and nothing else.</summary>
+    internal static string Unsplit(string table) => table.Trim().Trim('"');
 }

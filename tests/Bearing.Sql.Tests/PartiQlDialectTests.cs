@@ -256,6 +256,33 @@ public class PartiQlDialectTests
         Assert.Equal("select * from \"T\" where a = '?'", Pq.RedactLiterals("select * from \"T\" where a = 'secret'"));
     }
 
+    /// <summary>
+    /// The query log's redaction (§1.3) reaches inside PartiQL's own literals: a <c>{…}</c> tuple's keys and values
+    /// and a <c>&lt;&lt;…&gt;&gt;</c> bag's or <c>[…]</c> list's members are each a string or a number to the lexer,
+    /// and each is replaced. Names stay — they are not literals.
+    /// </summary>
+    [Theory]
+    [InlineData(
+        "insert into \"Users\" value {'email': 'ann@example.com', 'pin': 4321, 'tags': <<'vip', 7>>}",
+        "insert into \"Users\" value {'?': '?', '?': ?, '?': <<'?', ?>>}")]
+    [InlineData(
+        "select * from \"Users\" where \"email\" in ['ann@example.com', 'it''s me'] and age = 42.5",
+        "select * from \"Users\" where \"email\" in ['?', '?'] and age = ?")]
+    [InlineData(
+        "update \"Users\" set profile = {'card': {'number': '4111111111111111'}} where id = 'u1'",
+        "update \"Users\" set profile = {'?': {'?': '?'}} where id = '?'")]
+    [InlineData(
+        "select * from \"Users\" where id in <<1, 'x'>>",
+        "select * from \"Users\" where id in <<?, '?'>>")]
+    public void Redaction_hides_every_value_inside_tuples_bags_and_lists(string sql, string redacted)
+    {
+        var result = Pq.RedactLiterals(sql);
+
+        Assert.Equal(redacted, result);
+        Assert.DoesNotContain("ann@example.com", result);
+        Assert.DoesNotContain("4111", result);
+    }
+
     // ---- External access ----
 
     [Fact]
@@ -268,4 +295,27 @@ public class PartiQlDialectTests
         Assert.NotNull(ExternalSqlPolicy.Refuse(Pq, "delete from \"T\" where pk = 1"));
         Assert.NotNull(ExternalSqlPolicy.Refuse(Pq, "exists(select * from \"T\")"));
     }
+
+    /// <summary>A batch the lexer reads differently from DynamoDB is refused for an external host — but as one
+    /// that could not be read safely, never as a write nobody found (§1.1).</summary>
+    [Theory]
+    [InlineData("select * from \"T\" where pk = $$x$$")]
+    [InlineData("select * from \"T\" where pk = E'x\\'")]
+    [InlineData("/* /* */ select * from \"Big\"; /* */")]
+    public void An_unreadable_select_is_refused_as_unreadable_not_as_a_write(string sql)
+    {
+        var refusal = ExternalSqlPolicy.Refuse(Pq, sql);
+
+        Assert.Equal(
+            "Bearing could not read this statement safely in this engine's SQL, so it was not run. "
+            + "A connection exposed to external tools runs only statements Bearing can read as reads.",
+            refusal);
+        Assert.DoesNotContain(StatementRisk.UnparsedDialectNote, refusal);
+    }
+
+    [Fact]
+    public void A_write_the_scan_named_in_an_unreadable_batch_is_still_called_a_write()
+        => Assert.Equal(
+            "'DELETE' writes, and an exposed connection runs reads only.",
+            ExternalSqlPolicy.Refuse(Pq, "delete from \"T\" where pk = $$x$$"));
 }

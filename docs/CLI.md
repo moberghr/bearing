@@ -230,7 +230,10 @@ guarantee. The boundary is an IAM policy.
 
 **`query` returns the first page.** A DynamoDB result is read a page at a time and has no `LIMIT`/`OFFSET`, so a
 `query` without `--out` answers with the first page (at most `--max-rows`, default 200) and says
-`"truncated": true` when DynamoDB still has more. **`--out` follows the continuation:** it keeps reading until
+`"truncated": true` when DynamoDB still has more. DynamoDB also ends a page after 10 requests however few rows
+it found; such a page says `"stopped_by": "request_budget"` beside `"truncated": true` (in `--table`: "stopped by
+the engine's request budget"), because no row limit was reached and raising `--max-rows` would not help.
+**`--out` follows the continuation:** it keeps reading until
 the result is exhausted — or until `--max-rows` rows, when you pass one — before the file is complete, and a
 read that fails part-way leaves no file. A CSV of one statement streams a page at a time, like any other engine;
 an xlsx is built from every row.

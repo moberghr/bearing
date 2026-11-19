@@ -103,6 +103,17 @@ public static class CellValue
             // A statement that returned no grid still said something ("SELECT 0", an affected-row count).
             // It is the only answer such a statement has, so dropping it would report success with nothing.
             Message = string.IsNullOrWhiteSpace(result.Message) ? null : result.Message,
+            StoppedBy = StoppedByBudget(result) ? ResultSet.RequestBudget : null,
         };
     }
+
+    /// <summary>
+    /// Whether the engine's request budget, not the row ceiling, ended this page: a successful read that can still
+    /// continue <i>and</i> says something about itself. The executor words only that page (DynamoDB's
+    /// <c>BudgetNotice</c>, host-neutral by design — each host says how to read on); a page the ceiling ended
+    /// carries no message, and one with nothing left carries no continuation. The App reads the same pair
+    /// (<c>ContinuationPaging.BudgetNotice</c>).
+    /// </summary>
+    internal static bool StoppedByBudget(QueryResult result)
+        => result is { Success: true, Continuation: not null, Message.Length: > 0 };
 }

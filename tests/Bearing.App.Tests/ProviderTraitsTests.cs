@@ -163,6 +163,17 @@ public class ProviderTraitsEditorFactsTests
     public void Only_dynamodb_asks_the_full_scan_question(string providerId, bool asks)
         => Assert.Equal(asks, ProviderTraits.For(providerId).AsksFullScanQuestion);
 
+    /// <summary>Declared, not inferred from the scan question: the <c>bearing</c> command picks how an export
+    /// reads to the end from this flag alone.</summary>
+    [Theory]
+    [InlineData("postgres", false)]
+    [InlineData("sqlserver", false)]
+    [InlineData("mysql", false)]
+    [InlineData("dynamodb", true)]
+    [InlineData("no-such-engine", false)]
+    public void Only_dynamodb_reads_continue_by_token(string providerId, bool continues)
+        => Assert.Equal(continues, ProviderTraits.For(providerId).ReadsContinueByToken);
+
     [Fact]
     public void An_unknown_engine_asks_no_scan_question()
         => Assert.False(ProviderTraits.For("no-such-engine").AsksFullScanQuestion);
