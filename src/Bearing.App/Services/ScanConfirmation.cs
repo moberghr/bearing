@@ -30,7 +30,8 @@ public enum ScanQuestionKind
 /// <param name="Connection">Where the read lands; null only for <see cref="ScanQuestionKind.FetchAll"/> on a result
 /// whose connection can no longer be resolved — still asked, without the name (fail closed).</param>
 /// <param name="Kind">Which question.</param>
-/// <param name="Verdicts">The statements that are not keyed, in batch order; empty for <see cref="ScanQuestionKind.FetchAll"/>.</param>
+/// <param name="Verdicts">The statements it asks about (<see cref="ScanGuard.AsksBeforeRun"/>: not keyed, and not an
+/// unfiltered scan), in batch order; empty for <see cref="ScanQuestionKind.FetchAll"/>.</param>
 /// <param name="Text">The body: one sentence per statement, how rows load and what the check is.</param>
 public sealed record ScanQuestion(
     ConnectionInfo? Connection,
@@ -74,12 +75,17 @@ public sealed record ScanQuestion(
 
 /// <summary>What the scan check decided for one run.</summary>
 /// <param name="Proceed">False when the user cancelled (or nobody could be asked): nothing runs.</param>
-/// <param name="IsFullScan">The run was confirmed as a possible scan, so its result sets ask once more before
-/// Fetch all or Export (<see cref="ResultSetViewModel.IsFullScan"/>).</param>
+/// <param name="IsFullScan">The run may read a whole table — it was confirmed as a possible scan, or it holds an
+/// unfiltered scan that ran unasked — so its result sets ask once more before Fetch all or Export
+/// (<see cref="ResultSetViewModel.IsFullScan"/>).</param>
 public readonly record struct ScanDecision(bool Proceed, bool IsFullScan)
 {
     /// <summary>Nothing to ask: the setting is off, the engine has no scan question, or every read is keyed.</summary>
     public static ScanDecision NotAsked => new(Proceed: true, IsFullScan: false);
+
+    /// <summary>Nothing asked, but the run holds an unfiltered scan (<see cref="ScanVerdict.Unfiltered"/>): its first
+    /// page runs, and Fetch all / Export ask.</summary>
+    public static ScanDecision UnfilteredScan => new(Proceed: true, IsFullScan: true);
 
     public static ScanDecision Confirmed => new(Proceed: true, IsFullScan: true);
 
@@ -141,16 +147,16 @@ public sealed class ScanConfirmation
         return ScanGuard.TargetsFor(dialect, sql) is { Count: > 0 } targets ? targets : null;
     }
 
-    /// <summary>The run's question, or null when every verdict is keyed — nothing to ask.</summary>
+    /// <summary>
+    /// The run's question, naming only the statements that need asking (<see cref="ScanGuard.AsksBeforeRun"/>), or
+    /// null when none does — every verdict keyed, or an unfiltered scan whose first page runs unasked.
+    /// </summary>
     public static ScanQuestion? QuestionFor(ConnectionInfo info, IReadOnlyList<ScanVerdict> verdicts)
     {
-        if (ScanGuard.ConfirmationText(verdicts) is not { } text) return null;
+        var asked = verdicts.Where(ScanGuard.AsksBeforeRun).ToList();
+        if (ScanGuard.ConfirmationText(asked) is not { } text) return null;
 
-        return new ScanQuestion(
-            info,
-            ScanQuestionKind.Run,
-            verdicts.Where(v => v.Kind != ScanVerdictKind.Keyed).ToList(),
-            text);
+        return new ScanQuestion(info, ScanQuestionKind.Run, asked, text);
     }
 
     /// <summary>
@@ -161,7 +167,7 @@ public sealed class ScanConfirmation
     {
         var limit = Math.Max(1, fetchAllLimit).ToString("N0", CultureInfo.InvariantCulture);
         var text =
-            "This result comes from a SELECT that was confirmed before it ran because it may read a whole table. "
+            "This result comes from a SELECT that may read a whole table. "
             + $"Fetch all keeps reading it until it ends or reaches the Fetch all limit of {limit} rows "
             + "(Settings ▸ Results). Export fetches all first, the same way."
             + "\n\n" + ScanGuard.Boundary;
@@ -169,7 +175,8 @@ public sealed class ScanConfirmation
         return new ScanQuestion(info, ScanQuestionKind.FetchAll, [], text);
     }
 
-    /// <summary>Mark a run's result sets as coming from a confirmed scan, so Fetch all / Export ask again.</summary>
+    /// <summary>Mark a run's result sets as coming from a possible scan (confirmed, or unfiltered and run unasked),
+    /// so Fetch all / Export ask.</summary>
     public static void Mark(IEnumerable<ResultSetViewModel> sets, bool isFullScan)
     {
         if (!isFullScan) return;
@@ -181,8 +188,10 @@ public sealed class ScanConfirmation
     }
 
     /// <summary>
-    /// Ask before a run, once for the whole batch, when any statement is not keyed. Cancel — or no window to ask
-    /// in — runs nothing.
+    /// Ask before a run, once for the whole batch, when any statement needs asking — one that is not keyed, other
+    /// than an unfiltered scan (<c>select * from "T"</c>, no <c>WHERE</c>), whose first page reads about one page of
+    /// items and runs unasked. A run holding an unfiltered scan is still marked, so Fetch all and Export ask. Cancel
+    /// — or no window to ask in — runs nothing.
     /// </summary>
     public async Task<ScanDecision> ConfirmRunAsync(ConnectionInfo info, ISqlDialect dialect, string sql)
     {
@@ -190,7 +199,10 @@ public sealed class ScanConfirmation
 
         _status("Checking whether this reads a whole table…");
         var verdicts = await ClassifyAsync(info, targets);
-        if (QuestionFor(info, verdicts) is not { } question) return ScanDecision.NotAsked;
+        if (QuestionFor(info, verdicts) is not { } question)
+        {
+            return verdicts.Any(v => v.Unfiltered) ? ScanDecision.UnfilteredScan : ScanDecision.NotAsked;
+        }
 
         if (_dialogs is null)
         {
@@ -210,8 +222,8 @@ public sealed class ScanConfirmation
     }
 
     /// <summary>
-    /// Ask once more before Fetch all (and Export, which fetches all first) on a result confirmed as a scan that
-    /// still has more to read. True = go ahead; also true when there is nothing to ask about.
+    /// Ask before Fetch all (and Export, which fetches all first) on a result marked as a possible scan
+    /// (<see cref="Mark"/>) that still has more to read. True = go ahead; also true when there is nothing to ask about.
     /// <para>
     /// Fail closed: a scan-confirmed result asks even when <paramref name="info"/> is null (no tab, a running tab,
     /// or a connection since deleted) — the question then names no connection. Nothing reads on without an answer.

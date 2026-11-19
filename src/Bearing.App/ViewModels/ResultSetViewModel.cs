@@ -147,8 +147,9 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// </summary>
     public string? Continuation { get; private set; }
 
-    /// <summary>The run that produced this set was confirmed as a full table scan, so a fetch all or export
-    /// of it asks once more. Set by the run after the result sets are built.</summary>
+    /// <summary>The run that produced this set may read a whole table — it was confirmed as a possible scan, or
+    /// it held an unfiltered scan whose first page ran unasked — so a fetch all or export of it asks. Set by the
+    /// run after the result sets are built.</summary>
     public bool IsFullScan { get; set; }
 
     /// <summary>Total row count of the source query; null until the user asks for it.</summary>

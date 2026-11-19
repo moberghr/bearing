@@ -410,4 +410,13 @@ public sealed record ScanTarget(
     string? Table,
     string? Index,
     IReadOnlyList<string> PinnedAttributes,
-    bool Readable);
+    bool Readable)
+{
+    /// <summary>
+    /// Whether the statement has a <c>WHERE</c> clause. False only when the reduction read the statement and found
+    /// none (<c>select … from "T"</c>, optionally <c>"T"."Index"</c> and an <c>ORDER BY</c>): every item it
+    /// evaluates is returned, so its first page reads about one page of items. Defaults to true — "filtered" — so a
+    /// target nobody set this on is never treated as one whose first page may run unasked.
+    /// </summary>
+    public bool HasWhere { get; init; } = true;
+}

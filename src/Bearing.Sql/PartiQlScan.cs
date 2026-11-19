@@ -186,7 +186,7 @@ public static partial class PartiQlScan
 
         if (at == tokens.Count || IsOrderBy(tokens, at))
         {
-            return new ScanTarget(statement, table, index, [], Readable: true);
+            return new ScanTarget(statement, table, index, [], Readable: true) { HasWhere = false };
         }
 
         if (!IsWord(tokens[at], "WHERE"))

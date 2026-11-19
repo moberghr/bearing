@@ -58,7 +58,18 @@ public sealed record ScanVerdict(
     ScanVerdictKind Kind,
     string? PartitionKey,
     long? ApproximateItemCount,
-    ScanUncertainty? Uncertainty);
+    ScanUncertainty? Uncertainty)
+{
+    /// <summary>
+    /// A <see cref="ScanVerdictKind.FullScan"/> of a readable target with no <c>WHERE</c> at all
+    /// (<see cref="ScanTarget.HasWhere"/> false): every item it evaluates is returned, so its first page reads about
+    /// one page of items. The App runs that first page without asking (<see cref="ScanGuard.AsksBeforeRun"/>); its
+    /// result still asks before Fetch all and Export. Never set on any other verdict — a <c>WHERE</c> that does not
+    /// pin the key can evaluate many requests' worth of items to fill one page — and it changes nothing for the
+    /// <c>bearing</c> command, which runs keyed reads only.
+    /// </summary>
+    public bool Unfiltered { get; init; }
+}
 
 /// <summary>
 /// Whether a DynamoDB <c>SELECT</c> reads a whole table, and the sentences that say so (<i>Behaviour 8</i> and
@@ -72,9 +83,9 @@ public sealed record ScanVerdict(
 /// could not check, not that the statement scans (§1.1).
 /// </para>
 /// <para>
-/// Here rather than in a host because it decides whether a statement may run (§2.6): the App asks before a scan,
-/// the <c>bearing</c> command refuses anything not <see cref="ScanVerdictKind.Keyed"/>, and both say it in these
-/// words. Accident prevention, not a boundary — see <see cref="Boundary"/>.
+/// Here rather than in a host because it decides whether a statement may run (§2.6): the App asks before a scan
+/// (<see cref="AsksBeforeRun"/> — an unfiltered one's first page excepted), the <c>bearing</c> command refuses
+/// anything not <see cref="ScanVerdictKind.Keyed"/>, and both say it in these words. Accident prevention, not a boundary — see <see cref="Boundary"/>.
 /// </para>
 /// </summary>
 public static class ScanGuard
@@ -190,8 +201,20 @@ public static class ScanGuard
             ? ScanVerdictKind.Keyed
             : ScanVerdictKind.FullScan;
 
-        return new ScanVerdict(target, kind, partitionKey, count, Uncertainty: null);
+        return new ScanVerdict(target, kind, partitionKey, count, Uncertainty: null)
+        {
+            Unfiltered = kind == ScanVerdictKind.FullScan && !target.HasWhere,
+        };
     }
+
+    /// <summary>
+    /// Whether the App asks before running <paramref name="verdict"/>'s statement (with "Confirm full table scans"
+    /// on): every verdict that is not <see cref="ScanVerdictKind.Keyed"/>, except an
+    /// <see cref="ScanVerdict.Unfiltered"/> scan, whose first page runs unasked. Not the <c>bearing</c> command's
+    /// rule — it refuses anything not keyed (<see cref="CliRefusal"/>).
+    /// </summary>
+    public static bool AsksBeforeRun(ScanVerdict verdict)
+        => verdict.Kind != ScanVerdictKind.Keyed && !verdict.Unfiltered;
 
     /// <summary>Classify each target, in order.</summary>
     public static IReadOnlyList<ScanVerdict> Classify(
@@ -239,7 +262,8 @@ public static class ScanGuard
     /// <summary>
     /// The confirmation's text for a batch: one sentence per statement that is not keyed, then how rows load and
     /// what the check is (<see cref="Paging"/>, <see cref="Boundary"/>). Null when every verdict is keyed —
-    /// nothing to ask.
+    /// nothing to ask. A caller that skips unfiltered scans passes only the verdicts it asks about
+    /// (<see cref="AsksBeforeRun"/>).
     /// </summary>
     public static string? ConfirmationText(IEnumerable<ScanVerdict> verdicts)
     {

@@ -761,7 +761,7 @@
     "trap: region and profile in the Options bag are invisible to SameNetwork and the endpoint text",
     "trap: indexes as relations under a per-table schema put phantom schemas in the tree",
     "trap: default interface members for the provider flags let a future engine ship without answering",
-    "trap: skipping the confirmation for an unfiltered first page leaves load-more and fetch-all unguarded",
+    "trap: skipping the confirmation for an unfiltered first page leaves load-more and fetch-all unguarded [superseded 2026-11-19: adopted at the user's request for SELECTs with no WHERE; Fetch all / Export still ask; the bearing command still refuses]",
     "trap: rebuilding grid columns when a new attribute appears breaks the never-rebuild rule (9.10)",
     "the bearing command is a new unattended read path for DynamoDB; held to keyed SELECT only, which is accident prevention, not a boundary (IAM is)"
   ],
@@ -1033,6 +1033,12 @@
       "batch": "3c",
       "decision": "(other attributes) column on every result that continues, projections included",
       "why": "A later-page misfit or unseen attribute must never reach a column of another type nor be dropped; one-page results still have none"
+    },
+    {
+      "id": "D3",
+      "date": "2026-11-19",
+      "decision": "An unfiltered SELECT (no WHERE) runs its first page without the scan prompt; results stay marked IsFullScan so Fetch all / Export ask; bearing command unchanged",
+      "why": "User request: 'Select top 100 rows' reads one page yet prompted for a full scan"
     }
   ],
   "assumption_results": [

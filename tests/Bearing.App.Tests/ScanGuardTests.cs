@@ -335,6 +335,82 @@ public class ScanGuardTests
         Assert.Contains("keyed reads only", refusal);
     }
 
+    // ---- an unfiltered scan's first page ----------------------------------------------------------
+
+    /// <summary>A scan with no WHERE at all returns every item it evaluates, so its first page reads about one
+    /// page of items: it is still a scan (and still described as one), but the App does not ask before it.</summary>
+    [Theory]
+    [InlineData("select * from \"Orders\"")]
+    [InlineData("select customerId, status from \"Orders\" order by customerId")]
+    [InlineData("select * from \"Orders\".\"byStatus\"")]
+    public void A_scan_with_no_where_is_unfiltered_and_runs_unasked(string sql)
+    {
+        var verdict = One(sql);
+
+        Assert.Equal(ScanVerdictKind.FullScan, verdict.Kind);
+        Assert.True(verdict.Unfiltered);
+        Assert.False(ScanGuard.AsksBeforeRun(verdict));
+        Assert.Contains("would read the whole of", ScanGuard.Describe(verdict));
+    }
+
+    /// <summary>A WHERE that does not pin the key may evaluate many requests' worth of items to fill one page, so
+    /// it still asks.</summary>
+    [Theory]
+    [InlineData("select * from \"Orders\" where status = 'open'")]
+    [InlineData("select * from \"Orders\" where customerId > 'a'")]
+    [InlineData("select * from \"Orders\".\"byStatus\" where customerId = 'a'")]
+    public void A_scan_with_a_where_is_filtered_and_asks(string sql)
+    {
+        var verdict = One(sql);
+
+        Assert.Equal(ScanVerdictKind.FullScan, verdict.Kind);
+        Assert.False(verdict.Unfiltered);
+        Assert.True(ScanGuard.AsksBeforeRun(verdict));
+    }
+
+    /// <summary>Only a FullScan verdict is ever unfiltered: a missing fact still asks, even with no WHERE.</summary>
+    [Fact]
+    public void An_undetermined_read_with_no_where_is_not_unfiltered_and_asks()
+    {
+        var unknown = One("select * from \"Missing\"");
+        var broken = One("select * from \"Broken\"");
+        var noTables = ScanGuard.Classify(
+            Assert.Single(PartiQlDialect.Instance.ScanTargets("select * from \"Orders\"")!), snapshot: null);
+        var unreadable = ScanGuard.Classify(
+            new ScanTarget("select * from \"Orders\"", "Orders", null, [], Readable: false) { HasWhere = false },
+            Snapshot,
+            Details);
+
+        foreach (var verdict in new[] { unknown, broken, noTables, unreadable })
+        {
+            Assert.Equal(ScanVerdictKind.Undetermined, verdict.Kind);
+            Assert.False(verdict.Unfiltered);
+            Assert.True(ScanGuard.AsksBeforeRun(verdict));
+        }
+    }
+
+    [Fact]
+    public void A_keyed_read_is_never_unfiltered_and_never_asks()
+    {
+        var keyed = One("select * from \"Orders\" where customerId = 'a'");
+
+        Assert.False(keyed.Unfiltered);
+        Assert.False(ScanGuard.AsksBeforeRun(keyed));
+    }
+
+    /// <summary>The bearing command is unchanged: an unfiltered scan is refused in the same words as any scan.</summary>
+    [Fact]
+    public void The_cli_still_refuses_an_unfiltered_scan()
+    {
+        var refusal = ScanGuard.CliRefusal("prod", One("select * from \"Orders\""));
+
+        Assert.Equal(
+            "'prod': this SELECT would read the whole of \"Orders\" — the WHERE has no = or IN on its partition "
+            + "key \"customerId\". The bearing command runs keyed reads only; add a partition-key condition, or "
+            + "run it in Bearing.",
+            refusal);
+    }
+
     [Fact]
     public void Callers_share_a_four_second_budget()
         => Assert.Equal(TimeSpan.FromSeconds(4), ScanGuard.Budget);

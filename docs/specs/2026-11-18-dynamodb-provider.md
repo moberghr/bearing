@@ -77,10 +77,16 @@ which runs keyed `SELECT`s only.
      Runs without asking.
    - **Full scan** — anything else Bearing can read. Asks, naming the table (and index), its approximate
      item count when known, and that rows load a page at a time.
+   - **Unfiltered full scan** (adopted 2026-11-19 at the user's request) — a full scan with **no `WHERE` at
+     all** (an `ORDER BY`, the projection or an index target do not change that). Every item it evaluates is
+     returned, so its first page reads about one page of items: it **runs without asking**. Its result is still
+     marked as a scan, so "Fetch all" and Export ask. Any `WHERE` that does not pin the key still asks (one page
+     may evaluate up to 10 MB); so does every "could not check". A batch mixing an unfiltered `SELECT` with
+     others that need asking asks once, listing only those. The `bearing` command is unchanged (*Behaviour 12*).
    - **Could not check** — unreadable statement, unknown table, schema not loaded within the time limit.
      Asks, and says it could not check (never "this is a scan").
    - Cancel is the default button and runs nothing. "Fetch all" and Export on a result confirmed as a scan
-     ask once more, naming the Fetch-all row limit. "Load more" does not ask again.
+     (or from an unfiltered scan) ask once more, naming the Fetch-all row limit. "Load more" does not ask.
    - The check may connect and load the table list (the run would anyway), bounded by a 4 s budget.
    - The dialog and the setting's note say this stops mistakes and that the boundary is an IAM policy
      (`dynamodb:FullTableScan`).
@@ -112,7 +118,8 @@ which runs keyed `SELECT`s only.
     - Every `SELECT` is classified with the same `ScanGuard`, **whatever the connection's "Confirm full table
       scans" setting**. Only **Keyed** statements run. A full scan is refused with "'{name}': this SELECT
       would read the whole of "{table}" — the WHERE has no = or IN on its partition key "{pk}". The bearing
-      command runs keyed reads only; add a partition-key condition, or run it in Bearing." An
+      command runs keyed reads only; add a partition-key condition, or run it in Bearing." That includes an
+      unfiltered `SELECT` (no `WHERE`), whose first page only the app runs unasked (*Behaviour 8*). An
       **Undetermined** statement is refused saying Bearing could not check it, never that it scans.
     - Refusals are logged like every other CLI refusal (§1.11d).
     - `query` without `--export` returns the first page (`ResultPageSize`) and says when more rows exist;
@@ -467,11 +474,16 @@ Batches 2, 3 and 5 depend only on 1. Batch 4 depends on 3; 6 on 5; 7 and 8 on 3 
   but the tree would show a phantom schema per table.
 - **Default interface members for the provider flags.** Smaller diff, but a silent default is what §1.9a
   exists to prevent.
-- **Skip the confirmation for an unfiltered first page** (it reads only one page of items). Load more and
-  fetch all continue the same scan, and a rule with an exception is harder to trust.
 - **Emulate manual commit by queueing writes.** Reads would not see the queued writes; out of scope anyway.
 - **Rebuild grid columns when a new attribute appears.** §9.10 forbids rebuilding the grid.
 - **A vendored PartiQL ANTLR grammar.** The MySQL grammar alone was ~4,900 lines; not needed for query-only.
+
+Formerly rejected, since adopted:
+
+- **Skip the confirmation for an unfiltered first page** (it reads only one page of items) — adopted
+  2026-11-19 at the user's request; Fetch all / Export still ask; the `bearing` command still refuses. Now
+  *Behaviour 8*'s "Unfiltered full scan". (Rejected at first because Load more and Fetch all continue the
+  same scan; Fetch all keeps its question, and Load more never asked.)
 
 ## Open questions
 

@@ -98,6 +98,28 @@ public class DynamoDbExposureTests : IAsyncLifetime
         Assert.Equal(0, _provider.Executor.Calls);
     }
 
+    /// <summary>The App runs an unfiltered SELECT's first page unasked (it reads about one page of items); the
+    /// command does not — it runs keyed reads only, and nobody is there to confirm what comes after.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_unfiltered_select_is_still_refused_as_a_full_scan(bool confirmFullScans)
+    {
+        var host = await HostAsync(confirmFullScans);
+        const string sql = "select * from \"Orders\"";
+
+        var failure = await Assert.ThrowsAsync<CommandFailure>(
+            () => host.QueryAsync(new RunRequest(Name, sql), CancellationToken.None));
+
+        Assert.Equal(
+            "'agent-dynamo': this SELECT would read the whole of \"Orders\" — the WHERE has no = or IN on its "
+            + "partition key \"customerId\". The bearing command runs keyed reads only; add a partition-key "
+            + "condition, or run it in Bearing.",
+            failure.Message);
+        AssertRefusalLogged(sql, failure.Message);
+        Assert.Equal(0, _provider.Executor.Calls);
+    }
+
     [Fact]
     public async Task A_select_on_an_index_without_its_partition_key_is_refused_naming_the_index()
     {

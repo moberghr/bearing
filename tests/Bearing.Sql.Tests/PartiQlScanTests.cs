@@ -113,6 +113,65 @@ public class PartiQlScanTests
     [InlineData("select OrderID, Total from \"Orders\" order by OrderID desc")]
     public void No_where_pins_nothing_and_is_still_readable(string sql) => AssertPins(sql);
 
+    // ---- Whether there is a WHERE at all ----
+
+    /// <summary>No <c>WHERE</c> clause at all: the projection, an index target and an <c>ORDER BY</c> do not
+    /// change it.</summary>
+    [Theory]
+    [InlineData("select * from \"Orders\"")]
+    [InlineData("SELECT * FROM Orders;")]
+    [InlineData("select OrderID, Total from \"Orders\" order by OrderID desc")]
+    [InlineData("select * from \"Orders\".\"CustomerIndex\"")]
+    [InlineData("select Address['city'], size(Items) from \"Orders\"")]
+    [InlineData("select * from \"Orders\" -- where OrderID = 1")]
+    [InlineData("select * /* where */ from \"Orders\" /* where OrderID = 1 */")]
+    [InlineData("select \"where\" from \"Orders\"")]
+    [InlineData("select 'where x = 1' from \"Orders\"")]
+    [InlineData("select * from \"where\"")]
+    public void A_select_with_no_where_clause_is_unfiltered(string sql)
+    {
+        var target = Single(sql);
+        Assert.True(target.Readable, $"unreadable: {sql}");
+        Assert.False(target.HasWhere);
+    }
+
+    [Theory]
+    [InlineData("select * from \"Orders\" where OrderID = 100")]
+    [InlineData("select * from \"Orders\" where Total > 500")]
+    [InlineData("select * from \"Orders\" WHERE Total > 500 order by OrderID")]
+    [InlineData("select * from \"Orders\".\"CustomerIndex\" where CustomerID = 'c1'")]
+    [InlineData("select * from \"Orders\" where \"where\" = 'where'")]
+    public void A_select_with_a_where_clause_is_filtered(string sql)
+    {
+        var target = Single(sql);
+        Assert.True(target.Readable, $"unreadable: {sql}");
+        Assert.True(target.HasWhere);
+    }
+
+    /// <summary>A target the reduction could not read never claims to be unfiltered, and neither does one built
+    /// without saying — the default is "filtered", so nobody's first page runs unasked by omission.</summary>
+    [Theory]
+    [InlineData("select * from \"T\" t")]
+    [InlineData("select * from \"T\" limit 5")]
+    [InlineData("select * from \"T\" where pk in (select pk from \"U\")")]
+    public void An_unreadable_target_is_never_unfiltered(string sql)
+    {
+        var target = Single(sql);
+        Assert.False(target.Readable);
+        Assert.True(target.HasWhere);
+    }
+
+    [Fact]
+    public void A_target_built_without_saying_counts_as_filtered()
+        => Assert.True(new ScanTarget("select * from \"T\"", "T", null, [], Readable: true).HasWhere);
+
+    [Fact]
+    public void Each_select_in_a_batch_says_for_itself_whether_it_has_a_where()
+    {
+        var targets = PartiQlScan.Targets("select * from \"A\"; select * from \"B\" where x > 2; select * from \"C\"");
+        Assert.Equal([false, true, false], targets.Select(t => t.HasWhere));
+    }
+
     // ---- Targets ----
 
     [Fact]

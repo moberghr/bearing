@@ -152,6 +152,12 @@ holds before selecting `*` or an options bag.
   `ScanGuard.Budget` (4 s) and **a missing fact is `Undetermined`, said as "could not check" — never as "this scans"**
   (§1.1). The prompt defaults to Cancel; Fetch all and Export ask again on a result confirmed as a scan. It is not
   cost control and not a guarantee — the boundary is an IAM policy (`dynamodb:FullTableScan` condition key).
+- **An unfiltered scan's first page runs unasked** (user decision 2026-11-19): a `FullScan` of a readable target with
+  **no `WHERE` at all** (`ScanTarget.HasWhere` false → `ScanVerdict.Unfiltered`, `ScanGuard.AsksBeforeRun` false)
+  returns every item it evaluates, so one page reads about one page of items. Its result is still marked
+  `IsFullScan`: Fetch all and Export ask. Any `WHERE` that misses the key, and every `Undetermined`, still asks (one
+  page may evaluate 10 MB); a mixed batch asks naming only those. `HasWhere` defaults to true — a target nobody set
+  never skips the prompt. The `bearing` command is unchanged: it still refuses an unfiltered scan.
 - **The `bearing` command runs keyed reads only** (`SELECT` alone is in `ExternalReadVerbs`). Every `SELECT` is
   classified **whatever `ConfirmFullScans` says** — it is a question for the person at the keyboard and nobody is at
   this one. `FullScan` and `Undetermined` are refused (`ScanGuard.CliRefusal`), the refusal is logged (§1.11d), and a batch

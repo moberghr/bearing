@@ -132,13 +132,29 @@ public class ScanConfirmationTests : IDisposable
         Assert.Equal("Cancelled — nothing ran.", h.Status());
     }
 
+    /// <summary>Any WHERE that does not pin the partition key asks: one page of it may evaluate up to ten requests'
+    /// worth of items.</summary>
+    [Theory]
+    [InlineData("select * from \"Orders\" where x = 1")]
+    [InlineData("select * from \"Orders\" where status = 'open' order by customerId")]
+    [InlineData("select * from \"Orders\".\"byStatus\" where customerId = 'a'")]
+    public async Task A_filtered_scan_still_asks_and_cancel_runs_nothing(string sql)
+    {
+        var h = Build();
+
+        await h.Exec.ExecuteAsync(sql);
+
+        Assert.Equal(ScanVerdictKind.FullScan, Assert.Single(Assert.Single(h.Dialogs.ScanQuestions).Verdicts).Kind);
+        Assert.Equal(0, h.Executor.ExecuteCalls);
+    }
+
     [Fact]
     public async Task A_confirmed_scan_runs_once_and_its_results_are_marked()
     {
         var h = Build();
         h.Dialogs.ConfirmScanAnswer = true;
 
-        await h.Exec.ExecuteAsync("select * from \"Orders\"");
+        await h.Exec.ExecuteAsync("select * from \"Orders\" where status = 'open'");
 
         Assert.Single(h.Dialogs.ScanQuestions);
         Assert.Equal(1, h.Executor.ExecuteCalls);
@@ -152,7 +168,7 @@ public class ScanConfirmationTests : IDisposable
     {
         var h = Build();
 
-        await h.Exec.ExecuteAsync("select * from \"Orders\"");
+        await h.Exec.ExecuteAsync("select * from \"Orders\" where status = 'open'");
 
         var question = Assert.Single(h.Dialogs.ScanQuestions);
         Assert.Contains("\"Orders\"", question.Text);
@@ -204,7 +220,8 @@ public class ScanConfirmationTests : IDisposable
         h.Dialogs.ConfirmScanAnswer = true;
 
         await h.Exec.ExecuteAsync(
-            "select * from \"Orders\" where customerId = 'a'; select * from \"Orders\"; select * from \"Invoices\"");
+            "select * from \"Orders\" where customerId = 'a'; select * from \"Orders\" where status = 'open'; "
+            + "select * from \"Invoices\"");
 
         var question = Assert.Single(h.Dialogs.ScanQuestions);
         Assert.Equal(
@@ -228,12 +245,14 @@ public class ScanConfirmationTests : IDisposable
         Assert.False(h.Tab.LastResult!.IsFullScan);
     }
 
-    [Fact]
-    public async Task With_the_setting_off_a_scan_never_asks()
+    [Theory]
+    [InlineData("select * from \"Orders\"")]
+    [InlineData("select * from \"Orders\" where status = 'open'")]
+    public async Task With_the_setting_off_a_scan_never_asks(string sql)
     {
         var h = Build(confirmFullScans: false);
 
-        await h.Exec.ExecuteAsync("select * from \"Orders\"");
+        await h.Exec.ExecuteAsync(sql);
 
         Assert.Empty(h.Dialogs.ScanQuestions);
         Assert.Equal(1, h.Executor.ExecuteCalls);
@@ -265,10 +284,143 @@ public class ScanConfirmationTests : IDisposable
     {
         var h = Build(withDialogs: false);
 
-        await h.Exec.ExecuteAsync("select * from \"Orders\"");
+        await h.Exec.ExecuteAsync("select * from \"Orders\" where status = 'open'");
 
         Assert.Equal(0, h.Executor.ExecuteCalls);
         Assert.Contains("no window to confirm it in", h.Status());
+    }
+
+    // ---- an unfiltered SELECT (no WHERE at all): the first page runs unasked -----------------------
+
+    /// <summary>The tree's "Select top 100 rows" on DynamoDB: with no WHERE every evaluated item is returned, so
+    /// the first page reads about one page of items and runs without asking — but the result is still marked, so
+    /// Fetch all asks.</summary>
+    [Fact]
+    public async Task An_unfiltered_select_runs_its_first_page_unasked_and_fetch_all_still_asks()
+    {
+        var h = Build();
+
+        await h.Exec.ExecuteAsync("select * from \"Orders\"");
+
+        Assert.Empty(h.Dialogs.ScanQuestions);
+        Assert.Equal(1, h.Executor.ExecuteCalls);
+        Assert.Equal(10, h.Tab.LastResult!.Loaded);
+        Assert.True(h.Tab.LastResult.IsFullScan);
+
+        Assert.False(await h.Exec.FetchAllAsync(h.Tab.LastResult));
+
+        var question = Assert.Single(h.Dialogs.ScanQuestions);
+        Assert.Equal(ScanQuestionKind.FetchAll, question.Kind);
+        Assert.DoesNotContain("confirmed", question.Text);
+        Assert.Empty(h.Executor.Continued);
+        Assert.Equal(10, h.Tab.LastResult.Loaded);
+    }
+
+    [Theory]
+    [InlineData("select customerId, status from \"Orders\" order by customerId")]
+    [InlineData("select * from \"Orders\".\"byStatus\"")]
+    public async Task Order_by_projection_and_an_index_do_not_make_an_unfiltered_select_ask(string sql)
+    {
+        var h = Build();
+
+        await h.Exec.ExecuteAsync(sql);
+
+        Assert.Empty(h.Dialogs.ScanQuestions);
+        Assert.Equal(1, h.Executor.ExecuteCalls);
+        Assert.True(h.Tab.LastResult!.IsFullScan);
+    }
+
+    [Fact]
+    public async Task Export_of_an_unfiltered_select_asks_once_and_cancel_writes_nothing()
+    {
+        var h = Build();
+        h.Dialogs.ExportPath = Path.Combine(_root, "orders.csv");
+        await h.Exec.ExecuteAsync("select * from \"Orders\"");
+
+        await h.Exec.ExportAsync(h.Tab.LastResult!, ExportFormat.Csv);
+
+        Assert.Equal(ScanQuestionKind.FetchAll, Assert.Single(h.Dialogs.ScanQuestions).Kind);
+        Assert.Empty(h.Executor.Continued);
+        Assert.False(File.Exists(h.Dialogs.ExportPath));
+    }
+
+    [Fact]
+    public async Task Load_more_on_an_unfiltered_select_does_not_ask()
+    {
+        var h = Build();
+        await h.Exec.ExecuteAsync("select * from \"Orders\"");
+
+        await h.Exec.LoadMoreAsync(h.Tab.LastResult!);
+
+        Assert.Empty(h.Dialogs.ScanQuestions);
+        Assert.Equal(["t1"], h.Executor.Continued);
+    }
+
+    /// <summary>Nothing to ask, so no window is needed: the first page runs.</summary>
+    [Fact]
+    public async Task With_no_window_an_unfiltered_select_still_runs_its_first_page()
+    {
+        var h = Build(withDialogs: false);
+
+        await h.Exec.ExecuteAsync("select * from \"Orders\"");
+
+        Assert.Equal(1, h.Executor.ExecuteCalls);
+        Assert.True(h.Tab.LastResult!.IsFullScan);
+    }
+
+    /// <summary>A batch mixing an unfiltered SELECT with one that needs asking asks once, naming only the one
+    /// that needs asking; confirmed, the whole run is marked.</summary>
+    [Theory]
+    [InlineData("select * from \"Orders\"; select * from \"Orders\" where status = 'open'",
+        ScanVerdictKind.FullScan, "select * from \"Orders\" where status = 'open'")]
+    [InlineData("select * from \"Orders\"; select * from \"Invoices\"",
+        ScanVerdictKind.Undetermined, "select * from \"Invoices\"")]
+    public async Task A_batch_with_an_unfiltered_select_asks_only_about_the_others(
+        string sql, ScanVerdictKind asked, string statement)
+    {
+        var h = Build();
+        h.Dialogs.ConfirmScanAnswer = true;
+
+        await h.Exec.ExecuteAsync(sql);
+
+        var question = Assert.Single(h.Dialogs.ScanQuestions);
+        var verdict = Assert.Single(question.Verdicts);
+        Assert.Equal(asked, verdict.Kind);
+        Assert.Equal(statement, verdict.Target.Statement);
+        Assert.False(verdict.Unfiltered);
+        Assert.Equal(1, h.Executor.ExecuteCalls);
+        Assert.True(h.Tab.LastResult!.IsFullScan);
+    }
+
+    [Fact]
+    public async Task A_batch_of_an_unfiltered_select_and_a_keyed_one_runs_unasked_and_is_marked()
+    {
+        var h = Build();
+
+        await h.Exec.ExecuteAsync("select * from \"Orders\" where customerId = 'a'; select * from \"Orders\"");
+
+        Assert.Empty(h.Dialogs.ScanQuestions);
+        Assert.Equal(1, h.Executor.ExecuteCalls);
+        Assert.True(h.Tab.LastResult!.IsFullScan);
+    }
+
+    [Fact]
+    public void The_run_question_leaves_out_unfiltered_scans_and_is_null_when_only_they_remain()
+    {
+        var conn = new ConnectionInfo { Id = Guid.NewGuid(), ProviderId = "dynamodb", Name = "orders-prod" };
+        var unfiltered = new ScanVerdict(
+            new ScanTarget("select * from \"Orders\"", "Orders", null, [], Readable: true) { HasWhere = false },
+            ScanVerdictKind.FullScan, "customerId", null, null)
+        { Unfiltered = true };
+        var filtered = new ScanVerdict(
+            new ScanTarget("select * from \"Orders\" where x = 1", "Orders", null, [], Readable: true),
+            ScanVerdictKind.FullScan, "customerId", null, null);
+
+        Assert.Null(ScanConfirmation.QuestionFor(conn, [unfiltered]));
+
+        var question = ScanConfirmation.QuestionFor(conn, [unfiltered, filtered])!;
+        Assert.Equal([filtered], question.Verdicts);
+        Assert.Contains("x = 1", question.Verdicts[0].Target.Statement);
     }
 
     // ---- after a confirmed scan --------------------------------------------------------------------
@@ -277,7 +429,8 @@ public class ScanConfirmationTests : IDisposable
     {
         var h = Build();
         h.Dialogs.ConfirmScanAnswer = true;
-        await h.Exec.ExecuteAsync("select * from \"Orders\"");
+        await h.Exec.ExecuteAsync("select * from \"Orders\" where status = 'open'");
+        Assert.Single(h.Dialogs.ScanQuestions);
         h.Dialogs.ScanQuestions.Clear();
 
         return h;
@@ -421,7 +574,7 @@ public class ScanConfirmationTests : IDisposable
     {
         var h = Build(totalRows: 5);
         h.Dialogs.ConfirmScanAnswer = true;
-        await h.Exec.ExecuteAsync("select * from \"Orders\"");
+        await h.Exec.ExecuteAsync("select * from \"Orders\" where status = 'open'");
         h.Dialogs.ScanQuestions.Clear();
 
         Assert.True(await h.Exec.FetchAllAsync(h.Tab.LastResult!));
