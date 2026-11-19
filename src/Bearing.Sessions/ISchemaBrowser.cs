@@ -70,6 +70,15 @@ public interface ISchemaBrowser : IAsyncDisposable
     Task<RoleGrants> GetRoleGrantsAsync(
         ConnectionInfo connection, string database, string roleName, CancellationToken ct);
 
+    /// <summary>
+    /// A small sample of one table's attributes (<see cref="IMetadataReader.SampleAttributesAsync"/>), read when
+    /// the table is expanded. Null when the engine does not sample — the default, so a browser that never
+    /// reaches such an engine need not answer.
+    /// </summary>
+    Task<AttributeSample?> SampleAttributesAsync(
+        ConnectionInfo connection, string database, TableInfo table, int items, CancellationToken ct)
+        => Task.FromResult<AttributeSample?>(null);
+
     /// <summary>The server's tablespaces — cluster-wide, like <see cref="GetRolesAsync"/>.</summary>
     Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(ConnectionInfo connection, CancellationToken ct);
 

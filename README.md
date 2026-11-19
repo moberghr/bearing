@@ -36,6 +36,9 @@ indexes, and read the results.
 | **Read-only** | Refused by Bearing before the statement is sent. DynamoDB has no read-only session, so what stops a write at the server is an IAM policy without write actions. |
 | **Not available** | Grid editing, manual commit, query plans, the activity panel, SQL formatting, `:name` variables and `@set`, row counts, *Show definition* on a table, and the TLS and session-time-zone settings. |
 
+DynamoDB declares only a table's key attributes, so expanding a table in the tree reads a sample of up to 20
+items and lists the other attributes it found, marked *sampled* — other items may have other attributes.
+
 The `bearing` command reads DynamoDB too, for keyed `SELECT`s only — see [docs/CLI.md](docs/CLI.md).
 
 ## Project layout

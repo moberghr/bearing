@@ -256,6 +256,15 @@ public abstract partial class SchemaNodeViewModel : ObservableObject
         AddChild(child);
     }
 
+    /// <summary><see cref="AppendChild"/> at a position — for a late read whose rows belong among the ones
+    /// already there rather than after the folders.</summary>
+    protected void InsertChild(int index, SchemaNodeViewModel child)
+    {
+        child.InheritSearch(this);
+        child.Parent = this;
+        Children.Insert(index, child);
+    }
+
     /// <summary>
     /// Swap in a fresh set of children without re-reading anything (#132). For a node that can arrange the
     /// data it already holds more than one way — the generation is <b>not</b> bumped, because nothing was
@@ -1320,6 +1329,48 @@ public sealed class RelationNodeViewModel : SchemaNodeViewModel
         }
     }
 
+    /// <summary>How many items an attribute sample reads — one bounded request (DynamoDB's <c>Limit</c>).</summary>
+    internal const int SampleItems = 20;
+
+    /// <summary>
+    /// The attribute sample, for an engine whose tables declare only their keys (DynamoDB). Started here, once the
+    /// columns are attached, because it adds rows (§9.8) — and so only when the user expands the table: nothing is
+    /// read from a table before that. An engine that does not sample answers null and the rows are unchanged.
+    /// </summary>
+    protected override void OnChildrenAttached() => _ = FillSampledAttributesAsync();
+
+    /// <summary>
+    /// Read the sample and insert its rows after the key columns. A read from a load that has since been replaced
+    /// (a refresh) is discarded (§9.9b). A failure the reader threw — a sign-in, a refused setting — shows as a
+    /// refused sample with its reason rather than as nothing: an absent row would read as "no other attributes".
+    /// </summary>
+    private async Task FillSampledAttributesAsync()
+    {
+        var generation = LoadGeneration;
+        AttributeSample? sample;
+        try
+        {
+            sample = await _browser.SampleAttributesAsync(_connection, _database, _table, SampleItems, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            sample = AttributeSample.RefusedBecause(SafeErrorText.Of(ex));
+        }
+        if (!IsCurrentLoad(generation)) return;
+
+        if (sample is not null)
+        {
+            var at = Children.TakeWhile(c => c is ColumnNodeViewModel).Count();
+            foreach (var row in SampledAttributeNodeViewModel.RowsFor(sample)) InsertChild(at++, row);
+        }
+
+        AttributesSampled?.Invoke();
+    }
+
+    /// <summary>Raised once the attribute sample has answered (whether or not it added rows) for the current
+    /// load. For tests; nothing in the app waits.</summary>
+    internal Action? AttributesSampled { get; set; }
+
     /// <summary>
     /// A view's SQL, or a table's DDL — which now carries its constraints and indexes, the hole the
     /// generator's own note admitted to (#46). The read can fail (no server, no permission); the columns are
@@ -1642,6 +1693,47 @@ public sealed class ColumnNodeViewModel : SchemaNodeViewModel
     { }
 
     protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync() => Task.FromResult(None);
+}
+
+/// <summary>
+/// An attribute seen in a sample of a table's items (DynamoDB), not declared by the table. Leaf; its detail is
+/// the type the sample saw, marked <c>sampled</c> — it is not a column and never claims to be the table's schema.
+/// </summary>
+public sealed class SampledAttributeNodeViewModel : SchemaNodeViewModel
+{
+    /// <summary>The marker on every sampled row's detail.</summary>
+    internal const string Marker = "sampled";
+
+    public SampledAttributeNodeViewModel(SampledAttribute attribute)
+        : base("·", attribute.Name, $"{attribute.TypeName} · {Marker}", hasChildren: false)
+    {
+        DetailTip = "Seen in a sample of this table's items. DynamoDB does not declare it, so other items may "
+            + "not have it, or have it with another type.";
+    }
+
+    protected override Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync() => Task.FromResult(None);
+
+    /// <summary>
+    /// The rows a sample adds under its table: one line saying what the sample was, then each attribute — or,
+    /// for a refused sample, one row with the reason. Pure, so the wording is tested without a tree.
+    /// </summary>
+    internal static IReadOnlyList<SchemaNodeViewModel> RowsFor(AttributeSample sample)
+    {
+        if (sample.Refused is { } reason)
+            return [new MessageNodeViewModel("⚠", $"Couldn't sample attributes: {reason}")];
+
+        var rows = new List<SchemaNodeViewModel> { new MessageNodeViewModel("", Header(sample.ItemsRead)) };
+        rows.AddRange(sample.Attributes.Select(a => new SampledAttributeNodeViewModel(a)));
+        return rows;
+    }
+
+    /// <summary>What the sample was, in one line.</summary>
+    internal static string Header(int itemsRead) => itemsRead switch
+    {
+        0 => "A sample read no items, so no other attributes are known.",
+        1 => "Seen in a sample of 1 item — other items may have other attributes.",
+        _ => $"Seen in a sample of {itemsRead.ToString(CultureInfo.InvariantCulture)} items — other items may have other attributes.",
+    };
 }
 
 /// <summary>

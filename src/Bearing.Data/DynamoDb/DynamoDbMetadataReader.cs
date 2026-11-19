@@ -41,8 +41,15 @@ public sealed class DynamoDbMetadataReader : IMetadataReader
 
     private const string Schema = "";
 
+    /// <summary>The reason a sample gives for a table DynamoDB says is not there.</summary>
+    internal const string SampleTableGone = "The table no longer exists.";
+
     private readonly DynamoDbConnectionFactory _factory;
     private readonly ConcurrentDictionary<long, string> _names = new();
+
+    // Samples that were read, per table name, until the next snapshot (a refresh). A refused or failed one is
+    // never kept: the next expand asks again.
+    private readonly ConcurrentDictionary<string, AttributeSample> _samples = new(StringComparer.Ordinal);
 
     public DynamoDbMetadataReader(DynamoDbConnectionFactory factory) => _factory = factory;
 
@@ -53,6 +60,7 @@ public sealed class DynamoDbMetadataReader : IMetadataReader
     {
         // A snapshot is a refresh: what this session learned about its tables is read again.
         _factory.ForgetTables();
+        _samples.Clear();
 
         var names = await ListTableNamesAsync(ct).ConfigureAwait(false);
         var described = await DescribeAllAsync(names, ct).ConfigureAwait(false);
@@ -203,6 +211,146 @@ public sealed class DynamoDbMetadataReader : IMetadataReader
 
     public Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(CancellationToken ct)
         => Task.FromResult<IReadOnlyList<SchemaObjectInfo>>([]);
+
+    /// <summary>
+    /// The attributes found in at most <paramref name="items"/> of the table's items — <b>one</b>
+    /// <c>ExecuteStatement</c> of <c>select * from "T"</c> with <c>Limit</c> set, no continuation, so the read is
+    /// bounded by construction (which is why it is not put to the full-scan check). Read when the tree expands the
+    /// table, never on connect, and not logged (a metadata read, like the others here).
+    /// <para>
+    /// The declared attributes (the keys the tree already lists) are left out; the rest are ordinal by name, each
+    /// with the type its values had, or <c>mixed</c> when they differed. A refusal is typed (§1.1): a policy that
+    /// refuses the read, a table that is gone, a failure that may pass and the connection's timeout each come back
+    /// as <see cref="AttributeSample.Refused"/> with the scrubbed reason. Only a sign-in failure is thrown — as
+    /// the sign-in sentence, as on every other read. A sample that was read is kept until the next snapshot; a
+    /// refused one is not.
+    /// </para>
+    /// </summary>
+    public async Task<AttributeSample?> SampleAttributesAsync(TableInfo table, int items, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+
+        if (_samples.TryGetValue(table.Name, out var kept)) return kept;
+
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        if (_factory.StatementTimeoutSeconds > SessionPolicy.NoTimeout)
+        {
+            deadline.CancelAfter(TimeSpan.FromSeconds(_factory.StatementTimeoutSeconds));
+        }
+
+        HashSet<string> declared;
+
+        try
+        {
+            var description = await _factory.DescribeTableAsync(table.Name, deadline.Token).ConfigureAwait(false);
+            declared = DeclaredAttributes(description).Select(a => a.Name).ToHashSet(StringComparer.Ordinal);
+        }
+        catch (Exception e) when (!ct.IsCancellationRequested)
+        {
+            // A policy that refuses DescribeTable left the table in the tree with no key rows (see
+            // LoadSnapshotAsync), so nothing is listed already and nothing is left out — the read still runs.
+            if (deadline.IsCancellationRequested || !DynamoDbErrors.IsAccessDenied(e)) return Refusal(e, deadline);
+
+            declared = [];
+        }
+
+        ExecuteStatementResponse response;
+
+        try
+        {
+            response = await _factory.Api
+                .ExecuteStatementAsync(
+                    new ExecuteStatementRequest { Statement = $"select * from {Quote(table.Name)}", Limit = Math.Max(1, items) },
+                    deadline.Token)
+                .ConfigureAwait(false);
+        }
+        catch (Exception e) when (!ct.IsCancellationRequested)
+        {
+            if (DynamoDbErrors.IsResourceNotFound(e)) _factory.ForgetTable(table.Name);
+
+            return Refusal(e, deadline);
+        }
+
+        var found = Sampled(response.Items ?? [], declared);
+        var sample = new AttributeSample(found, response.Items?.Count ?? 0);
+
+        _samples[table.Name] = sample;
+
+        return sample;
+    }
+
+    /// <summary>
+    /// What a failed sample read comes back as: the timeout sentence when the connection's own clock fired, the
+    /// gone sentence for <c>ResourceNotFoundException</c>, else DynamoDB's scrubbed reason. A sign-in failure is
+    /// thrown as the sign-in sentence (<see cref="Rethrow"/>). The caller's own cancellation never reaches here.
+    /// </summary>
+    private AttributeSample Refusal(Exception e, CancellationTokenSource deadline)
+    {
+        if (deadline.IsCancellationRequested)
+        {
+            return AttributeSample.RefusedBecause(DynamoDbErrors.TimeoutSentence(_factory.StatementTimeoutSeconds));
+        }
+
+        if (DynamoDbErrors.IsSignInFailure(e))
+        {
+            Rethrow(e);
+        }
+
+        if (DynamoDbErrors.IsResourceNotFound(e)) return AttributeSample.RefusedBecause(SampleTableGone);
+
+        return AttributeSample.RefusedBecause(
+            DynamoDbErrors.Scrub(string.IsNullOrWhiteSpace(e.Message) ? e.GetType().Name : e.Message));
+    }
+
+    /// <summary>
+    /// Every attribute the items carry that is not in <paramref name="declared"/>, ordinal by name, with its type
+    /// (<see cref="SampleTypeName"/>) — <see cref="MixedType"/> when two items disagree.
+    /// </summary>
+    internal static IReadOnlyList<SampledAttribute> Sampled(
+        IEnumerable<IReadOnlyDictionary<string, AttributeValue>> items, IReadOnlySet<string> declared)
+    {
+        var types = new SortedDictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var item in items)
+        {
+            foreach (var (name, value) in item)
+            {
+                if (declared.Contains(name)) continue;
+
+                var type = SampleTypeName(value);
+                types[name] = types.TryGetValue(name, out var seen) && seen != type ? MixedType : type;
+            }
+        }
+
+        return types.Select(entry => new SampledAttribute(entry.Key, entry.Value)).ToList();
+    }
+
+    /// <summary>The type an attribute seen with values of more than one type is listed as.</summary>
+    internal const string MixedType = "mixed";
+
+    /// <summary>
+    /// One value's DynamoDB type in words. Scalars first, then a non-empty collection, then an empty one — the
+    /// same reading <see cref="DynamoDbValues"/> gives the SDK's value type (its class remarks).
+    /// </summary>
+    internal static string SampleTypeName(AttributeValue value)
+    {
+        if (value.S is not null) return "string";
+        if (value.N is not null) return "number";
+        if (value.BOOL is not null) return "boolean";
+        if (value.NULL is true) return "null";
+        if (value.B is not null) return "binary";
+
+        if (value.M is { Count: > 0 }) return "map";
+        if (value.L is { Count: > 0 }) return "list";
+        if (value.SS is { Count: > 0 }) return "string set";
+        if (value.NS is { Count: > 0 }) return "number set";
+        if (value.BS is { Count: > 0 }) return "binary set";
+
+        if (value.M is not null) return "map";
+        if (value.L is not null) return "list";
+
+        return "null";
+    }
 
     // ---- shared with the executor ------------------------------------------------------------------
 

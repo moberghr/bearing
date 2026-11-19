@@ -600,4 +600,207 @@ public class SchemaNodeTests
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
+
+    // ---- attribute sample (U2) ---------------------------------------------------------------------
+    //
+    // Each runs under Task.Run: with no synchronization context a fake's completion resumes the node inline, so
+    // "the sample has landed" is a fact by the time SetResult returns rather than a race with the thread pool.
+
+    [Fact]
+    public Task Expanding_a_table_samples_it_once_and_inserts_the_sampled_rows_after_the_key_columns() => Task.Run(async () =>
+    {
+        var browser = new SamplingBrowser
+        {
+            Answer = _ => Task.FromResult<AttributeSample?>(new AttributeSample(
+                [new SampledAttribute("doc", "map"), new SampledAttribute("v", "mixed")], ItemsRead: 20)),
+        };
+        var node = Dynamo(browser, out var other);
+        var raised = 0;
+        node.AttributesSampled = () => raised++;
+
+        node.IsExpanded = true;
+        await node.EnsureChildrenAsync();
+        node.IsExpanded = false;
+        node.IsExpanded = true;
+        await node.EnsureChildrenAsync();
+        await other.EnsureChildrenAsync();
+
+        Assert.Equal(["Orders", "Other"], browser.Sampled.Select(t => t.Name));
+        Assert.Equal(1, raised);
+        Assert.Equal(
+            ["pk", "sk", "Seen in a sample of 20 items — other items may have other attributes.", "doc", "v", "Indexes"],
+            node.Children.Select(c => c.Title));
+        var sampled = node.Children.OfType<SampledAttributeNodeViewModel>().ToList();
+        Assert.Equal(["map · sampled", "mixed · sampled"], sampled.Select(s => s.Detail));
+        Assert.All(sampled, s => Assert.Same(node, s.Parent));
+        Assert.Equal(RelationNodeViewModel.SampleItems, browser.Items);
+    });
+
+    [Fact]
+    public Task Nothing_is_sampled_before_the_table_is_expanded() => Task.Run(() =>
+    {
+        var browser = new SamplingBrowser { Answer = _ => Task.FromResult<AttributeSample?>(new AttributeSample([], 0)) };
+
+        _ = Dynamo(browser, out _);
+
+        Assert.Empty(browser.Sampled);
+    });
+
+    [Fact]
+    public Task A_refused_sample_shows_one_row_with_the_reason() => Task.Run(async () =>
+    {
+        var browser = new SamplingBrowser
+        {
+            Answer = _ => Task.FromResult<AttributeSample?>(
+                AttributeSample.RefusedBecause("User is not authorized to perform: dynamodb:PartiQLSelect")),
+        };
+        var node = Dynamo(browser, out _);
+
+        await node.EnsureChildrenAsync();
+
+        Assert.Equal(
+            ["pk", "sk", "Couldn't sample attributes: User is not authorized to perform: dynamodb:PartiQLSelect", "Indexes"],
+            node.Children.Select(c => c.Title));
+        Assert.Empty(node.Children.OfType<SampledAttributeNodeViewModel>());
+    });
+
+    [Fact]
+    public Task A_sample_that_throws_shows_its_reason_rather_than_nothing() => Task.Run(async () =>
+    {
+        var browser = new SamplingBrowser
+        {
+            Answer = _ => Task.FromException<AttributeSample?>(new InvalidOperationException("Could not sign in to AWS.")),
+        };
+        var node = Dynamo(browser, out _);
+
+        await node.EnsureChildrenAsync();
+
+        Assert.Contains("Couldn't sample attributes: Could not sign in to AWS.", node.Children.Select(c => c.Title));
+    });
+
+    [Fact]
+    public Task An_engine_that_does_not_sample_keeps_its_rows_unchanged() => Task.Run(async () =>
+    {
+        // FakeSchemaBrowser answers with the interface's default — what every engine but DynamoDB does.
+        var browser = new FakeSchemaBrowser();
+        var objects = await browser.GetObjectsAsync(Conn(), "app", CancellationToken.None);
+        var film = objects.Snapshot.Tables.Single(t => t.Name == "film");
+        var node = new RelationNodeViewModel(Conn(), "app", film, objects.Snapshot, browser, "public");
+        var raised = 0;
+        node.AttributesSampled = () => raised++;
+
+        await node.EnsureChildrenAsync();
+
+        Assert.Equal(1, raised);
+        Assert.Equal(["film_id", "title"], node.Children.Select(c => c.Title));
+        Assert.All(node.Children, c => Assert.IsType<ColumnNodeViewModel>(c));
+    });
+
+    [Fact]
+    public Task A_sample_from_a_load_since_refreshed_is_discarded() => Task.Run(async () =>
+    {
+        var stale = new TaskCompletionSource<AttributeSample?>();
+        var fresh = new TaskCompletionSource<AttributeSample?>();
+        var pending = new Queue<TaskCompletionSource<AttributeSample?>>([stale, fresh]);
+        var browser = new SamplingBrowser { Answer = _ => pending.Dequeue().Task };
+        var node = Dynamo(browser, out _);
+
+        node.IsExpanded = true;
+        await node.EnsureChildrenAsync();
+        await node.RefreshAsync();
+        stale.SetResult(new AttributeSample([new SampledAttribute("old", "string")], 1));
+        fresh.SetResult(new AttributeSample([new SampledAttribute("new", "number")], 1));
+
+        Assert.Equal(2, browser.Sampled.Count);
+        Assert.Equal(
+            ["pk", "sk", "Seen in a sample of 1 item — other items may have other attributes.", "new", "Indexes"],
+            node.Children.Select(c => c.Title));
+    });
+
+    [Fact]
+    public void A_sample_that_read_no_items_says_so_instead_of_claiming_there_are_no_attributes()
+    {
+        var rows = SampledAttributeNodeViewModel.RowsFor(new AttributeSample([], 0));
+
+        Assert.Equal(["A sample read no items, so no other attributes are known."], rows.Select(r => r.Title));
+    }
+
+    /// <summary>A DynamoDB-shaped table (partition + sort key, an index folder) under a sampling browser, and a
+    /// second table beside it.</summary>
+    private static RelationNodeViewModel Dynamo(SamplingBrowser browser, out RelationNodeViewModel other)
+    {
+        var connection = new ConnectionInfo
+        {
+            Id = Guid.NewGuid(),
+            Name = "ddb",
+            ProviderId = "dynamodb",
+            Host = "eu-west-1",
+            Database = "eu-west-1",
+        };
+        TableInfo[] tables = [new(1, "", "Orders", RelationKind.Table), new(2, "", "Other", RelationKind.Table)];
+        ColumnInfo[] columns =
+        [
+            new(1, 1, "pk", "string", NotNull: true, IsPrimaryKey: true),
+            new(1, 2, "sk", "number", NotNull: true, IsPrimaryKey: true),
+            new(2, 1, "id", "string", NotNull: true, IsPrimaryKey: true),
+        ];
+        var snapshot = new SchemaSnapshot("eu-west-1", [""], tables, columns, Array.Empty<ForeignKeyInfo>());
+        other = new RelationNodeViewModel(connection, "eu-west-1", tables[1], snapshot, browser, "");
+        return new RelationNodeViewModel(connection, "eu-west-1", tables[0], snapshot, browser, "");
+    }
+
+    /// <summary>Answers table details with a primary-key index (so there is a folder after the columns) and the
+    /// sample with <see cref="Answer"/>, recording each table it was asked to sample.</summary>
+    private sealed class SamplingBrowser : ISchemaBrowser
+    {
+        public Func<TableInfo, Task<AttributeSample?>> Answer { get; init; } = _ => Task.FromResult<AttributeSample?>(null);
+        public List<TableInfo> Sampled { get; } = [];
+        public int Items { get; private set; }
+
+        public Task<AttributeSample?> SampleAttributesAsync(
+            ConnectionInfo connection, string database, TableInfo table, int items, CancellationToken ct)
+        {
+            Sampled.Add(table);
+            Items = items;
+            return Answer(table);
+        }
+
+        public Task<TableDetails> GetTableDetailsAsync(ConnectionInfo connection, string database, long tableId, CancellationToken ct)
+            => Task.FromResult(new TableDetails(
+                [], [new IndexInfo(1, "PRIMARY", IsUnique: true, IsPrimary: true, IsValid: true, [1], "primary key")], [], []));
+
+        public Task<IReadOnlyList<string>> GetDatabasesAsync(ConnectionInfo connection, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<string>>([]);
+
+        public Task<DatabaseObjects> GetObjectsAsync(ConnectionInfo connection, string database, CancellationToken ct)
+            => throw new NotSupportedException();
+
+        public Task<string> GetViewDefinitionAsync(ConnectionInfo connection, string database, long tableId, CancellationToken ct)
+            => throw new NotSupportedException();
+
+        public Task<string> GetRoutineDefinitionAsync(ConnectionInfo connection, string database, long routineId, CancellationToken ct)
+            => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<RelationSize>> GetRelationSizesAsync(ConnectionInfo connection, string database, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<RelationSize>>([]);
+
+        public Task<IReadOnlyList<DatabaseSize>> GetDatabaseSizesAsync(ConnectionInfo connection, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<DatabaseSize>>([]);
+
+        public Task<DatabaseObjectKinds> GetDatabaseObjectKindsAsync(ConnectionInfo connection, string database, CancellationToken ct)
+            => Task.FromResult(DatabaseObjectKinds.Empty);
+
+        public Task<IReadOnlyList<RoleInfo>> GetRolesAsync(ConnectionInfo connection, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<RoleInfo>>([]);
+
+        public Task<RoleGrants> GetRoleGrantsAsync(ConnectionInfo connection, string database, string roleName, CancellationToken ct)
+            => Task.FromResult(RoleGrants.Of([]));
+
+        public Task<IReadOnlyList<SchemaObjectInfo>> GetTablespacesAsync(ConnectionInfo connection, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<SchemaObjectInfo>>([]);
+
+        public Task InvalidateAsync(Guid connectionId) => Task.CompletedTask;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
 }

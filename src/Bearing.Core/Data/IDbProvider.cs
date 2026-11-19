@@ -196,6 +196,16 @@ public interface IMetadataReader
         => (await GetRelationSizesAsync(ct).ConfigureAwait(false)).FirstOrDefault(size => size.TableId == tableId);
 
     /// <summary>
+    /// The attributes found in one small read of <paramref name="table"/>'s items (at most
+    /// <paramref name="items"/>), for an engine whose tables declare no columns beyond their keys — read only
+    /// when the user expands the table in the tree, never on connect. <b>Null means this engine does not
+    /// sample</b> (every engine with a catalog); a sample that could not be read is an
+    /// <see cref="AttributeSample"/> carrying its reason, not null and not an empty list.
+    /// </summary>
+    Task<AttributeSample?> SampleAttributesAsync(TableInfo table, int items, CancellationToken ct)
+        => Task.FromResult<AttributeSample?>(null);
+
+    /// <summary>
     /// Every database's size on the server. A size that cannot be read comes back null rather than throwing:
     /// <c>pg_database_size</c> raises for a database the user cannot connect to, and one inaccessible database
     /// must not cost the sizes of the rest.

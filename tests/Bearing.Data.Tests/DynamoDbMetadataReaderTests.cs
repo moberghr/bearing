@@ -167,6 +167,162 @@ public class DynamoDbMetadataReaderTests
         Assert.Same(RoleGrants.NotVisible, await reader.GetRoleGrantsAsync("anyone", CancellationToken.None));
     }
 
+    // ---- attribute sample (U2) ---------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_sample_is_one_bounded_request_listing_the_undeclared_attributes_by_name_with_their_types()
+    {
+        var api = new FakeDynamoDbApi();
+        api.AddTable(
+            "Orders",
+            [
+                FakeDynamoDbApi.Item(
+                    ("customer", S("c1")),
+                    ("placed", N("1")),
+                    ("status", S("open")),
+                    ("zeta", S("text")),
+                    ("amount", N("12.5")),
+                    ("flag", new AttributeValue { BOOL = true }),
+                    ("blob", new AttributeValue { B = new MemoryStream([1]) }),
+                    ("doc", new AttributeValue { M = new Dictionary<string, AttributeValue> { ["s"] = S("x") } }),
+                    ("list", new AttributeValue { L = [S("a")] }),
+                    ("ss", new AttributeValue { SS = ["a"] }),
+                    ("ns", new AttributeValue { NS = ["1"] }),
+                    ("bs", new AttributeValue { BS = [new MemoryStream([1])] }),
+                    ("gone", new AttributeValue { NULL = true }),
+                    ("v", S("x"))),
+                FakeDynamoDbApi.Item(("customer", S("c2")), ("placed", N("2")), ("v", N("2"))),
+                FakeDynamoDbApi.Item(("customer", S("c3")), ("placed", N("3")), ("late", S("never read"))),
+            ],
+            "customer", "placed");
+        // The index keys (status, total) are declared too: the tree lists them already.
+        api.Descriptions["Orders"] = Orders();
+
+        var sample = await Reader(api).SampleAttributesAsync(OrdersTable, 2, CancellationToken.None);
+
+        var request = Assert.Single(api.Requests);
+        Assert.Equal("select * from \"Orders\"", request.Statement);
+        Assert.Equal(2, request.Limit);
+        Assert.Null(request.NextToken);
+        Assert.NotNull(sample);
+        Assert.Null(sample.Refused);
+        Assert.Equal(2, sample.ItemsRead);
+        Assert.Equal(
+            [
+                ("amount", "number"), ("blob", "binary"), ("bs", "binary set"), ("doc", "map"), ("flag", "boolean"),
+                ("gone", "null"), ("list", "list"), ("ns", "number set"), ("ss", "string set"),
+                ("v", DynamoDbMetadataReader.MixedType), ("zeta", "string"),
+            ],
+            sample.Attributes.Select(a => (a.Name, a.TypeName)));
+    }
+
+    [Fact]
+    public async Task A_sample_is_kept_until_the_next_snapshot_and_a_refused_one_is_not()
+    {
+        var api = new FakeDynamoDbApi();
+        api.AddTable("T", [FakeDynamoDbApi.Item(("pk", S("a")), ("v", S("x")))], "pk");
+        // Described, but the read says it is not there (the fake holds no items for it).
+        api.Descriptions["Missing"] = new TableDescription { TableName = "Missing", KeySchema = [new KeySchemaElement("pk", KeyType.HASH)] };
+        var reader = Reader(api);
+
+        var first = await reader.SampleAttributesAsync(Table("T"), 20, CancellationToken.None);
+        var again = await reader.SampleAttributesAsync(Table("T"), 20, CancellationToken.None);
+
+        Assert.Same(first, again);
+        Assert.Single(api.Requests);
+
+        await reader.LoadSnapshotAsync("eu-west-1", CancellationToken.None);
+        await reader.SampleAttributesAsync(Table("T"), 20, CancellationToken.None);
+
+        Assert.Equal(2, api.Requests.Count);
+
+        // Refused (gone): asked again on the next expand.
+        await reader.SampleAttributesAsync(Table("Missing"), 20, CancellationToken.None);
+        await reader.SampleAttributesAsync(Table("Missing"), 20, CancellationToken.None);
+
+        Assert.Equal(4, api.Requests.Count);
+    }
+
+    [Fact]
+    public async Task A_policy_refusing_the_read_is_a_refused_sample_with_the_scrubbed_reason_not_an_empty_list()
+    {
+        var api = new FakeDynamoDbApi
+        {
+            ExecuteFails = new AmazonDynamoDBException(
+                "User AKIAABCDEFGHIJKLMNOP is not authorized to perform: dynamodb:PartiQLSelect")
+            { ErrorCode = "AccessDeniedException" },
+        };
+        api.AddTable("T", [], "pk");
+
+        var sample = await Reader(api).SampleAttributesAsync(Table("T"), 20, CancellationToken.None);
+
+        Assert.NotNull(sample);
+        Assert.Empty(sample.Attributes);
+        Assert.Equal("User *** is not authorized to perform: dynamodb:PartiQLSelect", sample.Refused);
+    }
+
+    [Fact]
+    public async Task A_table_that_is_gone_and_a_failure_that_may_pass_are_refused_samples_with_their_reasons()
+    {
+        var api = new FakeDynamoDbApi();
+        api.Descriptions["Dropped"] = new TableDescription
+        {
+            TableName = "Dropped",
+            KeySchema = [new KeySchemaElement("pk", KeyType.HASH)],
+        };
+        var throttled = new FakeDynamoDbApi
+        {
+            ExecuteFails = new ProvisionedThroughputExceededException("Rate of requests exceeds the allowed throughput."),
+        };
+        throttled.AddTable("T", [], "pk");
+
+        var gone = await Reader(api).SampleAttributesAsync(Table("Dropped"), 20, CancellationToken.None);
+        var failed = await Reader(throttled).SampleAttributesAsync(Table("T"), 20, CancellationToken.None);
+
+        Assert.Equal(DynamoDbMetadataReader.SampleTableGone, gone?.Refused);
+        Assert.Equal("Rate of requests exceeds the allowed throughput.", failed?.Refused);
+        Assert.Equal(0, failed?.ItemsRead);
+    }
+
+    [Fact]
+    public async Task A_table_whose_description_is_refused_is_still_sampled_with_nothing_left_out()
+    {
+        var api = new FakeDynamoDbApi
+        {
+            DescribeFails = new AmazonDynamoDBException("not authorized") { ErrorCode = "AccessDeniedException" },
+        };
+        api.AddTable("T", [FakeDynamoDbApi.Item(("pk", S("a")), ("v", N("1")))], "pk");
+
+        var sample = await Reader(api).SampleAttributesAsync(Table("T"), 20, CancellationToken.None);
+
+        Assert.Equal([("pk", "string"), ("v", "number")], sample!.Attributes.Select(a => (a.Name, a.TypeName)));
+    }
+
+    [Fact]
+    public async Task A_sign_in_failure_while_sampling_is_thrown_as_the_profile_sentence()
+    {
+        var api = new FakeDynamoDbApi
+        {
+            ExecuteFails = new AmazonDynamoDBException("The security token included in the request is expired")
+            { ErrorCode = "ExpiredTokenException" },
+        };
+        api.AddTable("T", [], "pk");
+        var reader = new DynamoDbMetadataReader(new DynamoDbConnectionFactory(FakeDynamoDbApi.Info(profile: "dev-sso"), api));
+
+        var failure = await Assert.ThrowsAsync<DynamoDbSignInException>(
+            () => reader.SampleAttributesAsync(Table("T"), 20, CancellationToken.None));
+
+        Assert.Contains("aws sso login --profile dev-sso", failure.Message);
+    }
+
+    private static readonly TableInfo OrdersTable = Table("Orders");
+
+    private static TableInfo Table(string name) => new(DynamoDbMetadataReader.StableId(name), "", name, RelationKind.Table);
+
+    private static AttributeValue S(string value) => new() { S = value };
+
+    private static AttributeValue N(string value) => new() { N = value };
+
     private static DynamoDbMetadataReader Reader(FakeDynamoDbApi api)
         => new(new DynamoDbConnectionFactory(FakeDynamoDbApi.Info(), api));
 

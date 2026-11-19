@@ -125,6 +125,39 @@ public class DynamoDbLiveTests
         Assert.True((await reader.GetDatabaseObjectsAsync(CancellationToken.None)).IsEmpty);
     }
 
+    // ---- attribute sample (U2) ---------------------------------------------------------------------
+
+    [SkippableFact]
+    public async Task An_attribute_sample_lists_the_undeclared_attributes_with_their_types_and_leaves_the_keys_out()
+    {
+        await DynamoDbTestServer.RequireAsync();
+        await using var table = await LiveTable.CreateAsync(
+            "sample",
+            keys: [("id", ScalarAttributeType.S, KeyType.HASH), ("seq", ScalarAttributeType.N, KeyType.RANGE)]);
+        await table.PutAsync(
+            Item(
+                ("id", S("a")),
+                ("seq", N("1")),
+                ("doc", new AttributeValue { M = new Dictionary<string, AttributeValue> { ["s"] = S("x") } }),
+                ("list", new AttributeValue { L = [S("a"), N("2")] }),
+                ("tags", new AttributeValue { SS = ["b", "a"] }),
+                ("v", S("text"))),
+            Item(("id", S("b")), ("seq", N("1")), ("v", N("7"))));
+        await using var factory = DynamoDbTestServer.Factory();
+        var reader = Provider.CreateMetadataReader(factory);
+        var snapshot = await reader.LoadSnapshotAsync(DynamoDbTestServer.Region, CancellationToken.None);
+        var info = Assert.Single(snapshot.Tables, t => t.Name == table.Name);
+
+        var sample = await reader.SampleAttributesAsync(info, 20, CancellationToken.None);
+
+        Assert.NotNull(sample);
+        Assert.Null(sample.Refused);
+        Assert.Equal(2, sample.ItemsRead);
+        Assert.Equal(
+            [("doc", "map"), ("list", "list"), ("tags", "string set"), ("v", DynamoDbMetadataReader.MixedType)],
+            sample.Attributes.Select(a => (a.Name, a.TypeName)));
+    }
+
     // ---- SC8: values -------------------------------------------------------------------------------
 
     [SkippableFact]

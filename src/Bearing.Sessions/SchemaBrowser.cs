@@ -89,6 +89,13 @@ public sealed class SchemaBrowser : ISchemaBrowser
         return await reader.Metadata.GetTableDetailsAsync(tableId, ct);
     }
 
+    public async Task<AttributeSample?> SampleAttributesAsync(
+        ConnectionInfo connection, string database, TableInfo table, int items, CancellationToken ct)
+    {
+        var reader = await GetReaderAsync(connection, database, ct);
+        return await reader.Metadata.SampleAttributesAsync(table, items, ct);
+    }
+
     public async Task<string> GetRoutineDefinitionAsync(ConnectionInfo connection, string database, long routineId, CancellationToken ct)
     {
         var reader = await GetReaderAsync(connection, database, ct);

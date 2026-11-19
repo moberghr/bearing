@@ -55,6 +55,18 @@ which runs keyed `SELECT`s only.
    projection. Sizes show DynamoDB's approximate byte size and item count. "Select top 100 rows" produces
    `select * from "Table"`. "Show definition" is not offered on tables. Roles, routines, tablespaces and
    the long-tail object kinds return empty and their groups are omitted (existing behaviour).
+   **Attribute sample (2026-11-19, user request).** Expanding a table reads one sample — a single
+   `ExecuteStatement` of `select * from "Table"` with `Limit` 20, no continuation — and lists the attributes
+   found after the key columns, each with its type (string, number, boolean, binary, map, list, string / number /
+   binary set, null; `mixed` when items disagree) and marked `sampled`, under the line "Seen in a sample of N
+   items — other items may have other attributes." Declared attributes are left out (already listed). Nothing is
+   read before the expand, never on connect; not logged; not put to the scan check (bounded by construction). A
+   refused read (an IAM denial, a dropped table, a throttle, the connection's timeout) shows one row with the
+   scrubbed reason, never an empty list; a sign-in failure shows its sentence. A sample is kept per table until
+   the tree's refresh; a refused one is not kept. The sample feeds neither completion nor the schema snapshot
+   (whose key ordinals drive the scan check). Seam: `IMetadataReader.SampleAttributesAsync` (default null = the
+   engine does not sample), `ISchemaBrowser.SampleAttributesAsync`, `AttributeSample` / `SampledAttribute` in
+   Core.
 5. **Running PartiQL.** One or more `;`-separated statements; each is sent with `ExecuteStatement`. Results:
    - Columns are the attributes found in the first page: the table's key attributes first, then the rest
      alphabetically.

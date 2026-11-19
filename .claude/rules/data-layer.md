@@ -36,6 +36,10 @@ connection, no password and no pool. Everything is behind `IDynamoDbApi` (the th
   named after the region, with one schema named `""`; columns are the declared key attributes only (partition key
   ordinal 1, sort key 2; index-only keys follow, nullable), and `GetTableDetailsAsync` lists the indexes the
   snapshot's ordinals point at. `DescribeTable` is cached per session; a snapshot refresh forgets it.
+- Attribute sample (`SampleAttributesAsync`, 2026-11-19): **only on a table's expand**, one `ExecuteStatement`
+  with `Limit` 20 and no continuation, keys left out, rows marked `sampled` — a sample, never the schema. Refusals
+  are typed (`AttributeSample.Refused`, scrubbed), only successes are cached until the next snapshot; it never feeds
+  completion or the snapshot (the key ordinals drive the scan check). Other engines answer null.
 - **No `LIMIT`/`OFFSET`.** A read continues from DynamoDB's `NextToken`, carried opaquely in
   `QueryResult.Continuation` and handed back to `IQueryExecutor.ExecuteContinuationAsync`; `Truncated` means "a
   token remains", never a row count. The token holds statement text and a server token: **in memory only — never
