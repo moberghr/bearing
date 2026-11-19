@@ -314,6 +314,13 @@
       "action": "modify",
       "purpose": "DynamoDbTestServer and its container",
       "mechanical": true
+    },
+    {
+      "path": "src/Bearing.App/Connections/ConnectionClipboard.cs",
+      "action": "modify",
+      "purpose": "carry ConfirmFullScans through the clipboard (SC3, reflection round-trip test)",
+      "mechanical": false,
+      "added_in": "batch-1 deviation"
     }
   ],
   "public_contracts": [
@@ -672,6 +679,36 @@
       "covers": [
         "SC19"
       ]
+    },
+    {
+      "path": "tests/Bearing.Persistence.Tests/WorkspacePersistenceTests.cs",
+      "action": "modify/create",
+      "covers": "batch-1 deviation"
+    },
+    {
+      "path": "tests/Bearing.Sql.Tests/DialectScanTargetsTests.cs",
+      "action": "modify/create",
+      "covers": "batch-1 deviation"
+    },
+    {
+      "path": "tests/Bearing.Data.Tests/Bearing.Data.Tests.csproj",
+      "action": "create/modify",
+      "covers": "implementation deviation (recorded per batch)"
+    },
+    {
+      "path": "tests/Bearing.Data.Tests/DynamoDbMetadataReaderTests.cs",
+      "action": "create/modify",
+      "covers": "implementation deviation (recorded per batch)"
+    },
+    {
+      "path": "tests/Bearing.Data.Tests/DynamoDbProviderTests.cs",
+      "action": "create/modify",
+      "covers": "implementation deviation (recorded per batch)"
+    },
+    {
+      "path": "tests/Bearing.Data.Tests/DynamoDbValuesTests.cs",
+      "action": "create/modify",
+      "covers": "implementation deviation (recorded per batch)"
     }
   ],
   "out_of_scope": [
@@ -760,68 +797,289 @@
       {
         "id": "1",
         "title": "Core seams, every implementer answers the flags",
-        "status": "pending"
+        "status": "completed"
       },
       {
         "id": "2",
         "title": "PartiQlDialect and PartiQlScan",
-        "status": "pending"
+        "status": "completed"
       },
       {
         "id": "3a",
         "title": "AWS SDK packages, IDynamoDbApi, factory, errors",
-        "status": "pending"
+        "status": "completed"
       },
       {
         "id": "3b",
         "title": "values, continuation, PartiQlBatch",
-        "status": "pending"
+        "status": "completed"
       },
       {
         "id": "3c",
         "title": "executor, metadata reader, provider, registry",
-        "status": "pending"
+        "status": "completed"
       },
       {
         "id": "4",
         "title": "DynamoDB Local live tests and CI step",
-        "status": "pending"
+        "status": "completed"
       },
       {
         "id": "5",
         "title": "Sessions: traits, AwsProfile arm, ScanGuard",
-        "status": "pending"
+        "status": "completed"
       },
       {
         "id": "6",
         "title": "Connection editor",
-        "status": "pending"
+        "status": "completed"
       },
       {
         "id": "7a",
         "title": "Continuation paging",
-        "status": "pending"
+        "status": "completed"
       },
       {
         "id": "7b",
         "title": "Scan confirmation",
-        "status": "pending"
+        "status": "completed"
       },
       {
         "id": "7c",
         "title": "Withheld features",
-        "status": "pending"
+        "status": "completed"
       },
       {
         "id": "8",
         "title": "bearing command keyed reads",
-        "status": "pending"
+        "status": "completed"
       },
       {
         "id": "9",
         "title": "Docs and rules",
-        "status": "pending"
+        "status": "completed"
       }
     ]
+  },
+  "implement": {
+    "completed_batches": [
+      {
+        "batch_id": "1",
+        "actual_files": 17,
+        "build": "ok",
+        "tests": "6048/0 failed/27 skipped",
+        "behavioral_diff": "Core seams only (AwsProfile, ConfirmFullScans, Continuation, 4 provider flags, ExecuteContinuationAsync default, ScanTargets default); no runtime change",
+        "implementer_model": "sonnet",
+        "deviations": [
+          "ConnectionClipboard.cs carries ConfirmFullScans"
+        ]
+      },
+      {
+        "batch_id": "2",
+        "actual_files": 4,
+        "build": "ok",
+        "tests": "6189/0 failed/27 skipped",
+        "behavioral_diff": "PartiQlDialect (unregistered) + PartiQlScan.Targets; conservative write guard; batches the PG lexer misreads ($$, E'', nested comments, unterminated, backtick, backslash, @set) declined per batch (GuardIsDialectAware=false, one unreadable scan target)",
+        "implementer_model": "opus",
+        "deviations": [
+          "[ASSUMED] lexer parity falsified: per-batch decline (internal PartiQlScan.ReadsAsPartiQl) instead of engine-wide HasDialectAwareGuard=false; widening only (\u00a71.2), keeps SC19 possible"
+        ]
+      },
+      {
+        "batch_id": "3a",
+        "actual_files": 8,
+        "build": "ok",
+        "tests": "6281/0 failed/27 skipped",
+        "behavioral_diff": "AWSSDK packages; internal IDynamoDbApi seam; DynamoDbConnectionFactory (endpoint rule, placeholder keys for loopback, describe cache, settings errors deferred to TestConnectionAsync); DynamoDbErrors classification + scrubbing",
+        "implementer_model": "sonnet",
+        "deviations": [
+          "factory defers refusals to TestConnectionAsync so the connect wrapper names the connection"
+        ]
+      },
+      {
+        "batch_id": "3b",
+        "actual_files": 5,
+        "build": "ok",
+        "tests": "6398/0 failed/27 skipped",
+        "behavioral_diff": "internal pure helpers PartiQlBatch, DynamoDbValues (+layout types), DynamoDbContinuation; not wired",
+        "implementer_model": "sonnet",
+        "deviations": [
+          "internal helper types only; DynamoDbValuesTests extra test file"
+        ]
+      },
+      {
+        "batch_id": "3c",
+        "actual_files": 8,
+        "build": "ok",
+        "tests": "6437/0 failed/27 skipped",
+        "behavioral_diff": "DynamoDbQueryExecutor (page rules, continuation, timeout, writes report verb), DynamoDbMetadataReader (region database, key ordinals, indexes, sizes), DynamoDbProvider (unregistered)",
+        "implementer_model": "opus",
+        "deviations": [
+          "budget notice in QueryResult.Message (7a shows it)",
+          "(other attributes) on every continuing result incl. projections",
+          "CountAsync returns null",
+          "internal Region/StatementTimeoutSeconds/SelectsAll",
+          "DynamoDbMetadataReaderTests extra"
+        ]
+      },
+      {
+        "batch_id": "4",
+        "actual_files": 6,
+        "build": "ok",
+        "tests": "6444/0 failed/27 skipped; DynamoDbLiveTests 7 passed 0 skipped",
+        "behavioral_diff": "DynamoDB Local script (3.1.0, port 18000), test server skip plumbing, 7 live tests SC7-SC10 + comment check, CI step; placeholder keys letters-only (bug fix, own commit)",
+        "implementer_model": "sonnet",
+        "deviations": [
+          "DynamoDbConnectionFactory placeholder keys fixed",
+          "Bearing.Data.Tests.csproj links Shared/DynamoDbTestServer.cs"
+        ]
+      },
+      {
+        "batch_id": "5",
+        "actual_files": 9,
+        "build": "ok",
+        "tests": "6493/0 failed/27 skipped",
+        "behavioral_diff": "dynamodb registered fourth; ProviderTraits.DynamoDb (+GridEditUnavailable, OffersTableDdl); AwsProfile resolves Credential(null,null) before store/prompt; ScanGuard verdicts + sentences, exact-case matching",
+        "implementer_model": "opus",
+        "deviations": [
+          "ConnectionEditorTests engine list",
+          "public ScanVerdict/ScanVerdictKind/ScanUncertainty types in Sessions"
+        ]
+      },
+      {
+        "batch_id": "6",
+        "actual_files": 10,
+        "build": "ok",
+        "tests": "6535/0 failed/27 skipped",
+        "behavioral_diff": "credential kinds from provider flags (DynamoDB: AWS profile only); TLS / manual commit / time zone rows hidden by flag; Confirm full table scans checkbox (ProviderTraits.AsksFullScanQuestion); Port 0 rule; profile@region endpoint; records no longer save settings the engine ignores",
+        "implementer_model": "sonnet",
+        "deviations": [
+          "ProviderTraits.AsksFullScanQuestion + WriteBoundary",
+          "SessionTimeZone saved null where unsupported (also SQL Server/MySQL, inert)",
+          "Apply drops undeclared intrinsic keys from Options",
+          "CredentialKindOptions tests in ProviderTraitsTests.cs"
+        ]
+      },
+      {
+        "batch_id": "7a",
+        "actual_files": 5,
+        "build": "ok",
+        "tests": "6548/0 failed/27 skipped",
+        "behavioral_diff": "ContinuationPaging: load more / fetch all / export via ExecuteContinuationAsync only; HasMore from token; budget notice in status line and run summary; ExecutionViewModel +9 lines (delegating branches)",
+        "implementer_model": "opus",
+        "deviations": [
+          "ResultSetBuilder: continuing results pageable in multi-statement batches; budget notice in run summary"
+        ]
+      },
+      {
+        "batch_id": "7b",
+        "actual_files": 7,
+        "build": "ok",
+        "tests": "6570/0 failed/27 skipped",
+        "behavioral_diff": "ScanConfirmation + ConfirmScanDialog + IDialogService.ConfirmScanAsync; asked after write guard, before run; fetch all / export on a scan result ask again; load more never; other engines and setting off never ask",
+        "implementer_model": "opus",
+        "deviations": [
+          "Fakes.cs dialog + provider fakes",
+          "public ScanQuestion/ScanQuestionKind/ScanDecision"
+        ]
+      },
+      {
+        "batch_id": "7c",
+        "actual_files": 8,
+        "build": "ok",
+        "tests": "6590/0 failed/27 skipped (App rerun 2657/0/23 after orchestrator lookup fix)",
+        "behavioral_diff": "lock chip sentence on DynamoDB results, no edit target; EffectiveConnection never manual commit where unsupported (file or override); pill hidden, toggle refuses; TabTransactions.OpenAsync refuses; no Show definition on DynamoDB tables",
+        "implementer_model": "sonnet",
+        "deviations": [
+          "ExecutionViewModel CommitModeVisible + toggle guard",
+          "public WorkspaceContext.SupportsManualCommit",
+          "orchestrator: OpenAsync lookup made non-throwing"
+        ]
+      },
+      {
+        "batch_id": "8",
+        "actual_files": 3,
+        "build": "ok",
+        "tests": "6613/0 failed/27 skipped",
+        "behavioral_diff": "bearing command: every DynamoDB SELECT classified by ScanGuard regardless of ConfirmFullScans; non-keyed refused + logged; --export follows continuations (xlsx and streamed CSV) to end or --max-rows",
+        "implementer_model": "opus",
+        "deviations": [
+          "none beyond a pinned check that AwsProfile is listed available"
+        ]
+      },
+      {
+        "batch_id": "9",
+        "actual_files": 8,
+        "build": "ok",
+        "tests": "SC18 grep 8/8",
+        "behavioral_diff": "docs and rules name DynamoDB: README section, docs/CLI.md section, data-layer 5.1b, security 1.9c, architecture, testing 4.2, CLAUDE.md/AGENTS.md profile",
+        "implementer_model": "sonnet",
+        "deviations": [
+          "fixed stale Postgres-only wording in listed files",
+          "CLI flag is --out, not --export"
+        ]
+      }
+    ]
+  },
+  "decisions": [
+    {
+      "id": "D1",
+      "batch": "2",
+      "decision": "Keep HasDialectAwareGuard=true; decline lexer-divergent batches individually",
+      "why": "Engine-wide false empties the CLI allow-list (\u00a71.11a, breaks SC19) and confirms every read; per-batch decline is strictly wider"
+    },
+    {
+      "id": "D2",
+      "batch": "3c",
+      "decision": "(other attributes) column on every result that continues, projections included",
+      "why": "A later-page misfit or unseen attribute must never reach a column of another type nor be dropped; one-page results still have none"
+    }
+  ],
+  "assumption_results": [
+    {
+      "assumption": "DynamoDB Local honours Limit/NextToken on ExecuteStatement and accepts -- and /* */ comments",
+      "result": "confirmed on DynamoDB Local 3.1.0 (not real DynamoDB)"
+    },
+    {
+      "assumption": "pk = a OR pk = b is not a full scan",
+      "result": "confirmed by AWS docs ql-reference.select.html (WHERE OrderID = 100 or OrderID = 200 listed as not a full table scan), 2026-11-19"
+    },
+    {
+      "assumption": "IAM condition key dynamodb:FullTableScan",
+      "result": "confirmed by AWS docs ql-iam.html example 6 (Deny dynamodb:PartiQLSelect with Bool dynamodb:FullTableScan true), 2026-11-19"
+    }
+  ],
+  "review_followups": [
+    "CLI TextTable says 'cut short at the row limit' for a DynamoDB page stopped by the request budget (inaccurate wording)"
+  ],
+  "drift": {
+    "checked": "2026-11-19",
+    "files_touched": 88,
+    "missing": 0,
+    "extra_after_amend": 0,
+    "public_contracts": "additions in Sessions/App (ScanVerdict*, ScanQuestion*, WorkspaceContext.SupportsManualCommit, ProviderTraits.AsksFullScanQuestion/WriteBoundary/GridEditUnavailable/OffersTableDdl) are internal-tooling surfaces recorded as batch deviations; no external contract beyond the spec",
+    "security_impact": "new-auth-path unchanged",
+    "out_of_scope": "none delivered",
+    "verdict": "clean after auto-fix amendment (test files only)"
+  },
+  "review": {
+    "stage1": {
+      "lane": "compliance",
+      "verdict": "PASS",
+      "critical": 0,
+      "warnings": 4
+    },
+    "stage2": {
+      "test": "3 critical (safety-path coverage + 1 fail-open), 7 warnings",
+      "architecture": "0 critical, 6 warnings",
+      "silent_failure": "0 critical, 7 warnings",
+      "context_miner": "1 warning (endpoint in SamePool), 2 suggestions"
+    },
+    "fix_batches": [
+      "F1 data+sessions",
+      "F2 app",
+      "F3 cli+tests"
+    ],
+    "findings_file": ".mtk/workflows/wf-20261118T214331Z-cd0f87/review-findings.md"
   }
 }
