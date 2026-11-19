@@ -90,8 +90,9 @@ internal sealed class InlineResultLayout
         _sized.Add((grid, result));
         Size(grid, result);
         void OnRows(object? sender, NotifyCollectionChangedEventArgs e) => Size(grid, result);
-        result.Rows.CollectionChanged += OnRows;
-        _subscriptions.Add((result.Rows, OnRows));
+        // The rows on screen, not the loaded ones: a filter shrinks the inline grid to what it shows (#106).
+        result.ViewRows.CollectionChanged += OnRows;
+        _subscriptions.Add((result.ViewRows, OnRows));
     }
 
     /// <summary>The view is rebuilding, in <paramref name="mode"/>: let go of the grids it is about to discard.</summary>
@@ -202,5 +203,5 @@ internal sealed class InlineResultLayout
     }
 
     private void Size(DataGrid grid, ResultSetViewModel result)
-        => grid.Height = InlineGridSizing.GridHeight(result.Rows.Count, ResultGridChrome.RowMinHeight, Cap);
+        => grid.Height = InlineGridSizing.GridHeight(result.ViewRows.Count, ResultGridChrome.RowMinHeight, Cap);
 }

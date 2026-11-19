@@ -45,28 +45,33 @@ public class ResultGridScrollTests
 
     public ResultGridScrollTests(UiTestSession ui) => _ui = ui;
 
+    /// <summary>Wide enough to scroll well past column 12 whatever monospace font the machine resolves. The
+    /// harness default (12) overflowed a 1000px window by only 154px under Iosevka, so "scroll to column 10"
+    /// scrolled nothing and every precondition here failed on a font change, not a code change.</summary>
+    private const int Columns = 24;
+
     /// <summary>A click on a cell while scrolled right and down leaves the viewport where it was. This is the
     /// regression guard for <c>KeepClickedCellInView</c>: delete that corrective and both offsets go to 0.</summary>
     [Fact]
     public Task Clicking_a_cell_while_scrolled_keeps_the_viewport_still() => _ui.Run(() =>
     {
-        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: Columns);
         var (window, view) = ResultsHarness.Show(rs);
         var grid = ResultsHarness.Grid(view);
 
         var target = rows[35];
-        grid.ScrollIntoView(target, grid.Columns[10]);
+        grid.ScrollIntoView(target, grid.Columns[16]);
         ResultsHarness.Pump(window);
 
         var (beforeH, beforeV) = Offsets(grid);
         Assert.True(beforeH > 0 && beforeV > 0, $"fixture must scroll both ways, got h={beforeH} v={beforeV}");
-        var before = ResultsHarness.PositionIn(ResultsHarness.RequireCell(view, target, 10), grid);
+        var before = ResultsHarness.PositionIn(ResultsHarness.RequireCell(view, target, 16), grid);
 
-        Click(window, ResultsHarness.RequireCell(view, target, 10));
+        Click(window, ResultsHarness.RequireCell(view, target, 16));
         ResultsHarness.Pump(window);
 
         Assert.Equal((beforeH, beforeV), Offsets(grid));
-        Assert.Equal(before, ResultsHarness.PositionIn(ResultsHarness.RequireCell(view, target, 10), grid));
+        Assert.Equal(before, ResultsHarness.PositionIn(ResultsHarness.RequireCell(view, target, 16), grid));
         window.Close();
     });
 
@@ -76,7 +81,7 @@ public class ResultGridScrollTests
     [Fact]
     public Task Clicking_a_cell_left_of_the_scrolled_one_keeps_the_viewport_still() => _ui.Run(() =>
     {
-        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: Columns);
         var (window, view) = ResultsHarness.Show(rs);
         var grid = ResultsHarness.Grid(view);
 
@@ -104,7 +109,7 @@ public class ResultGridScrollTests
     [Fact]
     public Task Clicking_a_cell_clipped_by_the_left_edge_does_not_reveal_it() => _ui.Run(() =>
     {
-        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: Columns);
         var (window, view) = ResultsHarness.Show(rs);
         var grid = ResultsHarness.Grid(view);
 
@@ -120,7 +125,8 @@ public class ResultGridScrollTests
             .Select(b => (Cell: b, X: b.TranslatePoint(default, grid)?.X ?? 0))
             .OrderBy(t => t.X)
             .First();
-        Assert.True(clipped.X < 0, $"fixture must clip a cell at the left edge, got x={clipped.X}");
+        Assert.True(clipped.X < ResultsHarness.CellsLeft(grid),
+            $"fixture must clip a cell at the left edge, got x={clipped.X} with cells from {ResultsHarness.CellsLeft(grid)}");
 
         // Aimed at the visible sliver, near the cell's right-hand side.
         var at = clipped.Cell.TranslatePoint(
@@ -145,7 +151,7 @@ public class ResultGridScrollTests
     [InlineData(GridPress.Corner)]
     public Task Clicking_the_grids_chrome_while_scrolled_keeps_the_viewport_still(GridPress press) => _ui.Run(() =>
     {
-        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: Columns);
         var (window, view) = ResultsHarness.Show(rs);
         var grid = ResultsHarness.Grid(view);
 
@@ -166,7 +172,7 @@ public class ResultGridScrollTests
     [Fact]
     public Task A_column_header_click_while_scrolled_still_selects_the_column() => _ui.Run(() =>
     {
-        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: Columns);
         var (window, view) = ResultsHarness.Show(rs);
         var grid = ResultsHarness.Grid(view);
 
@@ -244,7 +250,7 @@ public class ResultGridScrollTests
     [InlineData(GridPress.Corner)]
     public Task A_chrome_press_leaves_the_cursor_on_screen(GridPress press) => _ui.Run(() =>
     {
-        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: Columns);
         var (window, view) = ResultsHarness.Show(rs);
         var grid = ResultsHarness.Grid(view);
 
@@ -275,7 +281,7 @@ public class ResultGridScrollTests
     [Fact]
     public Task Focusing_a_scrolled_grid_seeds_the_cursor_in_view_without_scrolling() => _ui.Run(() =>
     {
-        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: Columns);
         var (window, view) = ResultsHarness.Show(rs);
         var grid = ResultsHarness.Grid(view);
 
@@ -307,7 +313,7 @@ public class ResultGridScrollTests
     [Fact]
     public Task The_first_arrow_key_into_a_scrolled_grid_does_not_jump() => _ui.Run(() =>
     {
-        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: Columns);
         var (window, view) = ResultsHarness.Show(rs);
         var grid = ResultsHarness.Grid(view);
 
@@ -338,7 +344,7 @@ public class ResultGridScrollTests
     [Fact]
     public Task Tabbing_scrolls_once_per_keystroke_not_twice() => _ui.Run(() =>
     {
-        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: Columns);
         var (window, view) = ResultsHarness.Show(rs);
         var grid = ResultsHarness.Grid(view);
 
@@ -371,7 +377,7 @@ public class ResultGridScrollTests
     [Fact]
     public Task Committing_an_edit_on_a_clipped_cell_does_not_reveal_it() => _ui.Run(() =>
     {
-        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: Columns);
         var (window, view) = ResultsHarness.Show(rs);
         var grid = ResultsHarness.Grid(view);
 
@@ -385,7 +391,8 @@ public class ResultGridScrollTests
             .Select(b => (Cell: b, X: b.TranslatePoint(default, grid)?.X ?? 0))
             .OrderBy(t => t.X)
             .First();
-        Assert.True(clipped.X < 0, $"fixture must clip a cell at the left edge, got x={clipped.X}");
+        Assert.True(clipped.X < ResultsHarness.CellsLeft(grid),
+            $"fixture must clip a cell at the left edge, got x={clipped.X} with cells from {ResultsHarness.CellsLeft(grid)}");
         var col = ((ValueTuple<object?[], int>)clipped.Cell.Tag!).Item2;
 
         Click(window, clipped.Cell);
@@ -396,7 +403,7 @@ public class ResultGridScrollTests
         grid.CurrentColumn = grid.Columns[col];
         Assert.True(grid.BeginEdit(), "the grid refused to begin editing");
         ResultsHarness.Pump(window);
-        var editor = grid.GetVisualDescendants().OfType<TextBox>().SingleOrDefault();
+        var editor = ResultsHarness.CellEditor(grid);
         Assert.NotNull(editor);
         editor!.Text = "edited";
         Assert.True(grid.CommitEdit(), "the grid refused to commit");
@@ -423,7 +430,7 @@ public class ResultGridScrollTests
     [Fact]
     public Task Beginning_an_edit_reveals_the_cursor_because_the_editor_needs_a_realized_cell() => _ui.Run(() =>
     {
-        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: Columns);
         var (window, view) = ResultsHarness.Show(rs);
         var grid = ResultsHarness.Grid(view);
 
@@ -439,7 +446,7 @@ public class ResultGridScrollTests
         view.Selection.BeginEditActive(grid, rs);
         ResultsHarness.Pump(window);
 
-        var editor = grid.GetVisualDescendants().OfType<TextBox>().SingleOrDefault();
+        var editor = ResultsHarness.CellEditor(grid);
         Assert.NotNull(editor);
         Assert.Equal("r3c1-value", editor!.Text);
 
@@ -465,7 +472,7 @@ public class ResultGridScrollTests
         _ => view.GetVisualDescendants().OfType<DataGridColumnHeader>()
             .Where(h => h.IsVisible && h.Bounds.Width > 0 && h.Name != "PART_TopLeftCornerHeader")
             .Select(h => (Header: h, X: h.TranslatePoint(default, grid)?.X ?? -1))
-            .Where(t => t.X > 20 && t.X < grid.Bounds.Width - 20)
+            .Where(t => t.X >= ResultsHarness.CellsLeft(grid) && t.X < grid.Bounds.Width - 20)
             .OrderBy(t => t.X)
             .Select(t => (Control)t.Header)
             .First(),
@@ -477,7 +484,7 @@ public class ResultGridScrollTests
     [Fact]
     public Task Committing_an_edit_leaves_the_edited_cell_in_place() => _ui.Run(() =>
     {
-        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: Columns);
         var (window, view) = ResultsHarness.Show(rs);
         var grid = ResultsHarness.Grid(view);
 
@@ -492,7 +499,7 @@ public class ResultGridScrollTests
 
         Assert.True(grid.BeginEdit(), "the grid refused to begin editing");
         ResultsHarness.Pump(window);
-        var editor = grid.GetVisualDescendants().OfType<TextBox>().SingleOrDefault();
+        var editor = ResultsHarness.CellEditor(grid);
         Assert.NotNull(editor);
         Assert.Equal("r36c10-value", editor.Text);
         editor.Text = "edited";
@@ -519,7 +526,7 @@ public class ResultGridScrollTests
     [Fact]
     public Task The_first_pending_edit_does_not_reflow_the_grid() => _ui.Run(() =>
     {
-        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: Columns);
         var (window, view) = ResultsHarness.Show(rs);
         var grid = ResultsHarness.Grid(view);
 
@@ -538,7 +545,7 @@ public class ResultGridScrollTests
     [Fact]
     public Task Clearing_the_pending_edits_does_not_reflow_the_grid_either() => _ui.Run(() =>
     {
-        var (rs, rows) = ResultsHarness.WideEditableResult();
+        var (rs, rows) = ResultsHarness.WideEditableResult(columns: Columns);
         var (window, view) = ResultsHarness.Show(rs);
         var grid = ResultsHarness.Grid(view);
 

@@ -138,4 +138,12 @@
   <StreamGeometry x:Key="Icon.Commit">M5,12.5 L9.5,17 L19,7</StreamGeometry>
   <StreamGeometry x:Key="Icon.Rollback">M6,10 h8 a4.5,4.5 0 1 1 0,9 h-4.5 M6,10 l3.5,-3.5 M6,10 l3.5,3.5</StreamGeometry>
 
+  <!-- Result meta row and filter bar (#106). Drawn, because the font glyphs they replace (⤓ ⌕ ✕) came from
+       whichever fallback face had them and rendered clipped. Fetch all: an arrow down onto a floor. Filter: a
+       funnel. Clear filters: the same funnel, smaller, with a cross. Clear: a plain cross. -->
+  <StreamGeometry x:Key="Icon.FetchAll">M12,4 v11 M7.5,10.5 L12,15 L16.5,10.5 M6,19.5 h12</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Filter">M4,5 h16 l-6,7.5 v5.5 l-4,2 v-7.5 z</StreamGeometry>
+  <StreamGeometry x:Key="Icon.FilterClear">M3,5 h13 l-5,6.2 v4.8 l-3,1.6 v-6.4 z M15.5,14.5 l5,5 M20.5,14.5 l-5,5</StreamGeometry>
+  <StreamGeometry x:Key="Icon.Clear">M7,7 L17,17 M17,7 L7,17</StreamGeometry>
+
 </ResourceDictionary>

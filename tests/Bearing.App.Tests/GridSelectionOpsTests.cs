@@ -498,4 +498,53 @@ public class GridSelectionOpsTests
 
         Assert.Equal(new object?[] { 9 }, values); // qty only — not the PK, not the FK
     }
+
+    // ---- order on screen under a client-side sort or filter (#106) ----------------------------------
+
+    private static int Id(object?[] row) => (int)row[0]!;
+
+    [Fact]
+    public void Under_a_sort_the_cursor_steps_and_rectangles_span_rows_in_view_order()
+    {
+        var rs = ThreeRows();
+        rs.Filter.Sort = new RowSort(0, SortDirection.Descending);   // view: 3, 2, 1
+
+        var (down, _) = GridSelectionOps.Move(rs, 0, 1, GridMotion.Down, toEdge: false, pageSize: 10);
+        Assert.Equal(2, Id(rs.ViewRows[down]));
+
+        // The top two rows on screen, top first. Walked in load order the same two come out 2, 3.
+        var rect = GridSelectionOps.Rectangle(rs, (rs.ViewRows[0], 0), (rs.ViewRows[1], 0));
+        Assert.Equal([3, 2], rect.Select(c => Id(c.Row)).ToArray());
+    }
+
+    [Fact]
+    public void Under_a_sort_tsv_and_every_copy_as_format_emit_rows_in_view_order()
+    {
+        var rs = ThreeRows();
+        rs.Filter.Sort = new RowSort(0, SortDirection.Descending);
+        var cells = GridSelectionOps.WholeColumns(rs, 0, 0);
+
+        Assert.Equal("3\n2\n1", GridSelectionOps.Tsv(rs, cells));
+        // The structured formats (CSV, JSON, SQL, Markdown, HTML) build from this block. The rich ones put it on
+        // the clipboard beside the TSV above, so the two must agree.
+        var block = ResultBlocks.ForSelection(rs, cells);
+        Assert.Equal([3, 2, 1], Enumerable.Range(0, block.Rows.Count).Select(r => (int)block.Value(r, 0)!).ToArray());
+    }
+
+    [Fact]
+    public void A_filtered_out_row_is_outside_every_selection()
+    {
+        var rs = ThreeRows();
+        rs.Filter.SetColumnFilter(1, "!= two");   // view: 1, 3
+
+        // Ctrl+Down runs to the last row on screen — index 1, not the loaded rows' 2.
+        var (last, _) = GridSelectionOps.Move(rs, 0, 1, GridMotion.Down, toEdge: true, pageSize: 10);
+        Assert.Equal(1, last);
+
+        var all = GridSelectionOps.AllCells(rs);
+        Assert.DoesNotContain(all, c => Id(c.Row) == 2);
+        var rect = GridSelectionOps.Rectangle(rs, (rs.ViewRows[0], 0), (rs.ViewRows[1], 0));
+        Assert.Equal([1, 3], rect.Select(c => Id(c.Row)).ToArray());
+    }
 }
+
