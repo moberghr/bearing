@@ -821,7 +821,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
                 ScanConfirmation.Mark(sets, fullScan);
                 tab.SetRunResults(sets);
             }
-            LogExecution(info, run.LogSql, results, _ctx.Transactions.For(tab)?.Id, run.LogParameters);
+            LogExecution(info, run.LogSql, results, _ctx.Transactions.For(tab)?.Id, run.LogParameters, tab.ScriptPath);
             var summary = ResultSetBuilder.DescribeResults(
                 results, wall.Elapsed, info, ct.IsCancellationRequested);
             // On success, lead with the connection so the status bar reads e.g. "pagila (local) · 88 ms".
@@ -899,7 +899,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
             assembler.Abandon();
             LogExecution(info, run.LogSql,
                 [new QueryResult([], [], 0, wall.Elapsed, null, new QueryError("Cancelled by user.", null, null), false)],
-                _ctx.Transactions.For(tab)?.Id, run.LogParameters);
+                _ctx.Transactions.For(tab)?.Id, run.LogParameters, tab.ScriptPath);
             throw;
         }
         catch (Exception)
@@ -929,10 +929,17 @@ public sealed partial class ExecutionViewModel : ObservableObject
     }
 
     /// <summary>Let everything queued above background priority — input, layout, render — run once. A no-op off the
-    /// UI thread (the view-model tests drive runs without a dispatcher loop).</summary>
+    /// UI thread (the view-model tests drive runs without a dispatcher loop).
+    /// <para>
+    /// "On the UI thread" is read from the synchronization context, not from
+    /// <c>Dispatcher.UIThread.CheckAccess()</c>: the dispatcher belongs to whichever thread touches it first,
+    /// so with no app running a test's own thread could become its owner, pass that check, and then wait
+    /// forever on a dispatcher nobody pumps. Avalonia's context is only current where its dispatcher is
+    /// really running the code.
+    /// </para></summary>
     private static async Task YieldToUiAsync()
     {
-        if (!Dispatcher.UIThread.CheckAccess()) return;
+        if (SynchronizationContext.Current is not AvaloniaSynchronizationContext) return;
         await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
     }
 
@@ -1605,9 +1612,12 @@ public sealed partial class ExecutionViewModel : ObservableObject
     // History logs one entry per submitted run; a multi-statement run aggregates its sets.
     private void LogExecution(
         ConnectionInfo info, string sql, IReadOnlyList<QueryResult> results, string? transactionId,
-        IReadOnlyList<QueryLogParameter>? parameters = null)
+        IReadOnlyList<QueryLogParameter>? parameters = null, string? scriptPath = null)
         => _ctx.QueryLog.Append(new QueryLogEntry
         {
+            // Which script the run came from, when the tab has a file: what "last run against" in the
+            // Scripts panel and a server's recent scripts are read back from.
+            ScriptPath = scriptPath,
             ExecutedAt = DateTimeOffset.UtcNow,
             ProviderId = info.ProviderId,
             ConnectionName = info.Name,

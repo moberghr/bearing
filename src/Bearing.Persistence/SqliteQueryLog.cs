@@ -466,6 +466,48 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         return results;
     }
 
+    public async Task<IReadOnlyList<ScriptUse>> LastScriptUsesAsync(Guid? connectionId, int? limit, CancellationToken ct)
+    {
+        await using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync(ct).ConfigureAwait(false);
+        using var cmd = conn.CreateCommand();
+
+        // The latest row per script is the one with the highest id: ids are assigned in insert order, and
+        // comparing the stored timestamps as text would misorder mixed offsets (#113).
+        var onConnection = "";
+        if (connectionId is { } id)
+        {
+            cmd.Parameters.AddWithValue("$id", id.ToString());
+            onConnection = " AND connection_id = $id";
+        }
+        var top = "";
+        if (limit is { } max)
+        {
+            cmd.Parameters.AddWithValue("$limit", max);
+            top = " LIMIT $limit";
+        }
+        cmd.CommandText =
+            "SELECT q.script_path, q.executed_at, q.connection, q.connection_id, q.db " +
+            "FROM query_log q " +
+            "JOIN (SELECT MAX(id) AS id FROM query_log " +
+            "      WHERE script_path IS NOT NULL AND script_path <> ''" + onConnection +
+            "      GROUP BY script_path) last ON last.id = q.id " +
+            "ORDER BY q.id DESC" + top + ";";
+
+        var uses = new List<ScriptUse>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            uses.Add(new ScriptUse(
+                reader.GetString(0),
+                DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
+                reader.GetString(2),
+                reader.IsDBNull(3) || !Guid.TryParse(reader.GetString(3), out var parsed) ? null : parsed,
+                reader.GetString(4)));
+        }
+        return uses;
+    }
+
     /// <summary>A row's stored values, or none when they can't be read — one unreadable historical row must
     /// not fail the read every history view and report goes through (the connection id's rule).</summary>
     private static IReadOnlyList<QueryLogParameter> ReadParameters(string json)

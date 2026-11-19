@@ -10,7 +10,7 @@ public sealed record ScriptTree(
 
 /// <summary>A <c>.sql</c> file in the scripts tree. <c>SizeBytes</c> comes free with the
 /// directory scan and is what lets a content search skip a file it should never read (0 = unknown).</summary>
-public sealed record ScriptFileRef(string Path, string Name, long SizeBytes = 0);
+public sealed record ScriptFileRef(string Path, string Name, long SizeBytes = 0, DateTimeOffset? Modified = null);
 
 /// <summary>
 /// Filesystem access for the project's scripts folder, behind an interface so the scripts / workspace

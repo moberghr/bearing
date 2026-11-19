@@ -281,7 +281,15 @@ public class BatchStreamingTests : IDisposable
         Assert.Contains("cancelled", status(), StringComparison.OrdinalIgnoreCase);
 
         // Whatever the batch did before Esc reached the server, so the audit trail has it.
-        var logged = Assert.Single(await log.SearchAsync(new QueryLogQuery(), CancellationToken.None));
+        // The log writes on its own thread: the entry is appended by the time the run returns, but only
+        // readable once that thread has stored it, so wait for it rather than race it.
+        IReadOnlyList<QueryLogEntry> entries = [];
+        using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+        {
+            while ((entries = await log.SearchAsync(new QueryLogQuery(), CancellationToken.None)).Count == 0)
+                await Task.Delay(10, timeout.Token);
+        }
+        var logged = Assert.Single(entries);
         Assert.False(logged.Success);
         Assert.Contains("select n from b", logged.SqlText);
 

@@ -700,6 +700,97 @@ public class LookProbe
             pageable: false);
     }
 
+    /// <summary>
+    /// Where a script was last run: the Scripts panel's dim trailer and accent icon for a script a tab holds,
+    /// and the server row's "Recent scripts" submenu. The menu frames are the popups' own surfaces — a
+    /// headless popup is its own top level, so it is not in the window's frame.
+    /// </summary>
+    [SkippableFact]
+    public Task ScriptUses()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(async () =>
+        {
+            var providers = new DemoProvider(DemoExecutor.Default(
+                sql => StatementSplitter.Split(sql).Select(span => span.Text).ToList()));
+            using var shell = await ShellHarness.ShowAsync(nameof(ScriptUses), providers);
+            await shell.Vm.StartDemoAsync(shell.ProjectDirectory, DemoMode.WelcomeScript);
+            shell.Pump();
+
+            var scripts = shell.Vm.ScriptsDirectory!;
+            async Task<string> Script(string name)
+            {
+                var path = Path.Combine(scripts, name);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                await File.WriteAllTextAsync(path, "select id, store_id, amount from shop.payment;");
+                return path;
+            }
+            var daily = await Script("daily_totals.sql");
+            var monthly = await Script(Path.Combine("Reports", "monthly_revenue.sql"));
+            await Script("never_run_here.sql");
+            shell.Vm.Scripts.RefreshScripts();
+
+            // Run two of them the way a user does, so the log links each run to its file.
+            foreach (var path in new[] { monthly, daily })
+            {
+                await shell.Vm.Workspace.OpenScriptInNewTabAsync(path);
+                await shell.Vm.Execution.ExecuteAsync("select id, store_id, amount from shop.payment;");
+            }
+            // The log writes on its own thread and tells the panel afterwards.
+            await Task.Delay(500);
+            shell.Pump();
+            // One left open, one closed: the two icon states.
+            shell.Vm.Workspace.Tabs.Remove(shell.Vm.Workspace.Tabs.Single(t => t.ScriptPath == monthly));
+
+            shell.Vm.ShowPanel(SidePanel.Scripts);
+            shell.Pump();
+            Write(shell.Window, dir, "script-uses-panel.png");
+            // And with room for the whole trailer: the default width trims it.
+            var width = shell.Vm.SidePaneWidth;
+            shell.Vm.SidePaneWidth = 380;
+            shell.Pump();
+            Write(shell.Window, dir, "script-uses-panel-wide.png");
+            shell.Vm.SidePaneWidth = width;
+
+            // The server row's menu, asked for the way a user asks.
+            shell.Vm.ShowPanel(SidePanel.Schema);
+            shell.Pump();
+            var server = shell.Vm.Connections.ServerNodes.First();
+            var row = shell.Window.GetVisualDescendants().OfType<DockPanel>()
+                .First(d => ReferenceEquals(d.DataContext, server) && d.ContextMenu is not null);
+            var at = row.TranslatePoint(new Point(40, row.Bounds.Height / 2), shell.Window)!.Value;
+            shell.Window.MouseDown(at, Avalonia.Input.MouseButton.Right);
+            shell.Window.MouseUp(at, Avalonia.Input.MouseButton.Right);
+            shell.Pump();
+            await Task.Delay(300);
+            shell.Pump();
+
+            var menu = row.ContextMenu!;
+            var recent = menu.Items.OfType<MenuItem>()
+                .First(m => Equals(m.Tag, Bearing.App.Controls.SidebarView.RecentScriptsTag));
+            _out.WriteLine($"menu open: {menu.IsOpen}; recent scripts: " +
+                string.Join(" | ", recent.Items.OfType<MenuItem>().Select(m => (m.Header as TextBlock)?.Text ?? m.Header)));
+            WritePopup(menu, dir, "script-uses-server-menu.png");
+            recent.Open();
+            shell.Pump();
+            if (recent.Items.OfType<MenuItem>().FirstOrDefault() is { } first)
+                WritePopup(first, dir, "script-uses-recent-menu.png");
+            menu.Close();
+        });
+    }
+
+    /// <summary>Write the frame of the popup a visual lives in.</summary>
+    private void WritePopup(Visual inside, string dir, string name)
+    {
+        if (TopLevel.GetTopLevel(inside) is not { } popup) { _out.WriteLine($"{name}: no popup surface"); return; }
+        popup.UpdateLayout();
+        using var frame = popup.CaptureRenderedFrame();
+        if (frame is null) { _out.WriteLine($"{name}: nothing rendered"); return; }
+        var path = Path.Combine(dir, name);
+        frame.Save(path);
+        _out.WriteLine($"wrote {path}");
+    }
+
     private void Write(Avalonia.Controls.Window window, string dir, string name)
     {
         var path = Path.Combine(dir, name);

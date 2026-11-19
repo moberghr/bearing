@@ -24,12 +24,28 @@ public sealed partial class ScriptItem : ObservableObject
     /// <summary>True when an open tab backs this file and has unsaved edits (snapshot at refresh time).</summary>
     public bool IsUnsaved { get; init; }
 
+    /// <summary>True while a tab holds this file. Observable: tabs open and close without the tree being
+    /// rebuilt (<c>ScriptsViewModel.SyncOpenScripts</c>).</summary>
+    [ObservableProperty] private bool _isOpen;
+
     /// <summary>
     /// The line that made this file a hit for the filter's <em>contents</em>, shown under the name — or null
     /// when the row is here because its name matched, or because nothing is being filtered. A content hit
     /// that looked identical to a name hit read as noise: this is what says why the file is in the list (#47).
     /// </summary>
     public string? MatchLine { get; init; }
+
+    /// <summary>When the file was last written, as the store listed it; the trailer's fallback when no run
+    /// is recorded.</summary>
+    public DateTimeOffset? Modified { get; init; }
+
+    /// <summary>The row's dim trailer: the database the script was last run against and the day
+    /// (<see cref="Workspace.ScriptUseText"/>). Observable because the log is read after the tree is
+    /// built, and a run made while the panel is open updates it in place.</summary>
+    [ObservableProperty] private string _useText = "";
+
+    /// <summary>The trailer's tooltip: connection, database and exact time, or that no run is recorded.</summary>
+    [ObservableProperty] private string _useTip = "";
 
     /// <summary>True while this row is an editable box rather than a label.</summary>
     [ObservableProperty] private bool _isRenaming;
