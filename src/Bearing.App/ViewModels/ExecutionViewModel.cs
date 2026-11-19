@@ -67,10 +67,17 @@ public sealed partial class ExecutionViewModel : ObservableObject
     // Runs only while a transaction is open: warns, and eventually rolls one back (#131).
     private readonly DispatcherTimer _transactionTimer;
 
+    // Load more / fetch all for a result continued by token rather than by offset (DynamoDB).
+    private readonly ContinuationPaging _continuationPaging;
+
     public ExecutionViewModel(WorkspaceContext ctx, IDialogService? dialogs)
     {
         _ctx = ctx;
         _dialogs = dialogs;
+        _continuationPaging = new ContinuationPaging(
+            ctx, ResolveLiveLease, ExecutorFor,
+            (tab, body, cancelled, failed) => RunExclusiveAsync(tab, body, cancelled, failed),
+            RunStatus, RunFinished, ReportCeiling, Classify);
         _elapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _elapsedTimer.Tick += (_, _) => RefreshElapsed();
         // IsBusy / RunButtonText / CancelExecution are a façade over the *selected* tab's per-tab run
@@ -855,6 +862,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
     /// <summary>Append the next page to a pageable result set (infinite-scroll "load more").</summary>
     public async Task LoadMoreAsync(ResultSetViewModel rs)
     {
+        if (rs.Continuation is not null) { await _continuationPaging.LoadMoreAsync(rs); return; }
         var tab = Selected;
         if (tab is null || tab.IsRunning || !rs.IsPageable || rs.SourceSql is null || !rs.HasMore) return;
         using var lease = ResolveLiveLease();
@@ -1044,6 +1052,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
     public async Task<bool> FetchAllAsync(ResultSetViewModel rs)
     {
+        if (rs.Continuation is not null) return await _continuationPaging.FetchAllAsync(rs);
         var tab = Selected;
         if (tab is null || tab.IsRunning || !rs.IsPageable || rs.SourceSql is null) return false;
         if (!rs.HasMore) return true;

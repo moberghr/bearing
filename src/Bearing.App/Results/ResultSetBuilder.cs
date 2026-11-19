@@ -38,7 +38,9 @@ internal static class ResultSetBuilder
                     ? (null, null)
                     : EditabilityResolver.ResolveWithReason(snapshot, r.Columns, connectionReadOnly);
                 var source = statements?[i] ?? sql;
-                var vm = new ResultSetViewModel(r, source, pageable)
+                // A result the engine continues by token pages on its own, one set of a batch included: the
+                // token carries its statement, so nothing is re-run and the offset rule's one-set limit is moot.
+                var vm = new ResultSetViewModel(r, source, pageable || r.Continuation is not null)
                 {
                     ExecutedSql = shown ?? (string.IsNullOrWhiteSpace(source) ? null : source.Trim()),
                     // So Copy as ▸ SQL renders this engine's literals and quoting, not Postgres'.
@@ -144,7 +146,13 @@ internal static class ResultSetBuilder
 
         var ms = (wallClock?.TotalMilliseconds) ?? results[^1].Duration.TotalMilliseconds;
         var elapsed = FormatElapsed(ms);
-        return results.Count == 1 ? $"Done · {elapsed}" : $"{results.Count} result sets · {elapsed}";
+        var line = results.Count == 1 ? $"Done · {elapsed}" : $"{results.Count} result sets · {elapsed}";
+
+        // A first page the engine's request budget cut short holds fewer rows than a page and still has more
+        // behind it; only the engine's own sentence says which, so it rides along (Behaviour 6).
+        return results.Select(ContinuationPaging.BudgetNotice).FirstOrDefault(n => n is not null) is { } notice
+            ? $"{line} — {notice}"
+            : line;
     }
 
     /// <summary>Human-friendly elapsed: "88 ms" under a second, "8.4 s" above — so a slow run reads honestly.

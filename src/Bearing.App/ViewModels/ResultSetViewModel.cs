@@ -37,7 +37,9 @@ public sealed partial class ResultSetViewModel : ObservableObject
         IsPageable = pageable;
         SourceSql = pageable ? sourceSql : null;
         ExecutedSql = string.IsNullOrWhiteSpace(sourceSql) ? null : sourceSql.Trim();
-        _hasMore = pageable && result.Truncated;
+        Continuation = result.Continuation;
+        // A token, when there is one, is the answer to "is there more" — not whether the page came back full.
+        _hasMore = pageable && (Continuation is not null || result.Truncated);
         ColumnLayout = new ColumnLayout(Columns.Count);
         // The marker on the meta row is derived from the layout, so it has to be told when the layout moves
         // (the layout itself is deliberately not an ObservableObject — it is pure, §2.5).
@@ -132,9 +134,22 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// (or when editability couldn't be determined, e.g. no schema loaded).</summary>
     public string? LockReason { get; init; }
 
-    /// <summary>Last page came back full — more rows likely exist beyond what's loaded.</summary>
+    /// <summary>Last page came back full — more rows likely exist beyond what's loaded. For a result the
+    /// engine continues by token (<see cref="Continuation"/>), the token alone decides.</summary>
     [ObservableProperty]
     private bool _hasMore;
+
+    /// <summary>
+    /// The engine's token for the rest of this read (<see cref="QueryResult.Continuation"/>), replaced by each
+    /// page loaded after it and null once the read is exhausted. While set, load more and fetch all go through
+    /// <c>ContinuationPaging</c> and send this — never the SQL again. Opaque and in memory only: never logged,
+    /// never persisted.
+    /// </summary>
+    public string? Continuation { get; private set; }
+
+    /// <summary>The run that produced this set was confirmed as a full table scan, so a fetch all or export
+    /// of it asks once more. Set by the run after the result sets are built.</summary>
+    public bool IsFullScan { get; set; }
 
     /// <summary>Total row count of the source query; null until the user asks for it.</summary>
     [ObservableProperty]
@@ -178,6 +193,14 @@ public sealed partial class ResultSetViewModel : ObservableObject
         }
         HasMore = hasMore;
         RaiseRowCount();
+    }
+
+    /// <summary>Append a page continued by token and take the token it carries in place of the one used;
+    /// whether more remain follows that token (null — the read is exhausted).</summary>
+    public void AppendContinuationPage(IReadOnlyList<object?[]> rows, string? continuation)
+    {
+        Continuation = continuation;
+        AppendPage(rows, hasMore: continuation is not null);
     }
 
     /// <summary>Notify the live row-count surfaces (meta row count + count-on-demand) after a change.</summary>
