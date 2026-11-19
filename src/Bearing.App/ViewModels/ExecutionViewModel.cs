@@ -891,10 +891,17 @@ public sealed partial class ExecutionViewModel : ObservableObject
     }
 
     /// <summary>Let everything queued above background priority — input, layout, render — run once. A no-op off the
-    /// UI thread (the view-model tests drive runs without a dispatcher loop).</summary>
+    /// UI thread (the view-model tests drive runs without a dispatcher loop).
+    /// <para>
+    /// "On the UI thread" is read from the synchronization context, not from
+    /// <c>Dispatcher.UIThread.CheckAccess()</c>: the dispatcher belongs to whichever thread touches it first,
+    /// so with no app running a test's own thread could become its owner, pass that check, and then wait
+    /// forever on a dispatcher nobody pumps. Avalonia's context is only current where its dispatcher is
+    /// really running the code.
+    /// </para></summary>
     private static async Task YieldToUiAsync()
     {
-        if (!Dispatcher.UIThread.CheckAccess()) return;
+        if (SynchronizationContext.Current is not AvaloniaSynchronizationContext) return;
         await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
     }
 
