@@ -74,6 +74,23 @@ internal static class PartiQlBatch
             : "";
     }
 
+    /// <summary>True when <paramref name="statement"/> is <c>SELECT *</c> — every attribute of every item, the
+    /// table's key attributes included, so those are columns even before an item has shown them. A projection
+    /// returns only what it names.</summary>
+    public static bool SelectsAll(string statement)
+    {
+        ArgumentNullException.ThrowIfNull(statement);
+
+        var tokens = Lex(statement)
+            .Where(t => t.Kind != TokenKind.Semicolon)
+            .Take(2)
+            .ToList();
+
+        return tokens.Count == 2
+            && IsWord(tokens[0], "SELECT")
+            && tokens[1] is { Kind: TokenKind.Other, Text: "*" };
+    }
+
     /// <summary>
     /// The table and index <paramref name="statement"/> names, or null when the text is not a shape this reads
     /// (no <c>FROM</c>, no name after it, an unknown lead verb). Null is "could not tell", never "none".

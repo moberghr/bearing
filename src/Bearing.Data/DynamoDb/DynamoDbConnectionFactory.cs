@@ -64,6 +64,8 @@ public sealed class DynamoDbConnectionFactory : IDbConnectionFactory
     internal DynamoDbConnectionFactory(ConnectionInfo info, string? profilesLocation)
     {
         _profile = string.IsNullOrWhiteSpace(info.User) ? null : info.User.Trim();
+        Region = info.Host.Trim();
+        StatementTimeoutSeconds = SessionPolicy.TimeoutSeconds(info);
         try
         {
             _api = Build(info, _profile, profilesLocation);
@@ -79,11 +81,21 @@ public sealed class DynamoDbConnectionFactory : IDbConnectionFactory
     internal DynamoDbConnectionFactory(ConnectionInfo info, IDynamoDbApi api)
     {
         _profile = string.IsNullOrWhiteSpace(info.User) ? null : info.User.Trim();
+        Region = info.Host.Trim();
+        StatementTimeoutSeconds = SessionPolicy.TimeoutSeconds(info);
         _api = api;
     }
 
     /// <summary>The profile this connection signs in with, trimmed; null for the SDK's default chain.</summary>
     internal string? Profile => _profile;
+
+    /// <summary>The region, trimmed — what the one database node is named after.</summary>
+    internal string Region { get; }
+
+    /// <summary>The connection's statement timeout in seconds (<see cref="SessionPolicy.TimeoutSeconds"/>);
+    /// <see cref="SessionPolicy.NoTimeout"/> when none. A client-side cancel of the page read, the SQL Server
+    /// arrangement (§1.9a): DynamoDB has no session to carry a server-side one.</summary>
+    internal int StatementTimeoutSeconds { get; }
 
     /// <summary>The DynamoDB calls this connection may make. Throws the sentence for a setting that was
     /// refused (an endpoint, a region, a profile the SDK cannot find) — on every use, not just the first.</summary>
