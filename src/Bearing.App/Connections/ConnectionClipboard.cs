@@ -82,6 +82,9 @@ public static class ConnectionClipboard
         // Carried: without it the paste arrives with an empty User and no way to fill it, and fails to log in.
         public bool UserFromEntraLogin { get; init; }
         public Dictionary<string, string> Options { get; init; } = new();
+        // The route and its pinned host key (a pin is a restriction — dropping it would let the paste trust
+        // whatever key it meets first). Never a secret: the SSH password lives under the source's id.
+        public SshTunnel? SshTunnel { get; init; }
     }
 
     private sealed record Payload(string Kind, int Version, List<Entry> Connections);
@@ -137,6 +140,7 @@ public static class ConnectionClipboard
         CredentialKind = c.CredentialKind,
         UserFromEntraLogin = c.UserFromEntraLogin,
         Options = c.Options.ToDictionary(kv => kv.Key, kv => kv.Value),
+        SshTunnel = c.SshTunnel,
     };
 
     private static ConnectionInfo FromEntry(Entry e) => new()
@@ -160,5 +164,6 @@ public static class ConnectionClipboard
         CredentialKind = e.CredentialKind,
         UserFromEntraLogin = e.UserFromEntraLogin,
         Options = e.Options,
+        SshTunnel = e.SshTunnel,
     };
 }

@@ -160,6 +160,7 @@ not part of `SamePool`/`SameConnection`.
   | Quit, close tab | Ask now, roll back later (`AskAsync` … `RollbackAsync`) — other prompts may still cancel |
   | Pool-rebuilding edit, manual commit turned off, connection/project/script deleted | Roll back and report |
   | Idle sweep | Roll back past threshold |
+  | SSH tunnel lost (`IConnectionSessionManager.TunnelLost`) | Roll back that pool's transactions and report |
 
   Every route that removes a tab or disposes/retires/re-keys a session must decide what happens to an open
   transaction (`RollbackForTabsAsync`). A project *switch* parks tabs and is safe.
@@ -241,3 +242,35 @@ Velopack hooks add/remove the install dir in the per-user PATH (`WindowsPath` / 
   install dir, has the stale name, and the fix differs.
 - WHEN a release renames anything the installer wrote, decide what happens to existing copies. Best-effort
   (§5.2).
+
+## §1.12 — SSH tunnel (`ConnectionInfo.SshTunnel`)
+SSH.NET in-process, opened in the connect recipe (`ConnectionFactoryBuilder.RouteAsync`); only the factory sees
+`127.0.0.1:<forwarded port>` — sessions, messages and pool identity keep the real host. One forward per factory,
+disposed after it (`ConnectionSession.Tunnel`, `SchemaBrowser.Reader`), all on **one SSH session per connection +
+route** (`SharedSshClient`, counted; last forward disconnects). First opens queue per connection, so one prompt and
+one handshake serve every pool. The dialog's Test goes through `IConnectionSessionManager.TestAsync` (no recipe in
+a host) and logs in on a session of its own with the typed secret.
+- Forward target = the database host/port as the bastion sees it; port 0 = the provider's declared default; a SQL
+  Server named instance is refused (`ConnectionFactoryBuilder.ForwardTarget`, and the dialog's Save).
+- Host key is **accept-new**: first key pinned into the connection via `SshTunnels.HostKeyPinned`; a different
+  key is refused, never trusted from the failure. No callback (CLI) → an unpinned key is refused. DO NOT add a
+  "trust anyway" path or disable the check.
+  Every tunnel is held to the pin **saved now** (`SshTunnels.SavedTunnel` lookup, same host+port), never the
+  caller's copy — explorer nodes keep the record they were built from. The saved record wins both ways: a pin saved
+  since binds an unpinned copy, a pin forgotten since frees a pinned one. A shared session is reused only if the key
+  it met is the one pinned now. The pin is written by
+  `ConnectionsViewModel.PinHostKeyAsync` on its own path (not a dialog save: no commit-mode reset, no rollback);
+  a save that fails is said (pinned for the session only). A key differing from a pin saved meanwhile
+  disconnects the connection and says so. Saving a connection keeps the current saved pin
+  (`SshTunnelForm.WithSavedPin`) unless the route changed or Forget host key was pressed.
+- SSH password / key passphrase: `ISecretStore` under `SshSecretId.For(connectionId)`, prompted when missing or
+  refused, saved only after it worked; deleted with the connection. Never in a message or log. A connection whose
+  password is `CredentialKind.Prompt` keeps its SSH secret in memory only (`SshTunnels.KeepsSecretInMemoryOnly`):
+  never read from or written to the keychain (the dialog doesn't read it either), and Save removes one stored
+  before the switch. Save writes each secret on its own: a refused database password never drops the SSH secret.
+- A dropped SSH session (`SshTunnelHandle.WhenLost` / `IsAlive`) evicts its pool and schema reader; a dead tunnel
+  is never handed out. `TunnelLost` fires only when that session was the one evicted, never against a replacement. Live test kills the bastion's `sshd-session`s.
+- Forward binds `127.0.0.1` only. Pin is not part of `SameRoute` / `SameConnection` / `SameNetwork`.
+- Not supported (stated in the dialog): ssh-agent, `~/.ssh/config`, ProxyJump. Verify Full TLS through a tunnel
+  checks `127.0.0.1`. Live tests: `./build/test-ssh.sh` (bastion → MariaDB, image pinned, run in CI's ubuntu leg),
+  `LiveSshTunnelTests`.

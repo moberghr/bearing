@@ -35,6 +35,9 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     /// <inheritdoc />
     public event Action<Guid>? LinkChanged;
 
+    /// <inheritdoc />
+    public event Action<SessionKey>? TunnelLost;
+
     // Never let a subscriber's fault escape into the connect/evict path it fired from.
     private void RaiseLiveChanged(SessionKey key)
     {
@@ -119,7 +122,8 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var key = SessionKey.For(info);
-            if (_live.TryGetValue(key, out var existing) && SameConnection(existing.Info, info))
+            // A session whose SSH tunnel has ended is never handed out: BuildAsync retires it and opens a new one.
+            if (_live.TryGetValue(key, out var existing) && SameConnection(existing.Info, info) && !existing.TunnelLost)
             {
                 existing.LastUsedUtc = _clock();
                 return Task.FromResult(existing);
@@ -261,13 +265,48 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         }
     }
 
-    public async Task EvictAsync(SessionKey key)
+    public Task EvictAsync(SessionKey key) => EvictAsync(key, only: null);
+
+    /// <inheritdoc />
+    public Task<bool> TestAsync(ConnectionInfo info, string? password, string? sshSecret, CancellationToken ct)
+        => ConnectionFactoryBuilder.TestAsync(_providers, _credentials(), info, password, sshSecret, ct);
+
+    /// <summary>The SSH tunnel under <paramref name="session"/> ended: evict it — only if it is still the one
+    /// live under <paramref name="key"/>, never a replacement built meanwhile. Runs on an SSH.NET thread.</summary>
+    internal async Task EvictLostTunnelAsync(SessionKey key, ConnectionSession session)
+    {
+        try
+        {
+            // Said only when this session was the one evicted: a replacement built meanwhile is healthy, and so
+            // is any transaction opened on it (TunnelLost rolls back every transaction under the key).
+            if (await EvictAsync(key, only: session))
+            {
+                TunnelLost?.Invoke(key);
+            }
+        }
+        catch
+        {
+            // Best-effort: the next acquire still skips the session (TunnelLost) and rebuilds.
+        }
+    }
+
+    /// <summary>Evict the session under <paramref name="key"/> — with <paramref name="only"/>, just that one.
+    /// True when a session left the live map.</summary>
+    private async Task<bool> EvictAsync(SessionKey key, ConnectionSession? only)
     {
         ConnectionSession? session;
         var disposeNow = false;
         lock (_gate)
         {
-            if (_live.TryGetValue(key, out session))
+            if (only is not null && _disposed)
+            {
+                return false;
+            }
+            if (_live.TryGetValue(key, out session) && only is not null && !ReferenceEquals(session, only))
+            {
+                return false;
+            }
+            if (session is not null)
             {
                 _live.Remove(key);
                 if (session.LeaseCount == 0) disposeNow = true; else session.Retired = true;
@@ -280,6 +319,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         // that we are linked to the server. The idle sweep does NOT come through here, which is exactly what
         // lets a swept connection stay linked (see SweepIdleAsync).
         if (UnlinkIfNothingLive(key.ConnectionId)) RaiseLinkChanged(key.ConnectionId);
+        return session is not null;
     }
 
     /// <inheritdoc />
@@ -428,7 +468,11 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             lock (_gate)
             {
                 _live.TryGetValue(key, out stale);
-                if (stale is not null && SameConnection(stale.Info, info)) { stale.LastUsedUtc = _clock(); return stale; }
+                if (stale is not null && SameConnection(stale.Info, info) && !stale.TunnelLost)
+                {
+                    stale.LastUsedUtc = _clock();
+                    return stale;
+                }
                 if (stale is not null)
                 {
                     _live.Remove(key);
@@ -437,7 +481,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             }
             if (stale is not null && disposeStale) await SafeDisposeAsync(stale);
 
-            var (provider, factory, credential) =
+            var (provider, factory, credential, tunnel) =
                 await ConnectionFactoryBuilder.BuildAsync(_providers, _credentials(), info, forceRefresh: false, ct);
 
             bool ok;
@@ -445,11 +489,13 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             catch (Exception ex)
             {
                 await SafeDisposeFactoryAsync(factory);
+                await SafeDisposeTunnelAsync(tunnel);
                 throw new ConnectionFailedException(Describe(info, Bearing.Core.Data.SafeErrorText.Of(ex)), ex);
             }
             if (!ok)
             {
                 await SafeDisposeFactoryAsync(factory);
+                await SafeDisposeTunnelAsync(tunnel);
                 throw new ConnectionFailedException(Describe(info, "connection test failed"));
             }
 
@@ -457,7 +503,7 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
                 info, factory, provider.CreateQueryExecutor(factory), provider.CreateMetadataReader(factory),
                 provider.CreateServerActivity(factory), credential.ExpiresAt,
                 provider.SupportsServerActivity)
-            { LastUsedUtc = _clock(), LoginUser = credential.ApplyTo(info).User };
+            { LastUsedUtc = _clock(), LoginUser = credential.ApplyTo(info).User, Tunnel = tunnel };
             bool disposedDuringConnect;
             bool newLink;
             lock (_gate)
@@ -478,6 +524,9 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
             }
             RaiseLiveChanged(key); // a new session entered the live map
             if (newLink) RaiseLinkChanged(info.Id);
+            // A pool on a tunnel is dead once the SSH session ends (sleep/wake, bastion restart): drop it, so the
+            // indicators say so and the next acquire opens a fresh tunnel instead of failing until a Disconnect.
+            tunnel?.WhenLost(() => _ = EvictLostTunnelAsync(key, session));
             return session;
         }
         catch
@@ -555,6 +604,8 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
            // The session zone rides the same packet (#163). The *resolved* zone, so "local" on a machine
            // whose zone changed is a different pool, and an explicit id equal to this machine's is not.
            && SessionTimeZonePolicy.ZoneFor(a) == SessionTimeZonePolicy.ZoneFor(b)
+           // A different SSH route reaches the server another way; the pinned host key alone does not.
+           && SshTunnel.SameRoute(a.SshTunnel, b.SshTunnel)
            && SameOptions(a.Options, b.Options);
 
     private static bool SameOptions(IReadOnlyDictionary<string, string> a, IReadOnlyDictionary<string, string> b)
@@ -573,5 +624,14 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
     private static async Task SafeDisposeFactoryAsync(IDbConnectionFactory factory)
     {
         try { await factory.DisposeAsync(); } catch { /* best-effort */ }
+    }
+
+    private static async Task SafeDisposeTunnelAsync(SshTunnelHandle? tunnel)
+    {
+        if (tunnel is null)
+        {
+            return;
+        }
+        try { await tunnel.DisposeAsync(); } catch { /* best-effort */ }
     }
 }

@@ -382,6 +382,15 @@ public class ConnectionClipboardTests
         // Set, so a payload that dropped it fails the round trip rather than comparing false with false.
         UserFromEntraLogin = true,
         Options = new Dictionary<string, string> { ["sslmode"] = "require" },
+        // Set, pin included: a paste that dropped the pin would trust whatever key it met first.
+        SshTunnel = new SshTunnel
+        {
+            Host = "bastion.example",
+            Port = 2222,
+            User = "jump",
+            PrivateKeyPath = "~/.ssh/id_ed25519",
+            HostKeyFingerprint = "SHA256:abc",
+        },
     };
 
     /// <summary>
