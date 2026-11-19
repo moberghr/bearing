@@ -193,6 +193,56 @@ the machine running `bearing` — the same zone the app on that machine computes
 `timestamptz::timestamp` answer the same from both. A script that must not depend on where it runs wants the
 connection pinned to a zone (Session time zone ▸ A specific zone, e.g. `UTC`).
 
+## Amazon DynamoDB connections
+
+A DynamoDB connection can be exposed like any other, and the command reads it with two further limits. The
+first applies to every exposed DynamoDB connection; the second is the one that decides whether a `SELECT` runs.
+
+**`SELECT` only.** PartiQL's only read is `SELECT`, so it is the only statement an exposed DynamoDB connection
+accepts; `INSERT`, `UPDATE`, `DELETE` and every other leading keyword are refused before anything is sent. The
+connection is read-only on the client alone — DynamoDB has no read-only session for Bearing to ask for — so, as on
+SQL Server, layer 1 above is the whole of it. What stops a write at the server is an IAM policy that grants none,
+and that role is the boundary here as everywhere else on this page.
+
+**Keyed reads only.** Whatever the connection's *Confirm full table scans* setting says, every `SELECT` in a
+batch is classified first, and one runs only if its `WHERE` pins the partition key of what it reads (the table, or
+the named index) with `=` or `IN`. That setting is a question for the person at the keyboard, and nobody is at
+this one to answer it. A scan is refused, saying what it would read:
+
+```console
+$ bearing query orders-db "select * from \"Orders\""
+'orders-db': this SELECT would read the whole of "Orders" — the WHERE has no = or IN on its partition key
+"CustomerId". The bearing command runs keyed reads only; add a partition-key condition, or run it in Bearing.
+```
+
+When Bearing cannot tell — the statement could not be followed, or the table list or its keys did not load
+within 4 seconds — it says that instead, and never claims the statement scans:
+
+```console
+$ bearing query orders-db "select * from \"Ordres\" where CustomerId = 'c1'"
+'orders-db': Bearing could not check whether this SELECT on "Ordres" is keyed: the table list Bearing loaded has
+no table named "Ordres". The bearing command runs keyed reads only, so it was not run; run it in Bearing.
+```
+
+Both refusals are logged like any other (`Success = false`, the SQL verbatim), and neither reaches the server.
+Keyed is not the same as small, and this check is accident prevention: it is not cost control and not a
+guarantee. The boundary is an IAM policy.
+
+**`query` returns the first page.** A DynamoDB result is read a page at a time and has no `LIMIT`/`OFFSET`, so a
+`query` without `--out` answers with the first page (at most `--max-rows`, default 200) and says
+`"truncated": true` when DynamoDB still has more. **`--out` follows the continuation:** it keeps reading until
+the result is exhausted — or until `--max-rows` rows, when you pass one — before the file is complete, and a
+read that fails part-way leaves no file. A CSV of one statement streams a page at a time, like any other engine;
+an xlsx is built from every row.
+
+**`explain` is refused** — DynamoDB reports no plan this command can read, and it says so rather than sending the
+statement.
+
+DynamoDB connections sign in with an AWS profile (or the SDK's default credential chain), which the command
+resolves exactly as the app does; it asks for no AWS secret and the keychain holds none. A profile that needs
+signing in again fails with the profile's name and the `aws sso login --profile <name>` to run. And `tables` and
+`describe` list the region's tables and their declared key attributes, as they list tables elsewhere.
+
 ## Which project
 
 `--project <dir>`, or the most recently opened project when it is omitted. Put the explicit form in anything

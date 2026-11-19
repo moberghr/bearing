@@ -15,8 +15,13 @@ Supplement: `.claude/references/dotnet/testing-supplement.md`.
   `MsSqlTestServer` / `BEARING_TEST_MSSQL_*`, `bearing-mssql-test` on 1433. MySQL provider: `MySqlTestServer`
   / `BEARING_TEST_{MARIADB,MYSQL}_*`, `bearing-mariadb-test` on 13306 and `bearing-mysql-test` on 13307 — every
   live test is a theory over **both** engines.
+- DynamoDB: `DynamoDbTestServer` (`tests/Shared/DynamoDbTestServer.cs`) / `BEARING_TEST_DYNAMODB_ENDPOINT` (default
+  `http://localhost:18000`), `bearing-dynamodb-test` from `amazon/dynamodb-local` on 18000 (image override
+  `BEARING_TEST_DYNAMODB_IMAGE`). In memory, and no credential to set: a loopback endpoint with a blank profile signs
+  with placeholder keys. Fixture tables are made through the SDK's own client, not the provider under test, each with a
+  unique name and dropped when the test is done (§4.7).
 - Never a plain `[Fact]` that fails without a DB; never a `catch { return false; }` probe.
-- Containers: `./build/test-db.sh`, `./build/test-db-mssql.sh`, `./build/test-db-mysql.sh` (starts both). WHEN a change touches a provider, run its
+- Containers: `./build/test-db.sh`, `./build/test-db-mssql.sh`, `./build/test-db-mysql.sh` (starts both), `./build/test-db-dynamodb.sh`. WHEN a change touches a provider, run its
   container before reporting a result.
 
 ## §4.3 — UI: headless tests assert, eyeball QA confirms

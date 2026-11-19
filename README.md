@@ -19,6 +19,24 @@ Built with .NET 10 and [Avalonia](https://avaloniaui.net/) (cross-platform deskt
 - **Connection environments** — tag connections (local / staging / production) with a color that threads
   through the whole UI so you always know what you're pointed at.
 - **Customizable keybindings** and a command palette (`Ctrl+Shift+P`).
+- **Amazon DynamoDB, read through PartiQL** — a fourth engine beside PostgreSQL, SQL Server and MySQL/MariaDB.
+  See [Amazon DynamoDB](#amazon-dynamodb).
+
+## Amazon DynamoDB
+
+Connections of type **Amazon DynamoDB** are read-focused: write PartiQL, browse a region's tables and their
+indexes, and read the results.
+
+| | |
+|---|---|
+| **Connect** | *Region* (required), *AWS profile* and an optional *Endpoint*. A blank profile uses the AWS SDK's default credential chain; the endpoint is for DynamoDB Local or a VPC endpoint, and plain `http://` is accepted for a loopback host only. A loopback endpoint with no profile signs with placeholder keys, so DynamoDB Local needs no AWS setup. |
+| **Sign-in** | The AWS SDK resolves the profile (shared config, SSO, assumed roles). Bearing never reads, stores, prompts for or logs an AWS secret. An expired SSO profile says to run `aws sso login --profile <name>`. |
+| **Query** | PartiQL `SELECT` (and `INSERT` / `UPDATE` / `DELETE`, behind the usual write confirmation). There is no `LIMIT` / `OFFSET`: a result is read a page at a time and **Load more** / **Fetch all** continue from DynamoDB's own token, so a row already shown is never read twice. |
+| **Full scans** | A `SELECT` that does not pin the partition key reads the whole table. Bearing asks before it runs one (**Confirm full table scans** on the connection, on by default) and again before Fetch all or an export. That check stops mistakes; it is not cost control and not a guarantee — the boundary is an IAM policy. |
+| **Read-only** | Refused by Bearing before the statement is sent. DynamoDB has no read-only session, so what stops a write at the server is an IAM policy without write actions. |
+| **Not available** | Grid editing, manual commit, query plans, the activity panel, SQL formatting, `:name` variables and `@set`, row counts, *Show definition* on a table, and the TLS and session-time-zone settings. |
+
+The `bearing` command reads DynamoDB too, for keyed `SELECT`s only — see [docs/CLI.md](docs/CLI.md).
 
 ## Project layout
 
@@ -28,7 +46,7 @@ The solution (`Bearing.slnx`) is layered so the SQL engine is testable in isolat
 |---|---|---|
 | `Bearing.Core` | Domain vocabulary + provider/persistence interfaces | none |
 | `Bearing.Sql` | SQL parsing + completion (ANTLR grammar, antlr4-c3, DML generation) | ANTLR runtime |
-| `Bearing.Data` | PostgreSQL implementation of the provider interfaces | Npgsql |
+| `Bearing.Data` | Implementations of the provider interfaces: PostgreSQL, SQL Server, MySQL/MariaDB and Amazon DynamoDB | Npgsql, Microsoft.Data.SqlClient, MySqlConnector, AWS SDK for .NET |
 | `Bearing.Persistence` | Project files, session state, query log (SQLite), secret store | Microsoft.Data.Sqlite |
 | `Bearing.Updates` | Release feed + self-update (installers, delta updates) | Velopack |
 | `Bearing.App` | Avalonia UI — views, view models, input pipeline | Avalonia |
@@ -94,6 +112,12 @@ run DDL check for a marker row it writes before doing so.
 
 The tests read `BEARING_TEST_PG_*` env vars (host/port/db/user/password) if you would rather point them
 somewhere else.
+
+The other engines' live suites skip the same way and have a script each: `./build/test-db-mssql.sh` (SQL
+Server), `./build/test-db-mysql.sh` (MariaDB and MySQL) and `./build/test-db-dynamodb.sh` (DynamoDB Local, the
+`bearing-dynamodb-test` container from `amazon/dynamodb-local` on **18000**, in memory, with no credentials to
+set up). `BEARING_TEST_DYNAMODB_ENDPOINT` points the DynamoDB tests somewhere else. A skip is not a pass — run
+the containers before trusting a green run.
 
 The default password is `squirrel` — a throwaway dev credential for the local test container, nothing to do
 with the app. Override it, and every other default, with `BEARING_TEST_PG_*` (`tests/Shared/PgTestServer.cs`).

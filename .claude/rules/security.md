@@ -129,6 +129,42 @@ holds before selecting `*` or an options bag.
 - Scanner lexes `/*! … */` as code (the server runs it); `RevealExecutableComments` does the same for the external
   name scan. `SqlLiteralStyle.MySql` escapes backslashes.
 
+### §1.9c — DynamoDB
+- **No AWS secret is ever read, stored, prompted for or logged** (§1.1). `CredentialKind.AwsProfile`: the resolver
+  returns a credential with a null secret, nothing touches `ISecretStore`, the user is never prompted, and no Bearing
+  code calls `GetCredentials` — the SDK resolves the profile (or its default chain) itself, on the first request.
+  It is not `Integrated`, whose copy is about the OS identity. `IDbProvider.SupportsPasswordCredentials` false means
+  the dialog offers no password box and neither password kind.
+- Error text: a sign-in failure is classified `Authentication` and **built from the profile name alone** — it names
+  `aws sso login --profile <name>`, never the SDK's own text — so no key, secret or token has a path into it. Every
+  other SDK message is scrubbed of access-key ids and `secret=…` fragments (`DynamoDbErrors.Scrub`) before it is
+  shown. `AccessDeniedException` is a privilege, not a sign-in failure.
+- **Read-only is client-side only.** `EnforcesReadOnlyOnServer` is false: there is no DynamoDB session to make
+  read-only (§1.9a's SQL Server case), so `WriteRefusal` is the whole of Bearing's guarantee and **an IAM policy
+  without write actions is the boundary**; `ProviderTraits.WriteBoundary` says so in the editor. The write guard on
+  PartiQL (`PartiQlDialect`, on the PostgreSQL lexer) treats `INSERT`/`UPDATE`/`DELETE` as writes and **every other
+  lead verb except `SELECT` as risky**; a batch the lexer would read differently from DynamoDB is declined as a
+  whole (unreadable / risky), never trusted. Widening only (§1.2).
+- **The scan confirmation is accident prevention, not a boundary.** `ConnectionInfo.ConfirmFullScans` (default on,
+  per connection, a typed field because it is a safety setting; client-side like `ManualCommit`, so not part of
+  `SamePool`/`SameConnection`, and `ConnectionClipboard` round-trips it). A `SELECT` is `Keyed` (the `WHERE` pins the
+  partition key of the table or index with `=`/`IN`), `FullScan`, or `Undetermined`; the lookup is bounded by
+  `ScanGuard.Budget` (4 s) and **a missing fact is `Undetermined`, said as "could not check" — never as "this scans"**
+  (§1.1). The prompt defaults to Cancel; Fetch all and Export ask again on a result confirmed as a scan. It is not
+  cost control and not a guarantee — the boundary is an IAM policy (`dynamodb:FullTableScan` condition key).
+- **The `bearing` command runs keyed reads only** (`SELECT` alone is in `ExternalReadVerbs`). Every `SELECT` is
+  classified **whatever `ConfirmFullScans` says** — it is a question for the person at the keyboard and nobody is at
+  this one. `FullScan` and `Undetermined` are refused (`ScanGuard.CliRefusal`), the refusal is logged (§1.11d), and a batch
+  with more statements than scan targets fails closed as one that could not be checked. `query` returns the first page; `--out` follows the continuation
+  (`--max-rows` caps it); `explain` is refused (`SupportsExplainPlan` false).
+- **Plain HTTP is loopback-only.** `Options["Endpoint"]` accepts `https://` anywhere and `http://` only for
+  `localhost`, `127.0.0.0/8` and `::1`: a signed request over plain HTTP elsewhere sends the signature and every item
+  read. The rule lives in the factory, not the dialog, because `Options` travels in the shared `project.json` (§1.4).
+  `SupportsTlsModes` is false — no TLS picker; never describe a DynamoDB connection as verified or unencrypted on
+  the strength of a setting that is inert here.
+- The paging token (`QueryResult.Continuation`) holds statement text and a server token: memory only, never logged,
+  persisted or shown (§1.3, §5.1b).
+
 ## §1.10 — Manual commit (#131)
 `ConnectionInfo.ManualCommit`: a **write** opens a transaction held until Commit/Rollback. `CommitPolicy`;
 not part of `SamePool`/`SameConnection`.
