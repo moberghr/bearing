@@ -99,6 +99,8 @@ public partial class App : Application
             // Grouped digits are a layer *over* CellFormat.Display, not a change to it — the grouped form
             // never leaves the cell's TextBlock (see NumberGrouping).
             Formatting.NumberGrouping.Enabled = settings.Current.GroupNumbersInResults;
+            // A typed client-side filter over a large result rebuilds once typing pauses, not per keystroke (#106).
+            ResultFilterViewModel.DefaultDebouncer = (delay, work) => DispatcherTimer.RunOnce(work, delay);
             // The demo registry holds the demo provider *instead of* Postgres, not beside it: that is what
             // makes the fake unreachable from any normal connection flow, since in an ordinary session it is
             // not in the graph at all.

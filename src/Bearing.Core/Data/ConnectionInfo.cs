@@ -161,6 +161,14 @@ public sealed record ConnectionInfo
     /// </summary>
     public TlsMode Tls { get; init; } = TlsPolicy.Default;
 
+    /// <summary>
+    /// Connect through an SSH server, or null (the default) to connect directly. <see cref="Host"/> and
+    /// <see cref="Port"/> are then the database server as the SSH server sees it — often <c>localhost</c>.
+    /// Part of what defines a pool (<c>SameConnection</c>) and a network target (<c>SameNetwork</c>), except
+    /// for the pinned host key — see <see cref="SshTunnel.SameRoute"/>.
+    /// </summary>
+    public SshTunnel? SshTunnel { get; init; }
+
     /// <summary>Provider-specific extra options (e.g. search_path). <c>sslmode</c> used to live here and is
     /// still read from here for older projects — see <see cref="Tls"/>.</summary>
     public IReadOnlyDictionary<string, string> Options { get; init; }

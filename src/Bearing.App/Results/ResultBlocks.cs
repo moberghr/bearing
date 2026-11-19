@@ -27,12 +27,16 @@ public static class ResultBlocks
     /// blanked, unlike <see cref="GridSelectionOps.Tsv"/>: TSV's blanks exist to keep a spreadsheet paste
     /// aligned with what was selected, whereas CSV/JSON/SQL/… describe data, where a ragged hole would either
     /// misalign every following field or invent a NULL that isn't in the database.
+    /// <para>
+    /// Rows come in the order on screen (<c>ViewRows</c>, #106), the same order <see cref="GridSelectionOps.Tsv"/>
+    /// uses — the rich formats carry both on one clipboard item, so they must agree under a sort.
+    /// </para>
     /// </summary>
     public static TableBlock ForSelection(
         ResultSetViewModel result, IReadOnlyCollection<(object?[] Row, int Col)> cells)
     {
         if (cells.Count == 0) return TableBlock.Empty;
-        var rows = result.Rows;
+        var rows = result.ViewRows;
         var rowIdx = cells.Select(c => rows.IndexOf(c.Row)).Where(i => i >= 0).Distinct().OrderBy(i => i).ToList();
         var colIdx = cells.Select(c => c.Col).Where(c => c < result.Columns.Count).Distinct().OrderBy(c => c).ToList();
         if (rowIdx.Count == 0 || colIdx.Count == 0) return TableBlock.Empty;

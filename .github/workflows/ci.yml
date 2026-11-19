@@ -113,6 +113,13 @@ jobs:
         if: matrix.database
         run: ./build/test-db-mysql.sh
 
+      # An SSH bastion in front of that MariaDB, for LiveSshTunnelTests: the host-key trust (first key pinned,
+      # changed key refused, unpinned key refused without a pin callback), the refused-password prompt and a
+      # dropped tunnel being rebuilt. Without it those skip, and a skip is not a pass.
+      - name: Provision the SSH bastion
+        if: matrix.database
+        run: ./build/test-ssh.sh
+
       # Built once, separately, so a compile error is reported as a build failure instead of being buried in
       # the first test project's output.
       - name: Build

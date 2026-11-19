@@ -119,7 +119,7 @@ public class ChoiceFieldTests
     private static ConnectionDialog Dialog(
         ConnectionInfo? existing = null, Action<ConnectionInfo>? test = null)
         => new(existing, null,
-            (info, _, _) => { test?.Invoke(info); return Task.FromResult(false); },
+            (info, _, _, _) => { test?.Invoke(info); return Task.FromResult(false); },
             providers: new SingleProviderRegistry(new ChoiceProvider()));
 
     /// <summary>A registry of exactly one engine, so the dialog's picker has nothing else to select and no

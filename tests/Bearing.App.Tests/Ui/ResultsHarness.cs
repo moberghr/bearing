@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Bearing.App.Controls;
@@ -89,7 +90,7 @@ internal static class ResultsHarness
     /// <summary>An editable result wide and tall enough that the grid scrolls in both directions: an
     /// <c>id</c> primary key plus <paramref name="columns"/> text columns of padded values.</summary>
     public static (ResultSetViewModel Result, ObservableCollection<object?[]> Rows) WideEditableResult(
-        int columns = 12, int rows = 40)
+        int columns = 12, int rows = 40, bool pageable = false)
     {
         var descriptors = new List<ColumnDescriptor> { new("id", "int4", typeof(int)) };
         var editable = new List<EditableColumn> { new(0, "id", IsPrimaryKey: true, NotNull: true) };
@@ -109,7 +110,7 @@ internal static class ResultsHarness
         }
 
         var result = new QueryResult(descriptors, data, data.Count, TimeSpan.Zero, null, null, false);
-        var rs = new ResultSetViewModel(result, "select * from wide", pageable: false)
+        var rs = new ResultSetViewModel(result, "select * from wide", pageable)
         {
             PrimaryKeyColumns = [0],
             EditTarget = new EditTarget("public", "wide", editable),
@@ -166,6 +167,20 @@ internal static class ResultsHarness
 
     /// <summary>Where a realized cell sits inside the grid's own coordinate space — the position that must not
     /// move when the viewport is meant to stay put (#60).</summary>
+    /// <summary>Where cells start being visible, in the grid's coordinates: the right edge of the row-number
+    /// gutter. A cell left of it is clipped even at a positive x — the gutter and the status lane sit there.</summary>
+    public static double CellsLeft(DataGrid grid)
+        => grid.GetVisualDescendants().OfType<DataGridRowHeader>()
+               .Where(h => h.IsEffectivelyVisible && h.Bounds.Width > 0)
+               .Select(h => h.TranslatePoint(new Point(h.Bounds.Width, 0), grid)?.X)
+               .FirstOrDefault(x => x is not null) ?? 0;
+
+    /// <summary>The open in-cell editor, or null. Not "the TextBox in the grid": every column header carries a
+    /// filter input too (#106), hidden until the column-filter row opens.</summary>
+    public static TextBox? CellEditor(DataGrid grid)
+        => grid.GetVisualDescendants().OfType<TextBox>()
+               .SingleOrDefault(t => !t.Classes.Contains(Bearing.App.Controls.ResultColumnHeader.ChromeClass));
+
     public static Point PositionIn(Visual cell, Visual grid)
         => cell.TranslatePoint(default, grid)
            ?? throw new InvalidOperationException("cell is not connected to the grid's visual tree");

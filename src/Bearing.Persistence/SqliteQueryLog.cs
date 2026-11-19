@@ -49,7 +49,8 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
     }
 
     /// <summary>
-    /// Drop history older than <paramref name="retentionDays"/> (≤0 keeps everything). Compared with
+    /// Drop history older than <paramref name="retentionDays"/> (≤0 keeps everything), except what the user
+    /// starred (#111) — a bookmark is a request to keep it. Compared with
     /// <c>julianday()</c> so it's correct regardless of the stored timestamps' timezone offsets, then
     /// the external-content FTS index is rebuilt to shed the deleted rows.
     /// </summary>
@@ -59,7 +60,8 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         var cutoff = DateTimeOffset.UtcNow.AddDays(-retentionDays).ToString("o", CultureInfo.InvariantCulture);
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            DELETE FROM query_log WHERE julianday(executed_at) < julianday($cutoff);
+            DELETE FROM query_log WHERE julianday(executed_at) < julianday($cutoff)
+                AND id NOT IN (SELECT log_id FROM query_log_star);
             INSERT INTO query_log_fts(query_log_fts) VALUES('rebuild');
             """;
         cmd.Parameters.AddWithValue("$cutoff", cutoff);
@@ -97,19 +99,20 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         if (version < 3) MigrateTo3(conn);
         if (version < 4) MigrateTo4(conn);
         if (version < 5) MigrateTo5(conn);
+        if (version < 6) MigrateTo6(conn);
     }
 
     /// <summary>
     /// The schema this build writes. 2 added the connection id and environment (#113); 3 added the
     /// transaction id (#131); 4 added the origin, so a row can say which host ran it (§1.11); 5 added the
-    /// values bound to a statement's <c>:name</c> placeholders (#103).
+    /// values bound to a statement's <c>:name</c> placeholders (#103); 6 added the bookmarks table (#111).
     /// <para>
     /// Internal rather than private so the tests that assert a migration ran can say "the log is at the
     /// current version" — which is the property worth holding — instead of repeating the number and
     /// needing three edits at the next bump.
     /// </para>
     /// </summary>
-    internal const long SchemaVersion = 5;
+    internal const long SchemaVersion = 6;
 
     private static void MigrateTo1(SqliteConnection conn)
     {
@@ -233,6 +236,45 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
             Execute(conn, "ALTER TABLE query_log ADD COLUMN parameters TEXT;");
         Execute(conn, "PRAGMA user_version = 5;");
         transaction.Commit();
+    }
+
+    /// <summary>
+    /// v6 adds <c>query_log_star</c>: the entries the user bookmarked (#111). A table of its own rather than a
+    /// column on <c>query_log</c>, so starring never rewrites a logged row — the log stays the append-only
+    /// record of what ran, and a bookmark is something said about it afterwards. Idempotent by
+    /// <c>IF NOT EXISTS</c>, under the same up-front write lock as v2–v5.
+    /// </summary>
+    private static void MigrateTo6(SqliteConnection conn)
+    {
+        using var transaction = conn.BeginTransaction(deferred: false);
+        Execute(conn, """
+            CREATE TABLE IF NOT EXISTS query_log_star (
+                log_id     INTEGER PRIMARY KEY,
+                starred_at TEXT    NOT NULL
+            );
+            """);
+        Execute(conn, "PRAGMA user_version = 6;");
+        transaction.Commit();
+    }
+
+    /// <inheritdoc />
+    public async Task SetStarredAsync(long id, bool starred, CancellationToken ct)
+    {
+        await using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync(ct).ConfigureAwait(false);
+        await using var cmd = conn.CreateCommand();
+        // busy_timeout per connection: the writer loop may hold the lock for an insert at this moment.
+        cmd.CommandText = starred
+            ? """
+              PRAGMA busy_timeout=3000;
+              INSERT INTO query_log_star (log_id, starred_at)
+                  SELECT id, $at FROM query_log WHERE id = $id
+                  ON CONFLICT(log_id) DO NOTHING;
+              """
+            : "PRAGMA busy_timeout=3000; DELETE FROM query_log_star WHERE log_id = $id;";
+        cmd.Parameters.AddWithValue("$id", id);
+        cmd.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture));
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>Whether a table already has a column, from <c>pragma table_info</c>.</summary>
@@ -362,6 +404,7 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
             where.Add("q.connection = $conn");
         }
         if (query.SuccessOnly == true) where.Add("q.success = 1");
+        if (query.StarredOnly) where.Add("q.id IN (SELECT log_id FROM query_log_star)");
         // julianday on both sides, like the retention prune: the stored timestamps carry their own offsets,
         // so comparing the text would order "2026-09-08T00:30+02:00" after "2026-09-08T01:00Z" (#113).
         if (query.From is { } from)
@@ -385,7 +428,8 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
         cmd.CommandText =
             "SELECT q.id, q.executed_at, q.provider_id, q.connection, q.db, q.sql_text, q.duration_ms, " +
             "q.row_count, q.success, q.error_message, q.script_path, q.connection_id, q.environment, " +
-            "q.transaction_id, q.origin, q.parameters " +
+            "q.transaction_id, q.origin, q.parameters, " +
+            "EXISTS (SELECT 1 FROM query_log_star s WHERE s.log_id = q.id) " +
             "FROM query_log q" +
             (where.Count > 0 ? " WHERE " + string.Join(" AND ", where) : "") +
             " ORDER BY q.id DESC" + limit + ";";
@@ -416,6 +460,7 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
                 TransactionId = reader.IsDBNull(13) ? null : reader.GetString(13),
                 Origin = reader.IsDBNull(14) ? null : reader.GetString(14),
                 Parameters = reader.IsDBNull(15) ? [] : ReadParameters(reader.GetString(15)),
+                IsStarred = reader.GetInt64(16) != 0,
             });
         }
         return results;

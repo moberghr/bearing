@@ -88,7 +88,7 @@ public static class GridSelectionOps
     public static (int Row, int Col) Move(
         ResultSetViewModel result, int row, int col, GridMotion motion, bool toEdge, int pageSize)
     {
-        var last = Math.Max(0, result.Rows.Count - 1);
+        var last = Math.Max(0, result.ViewRows.Count - 1);
         var page = Math.Max(1, pageSize);
         int nr = Math.Clamp(row, 0, last), nc = col;
         switch (motion)
@@ -123,7 +123,7 @@ public static class GridSelectionOps
     public static IReadOnlyList<(object?[] Row, int Col)> Rectangle(
         ResultSetViewModel result, (object?[] Row, int Col) a, (object?[] Row, int Col) b)
     {
-        var rows = result.Rows;
+        var rows = result.ViewRows;
         int r0 = rows.IndexOf(a.Row), r1 = rows.IndexOf(b.Row);
         if (r0 < 0 || r1 < 0) return Array.Empty<(object?[], int)>();
         if (r0 > r1) (r0, r1) = (r1, r0);
@@ -157,16 +157,16 @@ public static class GridSelectionOps
     /// </para></summary>
     public static IReadOnlyList<(object?[] Row, int Col)> WholeColumns(
         ResultSetViewModel result, int from, int to)
-        => result.Rows.Count == 0
+        => result.ViewRows.Count == 0
             ? Array.Empty<(object?[], int)>()
-            : Rectangle(result, (result.Rows[0], from), (result.Rows[^1], to));
+            : Rectangle(result, (result.ViewRows[0], from), (result.ViewRows[^1], to));
 
     /// <summary>Every visible cell of the result (Ctrl+A). A hidden column is not selected, so Ctrl+A then
     /// Copy is what is on screen — the exports are the path that deliberately carries everything (#118).</summary>
     public static IReadOnlyList<(object?[] Row, int Col)> AllCells(ResultSetViewModel result)
     {
         var cells = new List<(object?[] Row, int Col)>();
-        foreach (var row in result.Rows)
+        foreach (var row in result.ViewRows)
             for (var c = 0; c < result.Columns.Count; c++)
                 if (c < row.Length && !result.ColumnLayout.IsHidden(c)) cells.Add((row, c));
         return cells;
@@ -248,7 +248,7 @@ public static class GridSelectionOps
         var ordered = new List<(object?[] Row, int Col)>(selection);
         ordered.Sort((a, b) =>
         {
-            var byRow = result.Rows.IndexOf(a.Row).CompareTo(result.Rows.IndexOf(b.Row));
+            var byRow = result.ViewRows.IndexOf(a.Row).CompareTo(result.ViewRows.IndexOf(b.Row));
             return byRow != 0 ? byRow : a.Col.CompareTo(b.Col);
         });
         return ordered;
@@ -260,7 +260,7 @@ public static class GridSelectionOps
     public static string Tsv(ResultSetViewModel result, IReadOnlyCollection<(object?[] Row, int Col)> cells)
     {
         if (cells.Count == 0) return "";
-        var rows = result.Rows;
+        var rows = result.ViewRows;
         var rowIdx = cells.Select(s => rows.IndexOf(s.Row)).Where(i => i >= 0).Distinct().OrderBy(i => i).ToList();
         var colIdx = cells.Select(s => s.Col).Distinct().OrderBy(i => i).ToList();
         if (rowIdx.Count == 0) return "";

@@ -84,3 +84,19 @@ functions, decide what absence means before `GetInt64` does.
 - `TableFormats.WriteCsvHeader` / `WriteCsvRow` are the one CSV rendering (byte-identical streamed vs
   batch, `StreamedCsvExportTests`). Fakes fill-and-yield like the real executors.
 - xlsx has no streaming form.
+
+## §5.8 — A batch is read to the end; only a lone statement pages
+- `ResultSetBuilder.IsBatch(dialect, sql)` (the connection's own split, `@set` lines blanked) is the one
+  definition, shared by the run and the result sets.
+- A lone statement reads one page (server-side limit) and pages/counts/fetches against its own text.
+- A batch runs once with `MaxRows = ResultFetchAllMaxRows` per set and is **never** pageable: its text is not one
+  query (`declare @x …; select …` can't sit in a derived table), and re-reading set *N* would re-run the rest.
+- `HasMore = Truncated` always — a cut set never looks complete. `IsCutShort` (more rows, can't page) shows
+  "first N rows", names the limit in the status, and refuses export (single and workbook).
+- A batch **streams** (`IQueryExecutor.ExecuteStreamingAsync` → `BatchEvent`s: `ResultStarted` / `ResultRows` /
+  `ResultEnded` / `BatchCompleted`). The real executors observe the very loop `ExecuteAsync` runs (`BatchStream`,
+  a bounded channel — don't write a second read loop); the interface default replays `ExecuteAsync` for fakes/demo.
+- `BatchRunAssembler` publishes each set when it begins (`SetRunResults`, then `ExtendRunResults` — one run, one
+  stamp) and settles `StatementIndex`/`ExecutedSql`/messages at completion. An error part-way keeps earlier sets
+  (streaming only; `ExecuteAsync` still reports the failure alone). Esc/error mark the set being read cut short.
+- A cancelled streamed batch is still logged (unsuccessful): what it ran before Esc reached the server (§1.6).

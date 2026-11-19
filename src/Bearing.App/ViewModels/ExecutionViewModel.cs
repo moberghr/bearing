@@ -745,32 +745,157 @@ public sealed partial class ExecutionViewModel : ObservableObject
                 if (error is not null) { RunFinished(tab, error); return RunOutcome.Failed; }
             }
 
+            // A lone statement reads one page and pages the rest against its own text. A batch can't: its text
+            // is not one query a page or count can wrap (`declare @x …; select …`), and its sets can't be
+            // re-read one at a time without re-running everything before them. So a batch is read to the end
+            // here, once — every set, up to the Fetch all ceiling — and never pages (ResultSetBuilder).
+            var batch = ResultSetBuilder.IsBatch(ProviderTraits.For(info).Dialect, sql);
+            var cap = Math.Max(1, _ctx.Settings.ResultFetchAllMaxRows);
             RunStatus(tab, "Running…");
-            var results = await ExecutorFor(tab, session)
-                .ExecuteAsync(fetchSql, new QueryOptions { MaxRows = PageSize, Parameters = run.Parameters }, ct);
-            wall.Stop();
+            IReadOnlyList<QueryResult> results;
+            if (batch)
+            {
+                // Streamed: each set's grid appears as its first rows arrive (BatchRunAssembler). Null means an
+                // authentication failure before anything showed — the caller refreshes and retries.
+                if (await StreamBatchAsync(info, tab, session, run, fetchSql, cap, schemaWarm, wall, final, ct)
+                    is not { } streamed)
+                    return RunOutcome.AuthFailed;
+                results = streamed;
+                wall.Stop();
+            }
+            else
+            {
+                results = await ExecutorFor(tab, session).ExecuteAsync(
+                    fetchSql, new QueryOptions { MaxRows = PageSize, Parameters = run.Parameters }, ct);
+                wall.Stop();
 
-            // Auth rejected on open (stale token) comes back as a QueryError; retry before binding/logging.
-            if (!final && !ct.IsCancellationRequested
-                && results.Any(r => r.Error is { } e && Classify(info, e) == DbErrorKind.Authentication))
-                return RunOutcome.AuthFailed;
+                // Auth rejected on open (stale token) comes back as a QueryError; retry before binding/logging.
+                if (!final && !ct.IsCancellationRequested && IsAuthFailure(info, results))
+                    return RunOutcome.AuthFailed;
 
-            // Ensure the snapshot is loaded so a first-page result resolves as editable. Only the first
-            // run per session waits (the snapshot is cached thereafter); best-effort so a schema-load
-            // failure still shows the rows, just non-editable.
-            if (session.Snapshot is null) { try { await schemaWarm; } catch { /* results still show */ } }
-            // Results always route to the tab that started the run, never to whichever tab is focused now.
-            // A tab that has since been closed (or dropped by a project switch) is dead but harmless to
-            // assign to — RunFinished is what tells the user the run ended, with TabStillOpen false.
-            tab.SetRunResults(ResultSetBuilder.BuildResultSets(
-                results, sql, session.Snapshot, ProviderTraits.For(info), SessionPolicy.IsReadOnly(info), run));
+                // Ensure the snapshot is loaded so a first-page result resolves as editable. Only the first
+                // run per session waits (the snapshot is cached thereafter); best-effort so a schema-load
+                // failure still shows the rows, just non-editable.
+                if (session.Snapshot is null) { try { await schemaWarm; } catch { /* results still show */ } }
+                // Results always route to the tab that started the run, never to whichever tab is focused now.
+                // A tab that has since been closed (or dropped by a project switch) is dead but harmless to
+                // assign to — RunFinished is what tells the user the run ended, with TabStillOpen false.
+                tab.SetRunResults(ResultSetBuilder.BuildResultSets(
+                    results, sql, session.Snapshot, ProviderTraits.For(info), SessionPolicy.IsReadOnly(info), run));
+            }
             LogExecution(info, run.LogSql, results, _ctx.Transactions.For(tab)?.Id, run.LogParameters, tab.ScriptPath);
             var summary = ResultSetBuilder.DescribeResults(
                 results, wall.Elapsed, info, ct.IsCancellationRequested);
             // On success, lead with the connection so the status bar reads e.g. "pagila (local) · 88 ms".
-            RunFinished(tab, results.Any(r => !r.Success) ? summary : $"{info.Name} · {summary}");
+            // A batch set that hit the ceiling is said here, not left to the meta row alone: it is the one
+            // truncation nothing else in the app can fill in.
+            var stopped = batch && results.Any(r => r.Truncated)
+                ? $" · stopped at {cap:N0} rows in a result (the Fetch all limit — raise it in Settings ▸ Results)"
+                : "";
+            RunFinished(tab, results.Any(r => !r.Success) ? summary : $"{info.Name} · {summary}{stopped}");
             return results.Any(r => !r.Success) ? RunOutcome.Failed : RunOutcome.Success;
         }
+    }
+
+    private bool IsAuthFailure(ConnectionInfo info, IReadOnlyList<QueryResult> results)
+        => results.Any(r => r.Error is { } e && Classify(info, e) == DbErrorKind.Authentication);
+
+    /// <summary>
+    /// Run a batch with its sets shown as they are read (§5.8): each grid is published when its set begins and
+    /// fills in batch by batch, with the progress on the status line. Returns the run's results — the sets read,
+    /// then any failure that stopped it — or null for an authentication failure on a non-final attempt, which
+    /// shows nothing so the caller can retry.
+    /// <para>
+    /// Esc throws out of here like any cancelled run, keeping the sets on screen and marking the one being read
+    /// as cut short. The run is still logged first: whatever the batch did before Esc reached the server, and an
+    /// audit trail missing a script because it was stopped part-way would be the wrong kind of quiet (§1.6).
+    /// </para>
+    /// </summary>
+    private async Task<IReadOnlyList<QueryResult>?> StreamBatchAsync(
+        ConnectionInfo info, EditorTabViewModel tab, ConnectionSession session, PreparedRun run, string fetchSql,
+        int cap, Task schemaWarm, Stopwatch wall, bool final, CancellationToken ct)
+    {
+        var assembler = new BatchRunAssembler(
+            run.Sql, ProviderTraits.For(info), SessionPolicy.IsReadOnly(info), run,
+            (sets, first) => { if (first) tab.BeginStreamedRunResults(sets); else tab.ExtendRunResults(sets); },
+            () => wall.Elapsed);
+        // Per-set cap is the Fetch all ceiling; rows reach the grid a page at a time.
+        var options = new QueryOptions { MaxRows = cap, BatchRows = PageSize, Parameters = run.Parameters };
+        IReadOnlyList<QueryResult>? results = null;
+        try
+        {
+            // No ConfigureAwait(false): every event lands in a view model the grid is bound to, so the loop
+            // resumes on the UI thread while the executor reads off it (FetchAllAsync's arrangement).
+            await foreach (var e in ExecutorFor(tab, session).ExecuteStreamingAsync(fetchSql, options, ct))
+            {
+                switch (e)
+                {
+                    case ResultStarted started:
+                        // Editability resolves as a set begins, so the first one waits for the schema the way a
+                        // single result does; the cache makes every later run skip this.
+                        if (session.Snapshot is null) { try { await schemaWarm; } catch { /* rows still show */ } }
+                        assembler.Start(started, session.Snapshot);
+                        ReportReading(tab, assembler);
+                        break;
+                    case ResultRows rows:
+                        if (assembler.Rows(rows))
+                        {
+                            ReportReading(tab, assembler);
+                            // Rows landed on a grid: let input and rendering run before the next batch, or a fast
+                            // set's continuations — all at the dispatcher's normal priority — starve them until
+                            // the set ends and the window looks hung.
+                            await YieldToUiAsync();
+                        }
+                        break;
+                    case ResultEnded ended:
+                        assembler.End(ended);
+                        break;
+                    case BatchCompleted completed:
+                        results = completed.Results;
+                        break;
+                }
+            }
+        }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            assembler.Abandon();
+            LogExecution(info, run.LogSql,
+                [new QueryResult([], [], 0, wall.Elapsed, null, new QueryError("Cancelled by user.", null, null), false)],
+                _ctx.Transactions.For(tab)?.Id, run.LogParameters, tab.ScriptPath);
+            throw;
+        }
+        catch (Exception)
+        {
+            assembler.Abandon();
+            throw;
+        }
+
+        // The executor always completes a stream that did not throw; an empty one is a broken contract, and
+        // reporting it beats binding nothing and calling the run a success.
+        results ??= [new QueryResult([], [], 0, wall.Elapsed, null,
+            new QueryError("The server ended the batch without a result.", null, null), false)];
+
+        if (!final && assembler.Started == 0 && !ct.IsCancellationRequested && IsAuthFailure(info, results))
+            return null;
+
+        assembler.Complete(results, session.Snapshot);
+        return results;
+    }
+
+    /// <summary>"Reading result 3… 48,000 rows (Esc to stop)" — while a streamed batch is between sets, the last
+    /// count stays up until the next set begins.</summary>
+    private void ReportReading(EditorTabViewModel tab, BatchRunAssembler assembler)
+    {
+        if (assembler.Reading is not { } set) return;
+        RunStatus(tab, $"Reading result {assembler.Started}… {set.Loaded + assembler.Pending:N0} rows (Esc to stop)");
+    }
+
+    /// <summary>Let everything queued above background priority — input, layout, render — run once. A no-op off the
+    /// UI thread (the view-model tests drive runs without a dispatcher loop).</summary>
+    private static async Task YieldToUiAsync()
+    {
+        if (!Dispatcher.UIThread.CheckAccess()) return;
+        await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
     }
 
     /// <summary>Which credential kinds a fresh acquire can actually help. A kind that resolves to the same
@@ -1136,6 +1261,13 @@ public sealed partial class ExecutionViewModel : ObservableObject
         }, "Count cancelled.", "Count failed");
     }
 
+    /// <summary>Why a result that cannot fetch its remaining rows is not exported — said before the file dialog,
+    /// because a file holding part of a result is worse than no file.</summary>
+    private const string CutShortExport =
+        "Export stopped — a result from this script wasn't read to the end (the Fetch all limit, an error or Esc), "
+        + "so the file would be missing rows. Run it again — raising the limit in Settings ▸ Results if that is "
+        + "what stopped it — or run that statement on its own.";
+
     /// <summary>Raised after a result set has been written to a file, so the view can offer to open the
     /// containing folder. Not raised for a cancelled or failed export.</summary>
     public event Action<ExportCompletion>? ExportCompleted;
@@ -1157,6 +1289,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
         if (!rs.HasGrid) { _ctx.SetStatus("Nothing to export."); return; }
         if (_dialogs is not { } dialogs) return;
 
+        if (rs.IsCutShort) { _ctx.SetStatus(CutShortExport); return; }
         if (rs.HasMore && !await FetchAllAsync(rs))
         {
             _ctx.SetStatus("Export stopped — the result isn't fully loaded.");
@@ -1183,7 +1316,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
             return;
         }
 
-        _ctx.SetStatus($"Exported {block.Rows.Count:N0} rows to {System.IO.Path.GetFileName(path)}.");
+        // A filter only hides rows on screen; the file has all of them, in load order (#106). Said, not assumed.
+        var note = rs.Filter.IsActive ? " — every row, unfiltered and in query order" : "";
+        _ctx.SetStatus($"Exported {block.Rows.Count:N0} rows to {System.IO.Path.GetFileName(path)}{note}.");
         ExportCompleted?.Invoke(new ExportCompletion(path, block.Rows.Count, format));
     }
 
@@ -1212,6 +1347,7 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
         // Every set, before the file dialog: being asked where to save and *then* told the export cannot
         // happen is the wrong order to find out in.
+        if (results.Any(r => r.HasGrid && r.IsCutShort)) { _ctx.SetStatus(CutShortExport); return; }
         foreach (var rs in results.Where(r => r.HasGrid && r.HasMore))
         {
             if (await FetchAllAsync(rs)) continue;
@@ -1238,8 +1374,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
             return;
         }
 
+        var note = results.Any(r => r.HasGrid && r.Filter.IsActive) ? " — every row, unfiltered and in query order" : "";
         _ctx.SetStatus($"Exported {sheets.Count} result{(sheets.Count == 1 ? "" : "s")} "
-                     + $"({rows:N0} rows) to {System.IO.Path.GetFileName(path)}.");
+                     + $"({rows:N0} rows) to {System.IO.Path.GetFileName(path)}{note}.");
         ExportCompleted?.Invoke(new ExportCompletion(path, rows, ExportFormat.Xlsx));
     }
 

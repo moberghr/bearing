@@ -7,7 +7,8 @@ using Bearing.App.ViewModels;
 namespace Bearing.App.Controls;
 
 /// <summary>
-/// A result grid's <b>column header</b> menu (#118): freeze up to here, hide this column, show all.
+/// A result grid's <b>column header</b> menu (#118, #106): sort by this column, freeze up to here, hide this
+/// column, show all.
 /// <para>
 /// Separate from <see cref="ResultContextMenu"/>, which is the cell menu, because the two act on different
 /// things — that one on the selection, this one on the column being pointed at. The header's left-click is
@@ -36,6 +37,26 @@ public static class ResultColumnMenu
         var menu = new MenuFlyout();
 
         var name = index >= 0 && index < result.Columns.Count ? result.Columns[index].Name : "column";
+
+        // Sort (#106) — the same sort the header's indicator cycles, by name. A document column (json, jsonb,
+        // xml) has no sort, so its menu doesn't offer one.
+        var filter = result.Filter;
+        if (filter.IsSortable(index))
+        {
+            var current = filter.Sort is { } s && s.Column == index ? s.Direction : (SortDirection?)null;
+            menu.Items.Add(Item("Sort ascending", () => filter.SortBy(index, SortDirection.Ascending),
+                enabled: current != SortDirection.Ascending));
+            menu.Items.Add(Item("Sort descending", () => filter.SortBy(index, SortDirection.Descending),
+                enabled: current != SortDirection.Descending));
+            // Clears whichever column is sorted, so it is offered from any header — named, since it may not be this one.
+            menu.Items.Add(Item(
+                filter.Sort is { } sorted && sorted.Column != index && sorted.Column < result.Columns.Count
+                    ? $"Clear sort (“{result.Columns[sorted.Column].Name}”)"
+                    : "Clear sort",
+                () => filter.Sort = null,
+                enabled: filter.Sort is not null));
+            menu.Items.Add(new Separator());
+        }
 
         var freeze = Item(
             $"Freeze through “{name}”",

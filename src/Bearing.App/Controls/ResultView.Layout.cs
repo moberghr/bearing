@@ -29,6 +29,9 @@ public sealed partial class ResultView
     /// them. A layout outlives its grid — see the subscription site in <c>ResultView.Grid.cs</c>.
     /// </summary>
     private readonly List<(ColumnLayout Layout, Action Handler)> _layoutSubscriptions = new();
+
+    /// <summary>Each grid's "filter or sort changed" handler, detached on rebuild like the layout's.</summary>
+    private readonly List<(ResultFilterViewModel Filter, Action Handler)> _filterSubscriptions = new();
     // Result sets the user has collapsed in stacked view (keyed by VM reference; new runs reset it).
     private readonly HashSet<ResultSetViewModel> _collapsed = new();
 
@@ -45,6 +48,8 @@ public sealed partial class ResultView
         // Detached before anything else: these point at grids this render is about to discard.
         foreach (var (layout, handler) in _layoutSubscriptions) layout.Changed -= handler;
         _layoutSubscriptions.Clear();
+        foreach (var (filter, handler) in _filterSubscriptions) filter.ViewChanged -= handler;
+        _filterSubscriptions.Clear();
 
         _editableGrids.Clear();
         _gridsByResult.Clear();
@@ -105,6 +110,17 @@ public sealed partial class ResultView
 
     // ---- Body: single set, stacked, or tabbed ------------------------------------------------
 
+    /// <summary>A tab's header: a grid's count is bound, so it follows a streamed batch and Load more instead of
+    /// keeping the size the set had when the tab was built (0, for a set that was still being read).</summary>
+    private static object TabHeader(int index, ResultSetViewModel result)
+    {
+        if (!result.Success || result.Columns.Count == 0) return ResultMetaText.TabHeader(index, result);
+        var header = new TextBlock { DataContext = result };
+        header.Bind(TextBlock.TextProperty,
+            new Binding(nameof(ResultSetViewModel.CountBadge)) { StringFormat = ResultMetaText.TabHeaderFormat(index) });
+        return header;
+    }
+
     private Control BuildBody(IReadOnlyList<ResultSetViewModel> results)
     {
         if (results.Count == 1)
@@ -116,7 +132,7 @@ public sealed partial class ResultView
             for (var i = 0; i < results.Count; i++)
                 tabs.Items.Add(new TabItem
                 {
-                    Header = ResultMetaText.TabHeader(i, results[i]),
+                    Header = TabHeader(i, results[i]),
                     Content = BuildSetContainer(results[i], null, collapsible: false, capHeight: false),
                 });
             tabs.SelectedIndex = 0;
@@ -215,6 +231,15 @@ public sealed partial class ResultView
 
         var dock = new DockPanel { LastChildFill = true };
         dock.Children.Add(bar);
+        if (result.HasGrid && grid is not null)
+        {
+            // The client-side filter bar (#106): collapsed until asked for, docked between the meta row and
+            // the grid so it reads as part of this set.
+            var filterBar = new ResultFilterBar(result.Filter);
+            DockPanel.SetDock(filterBar, Dock.Top);
+            dock.Children.Add(filterBar);
+            body = WithEmptyState(body, result);
+        }
         dock.Children.Add(body);
         return dock;
     }
@@ -241,10 +266,40 @@ public sealed partial class ResultView
         detail.Bind(TextBlock.TextProperty, new Binding(nameof(ResultSetViewModel.MetaDetail)));
         left.Children.Add(detail);
 
+        // "· 4 shown (filtered locally)" while a client-side filter is narrowing the rows (#106).
+        var filtered = new TextBlock
+        {
+            Foreground = Res("Syntax.Func"),
+            FontSize = Metric("Font.Body"),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0, 0, 0),
+            DataContext = result.Filter,
+        };
+        filtered.Bind(TextBlock.TextProperty,
+            new Binding(nameof(ResultFilterViewModel.FooterText)) { StringFormat = "· {0}" });
+        filtered.Bind(Visual.IsVisibleProperty,
+            new Binding(nameof(ResultFilterViewModel.IsFiltered)));
+        left.Children.Add(filtered);
+
         // Before the pageable-only buttons: a result that cannot be paged can still have hidden columns.
         AddHiddenColumnsMarker(left, result);
 
-        if (!result.IsPageable) return;
+        if (result.IsPageable) AddPagingButtons(left, result);
+
+        // ⌕ Filter, after ⤓ all (design v4 §2). Hidden while the bar is open — the bar is its own control.
+        var filterBtn = ResultChrome.SubtleIconButton("Icon.Search", "Filter", "Filter and sort the loaded rows (Ctrl+F in the grid)");
+        filterBtn.Margin = new Thickness(4, 0, 0, 0);
+        filterBtn.DataContext = result.Filter;
+        filterBtn.Bind(Visual.IsVisibleProperty, new Binding(nameof(ResultFilterViewModel.IsFilterOpen))
+        {
+            Converter = Avalonia.Data.Converters.BoolConverters.Not,
+        });
+        filterBtn.Click += (_, _) => result.Filter.Open();
+        left.Children.Add(filterBtn);
+    }
+
+    private void AddPagingButtons(StackPanel left, ResultSetViewModel result)
+    {
         var countBtn = ResultChrome.SubtleButton("∑ count", "Count all rows");
         countBtn.Margin = new Thickness(6, 0, 0, 0);
         countBtn.DataContext = result;
@@ -252,14 +307,48 @@ public sealed partial class ResultView
         countBtn.Click += async (_, _) => { if (CountTotal is { } f) await f(result); };
         left.Children.Add(countBtn);
 
-        // ⤓ all pages the result to the end in one action instead of scrolling for it. Bound to HasMore, so it
-        // retires by itself the moment the last page lands (whether it got there by scrolling or by this).
-        var fetchAllBtn = ResultChrome.SubtleButton("⤓ all", "Fetch every remaining row (Esc to stop)");
+        // ⤓ all pages the result to the end in one action instead of scrolling for it. Bound to CanFetchAll, so it
+        // retires by itself the moment the last page lands (whether it got there by scrolling or by this), and
+        // never shows on a cut-short batch set, which has more rows but cannot page to them.
+        var fetchAllBtn = ResultChrome.SubtleIconButton("Icon.FetchAll", "all", "Fetch every remaining row (Esc to stop)");
         fetchAllBtn.Margin = new Thickness(4, 0, 0, 0);
         fetchAllBtn.DataContext = result;
-        fetchAllBtn.Bind(Visual.IsVisibleProperty, new Binding(nameof(ResultSetViewModel.HasMore)));
+        fetchAllBtn.Bind(Visual.IsVisibleProperty, new Binding(nameof(ResultSetViewModel.CanFetchAll)));
         fetchAllBtn.Click += async (_, _) => { if (FetchAll is { } f) await f(result); };
         left.Children.Add(fetchAllBtn);
+    }
+
+    /// <summary>
+    /// The grid with the "no loaded rows match" state laid over it (design v4 §6): shown only while filters
+    /// leave no loaded row, pinned at the left under the header, with the way out next to it.
+    /// </summary>
+    private static Control WithEmptyState(Control body, ResultSetViewModel result)
+    {
+        var clear = ResultChrome.SubtleButton("Clear filters", "Clear every filter on this result");
+        clear.Click += (_, _) => result.Filter.ClearAndClose();
+        var message = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(ResultGridChrome.GutterWidth + 12, 36, 0, 0),
+            DataContext = result.Filter,
+        };
+        message.Children.Add(new TextBlock
+        {
+            Text = "No loaded rows match these filters.",
+            FontSize = Metric("Font.Body"),   // follows the chrome dial like the rest of the set's text
+            Foreground = Res("Text.Muted"),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        message.Children.Add(clear);
+        message.Bind(Visual.IsVisibleProperty, new Binding(nameof(ResultFilterViewModel.IsEmptyResult)));
+
+        var overlay = new Panel();
+        overlay.Children.Add(body);
+        overlay.Children.Add(message);
+        return overlay;
     }
 
     /// <summary>

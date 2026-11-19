@@ -27,9 +27,9 @@ public sealed partial class ResultSetViewModel : ObservableObject
     public ResultSetViewModel(QueryResult result, string? sourceSql, bool pageable)
     {
         Columns = result.Columns;
-        Rows = new ObservableCollection<object?[]>(result.Rows);
+        Rows = new RowCollection(result.Rows);
         RowCount = result.RowCount;
-        Duration = result.Duration;
+        _duration = result.Duration;
         Message = result.Message;
         Error = result.Error;
         Success = result.Success;
@@ -37,12 +37,29 @@ public sealed partial class ResultSetViewModel : ObservableObject
         IsPageable = pageable;
         SourceSql = pageable ? sourceSql : null;
         ExecutedSql = string.IsNullOrWhiteSpace(sourceSql) ? null : sourceSql.Trim();
-        _hasMore = pageable && result.Truncated;
+        // Whether or not this set can page: a set cut short must never look complete. A batch is read to the
+        // Fetch all limit on its first run, so a truncated one stopped there and says so (RowCountText).
+        _hasMore = result.Truncated;
         ColumnLayout = new ColumnLayout(Columns.Count);
         // The marker on the meta row is derived from the layout, so it has to be told when the layout moves
         // (the layout itself is deliberately not an ObservableObject — it is pure, §2.5).
-        ColumnLayout.Changed += () => OnPropertyChanged(nameof(HiddenColumnsText));
+        // One handler for the result's life: the meta row's marker, and the quick filter, which searches visible
+        // columns only (#106).
+        Filter = new ResultFilterViewModel(Rows, Columns, IsNewRow, ColumnLayout.IsHidden);
+        ColumnLayout.Changed += () =>
+        {
+            OnPropertyChanged(nameof(HiddenColumnsText));
+            Filter.OnColumnVisibilityChanged();
+        };
     }
+
+    /// <summary>The client-side filter and sort over the loaded rows (#106), and the rows they leave on
+    /// screen (<see cref="ViewRows"/>). Pending changes, saves and exports keep reading <see cref="Rows"/>.</summary>
+    public ResultFilterViewModel Filter { get; }
+
+    /// <summary>The rows on screen, in view order — the grid's ItemsSource, and the order every "next row",
+    /// rectangle and paste walks. Equal to <see cref="Rows"/> while no filter or sort is active.</summary>
+    public ViewRowCollection ViewRows => Filter.ViewRows;
 
     public IReadOnlyList<ColumnDescriptor> Columns { get; }
 
@@ -57,10 +74,18 @@ public sealed partial class ResultSetViewModel : ObservableObject
     public string? HiddenColumnsText => ColumnLayout.HiddenText;
 
     /// <summary>Rows shown in the grid; grows as pages are appended (bound as the grid ItemsSource).</summary>
-    public ObservableCollection<object?[]> Rows { get; }
+    public RowCollection Rows { get; }
 
     public long RowCount { get; }
-    public TimeSpan Duration { get; }
+
+    /// <summary>The set's query time. Settable because a streamed batch builds the set as it begins and only
+    /// knows the time once it is read (<see cref="EndReading"/>).</summary>
+    public TimeSpan Duration
+    {
+        get => _duration;
+        private set { _duration = value; OnPropertyChanged(nameof(MetaDetail)); }
+    }
+    private TimeSpan _duration;
     public string? Message { get; }
     public QueryError? Error { get; }
     public bool Success { get; }
@@ -68,7 +93,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// <summary>Which statement of the executed batch produced this set (0-based), as the provider proved it —
     /// <see cref="QueryResult.StatementIndex"/> verbatim. Null when the provider could not prove the mapping;
     /// never filled in by guessing.</summary>
-    public int? StatementIndex { get; }
+    public int? StatementIndex { get; set; }
 
     /// <summary>A row-returning success renders a grid; everything else renders as text.</summary>
     public bool HasGrid => Success && Columns.Count > 0;
@@ -79,6 +104,10 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// rather than retried forever.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanCount))]
+    [NotifyPropertyChangedFor(nameof(CanFetchAll))]
+    [NotifyPropertyChangedFor(nameof(IsCutShort))]
+    [NotifyPropertyChangedFor(nameof(RowCountText))]
+    [NotifyPropertyChangedFor(nameof(MetaDetail))]
     private bool _isPageable;
 
     /// <summary>The exact SELECT that produced this set (for paging/count); null unless pageable.</summary>
@@ -118,7 +147,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// <c>@set</c> lines that give its values above it — the same shape history reopens it in, so what is
     /// pasted can be run again as it is (#103).
     /// </para>
-    public string? ExecutedSql { get; init; }
+    public string? ExecutedSql { get; set; }
 
     /// <summary>Column indices that are foreign keys (rendered clickable → navigate to the referenced row).
     /// Computed by the shell from the schema snapshot; empty when the connection has no snapshot yet.</summary>
@@ -134,6 +163,11 @@ public sealed partial class ResultSetViewModel : ObservableObject
 
     /// <summary>Last page came back full — more rows likely exist beyond what's loaded.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanFetchAll))]
+    [NotifyPropertyChangedFor(nameof(IsCutShort))]
+    [NotifyPropertyChangedFor(nameof(RowCountText))]
+    [NotifyPropertyChangedFor(nameof(MetaDetail))]
+    [NotifyPropertyChangedFor(nameof(CountBadge))]
     private bool _hasMore;
 
     /// <summary>Total row count of the source query; null until the user asks for it.</summary>
@@ -149,13 +183,54 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// <summary>The [Count] button is offered only while the total is still unknown.</summary>
     public bool CanCount => IsPageable && TotalCount is null;
 
+    /// <summary>"⤓ all" / Fetch all is offered only when more rows exist <em>and</em> this set can page to them —
+    /// a cut-short batch set (<see cref="IsCutShort"/>) has more rows but no way to fetch them.</summary>
+    public bool CanFetchAll => IsPageable && HasMore;
+
     /// <summary>Canonical live row-count phrase, e.g. "100 rows" or "200 of 1,000 rows". Every surface
     /// (meta row, footer, status bar) derives from this so the counts never drift out of sync.</summary>
     public string RowCountText =>
-        $"{Loaded:N0}{(TotalCount is { } t ? $" of {t:N0}" : "")} rows";
+        IsReading ? $"{Loaded:N0} rows so far…"
+        : IsCutShort ? $"first {Loaded:N0} rows, more not loaded"
+                   : $"{Loaded:N0}{(TotalCount is { } t ? $" of {t:N0}" : "")} rows";
 
-    /// <summary>Meta-row detail: live row count + the query time ("200 of 1,000 rows · 88 ms").</summary>
-    public string MetaDetail => $"{RowCountText} · {(long)System.Math.Round(Duration.TotalMilliseconds)} ms";
+    /// <summary>More rows exist and none of them can be fetched — typically a set from a batch that ran into
+    /// the Fetch all limit (a batch is read to the end and never pages). Export refuses these rather than write
+    /// part of the answer.</summary>
+    public bool IsCutShort => HasMore && !IsPageable;
+
+    /// <summary>Meta-row detail: live row count + the query time ("200 of 1,000 rows · 88 ms"). No time while
+    /// the set is still being read — there isn't one yet.</summary>
+    public string MetaDetail => IsReading
+        ? RowCountText
+        : $"{RowCountText} · {(long)System.Math.Round(Duration.TotalMilliseconds)} ms";
+
+    /// <summary>
+    /// True while a streamed batch is still reading this set (<see cref="BatchRunAssembler"/>): its rows are
+    /// arriving, and neither "all of them" nor "cut short" is known yet. Ends with <see cref="EndReading"/>.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RowCountText))]
+    [NotifyPropertyChangedFor(nameof(MetaDetail))]
+    [NotifyPropertyChangedFor(nameof(CountBadge))]
+    private bool _isReading;
+
+    /// <summary>
+    /// The short count a tab header carries: rows loaded, "…" while a streamed batch is still reading the set, and
+    /// "+" when more exist than are loaded (another page, or a set cut short). It is the loaded count, not the
+    /// set's first-read size — a streamed set begins with none, and a paged one grows.
+    /// </summary>
+    public string CountBadge => IsReading ? $"{Loaded:N0}…" : HasMore ? $"{Loaded:N0}+" : $"{Loaded:N0}";
+
+    /// <summary>A streamed set has been read as far as it will be. <paramref name="more"/> is true when rows were
+    /// left unread — the Fetch all ceiling, an error or Esc part-way — which a batch set can never fetch, so it
+    /// then shows as cut short (<see cref="IsCutShort"/>).</summary>
+    public void EndReading(bool more, TimeSpan duration)
+    {
+        HasMore = more;
+        Duration = duration;
+        IsReading = false;
+    }
 
     /// <summary>
     /// Give up paging this result: the rows already on screen stay, and load-more, fetch-all and [Count]
@@ -171,11 +246,14 @@ public sealed partial class ResultSetViewModel : ObservableObject
     /// <summary>Append a freshly-fetched page and update whether more remain.</summary>
     public void AppendPage(IReadOnlyList<object?[]> rows, bool hasMore)
     {
-        foreach (var row in rows)
-        {
-            Rows.Add(row);
-            if (IsEditable) _originals[row] = (object?[])row.Clone();
-        }
+        // One rebuild for the page, not one per row, while a filter or sort is active.
+        using var _ = Filter.DeferRefresh();
+        // One notification for the batch, not one per row: the grid's view pays O(rows loaded) per Add
+        // (RowCollection), which made a streamed batch or Fetch all quadratic. Unfiltered, the view mirrors the
+        // Reset with one ResetTo of its own.
+        Rows.AppendRange(rows);
+        if (IsEditable)
+            foreach (var row in rows) _originals[row] = (object?[])row.Clone();
         HasMore = hasMore;
         RaiseRowCount();
     }
@@ -184,6 +262,7 @@ public sealed partial class ResultSetViewModel : ObservableObject
     private void RaiseRowCount()
     {
         OnPropertyChanged(nameof(Loaded));
+        OnPropertyChanged(nameof(CountBadge));
         OnPropertyChanged(nameof(RowCountText));
         OnPropertyChanged(nameof(MetaDetail));
     }
@@ -258,8 +337,9 @@ public sealed partial class ResultSetViewModel : ObservableObject
     public object?[] AddRow()
     {
         var row = new object?[Columns.Count];
-        Rows.Add(row);
+        // Marked new *before* it lands, so the view can see it is a pending insert and pin it at the bottom.
         _newRows.Add(row);
+        Rows.Add(row);
         RaiseRowCount();
         RaisePending();
         return row;
@@ -271,8 +351,8 @@ public sealed partial class ResultSetViewModel : ObservableObject
     {
         if (_newRows.Contains(row))
         {
-            _newRows.Remove(row);
             Rows.Remove(row);
+            _newRows.Remove(row);
             RaiseRowCount();
             RaisePending();
             return;

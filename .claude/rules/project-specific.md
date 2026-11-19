@@ -32,8 +32,8 @@ files does not count as extraction.
 - Pools are per (connection, database); "connected" is per connection. Every user-visible connected
   indicator reads `ConnectionSessionManager.IsLinked(Guid)`, never `TryGet`/`IsAnyLive`.
 - Link set by a successful `BuildAsync` on any database. Cleared by `EvictConnectionAsync`, last-session
-  `EvictAsync`, failed connect with nothing live, credential near expiry, `CloseAllAsync`. **Not** by the
-  idle sweep.
+  `EvictAsync` (including a lost SSH tunnel's), failed connect with nothing live, credential near expiry,
+  `CloseAllAsync`. **Not** by the idle sweep.
 - `SetTabDatabase` warms the new pool in the background only when already linked (never prompts).
 
 ## §9.4a — Sessions keyed by `SessionKey` (connection id + database)
@@ -207,3 +207,38 @@ objects, not sub-groups.
 - Focus leaving the grid commits; Escape cancels.
 - `CommitFirstCommands` (`grid.save`, `grid.discard`, `grid.showSql`): resolve the key, commit, then dispatch
   with that set as `only`. Don't add Ctrl+C/V/arrows.
+
+## §9.16 — Client-side sort & filter (#106, design v4)
+- `result.Rows` = every loaded row (pending changes, save, export read it). `result.ViewRows` = what the grid
+  shows (`ResultFilterViewModel`, rules in pure `RowView`/`ColumnFilter`). **Anything meaning "order on
+  screen"** — selection rectangles, copy order, arrows, paste, ring adjacency, inline sizing — uses `ViewRows`.
+- Unfiltered/unsorted, `ViewRows` mirrors `Rows` change for change; a page is one `Reset` on both (`RowCollection.AppendRange`, §5.8), which keeps the scroll. Active: rebuilt
+  by `RowView.Apply`; `AppendPage` defers to one rebuild; new rows pin at the bottom (mark `_newRows` *before*
+  `Rows.Add`); `ReplaceRow` keeps its place. Auto-load is off while active; ⤓ all still loads.
+- Header click still selects the column (#6). The sort glyph and the header filter input carry
+  `ResultColumnHeader.ChromeClass`: they don't select (`GridPressTarget.HeaderChrome`), don't auto-fit on
+  double-tap, and focus in a header doesn't seed the cursor. Header filter inputs swallow Enter/Esc/arrows. The
+  header's right-click menu (`ResultColumnMenu`) also sorts and clears.
+- Sort is a **total order** (`RowView.CompareValues`): numbers (incl. number-like text) before other comparables
+  before text — never pair-by-pair, which cycles. Text is invariant-culture, case-insensitive. NULLs last
+  ascending, first descending (Postgres's default).
+- A sort on a part-fetched result says so via `LoadedOnlyNotice`, the sentence column selection uses.
+- Typed filters on a result over `DebounceCells` wait for a pause (`ResultFilterViewModel.DefaultDebouncer`, set in
+  `App`); any other rebuild cancels the wait. Export says when it ignored an active filter or sort.
+- The header template keeps a ≥32px right column for its own sort arrow; `ResultColumnHeader` runs over it with
+  a negative right margin (`TemplateSortColumn`). **Never copy the header's width onto its content**: under an
+  auto-sized column the header's width comes from that content, and the two grow each other on every layout
+  pass. The sort glyph isn't focusable (a held focus kept it visible). Find the cell editor with
+  `ResultsHarness.CellEditor`, never "the TextBox in the grid".
+- Escape in the grid (`grid.clearSelection`) clears the selection, then the filters (not the sort). Grid
+  commands dispatch even with no rows on screen; only spatial motion needs one.
+- Result chrome icons are drawn (`ResultChrome.Icon`, `Icons.axaml`), never ⤓ ⌕ ✕ glyphs — they render clipped.
+- Gutter row numbers are the **screen position** in `ViewRows` (1..N top to bottom), not the load index — chosen
+  deliberately: under a sort or filter "row 37" is the 37th row on screen. Don't map back to `Rows`.
+- The quick filter searches **visible** columns only (`ColumnLayout.IsHidden`); hiding/showing a column re-applies
+  it, a freeze doesn't. Column filters still apply to a hidden column (the badge counts them).
+- Sort keys (`RowView.SortKey`) are computed once per row, never per comparison. Unfiltered, the mirror path
+  raises no count notifications (nothing shown reads them) — keep ⤓ all at one notification per batch.
+- NULL matches no column filter (`!=` included). Docs (json/jsonb/xml) filter but don't sort. Changing filter
+  or sort clears this result's selection (deliberately not kept) and restyles every cell. §5 "→ SQL"
+  push-to-server is not built yet.

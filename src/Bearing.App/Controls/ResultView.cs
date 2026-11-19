@@ -192,6 +192,11 @@ public sealed partial class ResultView : UserControl
         return null;
     }
 
+    /// <summary>The filter of the result a grid command acts on, when a filter is narrowing it — what Escape
+    /// clears once there is no selection left to clear.</summary>
+    private ResultFilterViewModel? FilteredTarget()
+        => GridTarget() is { } t && t.Result.Filter.IsFiltered ? t.Result.Filter : null;
+
     /// <summary>Register the grid's discrete commands into the shared registry, so the same matcher (and the
     /// command palette) drives them. Called by the window before the keymap is loaded; safe to call twice.
     /// Once for every view: each command acts on <see cref="Router"/>'s current one (spec §8).</summary>
@@ -218,7 +223,7 @@ public sealed partial class ResultView : UserControl
             canRun: () => V().GridTarget() is { } t && V()._selection.CanPasteInto(t.Result)));
         r.Register(new KeyCommand(CommandIds.GridFetchAll, "Fetch all rows", KeyScope.Grid, "Grid",
             async () => { if (V().GridTarget() is { } t && V().FetchAll is { } f) await f(t.Result); },
-            canRun: () => V().GridTarget()?.Result is { IsPageable: true, HasMore: true }));
+            canRun: () => V().GridTarget()?.Result is { CanFetchAll: true }));
         foreach (var format in new[] { ExportFormat.Csv, ExportFormat.Xlsx })
         {
             var captured = format;
@@ -252,13 +257,23 @@ public sealed partial class ResultView : UserControl
         r.Register(new KeyCommand(CommandIds.GridShowSql, "Show pending SQL", KeyScope.Grid, "Grid",
             async () => { if (V().GridTarget() is { } t && V().ShowPendingSql is { } f) { CommitOpenEdit(t.Grid); await f(t.Result); } },
             canRun: () => V().HasPendingEdits()));
-        r.Register(KeyCommand.Sync(CommandIds.GridClearSelection, "Clear selection", KeyScope.Grid, "Grid",
-            () => V()._selection.ClearAndNotify(),
-            canRun: () => V()._selection.Model.Cells.Count > 0));
+        // Escape in the grid steps back one layer at a time: the selection first, then the result's filters
+        // (#106) — the same as the bar's clear button, so the sort, which has its own control, stays. One command,
+        // because a scope resolves a gesture to exactly one.
+        r.Register(KeyCommand.Sync(CommandIds.GridClearSelection, "Clear selection, then filters", KeyScope.Grid, "Grid",
+            () =>
+            {
+                if (V()._selection.Model.Cells.Count > 0) V()._selection.ClearAndNotify();
+                else if (V().FilteredTarget() is { } filter) filter.ClearAndClose();
+            },
+            canRun: () => V()._selection.Model.Cells.Count > 0 || V().FilteredTarget() is not null));
         r.Register(KeyCommand.Sync(CommandIds.GridInspect, "Inspect value", KeyScope.Grid, "Grid",
             () => V().ToggleInspectActiveCell(), canRun: () => V().InspectableActiveCell() is not null));
         r.Register(KeyCommand.Sync(CommandIds.GridFollowFk, "Follow foreign key", KeyScope.Grid, "Grid",
             () => V().FollowActiveFk(), canRun: () => V()._selection.ActiveCellIsFk()));
+        r.Register(KeyCommand.Sync(CommandIds.GridFilter, "Filter rows", KeyScope.Grid, "Grid",
+            () => { if (V().GridTarget() is { } t) t.Result.Filter.Open(); },
+            canRun: () => V().GridTarget() is { } t && t.Result.HasGrid));
         r.Register(KeyCommand.Sync(CommandIds.GridBack, "Back (foreign-key navigation)", KeyScope.Grid, "Grid",
             () => V().GoBack?.Invoke(), canRun: () => V().CanGoBack));
     }

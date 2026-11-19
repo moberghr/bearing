@@ -108,10 +108,11 @@ public interface IDialogService
     Task<ConnectionDialogResult?> ShowConnectionDialogAsync(
         ConnectionInfo? existing,
         string? existingPassword,
-        Func<ConnectionInfo, string?, CancellationToken, Task<bool>> test,
+        Func<ConnectionInfo, string?, string?, CancellationToken, Task<bool>> test,
         SecretStoragePosture storage,
         IProviderRegistry providers,
-        IAzureCatalog? azure);
+        IAzureCatalog? azure,
+        string? existingSshSecret = null);
 
     /// <summary>A script changed on disk while its tab held unsaved edits: which copy wins? Implementations
     /// with no window answer <see cref="DiskConflictChoice.Decide"/> — neither copy is thrown away unasked.</summary>

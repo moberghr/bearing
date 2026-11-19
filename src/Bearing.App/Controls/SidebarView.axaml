@@ -448,6 +448,22 @@
           <!-- ===== History panel (design §4): day-grouped, filterable ===== -->
           <DockPanel Margin="8,8,6,6"
                      IsVisible="{Binding ActivePanel, Converter={StaticResource EnumToBool}, ConverterParameter=History}">
+            <DockPanel.Styles>
+              <Style Selector="Button.historyStar">
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="Padding" Value="3,0"/>
+                <Setter Property="MinWidth" Value="0"/>
+                <Setter Property="FontSize" Value="{DynamicResource Font.Body}"/>
+                <Setter Property="Foreground" Value="{DynamicResource Text.Faint}"/>
+              </Style>
+              <Style Selector="Button.historyStar.starred">
+                <Setter Property="Foreground" Value="{DynamicResource Warn.Amber}"/>
+              </Style>
+              <Style Selector="Button.historyStar:pointerover /template/ ContentPresenter">
+                <Setter Property="Background" Value="Transparent"/>
+              </Style>
+            </DockPanel.Styles>
             <!-- Title row: the panel name, and the audit export (#113) on the right. A button rather than
                  palette-only, because the people who need the report are the ones least likely to know the
                  palette exists. -->
@@ -468,6 +484,10 @@
                            IsChecked="{Binding History.Filter, Converter={StaticResource EnumToBool}, ConverterParameter=Ok, Mode=TwoWay}"/>
               <RadioButton Theme="{StaticResource PillToggle}" GroupName="histfilter" Content="✕ error"
                            IsChecked="{Binding History.Filter, Converter={StaticResource EnumToBool}, ConverterParameter=Error, Mode=TwoWay}"/>
+              <!-- Bookmarks (#111): asks the log for starred rows, so an old one is found too. -->
+              <RadioButton Theme="{StaticResource PillToggle}" GroupName="histfilter" Content="★ starred"
+                           ToolTip.Tip="Starred queries — kept past history retention"
+                           IsChecked="{Binding History.Filter, Converter={StaticResource EnumToBool}, ConverterParameter=Starred, Mode=TwoWay}"/>
             </StackPanel>
             <TextBlock DockPanel.Dock="Bottom" Text="{Binding History.Status}" FontSize="{DynamicResource Font.Small}"
                        Foreground="{DynamicResource Text.Faint}" Margin="2,4,2,0"/>
@@ -497,7 +517,7 @@
                                SelectedItem="{ReflectionBinding DataContext.History.SelectedRow, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay}">
                         <ListBox.ItemTemplate>
                           <DataTemplate x:DataType="vm:HistoryRowViewModel">
-                            <Grid ColumnDefinitions="Auto,*,Auto" Background="Transparent"
+                            <Grid ColumnDefinitions="Auto,*,Auto,Auto" Background="Transparent"
                                   DoubleTapped="OnHistoryRowActivated" ToolTip.Tip="{Binding Detail}">
                               <Border Grid.Column="0" Width="8" Height="8" CornerRadius="4"
                                       VerticalAlignment="Center" Margin="0,0,6,0"
@@ -515,6 +535,11 @@
                               </StackPanel>
                               <TextBlock Grid.Column="2" Text="{Binding Time}" FontSize="{DynamicResource Font.Small}" Margin="8,0,0,0"
                                          VerticalAlignment="Center" Foreground="{DynamicResource Text.Faint}"/>
+                              <!-- Star (#111): gold when set, faint outline otherwise. A button of its own so
+                                   the click stars rather than opening the row. -->
+                              <Button Grid.Column="3" Classes="historyStar" Classes.starred="{Binding IsStarred}"
+                                      Content="{Binding StarGlyph}" ToolTip.Tip="{Binding StarTip}"
+                                      Click="OnHistoryStarClick" VerticalAlignment="Center" Margin="4,0,0,0"/>
                             </Grid>
                           </DataTemplate>
                         </ListBox.ItemTemplate>

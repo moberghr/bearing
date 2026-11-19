@@ -164,7 +164,7 @@ public class CellEditCommitTests
     }
 
     private static TextBox? Editor(Bearing.App.Controls.ResultView view)
-        => ResultsHarness.Grid(view).GetVisualDescendants().OfType<TextBox>().FirstOrDefault();
+        => ResultsHarness.CellEditor(ResultsHarness.Grid(view));
 
     private static void Dispatch(Bearing.App.Controls.ResultView view)
     {

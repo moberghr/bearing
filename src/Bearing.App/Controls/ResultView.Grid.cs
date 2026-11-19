@@ -8,6 +8,7 @@ using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 using Avalonia.Media;
 using Bearing.App.Input;
+using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using static Bearing.App.Controls.Tokens;
 
@@ -55,17 +56,26 @@ public sealed partial class ResultView
 
         grid.LoadingRow += (_, e) =>
         {
+            // Screen position, not load order (#106, §9.16): under a sort or filter the gutter still reads
+            // 1..N top to bottom, as DataGrip and DBeaver do. Deliberate — don't "fix" it to the load index.
             e.Row.Header = (e.Row.Index + 1).ToString();
             // Design row striping; editable rows still tint on a pending edit/new/delete (handled inside).
             if (result.IsEditable) ResultRowPainter.ApplyRowStatus(e.Row, result);
             else e.Row.Background = ResultRowPainter.RowBackground(e.Row.Index);
             // Infinite scroll: when a near-bottom row realizes and more rows exist, fetch the next page.
-            if (result.HasMore && e.Row.Index >= result.Rows.Count - 8) TriggerAutoLoad(result);
+            // Off while a filter or sort is active (#106): the view's last rows aren't the loaded ones, and a
+            // page landing under a sort reshuffles what the user is reading. ⭳ all still loads, and re-applies.
+            // Never on a cut-short batch set: it has more rows but cannot page to them (§5.8).
+            if (result is { IsPageable: true, HasMore: true } && !result.Filter.IsActive
+                && e.Row.Index >= result.Rows.Count - 8)
+                TriggerAutoLoad(result);
         };
 
         for (var i = 0; i < result.Columns.Count; i++)
             grid.Columns.Add(_cells.BuildColumn(result, i, grid));
-        grid.ItemsSource = result.Rows; // ObservableCollection → paged rows append without a rebuild
+        // The view over the loaded rows (#106): equal to them, change for change, until a filter or sort is
+        // set — so paged rows still append without a rebuild.
+        grid.ItemsSource = result.ViewRows;
 
         // Double-tap: a column header (incl. its resize gripper) auto-fits that column; a checkbox cell
         // cycles its value, which is how a bool is edited with the mouse now that a plain click only selects.
@@ -114,6 +124,29 @@ public sealed partial class ResultView
         void OnLayoutChanged() => ApplyColumnLayout(grid, result);
         result.ColumnLayout.Changed += OnLayoutChanged;
         _layoutSubscriptions.Add((result.ColumnLayout, OnLayoutChanged));
+
+        // A new filter or sort clears this result's selection (design v4 §8): a selection over rows that moved or
+        // vanished means nothing, and Copy must never act on cells the user can no longer see. A selection in
+        // another result is left alone, but the cells are restyled either way, so the sorted column's wash
+        // follows the sort even when the view's order didn't change.
+        var lastSort = result.Filter.Sort;
+        void OnViewChanged()
+        {
+            if (ReferenceEquals(_selection.Model.Result, result) || _selection.Model.Result is null)
+                _selection.ClearAndNotify();
+            else
+                _selection.Restyle();
+
+            // A new sort on a part-fetched result says it covers the loaded rows only (#106), in the sentence a
+            // column selection uses.
+            var sort = result.Filter.Sort;
+            if (sort is not null && sort != lastSort
+                && LoadedOnlyNotice.For(result, LoadedOnlyNotice.Sorted(result, sort)) is { } notice)
+                Status?.Invoke(notice);
+            lastSort = sort;
+        }
+        result.Filter.ViewChanged += OnViewChanged;
+        _filterSubscriptions.Add((result.Filter, OnViewChanged));
 
         WireSelection(grid, result);
         if (result.IsEditable) WireEditing(grid, result);
@@ -200,8 +233,11 @@ public sealed partial class ResultView
 
         // When the grid takes focus (e.g. via F6) with no active cell yet, seed the top-left cell so the
         // focus is visible instead of the caller having to press an arrow first.
-        grid.GotFocus += (_, _) =>
+        grid.GotFocus += (_, e) =>
         {
+            // Focus arriving in a header's filter input (#106) is not focus arriving in the cells: seeding a
+            // cursor there selected a cell under the column the user was typing a filter for.
+            if (e.Source is Visual v && v.FindAncestorOfType<DataGridColumnHeader>() is not null) return;
             if (_selection.NeedsSeed(result))
             {
                 _selection.SeedActive(grid, result);
@@ -233,10 +269,10 @@ public sealed partial class ResultView
             case GridPressTarget.RowHeader:
             case GridPressTarget.Corner:
             case GridPressTarget.ScrollBar:
+            case GridPressTarget.HeaderChrome:
                 return;
             case GridPressTarget.ColumnHeader:
-                if (result is { IsPageable: true, HasMore: true })
-                    Status?.Invoke($"Column selected over the loaded rows only ({result.RowCountText}) — ⤓ all fetches the rest.");
+                if (LoadedOnlyNotice.For(result, "Column selected") is { } notice) Status?.Invoke(notice);
                 return;
             default:
                 if (_selection.Model.Cells.Count > 0) _selection.ClearAndNotify();
@@ -329,7 +365,9 @@ public sealed partial class ResultView
         // guard is true by the time it is asked (#147/#148).
         var inCellEditor = e.Source is TextBox;
         if (inCellEditor && !ResolvesToCommitFirst(e)) return;
-        if (!result.HasGrid || result.Rows.Count == 0) return;
+        // Commands run with no rows on screen too: a filter that matches nothing is exactly when Escape (clear the
+        // filters, #106) and Ctrl+F are wanted. Only the spatial motion below needs a row to move to.
+        if (!result.HasGrid) return;
         if (inCellEditor) CommitOpenEdit(grid);
 
         _keyStrokeTarget = (grid, result);
@@ -339,6 +377,7 @@ public sealed partial class ResultView
         finally { _keyStrokeTarget = null; }
         if (handled) return;
         if (inCellEditor) return;                        // the rest of the keyboard is the editor's
+        if (result.ViewRows.Count == 0) return;
 
         // Everything below is spatial cell-cursor motion — intrinsic grid navigation, not a rebindable
         // command (mirrors how the editor's caret motion isn't in the keymap).

@@ -74,6 +74,18 @@ public class AutosaveModeTests : IDisposable
     }
 
     /// <summary>
+    /// Wait for the tab to take the written text as its clean baseline. The file showing the new content is not
+    /// the end of a save: <c>TabAutosave</c> calls <c>MarkSaved</c> in the continuation after the write's
+    /// <c>await</c>, so a poll can see the file before the dirty marker clears. Asserting <c>IsDirty</c> the
+    /// moment the file matches failed on macOS CI (#188) — the test racing the writer, not autosave failing.
+    /// </summary>
+    private static async Task<bool> WaitForSaved(EditorTabViewModel tab)
+    {
+        for (var i = 0; i < 240 && tab.IsDirty; i++) await Task.Delay(50);
+        return !tab.IsDirty;
+    }
+
+    /// <summary>
     /// The file's content, or null while it doesn't exist yet.
     /// <para>
     /// Opened with a sharing mode that lets the writer keep working, which is the whole fix for #83: this
@@ -133,7 +145,9 @@ public class AutosaveModeTests : IDisposable
             $"file={written}; tab: dirty={tab.IsDirty} unsaved={tab.HasUnsavedWork} "
             + $"scratch={tab.IsScratch} path={tab.ScriptPath} text='{tab.Text}' "
             + $"stillOpen={vm.Workspace.Tabs.Contains(tab)} laterEdits={edits} status='{vm.StatusText}'");
-        Assert.False(tab.IsDirty);          // the dot goes away because there's nothing unsaved
+        Assert.True(await WaitForSaved(tab),  // the dot goes away because there's nothing unsaved
+            $"still dirty after the write landed: unsaved={tab.HasUnsavedWork} laterEdits={edits} "
+            + $"status='{vm.StatusText}'");
         Assert.False(tab.HasUnsavedWork);
     }
 
@@ -171,7 +185,7 @@ public class AutosaveModeTests : IDisposable
 
         Assert.Equal("select 1; -- typed while locked",
             await WaitForWrite(path, "select 1; -- typed while locked"));
-        Assert.False(tab.IsDirty);
+        Assert.True(await WaitForSaved(tab));
     }
 
     [Fact]
