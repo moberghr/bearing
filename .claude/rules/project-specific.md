@@ -212,7 +212,7 @@ objects, not sub-groups.
 - `result.Rows` = every loaded row (pending changes, save, export read it). `result.ViewRows` = what the grid
   shows (`ResultFilterViewModel`, rules in pure `RowView`/`ColumnFilter`). **Anything meaning "order on
   screen"** — selection rectangles, copy order, arrows, paste, ring adjacency, inline sizing — uses `ViewRows`.
-- Unfiltered/unsorted, `ViewRows` mirrors `Rows` change for change (paging never resets the grid). Active: rebuilt
+- Unfiltered/unsorted, `ViewRows` mirrors `Rows` change for change; a page is one `Reset` on both (`RowCollection.AppendRange`, §5.8), which keeps the scroll. Active: rebuilt
   by `RowView.Apply`; `AppendPage` defers to one rebuild; new rows pin at the bottom (mark `_newRows` *before*
   `Rows.Add`); `ReplaceRow` keeps its place. Auto-load is off while active; ⤓ all still loads.
 - Header click still selects the column (#6). The sort glyph and the header filter input carry
@@ -238,7 +238,7 @@ objects, not sub-groups.
 - The quick filter searches **visible** columns only (`ColumnLayout.IsHidden`); hiding/showing a column re-applies
   it, a freeze doesn't. Column filters still apply to a hidden column (the badge counts them).
 - Sort keys (`RowView.SortKey`) are computed once per row, never per comparison. Unfiltered, the mirror path
-  raises no count notifications (nothing shown reads them) — keep ⤓ all at one collection add per row.
+  raises no count notifications (nothing shown reads them) — keep ⤓ all at one notification per batch.
 - NULL matches no column filter (`!=` included). Docs (json/jsonb/xml) filter but don't sort. Changing filter
   or sort clears this result's selection (deliberately not kept) and restyles every cell. §5 "→ SQL"
   push-to-server is not built yet.

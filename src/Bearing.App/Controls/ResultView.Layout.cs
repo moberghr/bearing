@@ -110,6 +110,17 @@ public sealed partial class ResultView
 
     // ---- Body: single set, stacked, or tabbed ------------------------------------------------
 
+    /// <summary>A tab's header: a grid's count is bound, so it follows a streamed batch and Load more instead of
+    /// keeping the size the set had when the tab was built (0, for a set that was still being read).</summary>
+    private static object TabHeader(int index, ResultSetViewModel result)
+    {
+        if (!result.Success || result.Columns.Count == 0) return ResultMetaText.TabHeader(index, result);
+        var header = new TextBlock { DataContext = result };
+        header.Bind(TextBlock.TextProperty,
+            new Binding(nameof(ResultSetViewModel.CountBadge)) { StringFormat = ResultMetaText.TabHeaderFormat(index) });
+        return header;
+    }
+
     private Control BuildBody(IReadOnlyList<ResultSetViewModel> results)
     {
         if (results.Count == 1)
@@ -121,7 +132,7 @@ public sealed partial class ResultView
             for (var i = 0; i < results.Count; i++)
                 tabs.Items.Add(new TabItem
                 {
-                    Header = ResultMetaText.TabHeader(i, results[i]),
+                    Header = TabHeader(i, results[i]),
                     Content = BuildSetContainer(results[i], null, collapsible: false, capHeight: false),
                 });
             tabs.SelectedIndex = 0;
@@ -296,12 +307,13 @@ public sealed partial class ResultView
         countBtn.Click += async (_, _) => { if (CountTotal is { } f) await f(result); };
         left.Children.Add(countBtn);
 
-        // ⤓ all pages the result to the end in one action instead of scrolling for it. Bound to HasMore, so it
-        // retires by itself the moment the last page lands (whether it got there by scrolling or by this).
+        // ⤓ all pages the result to the end in one action instead of scrolling for it. Bound to CanFetchAll, so it
+        // retires by itself the moment the last page lands (whether it got there by scrolling or by this), and
+        // never shows on a cut-short batch set, which has more rows but cannot page to them.
         var fetchAllBtn = ResultChrome.SubtleIconButton("Icon.FetchAll", "all", "Fetch every remaining row (Esc to stop)");
         fetchAllBtn.Margin = new Thickness(4, 0, 0, 0);
         fetchAllBtn.DataContext = result;
-        fetchAllBtn.Bind(Visual.IsVisibleProperty, new Binding(nameof(ResultSetViewModel.HasMore)));
+        fetchAllBtn.Bind(Visual.IsVisibleProperty, new Binding(nameof(ResultSetViewModel.CanFetchAll)));
         fetchAllBtn.Click += async (_, _) => { if (FetchAll is { } f) await f(result); };
         left.Children.Add(fetchAllBtn);
     }

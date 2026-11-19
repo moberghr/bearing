@@ -164,15 +164,34 @@ public sealed class InlineResultsCoordinator
             return true;
         }
 
+        // A streamed batch publishes its sets as they are read (§5.8): draw them in the pane as they land, so
+        // the grids fill in during the run and the previous run's results go as soon as the first set begins.
+        // Inline mode places a run under its statements once it ends, as it always has.
+        void OnStreamed()
+        {
+            if (!IsInline && ran is not null && ReferenceEquals(ran, _selectedTab()))
+            {
+                _rebuildResults(ran);
+            }
+        }
+        if (ran is not null)
+        {
+            ran.ResultsStreamed += OnStreamed;
+        }
+
         try
         {
             await execute(scope.Sql, ConfirmEditsAsync, scope.Preamble);
         }
         finally
         {
-            if (ran is not null && flagged)
+            if (ran is not null)
             {
-                ran.RunGaveUpEdits = false;   // only the call that set it clears it
+                ran.ResultsStreamed -= OnStreamed;
+                if (flagged)
+                {
+                    ran.RunGaveUpEdits = false;   // only the call that set it clears it
+                }
             }
         }
         if (ran is null || start is null)

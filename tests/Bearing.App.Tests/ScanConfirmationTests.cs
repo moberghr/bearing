@@ -549,6 +549,27 @@ public class ScanConfirmationTests : IDisposable
         Assert.Equal(26, lines.Length);
     }
 
+    /// <summary>
+    /// A batch on an engine whose reads continue by token is not read to the Fetch all ceiling (§5.8's exception):
+    /// two unfiltered scans run unasked because each reads about one page — read to the ceiling they would read
+    /// thousands of items nobody confirmed — and each keeps its token to read on from.
+    /// </summary>
+    [Fact]
+    public async Task A_dynamodb_batch_reads_one_page_and_keeps_its_token_instead_of_reading_to_the_ceiling()
+    {
+        var h = Build(totalRows: 25);
+
+        await h.Exec.ExecuteAsync("select * from \"Orders\"; select * from \"Orders\"");
+
+        Assert.Empty(h.Dialogs.ScanQuestions);
+        var set = h.Tab.LastResult!;
+        Assert.Equal(10, set.Loaded);          // one page, not the 5,000-row ceiling
+        Assert.Equal("t1", set.Continuation);
+        Assert.True(set.CanFetchAll);
+        Assert.False(set.IsCutShort);
+        Assert.True(set.IsFullScan);           // so Fetch all and Export still ask
+    }
+
     /// <summary>A second scan result of the same run, continuing from its own token, beside the first.</summary>
     private static ResultSetViewModel SecondScanResult(ResultSetViewModel first)
     {

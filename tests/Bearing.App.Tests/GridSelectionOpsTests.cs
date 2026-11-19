@@ -238,6 +238,7 @@ public class GridSelectionOpsTests
         // loaded, and the grid says so. Silently spanning 3 of 1,000 rows is how a Copy as ▸ IN list comes
         // out short without anyone noticing.
         var rs = ThreeRows();
+        rs.IsPageable = true;
         rs.HasMore = true;
         rs.TotalCount = 1000;
 

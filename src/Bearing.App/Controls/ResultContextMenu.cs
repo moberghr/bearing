@@ -149,7 +149,7 @@ internal static class ResultContextMenu
             {
                 deleteItem.IsEnabled = selected;
             }
-            if (fetchItem is not null) fetchItem.IsEnabled = result.IsPageable && result.HasMore;
+            if (fetchItem is not null) fetchItem.IsEnabled = result.CanFetchAll;
         };
         return menu;
     }

@@ -125,6 +125,43 @@ public class SqlServerExecutorTests
         }
     }
 
+    /// <summary>
+    /// The shape of an evidence script: a DECLARE, then several SELECTs that read the variable. The app reads
+    /// such a batch to the end in one run (it never pages one), so what has to hold on the server is that the
+    /// DECLARE yields no set of its own, each SELECT is its own set in order, and the run's cap applies to
+    /// each set separately — marking exactly the ones it cut.
+    /// </summary>
+    [SkippableFact]
+    public async Task A_declare_then_several_selects_reads_each_set_whole_under_one_cap_per_set()
+    {
+        var provider = Provider();
+        await using var factory = provider.CreateConnectionFactory(Info(), Password);
+        await MsSqlTestServer.RequireAsync(factory);
+
+        var executor = provider.CreateQueryExecutor(factory);
+        const string script = """
+            DECLARE @n int = 600;
+
+            -- A. the first set
+            SELECT TOP (@n) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n
+            FROM sys.all_columns a CROSS JOIN sys.all_columns b ORDER BY n;
+
+            -- B. the second set, a different size
+            SELECT TOP (@n + 5) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n
+            FROM sys.all_columns a CROSS JOIN sys.all_columns b;
+            """;
+
+        var whole = await executor.ExecuteAsync(script, new QueryOptions { MaxRows = 1_000 }, CancellationToken.None);
+        Assert.Equal(2, whole.Count);
+        Assert.All(whole, r => Assert.True(r.Success, r.Error?.Message));
+        Assert.Equal([600, 605], whole.Select(r => r.Rows.Count));
+        Assert.All(whole, r => Assert.False(r.Truncated));
+
+        var capped = await executor.ExecuteAsync(script, new QueryOptions { MaxRows = 602 }, CancellationToken.None);
+        Assert.Equal([600, 602], capped.Select(r => r.Rows.Count));
+        Assert.Equal([false, true], capped.Select(r => r.Truncated));
+    }
+
     [SkippableFact]
     public async Task Executes_a_select_and_returns_typed_rows()
     {

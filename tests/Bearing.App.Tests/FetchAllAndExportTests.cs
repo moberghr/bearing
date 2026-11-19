@@ -41,15 +41,16 @@ public class FetchAllAndExportTests : IDisposable
         Func<string> Status);
 
     /// <summary>A tab that has run one pageable query, with <paramref name="totalRows"/> rows behind it.</summary>
-    private async Task<Harness> RunOnce(int totalRows, string sql = "select n from t")
+    private async Task<Harness> RunOnce(
+        int totalRows, string sql = "select n from t", int resultSets = 1, int? fetchAllMaxRows = null)
     {
         Directory.CreateDirectory(_root);
-        var executor = new PageableExecutor { TotalRows = totalRows, PageSize = Page };
+        var executor = new PageableExecutor { TotalRows = totalRows, PageSize = Page, ResultSets = resultSets };
         var settings = SettingsService.InMemory(new AppSettings
         {
             AutosaveMode = AutosaveMode.Off,
             ResultPageSize = Page,
-            ResultFetchAllMaxRows = AppSettings.Defaults.ResultFetchAllMaxRows,
+            ResultFetchAllMaxRows = fetchAllMaxRows ?? AppSettings.Defaults.ResultFetchAllMaxRows,
         });
         var ctx = new WorkspaceContext(
             new FakeProvider { Executor = executor },
@@ -345,5 +346,82 @@ public class FetchAllAndExportTests : IDisposable
         Assert.Equal(4, h.Executor.ParametersSeen.Count);     // run, page, count, stream
         Assert.All(h.Executor.ParametersSeen, seen => Assert.Equal([expected], seen));
         Assert.Contains("@bearing_min", h.Executor.LastStreamSql);
+    }
+
+    // ---- batches: read to the end, never paged ---------------------------------------------------
+
+    /// <summary>
+    /// A script's sets used to stop at the first page with nothing to fetch the rest — and to look complete,
+    /// since only a pageable set could report more rows. A batch now reads every set to the end in its one run.
+    /// </summary>
+    [Fact]
+    public async Task A_batch_reads_every_row_of_every_set_and_offers_no_paging()
+    {
+        var h = await RunOnce(totalRows: 25, sql: "select n from t;\nselect n from t;", resultSets: 2);
+
+        Assert.Equal(AppSettings.Defaults.ResultFetchAllMaxRows, h.Executor.LastExecuteMaxRows);
+        Assert.Equal(2, h.Tab.Results.Count);
+        Assert.All(h.Tab.Results, rs =>
+        {
+            Assert.Equal(25, rs.Loaded);
+            Assert.False(rs.HasMore);
+            Assert.False(rs.IsPageable);
+            Assert.False(rs.CanCount);
+            Assert.False(rs.IsCutShort);
+            Assert.Null(rs.SourceSql);
+        });
+    }
+
+    /// <summary>The DECLARE case: one result set, but two statements. Paging it wrapped the whole batch in a
+    /// derived table — `select * from (declare …; select …)` — which no server accepts.</summary>
+    [Fact]
+    public async Task A_declare_ahead_of_one_select_is_a_batch_not_a_pageable_query()
+    {
+        var h = await RunOnce(totalRows: 25, sql: "set @x = 1;\nselect n from t where n > @x;");
+
+        Assert.Equal(25, h.Result.Loaded);
+        Assert.False(h.Result.IsPageable);
+        Assert.Null(h.Result.SourceSql);
+        Assert.Equal(AppSettings.Defaults.ResultFetchAllMaxRows, h.Executor.LastExecuteMaxRows);
+    }
+
+    /// <summary>A lone statement keeps paging: one page, then Load more / Fetch all / Count.</summary>
+    [Fact]
+    public async Task A_lone_statement_still_reads_one_page()
+    {
+        var h = await RunOnce(totalRows: 25, sql: "select n from t;");
+
+        Assert.Equal(Page, h.Executor.LastExecuteMaxRows);
+        Assert.Equal(Page, h.Result.Loaded);
+        Assert.True(h.Result.IsPageable);
+        Assert.True(h.Result.HasMore);
+        Assert.False(h.Result.IsCutShort);
+    }
+
+    /// <summary>A set that ran into the ceiling says so and can't be exported — neither alone nor in the
+    /// run's workbook — because nothing can fetch its remaining rows.</summary>
+    [Fact]
+    public async Task A_batch_set_stopped_at_the_ceiling_is_marked_and_not_exported()
+    {
+        var h = await RunOnce(totalRows: 25, sql: "select n from t;\nselect n from t;", resultSets: 2,
+            fetchAllMaxRows: 20);
+        h.Dialogs.ExportPath = Path.Combine(_root, "out.csv");
+        var rs = h.Tab.Results[0];
+
+        Assert.Equal(20, rs.Loaded);
+        Assert.True(rs.HasMore);
+        Assert.True(rs.IsCutShort);
+        Assert.False(rs.CanCount);
+        Assert.False(rs.CanFetchAll);           // more rows, but nothing can page to them — no "⤓ all"
+        Assert.StartsWith("first 20 rows", rs.RowCountText);
+        Assert.Contains("Fetch all limit", h.Status());
+
+        await h.Exec.ExportAsync(rs, ExportFormat.Csv);
+        Assert.Contains("Fetch all limit", h.Status());
+        Assert.False(File.Exists(h.Dialogs.ExportPath));
+
+        await h.Exec.ExportRunAsync();
+        Assert.Contains("Fetch all limit", h.Status());
+        Assert.Equal(0, h.Executor.StreamCalls);
     }
 }

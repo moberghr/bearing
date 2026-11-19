@@ -223,7 +223,7 @@ public sealed partial class ResultView : UserControl
             canRun: () => V().GridTarget() is { } t && V()._selection.CanPasteInto(t.Result)));
         r.Register(new KeyCommand(CommandIds.GridFetchAll, "Fetch all rows", KeyScope.Grid, "Grid",
             async () => { if (V().GridTarget() is { } t && V().FetchAll is { } f) await f(t.Result); },
-            canRun: () => V().GridTarget()?.Result is { IsPageable: true, HasMore: true }));
+            canRun: () => V().GridTarget()?.Result is { CanFetchAll: true }));
         foreach (var format in new[] { ExportFormat.Csv, ExportFormat.Xlsx })
         {
             var captured = format;
