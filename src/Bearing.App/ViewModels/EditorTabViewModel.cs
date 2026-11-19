@@ -135,6 +135,33 @@ public sealed partial class EditorTabViewModel : ObservableObject, IResultFrames
         SetFreshResults(results);
     }
 
+    /// <summary>
+    /// More of the same run's results: a streamed batch publishes its sets as they begin, the first through
+    /// <see cref="SetRunResults"/> and every later one here. It is still one run, so the Back stack,
+    /// <see cref="ReplacedByRun"/> and <see cref="RunResultsStamp"/> are left as the first call set them.
+    /// </summary>
+    public void ExtendRunResults(IReadOnlyList<ResultSetViewModel> results)
+    {
+        RunResults = results;
+        Results = results;
+        ResultsStreamed?.Invoke();
+    }
+
+    /// <summary>A streamed batch's first sets: <see cref="SetRunResults"/>, announced like
+    /// <see cref="ExtendRunResults"/> so the pane draws them now rather than when the run ends.</summary>
+    public void BeginStreamedRunResults(IReadOnlyList<ResultSetViewModel> results)
+    {
+        SetRunResults(results);
+        ResultsStreamed?.Invoke();
+    }
+
+    /// <summary>
+    /// Raised when a run in progress publishes results — a streamed batch, as each set begins (§5.8). Every other
+    /// run sets its results once and the pane is redrawn when it ends; this is the one case that has something to
+    /// show before then.
+    /// </summary>
+    public event Action? ResultsStreamed;
+
     /// <summary>Every frame the pane held when the latest run's results replaced them — its Back stack, oldest
     /// first, then the frame shown — so edits made in any of them while the run was in flight can be kept.</summary>
     public IReadOnlyList<IReadOnlyList<ResultSetViewModel>> ReplacedByRun { get; private set; } = [];

@@ -24,13 +24,18 @@ public static class ResultMetaText
         return $"{name} · {rows} · {ms} ms";
     }
 
-    /// <summary>A tab header for result <paramref name="index"/> (0-based) in tabbed view.</summary>
+    /// <summary>A tab header for result <paramref name="index"/> (0-based) in tabbed view — as it reads now. A
+    /// grid's count moves (paging, a streamed batch), so the view binds <see cref="TabHeaderFormat"/> to
+    /// <see cref="ResultSetViewModel.CountBadge"/> instead of using this string for one.</summary>
     public static string TabHeader(int index, ResultSetViewModel result)
     {
         if (!result.Success) return $"Result {index + 1} · error";
         if (result.Columns.Count == 0) return $"Result {index + 1} · {result.Message}";
-        return $"Result {index + 1} ({result.RowCount})";
+        return string.Format(System.Globalization.CultureInfo.CurrentCulture, TabHeaderFormat(index), result.CountBadge);
     }
+
+    /// <summary>A grid's tab header with its count left as <c>{0}</c>, for a binding's <c>StringFormat</c>.</summary>
+    public static string TabHeaderFormat(int index) => $"Result {index + 1} ({{0}})";
 
     /// <summary>The cell inspector's header, e.g. <c>film[42].description</c> — the edit target's table (or
     /// "row" when the result isn't attributable to one) keyed by the row's first non-null primary key.</summary>

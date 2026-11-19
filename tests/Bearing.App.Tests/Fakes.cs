@@ -328,9 +328,11 @@ internal sealed class PageableExecutor : IQueryExecutor
 
     /// <summary>The next page: rows numbered from where the last one stopped, so a test can assert both the
     /// count and the order of what fetch-all appended.</summary>
-    private QueryResult NextPage()
+    private QueryResult NextPage() => NextPage(PageSize);
+
+    private QueryResult NextPage(int size)
     {
-        var take = System.Math.Max(0, System.Math.Min(PageSize, TotalRows - _served));
+        var take = System.Math.Max(0, System.Math.Min(size, TotalRows - _served));
         var rows = new object?[take][];
         for (var i = 0; i < take; i++) rows[i] = new object?[] { _served + i + 1 };
         _served += take;
@@ -341,9 +343,24 @@ internal sealed class PageableExecutor : IQueryExecutor
     {
         ParametersSeen.Add(options.Parameters);
         LastExecuteSql = sql;
-        _served = 0; // a re-run starts the source query over
-        return Task.FromResult<IReadOnlyList<QueryResult>>(new[] { NextPage() });
+        LastExecuteMaxRows = options.MaxRows;
+        // Like the real readers, the run's MaxRows caps every set it reads; each set is the source query read
+        // from the start (a batch of ResultSets identical SELECTs).
+        var sets = new List<QueryResult>();
+        for (var i = 0; i < System.Math.Max(1, ResultSets); i++)
+        {
+            _served = 0; // a re-run starts the source query over
+            sets.Add(NextPage(options.MaxRows ?? TotalRows));
+        }
+        return Task.FromResult<IReadOnlyList<QueryResult>>(sets);
     }
+
+    /// <summary>How many result sets a run returns — raise it to stand in for a batch of SELECTs.</summary>
+    public int ResultSets { get; set; } = 1;
+
+    /// <summary>The row cap the last run was handed: a page for a lone statement, the Fetch all ceiling for a
+    /// batch.</summary>
+    public int? LastExecuteMaxRows { get; private set; }
 
     /// <summary>When set, every page comes back as a failed result carrying this error — how a real page
     /// failure arrives (the executor catches the driver exception), which is the case Load more has to

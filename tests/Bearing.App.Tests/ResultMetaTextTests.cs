@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Bearing.App.Results;
 using Bearing.App.ViewModels;
 using Bearing.Core.Data;
@@ -17,7 +18,8 @@ public class ResultMetaTextTests
     private static ResultSetViewModel Rows(long count, int ms) => new(
         new QueryResult(
             [new ColumnDescriptor("id", "int4", typeof(int))],
-            new[] { new object?[] { 1 } }, count, TimeSpan.FromMilliseconds(ms), null, null, false),
+            Enumerable.Range(1, (int)count).Select(i => new object?[] { i }).ToArray(), count,
+            TimeSpan.FromMilliseconds(ms), null, null, false),
         "select id from t", pageable: false);
 
     private static ResultSetViewModel Failed(string message) => new(
@@ -60,6 +62,26 @@ public class ResultMetaTextTests
     [Fact]
     public void Tab_headers_are_one_based_and_show_the_row_count()
         => Assert.Equal("Result 1 (10)", ResultMetaText.TabHeader(0, Rows(10, 1)));
+
+    /// <summary>A streamed set's tab is built before any rows arrive, so the header follows the loaded count:
+    /// "…" while it is read, "+" when more exist than are loaded, the plain count once it is all there.</summary>
+    [Fact]
+    public void A_tab_header_follows_the_rows_as_they_arrive()
+    {
+        var rs = new ResultSetViewModel(
+            new QueryResult([new ColumnDescriptor("id", "int4", typeof(int))], [], 0, TimeSpan.Zero, null, null, false),
+            "select id from t", pageable: false) { IsReading = true };
+        Assert.Equal("Result 2 (0…)", ResultMetaText.TabHeader(1, rs));
+
+        rs.AppendPage([[1], [2], [3]], hasMore: false);
+        Assert.Equal("Result 2 (3…)", ResultMetaText.TabHeader(1, rs));
+
+        rs.EndReading(more: true, TimeSpan.Zero);
+        Assert.Equal("Result 2 (3+)", ResultMetaText.TabHeader(1, rs));
+
+        rs.EndReading(more: false, TimeSpan.Zero);
+        Assert.Equal("Result 2 (3)", ResultMetaText.TabHeader(1, rs));
+    }
 
     [Fact]
     public void A_failed_tab_header_says_error()

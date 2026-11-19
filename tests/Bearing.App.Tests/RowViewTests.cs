@@ -219,7 +219,9 @@ public class RowViewTests
         rs.AppendPage([[6, "ZORRO ARK", 1.99m, null]], hasMore: false);
 
         Assert.Equal(rs.Rows, rs.ViewRows);
-        Assert.Equal(0, resets);   // a page appends; it doesn't reset the grid and its scroll
+        // A page arrives as one Reset (RowCollection, §5.8) and the view follows with one of its own — never one
+        // per row. The scroll survives it: Ui/RowAppendTests.Appending_a_page_keeps_the_scroll_position.
+        Assert.Equal(1, resets);
     }
 
     [Fact]

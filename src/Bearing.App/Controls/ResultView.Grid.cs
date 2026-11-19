@@ -65,7 +65,9 @@ public sealed partial class ResultView
             // Infinite scroll: when a near-bottom row realizes and more rows exist, fetch the next page.
             // Off while a filter or sort is active (#106): the view's last rows aren't the loaded ones, and a
             // page landing under a sort reshuffles what the user is reading. ⭳ all still loads, and re-applies.
-            if (result.HasMore && !result.Filter.IsActive && e.Row.Index >= result.Rows.Count - 8)
+            // Never on a cut-short batch set: it has more rows but cannot page to them (§5.8).
+            if (result is { IsPageable: true, HasMore: true } && !result.Filter.IsActive
+                && e.Row.Index >= result.Rows.Count - 8)
                 TriggerAutoLoad(result);
         };
 

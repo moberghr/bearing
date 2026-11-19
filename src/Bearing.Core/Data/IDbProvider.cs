@@ -220,6 +220,34 @@ public interface IQueryExecutor
     Task<IReadOnlyList<QueryResult>> ExecuteAsync(string sql, QueryOptions options, CancellationToken ct);
 
     /// <summary>
+    /// <see cref="ExecuteAsync"/> for a batch whose sets should become visible as they are read: each set's
+    /// columns as it begins, its rows every <see cref="QueryOptions.BatchRows"/>, and the whole run last (see
+    /// <see cref="BatchEvent"/>). <see cref="QueryOptions.MaxRows"/> caps each set, as it does there.
+    /// <para>
+    /// A cancellation <em>throws</em> — what was yielded before it is all the caller gets. A statement error
+    /// arrives as <see cref="BatchCompleted"/> holding the sets read so far and then the failure.
+    /// </para>
+    /// <para>
+    /// The default runs <see cref="ExecuteAsync"/> and replays its answer, so an executor that has no
+    /// incremental read (the demo, a test fake) is correct, just not progressive.
+    /// </para>
+    /// </summary>
+    async IAsyncEnumerable<BatchEvent> ExecuteStreamingAsync(
+        string sql, QueryOptions options, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        var results = await ExecuteAsync(sql, options, ct).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        for (var i = 0; i < results.Count; i++)
+        {
+            if (!results[i].Success || results[i].Columns.Count == 0) continue;
+            yield return new ResultStarted(i, results[i].Columns);
+            yield return new ResultRows(i, results[i].Rows);
+            yield return new ResultEnded(i, results[i].Truncated);
+        }
+        yield return new BatchCompleted(results);
+    }
+
+    /// <summary>
     /// Run one already-built page query (the caller shaped the LIMIT/OFFSET — see <c>PageSql.Page</c>)
     /// as a single row-returning statement. One result set, uncapped; base-table origin isn't read
     /// (the columns come from the first page). The executor only runs the SQL — it doesn't shape it.
