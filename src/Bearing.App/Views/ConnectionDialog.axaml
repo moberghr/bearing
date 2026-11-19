@@ -142,7 +142,7 @@
                        Text="Connects as the Windows account running Bearing. No password is stored, prompted for, or read from the keychain."/>
 
             <TextBlock x:Name="AwsProfileHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,4,0,0"
-                       Text="Signs in through the AWS SDK with the profile named above (or its default credential chain when blank). Bearing never reads, stores or prompts for an AWS secret."/>
+                       Text="Signs in through the AWS SDK with the profile named above (or its default credential chain when blank). Bearing's own code never reads, stores or asks for an AWS secret — the AWS SDK resolves the profile."/>
 
             <!-- No keychain: nothing is stored anywhere, so say what will happen instead — and why, which the
                  code-behind fills in from what the store actually reported (SecretStorageAdvice). -->

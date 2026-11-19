@@ -524,6 +524,47 @@ public class ManualCommitGuardTests : IDisposable
         Assert.False(CommitPolicy.IsManualCommit(effective));
     }
 
+    /// <summary>SF6: the ignored setting is said once, in the connection's status tip, rather than dropped
+    /// silently — and it is not called "manual commit" as if it were in force.</summary>
+    [Fact]
+    public void A_saved_manual_commit_flag_on_that_engine_is_named_in_the_status_tip()
+    {
+        var (ctx, _, _, _) = OnEngine(Bearing.Data.DynamoDb.DynamoDbProvider.ProviderId, savedManualCommit: true);
+        var connections = new ConnectionsViewModel(ctx);
+
+        Assert.Contains(
+            "manual commit is set but Amazon DynamoDB can't hold a transaction; statements commit themselves",
+            connections.StatusTip);
+        Assert.DoesNotContain("· manual commit ·", connections.StatusTip + " ·");
+    }
+
+    [Fact]
+    public void Without_the_flag_or_on_an_engine_that_holds_one_there_is_no_such_note()
+    {
+        var (ddbCtx, _, _, _) = OnEngine(Bearing.Data.DynamoDb.DynamoDbProvider.ProviderId, savedManualCommit: false);
+        Assert.DoesNotContain("can't hold a transaction", new ConnectionsViewModel(ddbCtx).StatusTip);
+
+        var (pgCtx, _, pg, _) = OnEngine("postgres", savedManualCommit: true);
+        var tip = new ConnectionsViewModel(pgCtx).StatusTip;
+        Assert.Contains("manual commit", tip);
+        Assert.DoesNotContain("can't hold a transaction", tip);
+        Assert.Null(pgCtx.IgnoredManualCommitNote(pg));
+    }
+
+    /// <summary>ARCH5: the shared rule and the instance answer agree, including for an engine the registry does
+    /// not know (true — the behaviour from before the flag), which is what TabTransactions used to spell its own way.</summary>
+    [Theory]
+    [InlineData("dynamodb", false)]
+    [InlineData("postgres", true)]
+    [InlineData("no-such-engine", true)]
+    public void The_manual_commit_rule_is_one_lookup(string providerId, bool expected)
+    {
+        var (ctx, _, conn, _) = OnEngine(providerId, savedManualCommit: false);
+
+        Assert.Equal(expected, ctx.SupportsManualCommit(conn));
+        Assert.Equal(expected, WorkspaceContext.SupportsManualCommit(ctx.Providers, conn));
+    }
+
     /// <summary>The session override is the other way in; it is ignored there too, so nothing downstream ever
     /// sees manual commit on such an engine.</summary>
     [Fact]

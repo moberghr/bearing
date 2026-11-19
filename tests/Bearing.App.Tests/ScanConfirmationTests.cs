@@ -352,6 +352,69 @@ public class ScanConfirmationTests : IDisposable
         Assert.Equal(["t1", "t2"], h.Executor.Continued);
     }
 
+    /// <summary>TC2: a scan-confirmed result whose connection can no longer be resolved still asks — without a
+    /// name — and Cancel reads nothing. It used to go ahead unasked (fail open).</summary>
+    [Fact]
+    public async Task Fetch_all_on_a_scan_whose_connection_is_gone_still_asks_and_cancel_reads_nothing()
+    {
+        var h = await ConfirmedScan();
+        h.Dialogs.ConfirmScanAnswer = false;
+        h.Ctx.Project!.Manifest.Connections.Clear();   // deleted since the run: nothing to name
+
+        Assert.False(await h.Exec.FetchAllAsync(h.Tab.LastResult!));
+
+        var question = Assert.Single(h.Dialogs.ScanQuestions);
+        Assert.Equal(ScanQuestionKind.FetchAll, question.Kind);
+        Assert.Null(question.Connection);
+        Assert.Equal("Keep reading the whole table?", question.Heading);
+        Assert.Empty(h.Executor.Continued);
+    }
+
+    [Fact]
+    public async Task With_no_connection_and_no_window_fetch_all_on_a_scan_reads_nothing()
+    {
+        var h = await ConfirmedScan();
+        var check = new ScanConfirmation(h.Ctx.Sessions, dialogs: null, _ => { });
+
+        Assert.False(await check.ConfirmFetchAllAsync(h.Tab.LastResult!, info: null, fetchAllLimit: 5_000));
+    }
+
+    /// <summary>TC3: a run Bearing could not check, once confirmed, is treated like a confirmed scan afterwards —
+    /// its result is marked, and Fetch all asks again.</summary>
+    [Fact]
+    public async Task A_confirmed_undetermined_run_is_marked_and_fetch_all_asks_again()
+    {
+        var h = Build();
+        h.Dialogs.ConfirmScanAnswer = true;
+        await h.Exec.ExecuteAsync("select * from \"Invoices\" where id = 'a'");
+        Assert.Equal(ScanVerdictKind.Undetermined, Assert.Single(Assert.Single(h.Dialogs.ScanQuestions).Verdicts).Kind);
+        Assert.True(h.Tab.LastResult!.IsFullScan);
+        h.Dialogs.ScanQuestions.Clear();
+        h.Dialogs.ConfirmScanAnswer = false;
+
+        Assert.False(await h.Exec.FetchAllAsync(h.Tab.LastResult!));
+
+        Assert.Equal(ScanQuestionKind.FetchAll, Assert.Single(h.Dialogs.ScanQuestions).Kind);
+        Assert.Empty(h.Executor.Continued);
+    }
+
+    /// <summary>The window title follows the heading's rule: a run Bearing could not check is not titled a scan.</summary>
+    [Fact]
+    public void The_title_calls_only_a_known_scan_a_scan()
+    {
+        var conn = new ConnectionInfo { Id = Guid.NewGuid(), ProviderId = "dynamodb", Name = "orders-prod" };
+        var target = new ScanTarget("select * from \"Orders\"", "Orders", null, [], Readable: true);
+        var scan = new ScanQuestion(
+            conn, ScanQuestionKind.Run, [new ScanVerdict(target, ScanVerdictKind.FullScan, "customerId", null, null)], "");
+        var unchecked_ = new ScanQuestion(
+            conn, ScanQuestionKind.Run,
+            [new ScanVerdict(target, ScanVerdictKind.Undetermined, null, null, ScanUncertainty.UnknownTable)], "");
+
+        Assert.Equal("Confirm full table scan", scan.Title);
+        Assert.Equal("Confirm unchecked read", unchecked_.Title);
+        Assert.DoesNotContain("scan", unchecked_.Heading, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>A scan that fit in one page has nothing more to read, so Fetch all has nothing to ask about.</summary>
     [Fact]
     public async Task Fetch_all_on_a_scan_with_nothing_more_does_not_ask()

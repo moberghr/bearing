@@ -128,7 +128,7 @@ public sealed class TabTransactions
 
         // The backstop for EffectiveConnection's rule: a provider that cannot hold a transaction throws from
         // CreateTransactionScope, so say why here instead of surfacing that as a failed start.
-        if (_providers.All.FirstOrDefault(p => string.Equals(p.Id, info.ProviderId, StringComparison.OrdinalIgnoreCase))?.SupportsManualCommit == false)
+        if (!Workspace.WorkspaceContext.SupportsManualCommit(_providers, info))
             return (null, $"{info.Name} is on an engine that cannot hold a transaction open across statements, "
                           + "so every statement commits itself.");
 

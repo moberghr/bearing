@@ -796,28 +796,9 @@ public sealed partial class ExecutionViewModel : ObservableObject
         }
     }
 
-    /// <summary>Which credential kinds a fresh acquire can actually help. A kind that resolves to the same
-    /// value twice must not be retried: the second attempt fails identically, and the user reads
-    /// "Reauthenticating…" for an authentication that never happened. One arm per kind, with its reason,
-    /// because the arms are not obvious from the outside.</summary>
-    private bool CanRefreshCredential(ConnectionInfo info) => info.CredentialKind switch
-    {
-        // Re-asking the user, and re-minting a token, are both things a retry can actually change.
-        CredentialKind.Prompt or CredentialKind.EntraToken => true,
-
-        // A stored password that didn't change would just fail identically — unless the store can't hold
-        // passwords at all (no keyring), where "stored password" really means "there is nothing stored" and
-        // the retry is what gets the user prompted for one.
-        CredentialKind.StoredPassword => _ctx.Secrets is { CanStore: false },
-
-        // The OS identity: nothing to re-prompt for and nothing to re-mint, so a retry would send the exact
-        // same handshake. Spelled out rather than left to the default arm because the case it must not fall
-        // into is right above it — an Integrated connection swept into the no-keyring branch would
-        // "reauthenticate" by doing nothing, twice.
-        CredentialKind.Integrated => false,
-
-        _ => false,
-    };
+    /// <summary>Whether a fresh acquire can actually help — the resolver's decision
+    /// (<see cref="CredentialResolver.CanRefresh"/>), which also knows the engines that take no password.</summary>
+    private bool CanRefreshCredential(ConnectionInfo info) => _ctx.Credentials.CanRefresh(info);
 
     /// <summary>
     /// The engine's own verdict on a failed statement. The App layer used to read Postgres SQLSTATEs as
@@ -1068,9 +1049,12 @@ public sealed partial class ExecutionViewModel : ObservableObject
 
     public async Task<bool> FetchAllAsync(ResultSetViewModel rs)
     {
-        // Export enters here too, so a confirmed scan is asked about once more on either path.
-        if (!await _scanConfirmation.ConfirmFetchAllAsync(
-                rs, Selected is { IsRunning: false } ? SelectedConnection : null, _ctx.Settings.ResultFetchAllMaxRows))
+        // Both fetch paths refuse without an idle tab; refusing first means nobody is asked about a fetch that
+        // would not happen.
+        if (Selected is null or { IsRunning: true }) return false;
+        // Export enters here too, so a confirmed scan is asked about once more on either path — with or without a
+        // connection it can still name (fail closed).
+        if (!await _scanConfirmation.ConfirmFetchAllAsync(rs, SelectedConnection, _ctx.Settings.ResultFetchAllMaxRows))
             return false;
         if (rs.Continuation is not null) return await _continuationPaging.FetchAllAsync(rs);
         var tab = Selected;

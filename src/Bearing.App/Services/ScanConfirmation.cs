@@ -27,22 +27,32 @@ public enum ScanQuestionKind
 /// One full-scan question as the dialog shows it (<i>Behaviour 8</i>). Pure: every sentence is derived here, from
 /// <see cref="ScanGuard"/>'s, so it can be tested without a window (§2.5, §4.3).
 /// </summary>
-/// <param name="Connection">Where the read lands.</param>
+/// <param name="Connection">Where the read lands; null only for <see cref="ScanQuestionKind.FetchAll"/> on a result
+/// whose connection can no longer be resolved — still asked, without the name (fail closed).</param>
 /// <param name="Kind">Which question.</param>
 /// <param name="Verdicts">The statements that are not keyed, in batch order; empty for <see cref="ScanQuestionKind.FetchAll"/>.</param>
 /// <param name="Text">The body: one sentence per statement, how rows load and what the check is.</param>
 public sealed record ScanQuestion(
-    ConnectionInfo Connection,
+    ConnectionInfo? Connection,
     ScanQuestionKind Kind,
     IReadOnlyList<ScanVerdict> Verdicts,
     string Text)
 {
-    public string Title => Kind == ScanQuestionKind.Run ? "Confirm full table scan" : "Confirm fetch all";
+    /// <summary>The window title. A run Bearing could not check is not called a scan here either (§1.1).</summary>
+    public string Title => Kind switch
+    {
+        ScanQuestionKind.FetchAll => "Confirm fetch all",
+        _ when IsScan => "Confirm full table scan",
+        _ => "Confirm unchecked read",
+    };
 
-    /// <summary>Connection name plus its environment label, as the write confirmation names it.</summary>
-    public string Target => string.IsNullOrWhiteSpace(Connection.Environment)
-        ? Connection.Name
-        : $"{Connection.Name} · {Connection.Environment}";
+    /// <summary>Connection name plus its environment label, as the write confirmation names it; null when the
+    /// connection is unknown.</summary>
+    public string? Target => Connection is null
+        ? null
+        : string.IsNullOrWhiteSpace(Connection.Environment)
+            ? Connection.Name
+            : $"{Connection.Name} · {Connection.Environment}";
 
     /// <summary>
     /// The question. Says "may read a whole table" when every statement it asks about is one Bearing could not
@@ -50,10 +60,14 @@ public sealed record ScanQuestion(
     /// </summary>
     public string Heading => Kind switch
     {
-        ScanQuestionKind.FetchAll => $"Keep reading the whole table on {Target}?",
-        _ when Verdicts.Any(v => v.Kind == ScanVerdictKind.FullScan) => $"Read a whole table on {Target}?",
+        ScanQuestionKind.FetchAll => Target is null
+            ? "Keep reading the whole table?"
+            : $"Keep reading the whole table on {Target}?",
+        _ when IsScan => $"Read a whole table on {Target}?",
         _ => $"Run on {Target}? Bearing could not check whether it reads a whole table.",
     };
+
+    private bool IsScan => Verdicts.Any(v => v.Kind == ScanVerdictKind.FullScan);
 
     public string ConfirmLabel => Kind == ScanQuestionKind.Run ? "Run anyway" : "Fetch all";
 }
@@ -143,7 +157,7 @@ public sealed class ScanConfirmation
     /// Fetch all's second question, naming the Fetch-all row limit (<paramref name="fetchAllLimit"/>). Load more
     /// never asks again — it reads one page of the scan the user already confirmed.
     /// </summary>
-    public static ScanQuestion FetchAllQuestion(ConnectionInfo info, int fetchAllLimit)
+    public static ScanQuestion FetchAllQuestion(ConnectionInfo? info, int fetchAllLimit)
     {
         var limit = Math.Max(1, fetchAllLimit).ToString("N0", CultureInfo.InvariantCulture);
         var text =
@@ -197,12 +211,15 @@ public sealed class ScanConfirmation
 
     /// <summary>
     /// Ask once more before Fetch all (and Export, which fetches all first) on a result confirmed as a scan that
-    /// still has more to read. True = go ahead; also true when there is nothing to ask about, or nothing the
-    /// fetch would do (<paramref name="info"/> null: no tab or connection — the fetch refuses on its own).
+    /// still has more to read. True = go ahead; also true when there is nothing to ask about.
+    /// <para>
+    /// Fail closed: a scan-confirmed result asks even when <paramref name="info"/> is null (no tab, a running tab,
+    /// or a connection since deleted) — the question then names no connection. Nothing reads on without an answer.
+    /// </para>
     /// </summary>
     public async Task<bool> ConfirmFetchAllAsync(ResultSetViewModel rs, ConnectionInfo? info, int fetchAllLimit)
     {
-        if (!rs.IsFullScan || !rs.HasMore || info is null) return true;
+        if (!rs.IsFullScan || !rs.HasMore) return true;
 
         if (_dialogs is null)
         {

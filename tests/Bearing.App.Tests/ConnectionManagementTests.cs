@@ -304,6 +304,63 @@ public class ConnectionManagementTests : IDisposable
         Assert.Equal("http://localhost:8000", copy.Options["Endpoint"]);
     }
 
+    /// <summary>W3: the endpoint decides which service is reached, so an endpoint-only edit drops the cached schema
+    /// (it describes the other service) and the live pool (Load more / Fetch all would keep reading it).</summary>
+    [Fact]
+    public async Task An_endpoint_only_edit_drops_the_cached_schema_and_the_live_pool()
+    {
+        var conn = DynamoConn("orders (dev)");
+        var (ctx, vm, _) = NewVm(conn);
+        var session = await ctx.Sessions.GetOrConnectAsync(conn, CancellationToken.None);
+        await ctx.Sessions.EnsureSchemaAsync(session, CancellationToken.None);
+        Assert.NotNull(ctx.Sessions.TryGet(Bearing.Sessions.SessionKey.For(conn)));
+        Assert.NotNull(ctx.Sessions.TryGetSnapshot(conn.Id, conn.Database));
+
+        await vm.AddOrUpdateConnectionAsync(
+            conn with { Options = new Dictionary<string, string> { ["Endpoint"] = "http://localhost:8001" } },
+            password: null);
+
+        Assert.Null(ctx.Sessions.TryGet(Bearing.Sessions.SessionKey.For(conn)));
+        Assert.Null(ctx.Sessions.TryGetSnapshot(conn.Id, conn.Database));
+    }
+
+    /// <summary>The endpoint as the factory reads it: surrounding whitespace is not a different service.</summary>
+    [Fact]
+    public async Task An_endpoint_differing_only_in_whitespace_keeps_the_pool_and_the_schema()
+    {
+        var conn = DynamoConn("orders (dev)");
+        var (ctx, vm, _) = NewVm(conn);
+        var session = await ctx.Sessions.GetOrConnectAsync(conn, CancellationToken.None);
+        await ctx.Sessions.EnsureSchemaAsync(session, CancellationToken.None);
+
+        await vm.AddOrUpdateConnectionAsync(
+            conn with { Options = new Dictionary<string, string> { ["Endpoint"] = "  http://localhost:8000 " } },
+            password: null);
+
+        Assert.NotNull(ctx.Sessions.TryGetSnapshot(conn.Id, conn.Database));
+        Assert.NotNull(ctx.Sessions.TryGet(Bearing.Sessions.SessionKey.For(conn)));
+    }
+
+    /// <summary>An import is matched by where it points: the same region and profile at another endpoint is
+    /// another connection, added beside the first rather than overwriting it.</summary>
+    [Fact]
+    public async Task Importing_a_connection_differing_only_in_endpoint_adds_it_rather_than_updating()
+    {
+        var conn = DynamoConn("orders (local)");
+        var (ctx, vm, _) = NewVm(conn);
+        var elsewhere = DynamoConn("orders (vpc)") with
+        {
+            Options = new Dictionary<string, string> { ["Endpoint"] = "https://vpce-1.dynamodb.eu-west-1.vpce.amazonaws.com" },
+        };
+
+        var outcome = await vm.ImportConnectionsAsync([elsewhere]);
+
+        Assert.Equal(1, outcome.Added);
+        Assert.Equal(0, outcome.Updated);
+        Assert.Equal(2, ctx.Project!.Manifest.Connections.Count);
+        Assert.Equal("http://localhost:8000", Named(ctx, "orders (local)").Options["Endpoint"]);
+    }
+
     // ---- clipboard -----------------------------------------------------------------------------
 
     [Fact]

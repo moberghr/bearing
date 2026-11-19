@@ -369,6 +369,12 @@ public class ConnectionEditorTests
         Assert.True(Visible(dialog, "AwsProfileHint"));
         Assert.False(Visible(dialog, "IntegratedHint"));
         Assert.False(Visible(dialog, "EntraHint"));
+
+        // S7: the claim is about Bearing's own code; the SDK it hands the profile to does read the secret.
+        var hint = dialog.FindControl<TextBlock>("AwsProfileHint")!.Text ?? "";
+        Assert.Contains("Bearing's own code never reads, stores or asks for an AWS secret", hint);
+        Assert.Contains("the AWS SDK resolves the profile", hint);
+        Assert.DoesNotContain("Bearing never reads", hint);
     });
 
     [Fact]

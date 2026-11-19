@@ -23,8 +23,10 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
     public bool TestResult = true;
     public Exception? TestThrows;
 
-    public string Id => "postgres";
-    public string DisplayName => "Fake";
+    /// <summary>"postgres" unless a test needs the registry to answer for another engine (DynamoDB's
+    /// no-password and no-manual-commit facts, below).</summary>
+    public string Id { get; init; } = "postgres";
+    public string DisplayName { get; init; } = "Fake";
     public IReadOnlyList<ConnectionField> ConnectionFields => System.Array.Empty<ConnectionField>();
 
     /// <summary>Matches PostgresProvider (no SSPI path), so the dialog-facing behaviour a test observes
@@ -33,9 +35,9 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
     public bool SupportsSessionTimeZone => true;   // Postgres has one (#163), and this fake claims to be it
     public bool SupportsIntegratedAuth => false;
     public bool SupportsEntraToken => true;
-    public bool SupportsPasswordCredentials => true;
+    public bool SupportsPasswordCredentials { get; init; } = true;
     public bool SupportsAwsProfile => false;
-    public bool SupportsManualCommit => true;
+    public bool SupportsManualCommit { get; init; } = true;
     public bool SupportsTlsModes => true;
 
     public bool SupportsServerActivity => true;
@@ -275,6 +277,10 @@ internal sealed class FakeExecutor : IQueryExecutor
     /// notice to mark itself aborted (#131).</summary>
     public string? FailWith { get; set; }
 
+    /// <summary>The state <see cref="FailWith"/>'s error carries: a syntax error unless a test needs another verdict
+    /// (a <c>28…</c> state is what <see cref="FakeProvider.Classify"/> calls an authentication failure).</summary>
+    public string FailState { get; set; } = "42601";
+
     /// <summary>The SQL each <see cref="ExecuteAsync"/> was handed, in order.</summary>
     public List<string> Executed { get; } = new();
 
@@ -288,7 +294,7 @@ internal sealed class FakeExecutor : IQueryExecutor
         return Task.FromResult<IReadOnlyList<QueryResult>>(new[]
         {
             FailWith is { } message
-                ? Empty with { Error = new QueryError(message, "42601", null) }
+                ? Empty with { Error = new QueryError(message, FailState, null) }
                 : Empty,
         });
     }

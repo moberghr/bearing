@@ -28,7 +28,7 @@ public sealed class ConfirmScanDialog : Window
         CanResize = true;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
-        var accent = new SolidColorBrush(Theming.ConnectionColors.Resolve(request.Connection.EnvironmentColor));
+        var accent = new SolidColorBrush(Theming.ConnectionColors.Resolve(request.Connection?.EnvironmentColor));
 
         var layout = new StackPanel { Margin = new Thickness(18), Spacing = 8 };
         layout.Children.Add(new TextBlock

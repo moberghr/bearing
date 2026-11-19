@@ -45,7 +45,11 @@ public sealed class WorkspaceContext
         ScriptStore = ScriptWrites = new ScriptWriteTracker(scriptStore ?? new FileScriptStore());
         // Credential resolution reads the secret store lazily (via () => Secrets) so a late
         // AttachSecretStore still applies; prompted passwords / Entra tokens are cached in-memory here.
-        Credentials = new CredentialResolver(() => Secrets, credentialPrompt, entraTokens ?? new EntraTokenProvider());
+        // The registry says which engines take no password at all (DynamoDB), so a hand-edited password kind there
+        // is never read from the store, prompted for or retried.
+        Credentials = new CredentialResolver(
+            () => Secrets, credentialPrompt, entraTokens ?? new EntraTokenProvider(),
+            takesPassword: info => ProviderFor(providers, info.ProviderId)?.SupportsPasswordCredentials ?? true);
         var sessions = new ConnectionSessionManager(providers, () => Credentials, IdleTimeout(Settings));
         Sessions = sessions;
         // Injectable like every other dependency here (§2.4), rather than reached for: the schema tree's
@@ -311,8 +315,32 @@ public sealed class WorkspaceContext
     /// true — the behaviour every connection had before the flag existed — rather than throwing on a path every
     /// tab read goes through.
     /// </summary>
-    public bool SupportsManualCommit(ConnectionInfo info)
-        => Providers.All.FirstOrDefault(p => string.Equals(p.Id, info.ProviderId, StringComparison.OrdinalIgnoreCase))
-               ?.SupportsManualCommit
-           ?? true;
+    public bool SupportsManualCommit(ConnectionInfo info) => SupportsManualCommit(Providers, info);
+
+    /// <inheritdoc cref="SupportsManualCommit(ConnectionInfo)"/>
+    /// <remarks>The one copy of the rule, for a caller holding only the registry (<see cref="TabTransactions"/>).</remarks>
+    public static bool SupportsManualCommit(IProviderRegistry providers, ConnectionInfo info)
+        => ProviderFor(providers, info.ProviderId)?.SupportsManualCommit ?? true;
+
+    /// <summary>
+    /// The registered provider for <paramref name="providerId"/>, matched the way the registry matches it
+    /// (case-insensitively), or null when none is — never a throw, because every caller is on a path a tab read
+    /// goes through and answers an unknown engine with the behaviour from before the flag it asks about.
+    /// </summary>
+    public static IDbProvider? ProviderFor(IProviderRegistry providers, string? providerId)
+        => providers.All.FirstOrDefault(p => string.Equals(p.Id, providerId, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The sentence saying that <paramref name="saved"/> asks for manual commit on an engine that cannot hold a
+    /// transaction — the setting <see cref="EffectiveConnection"/> drops — or null when there is nothing to say.
+    /// A hand-edited <c>project.json</c> is the only way there, and without this the mode would vanish silently.
+    /// </summary>
+    public string? IgnoredManualCommitNote(ConnectionInfo saved)
+    {
+        if (!saved.ManualCommit || SupportsManualCommit(saved)) return null;
+
+        var engine = ProviderFor(Providers, saved.ProviderId)?.DisplayName ?? saved.ProviderId;
+
+        return $"manual commit is set but {engine} can't hold a transaction; statements commit themselves";
+    }
 }

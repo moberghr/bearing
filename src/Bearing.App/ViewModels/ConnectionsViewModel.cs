@@ -13,6 +13,7 @@ using Bearing.App.Workspace;
 using Bearing.Core.Data;
 using Bearing.Core.Schema;
 using Bearing.Core.Workspace;
+using Bearing.Data.DynamoDb;
 using Bearing.Data.Postgres;
 using Bearing.Persistence.Import;
 using Bearing.Sessions;
@@ -346,13 +347,16 @@ public sealed partial class ConnectionsViewModel : ObservableObject
             // A setting of the connection, like the two beside it — not "a transaction is open right now",
             // which the status chip says and which is a fact about this tab rather than this connection.
             if (CommitPolicy.IsManualCommit(info)) marks.Add("manual commit");
+            // The saved record's setting, which EffectiveConnection drops on an engine that cannot hold a
+            // transaction — said here once rather than dropped silently.
+            else if (_ctx.FindConnection(info.Id) is { } saved && _ctx.IgnoredManualCommitNote(saved) is { } ignored)
+                marks.Add(ignored);
             if (SessionPolicy.TimeoutSeconds(info) > SessionPolicy.NoTimeout)
                 marks.Add($"statement timeout {SessionPolicy.TimeoutLabel(info)}");
             // Always, where the engine has one (#163): the zone is not a safety setting to flag when on, it is
             // what every timestamp expression computes in, and the mismatch it caused was invisible because
             // nothing ever named it.
-            if (_ctx.Providers.All.FirstOrDefault(p => string.Equals(p.Id, info.ProviderId, StringComparison.OrdinalIgnoreCase))
-                    is { SupportsSessionTimeZone: true })
+            if (WorkspaceContext.ProviderFor(_ctx.Providers, info.ProviderId) is { SupportsSessionTimeZone: true })
                 marks.Add($"time zone {SessionTimeZonePolicy.Describe(info)}");
             return marks.Count == 0 ? StatusLabel : $"{StatusLabel} · {string.Join(" · ", marks)}";
         }
@@ -1248,7 +1252,19 @@ public sealed partial class ConnectionsViewModel : ObservableObject
            && a.Database == b.Database && a.User == b.User
            // Who logs in, like User: switching to the az account is a different role, so a different tree.
            && a.UserFromEntraLogin == b.UserFromEntraLogin
-           && TlsPolicy.Resolve(a) == TlsPolicy.Resolve(b);
+           && TlsPolicy.Resolve(a) == TlsPolicy.Resolve(b)
+           // Which service is reached, like Host: a DynamoDB connection's region names the AWS service, but an
+           // endpoint (DynamoDB Local, a VPC endpoint) replaces it. Without it an endpoint-only edit kept the old
+           // endpoint's schema and its live pool, so Load more / Fetch all went on reading the old service.
+           // SamePool inherits it from here.
+           && string.Equals(EndpointOf(a), EndpointOf(b), StringComparison.Ordinal);
+
+    /// <summary>The endpoint option as the factory reads it (trimmed; blank = none), for <see cref="SameNetwork"/>.</summary>
+    private static string? EndpointOf(ConnectionInfo info)
+        => info.Options.TryGetValue(DynamoDbConnectionFactory.EndpointOption, out var value)
+           && !string.IsNullOrWhiteSpace(value)
+            ? value.Trim()
+            : null;
 
     /// <summary>
     /// Whether a live pool built from <paramref name="a"/> can go on serving <paramref name="b"/>.
