@@ -335,6 +335,12 @@ public sealed partial class WorkspaceViewModel : ObservableObject
         var editors = session?.OpenEditors ?? new List<OpenEditor>();
         foreach (var e in editors)
         {
+            // Passed into NewTab rather than assigned afterwards: NewTab selects the tab, and the selection
+            // is what loads the toolbar pills. Assigned after, the tab was selected under the connection it
+            // inherited from the tab before it — and when it was also the last tab and the one to restore
+            // as selected, the final SelectedTab below was no change, so the database pill kept the other
+            // connection's database and list.
+            var connectionId = e.ConnectionId ?? _ctx.DefaultConnectionId;
             // Combine keeps an absolute path as it is — a file opened from outside the project (`bearing
             // file.sql`) — and GetFullPath folds an older session's `../..` walk to the same path, so the
             // tab compares equal to a later request to open that file.
@@ -348,7 +354,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
                 // content as the clean baseline so an unsaved script comes back marked modified.
                 var disk = await _ctx.ScriptStore.ReadTextAsync(abs, CancellationToken.None);
                 var restore = RestoredBuffer(e.ScratchText, e.BaselineHash, disk);
-                tab = NewTab(restore.Buffer, abs);   // NewTab re-derives IsScratch from where the file lives
+                tab = NewTab(restore.Buffer, abs, connectionId);   // NewTab re-derives IsScratch from where the file lives
                 tab.MarkSaved(disk);
                 // Unsaved edits came back, and the file they were made against has since changed: neither copy
                 // may silently win, so nothing writes this tab until the user picks one (ScriptFileSync).
@@ -368,7 +374,7 @@ public sealed partial class WorkspaceViewModel : ObservableObject
                 // No file: either a pre-Phase-2 session with inlined scratch text, or a scratch file that
                 // has since been deleted. Either way it comes back as a scratch buffer and autosave will
                 // give it a fresh file on the next keystroke.
-                tab = NewTab(e.ScratchText ?? "");
+                tab = NewTab(e.ScratchText ?? "", connectionId: connectionId);
                 tab.CaretOffset = Math.Clamp(e.CaretOffset, 0, tab.Text.Length);
                 if (e.ScratchName is { Length: > 0 } name)
                 {
@@ -377,7 +383,6 @@ public sealed partial class WorkspaceViewModel : ObservableObject
                     tab.IsUserNamed = !ScratchNaming.IsGeneratedLabel(name);
                 }
             }
-            tab.ConnectionId = e.ConnectionId ?? _ctx.DefaultConnectionId;
             tab.IsPinned = e.Pinned;
         }
 
