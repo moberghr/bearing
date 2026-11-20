@@ -775,7 +775,12 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         try
         {
             var dbs = await _ctx.Schema.GetDatabasesAsync(info, CancellationToken.None);
-            if (!ReferenceEquals(tab, Selected)) return;
+            // Still the selected tab *and* still on this server: a list that arrives after the tab was
+            // re-pointed belongs to the connection it left.
+            if (!ReferenceEquals(tab, Selected) || tab.ConnectionId != id)
+            {
+                return;
+            }
             TabDatabases.Clear();
             foreach (var d in dbs) TabDatabases.Add(d);
             if (!TabDatabases.Contains(current)) TabDatabases.Insert(0, current); // keep the selection valid
