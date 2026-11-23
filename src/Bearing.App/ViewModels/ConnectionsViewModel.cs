@@ -202,7 +202,20 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     /// and the toolbar dot actually turn on, and it is why a query-driven connect lights the toolbar without
     /// the user touching the toggle, while an idle sweep no longer darkens it. Fires possibly off-thread.</summary>
     private void OnServerLinkChanged(Guid connectionId)
-        => Dispatcher.UIThread.Post(() => RefreshIndicators(connectionId));
+        => Dispatcher.UIThread.Post(() =>
+        {
+            RefreshIndicators(connectionId);
+            OnServerLinked(connectionId);
+        });
+
+    /// <summary>The selected tab's server gained (or lost) its link: re-read the database list, which is only
+    /// read from a linked server (<see cref="RefreshTabDatabasesAsync"/>) and so was left at the tab's own
+    /// database until now. Here rather than on <c>LiveChanged</c>, which also fires for every further pool.</summary>
+    internal void OnServerLinked(Guid connectionId)
+    {
+        if (Selected is { } tab && tab.ConnectionId == connectionId)
+            CrashReporter.Observe(RefreshTabDatabasesAsync(tab), "connections.refresh-databases");
+    }
 
     /// <summary>
     /// The SSH session under a pool ended and the pool was evicted (§1.12). A transaction held on it went with
@@ -758,7 +771,8 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     /// <summary>Load the server's database list into <see cref="TabDatabases"/> for the given tab. Awaited
     /// through <see cref="CrashReporter.Observe(Task, string)"/> at every call site (it is fire-and-forget,
     /// triggered by tab/connection changes), so a preamble fault is logged instead of escaping unobserved.
-    /// The offline fallback below is deliberate and stays swallowed.</summary>
+    /// The offline fallback below is deliberate and stays swallowed. An unlinked server is not asked: the list
+    /// stays at the tab's own database until the user connects.</summary>
     private async Task RefreshTabDatabasesAsync(EditorTabViewModel? tab)
     {
         TabDatabases.Clear();
@@ -772,6 +786,11 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         // so the ComboBox selects it now that the item exists.
         TabDatabases.Add(current);
         OnPropertyChanged(nameof(SelectedTabDatabase));
+        // Only from a server the user already connected to. The read below opens a connection of its own, so
+        // on an unlinked server it would resolve the credential — a password prompt for "Prompt each time" —
+        // and reach a server nobody asked for, on every tab selection (restoring tabs at launch included).
+        // OnServerLinked re-reads once the link is there.
+        if (!_ctx.Sessions.IsLinked(id)) return;
         try
         {
             var dbs = await _ctx.Schema.GetDatabasesAsync(info, CancellationToken.None);
