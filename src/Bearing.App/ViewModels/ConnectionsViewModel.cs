@@ -1063,7 +1063,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         // that is the record that will be resolved: an update deliberately keeps the kind already here.
         var carried = landed
             .Select(c => (c, local: _ctx.Project.Manifest.Connections.FirstOrDefault(x => x.Id == c.LocalId)))
-            .Where(p => p.local is not null && p.local.CredentialKind == CredentialKind.StoredPassword)
+            .Where(p => p.local is not null && CredentialKindOptions.KeepsAStoredPassword(p.local.CredentialKind))
             .Select(p => (p.c.SourceId, p.c.LocalId))
             .ToList();
 

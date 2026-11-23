@@ -435,6 +435,13 @@ public sealed class ConnectionFieldModel
                 continue;
             }
 
+            // A domain login with no domain is refused at connect (it would authenticate against whatever
+            // domain the server defaults to), so say it while the user is still typing.
+            if (credentialKind == CredentialKind.DomainPassword && value.Length > 0
+                && string.Equals(field.Key, "User", StringComparison.OrdinalIgnoreCase)
+                && !DomainUser.TryParse(value, out _))
+                problems.Add($"{field.Label} must name its domain: DOMAIN\\user or user@domain.");
+
             if (field.Kind == ConnectionFieldKind.Number && value.Length > 0
                 && !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
                 problems.Add($"{field.Label} must be a whole number.");

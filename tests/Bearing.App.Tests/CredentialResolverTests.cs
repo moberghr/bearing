@@ -267,4 +267,48 @@ public class CredentialResolverTests
 
         Assert.Null((await resolver.ResolveAsync(info, forceRefresh: false, CancellationToken.None)).Secret);
     }
+
+    [Fact]
+    public async Task DomainPassword_reads_the_secret_store_like_a_stored_password()
+    {
+        var secrets = new FakeSecretStore();
+        var info = Conn(CredentialKind.DomainPassword);
+        await secrets.SetPasswordAsync(info.Id, "pw", CancellationToken.None);
+        var prompt = new FakeCredentialPrompt("should-not-be-asked");
+        var resolver = new CredentialResolver(() => secrets, prompt, new ThrowingEntraTokens());
+
+        var cred = await resolver.ResolveAsync(info, forceRefresh: false, CancellationToken.None);
+
+        Assert.Equal("pw", cred.Secret);
+        Assert.Equal(0, prompt.Calls);
+    }
+
+    /// <summary>Unlike a stored password, whose first attempt goes out passwordless: a domain account has no
+    /// passwordless login and its factory refuses to open without one, so the first resolve asks — once.</summary>
+    [Fact]
+    public async Task DomainPassword_with_nothing_stored_asks_at_once_and_remembers_the_answer()
+    {
+        var info = Conn(CredentialKind.DomainPassword);
+        var prompt = new FakeCredentialPrompt("typed");
+        var resolver = new CredentialResolver(() => new FakeSecretStore(), prompt, new ThrowingEntraTokens());
+
+        var first = await resolver.ResolveAsync(info, forceRefresh: false, CancellationToken.None);
+        var second = await resolver.ResolveAsync(info, forceRefresh: false, CancellationToken.None);
+
+        Assert.Equal("typed", first.Secret);
+        Assert.Equal("typed", second.Secret);
+        Assert.Equal(1, prompt.Calls);
+    }
+
+    /// <summary>A host with no prompt (the CLI) gets no secret rather than an exception here; the factory
+    /// then refuses the open with its own sentence.</summary>
+    [Fact]
+    public async Task DomainPassword_with_nothing_stored_and_no_prompt_resolves_no_secret()
+    {
+        var info = Conn(CredentialKind.DomainPassword);
+        var resolver = new CredentialResolver(() => new FakeSecretStore(), null, new ThrowingEntraTokens());
+
+        Assert.Null((await resolver.ResolveAsync(info, forceRefresh: false, CancellationToken.None)).Secret);
+        Assert.False(resolver.CanRefresh(info));
+    }
 }

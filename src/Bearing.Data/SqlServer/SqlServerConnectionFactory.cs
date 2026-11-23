@@ -39,6 +39,27 @@ public sealed class SqlServerConnectionFactory : IDbConnectionFactory
     /// </summary>
     private readonly string? _accessToken;
 
+    /// <summary>
+    /// The NTLM answerer for a <see cref="CredentialKind.DomainPassword"/> connection, or null for every other
+    /// kind — and for a domain login that cannot be presented, see <see cref="_domainLoginProblem"/>. One per
+    /// factory, attached to every connection it builds: SqlClient compares it by reference as part of the
+    /// pool's identity (<see cref="NtlmSspiContextProvider"/>). It holds the password; the string does not.
+    /// </summary>
+    private readonly NtlmSspiContextProvider? _domainLogin;
+
+    /// <summary>
+    /// Why a <see cref="CredentialKind.DomainPassword"/> connection cannot be opened, or null. Its string says
+    /// <c>Integrated Security</c> and names no user, so opening it without the answerer would log in as the
+    /// identity of the process — a different account from the one asked for. Refused in
+    /// <see cref="OpenConnectionAsync"/>, before the driver is touched, rather than thrown from the
+    /// constructor, for the reason <see cref="_accessToken"/> gives.
+    /// </summary>
+    private readonly string? _domainLoginProblem;
+
+    /// <summary>Lets one domain login through at a time: the pool's logins all run through the one
+    /// <see cref="_domainLogin"/>, which holds one handshake's state. Null for every other kind.</summary>
+    private readonly SemaphoreSlim? _domainLoginGate;
+
     /// <summary>Pooled connections per (connection, database), capped for the same reason Npgsql's is
     /// (§5.3): a pool exists per database rather than per connection (#54), so SqlClient's default of 100
     /// would have been an N x 100 ceiling on a server the user does not administer. Overridable through
@@ -147,6 +168,24 @@ public sealed class SqlServerConnectionFactory : IDbConnectionFactory
             // — which the dialog still shows, because it names the login for every other kind — has nothing
             // to contribute here. That refusal is also what the tests lean on: a CreateConnection that
             // succeeds in attaching the token is proof the string carries neither credential.
+        }
+        else if (info.CredentialKind == CredentialKind.DomainPassword)
+        {
+            // The handshake is SQL Server's integrated one, answered by us with an explicit account rather
+            // than by the OS with the process's. So the string says Integrated Security and carries neither
+            // the user nor the password; both go to the answerer (§1.1).
+            csb.IntegratedSecurity = true;
+            if (!DomainUser.TryParse(info.User, out var login))
+                _domainLoginProblem =
+                    $"A domain account needs its domain: type the user as DOMAIN\\user or user@domain (connection '{info.Name}').";
+            else if (string.IsNullOrEmpty(password))
+                _domainLoginProblem = $"No password was given for the domain account of '{info.Name}'.";
+            else
+            {
+                _domainLogin = new NtlmSspiContextProvider(
+                    new System.Net.NetworkCredential(login.User, password, login.Domain));
+                _domainLoginGate = new SemaphoreSlim(1, 1);
+            }
         }
         else
         {
@@ -324,24 +363,38 @@ public sealed class SqlServerConnectionFactory : IDbConnectionFactory
         // left untouched for every other credential kind rather than being written to and then read back as
         // null — which is what the tests distinguish.
         if (_accessToken is not null) conn.AccessToken = _accessToken;
+        if (_domainLogin is not null) conn.SspiContextProvider = _domainLogin;
         return conn;
     }
 
     /// <summary>Opens a pooled connection. Internal: the driver type stops at this project's edge (§2.1).</summary>
     internal async Task<SqlConnection> OpenConnectionAsync(CancellationToken ct)
     {
-        var conn = CreateConnection();
+        // Before any network use: see _domainLoginProblem for what opening anyway would do.
+        if (_domainLoginProblem is not null) throw new InvalidOperationException(_domainLoginProblem);
+
+        // A domain login's opens go one at a time (see _domainLoginGate). Held across the open only: a
+        // connection taken from the pool does no handshake and returns at once.
+        if (_domainLoginGate is not null) await _domainLoginGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            await conn.OpenAsync(ct).ConfigureAwait(false);
-            return conn;
+            var conn = CreateConnection();
+            try
+            {
+                await conn.OpenAsync(ct).ConfigureAwait(false);
+                return conn;
+            }
+            catch
+            {
+                // A failed open still owns a SqlConnection nobody else has a reference to; dispose it rather
+                // than leaving it for the finalizer.
+                await conn.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
         }
-        catch
+        finally
         {
-            // A failed open still owns a SqlConnection nobody else has a reference to; dispose it rather
-            // than leaving it for the finalizer.
-            await conn.DisposeAsync().ConfigureAwait(false);
-            throw;
+            _domainLoginGate?.Release();
         }
     }
 
