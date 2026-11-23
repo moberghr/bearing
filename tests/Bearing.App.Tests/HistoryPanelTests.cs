@@ -113,7 +113,7 @@ public class HistoryPanelTests
         var now = DateTimeOffset.Now;
         var entries = new List<QueryLogEntry> { Entry(now.AddMinutes(-5), ok: true) };
         var vm = new HistoryPanelViewModel(
-            (_, _, _) => Task.FromResult<IReadOnlyList<QueryLogEntry>>(entries.ToList()),
+            (_, _) => Task.FromResult<IReadOnlyList<QueryLogEntry>>(entries.ToList()),
             _ => "#7AA89F");
 
         await vm.ReloadAsync(CancellationToken.None);
@@ -156,7 +156,7 @@ public class HistoryPanelTests
         var first = true;
 
         var vm = new HistoryPanelViewModel(
-            async (_, _, ct) =>
+            async (_, ct) =>
             {
                 if (!first) return fresh;
                 first = false;
@@ -181,7 +181,7 @@ public class HistoryPanelTests
 
     private static HistoryPanelViewModel Make(IReadOnlyList<QueryLogEntry> entries)
         => new(
-            (_, _, _) => Task.FromResult(entries),
+            (_, _) => Task.FromResult(entries),
             name => name == "prod" ? "#E46876" : "#7AA89F");
 
     /// <summary>
@@ -263,8 +263,9 @@ public class HistoryPanelTests
         public bool Fail { get; set; }
         public List<bool> StarredOnlyAsked { get; } = [];
 
-        public Task<IReadOnlyList<QueryLogEntry>> Search(string? text, bool starredOnly, CancellationToken ct)
+        public Task<IReadOnlyList<QueryLogEntry>> Search(HistorySearch search, CancellationToken ct)
         {
+            var starredOnly = search.StarredOnly;
             StarredOnlyAsked.Add(starredOnly);
             var rows = Entries.Select(e => e with { IsStarred = Starred.Contains(e.Id) })
                 .Where(e => !starredOnly || e.IsStarred).ToList();
@@ -351,8 +352,9 @@ public class HistoryPanelTests
                           Entry(now.AddMinutes(-1), ok: true, sql: "select b") with { Id = 2, IsStarred = true } };
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var vm = new HistoryPanelViewModel(
-            async (_, starredOnly, _) =>
+            async (search, _) =>
             {
+                var starredOnly = search.StarredOnly;
                 if (!starredOnly) return all;
                 await gate.Task;                                      // the slow starred-only search
                 return all.Where(e => e.IsStarred).ToList();
@@ -399,5 +401,224 @@ public class HistoryPanelTests
 
         Assert.False(vm.Groups[0].Rows[0].IsStarred);
         Assert.Empty(store.Starred);
+    }
+
+    // ---- connection filter and grouping ----------------------------------------------------------
+
+    private static readonly Guid ProdId = Guid.NewGuid();
+    private static readonly Guid LocalId = Guid.NewGuid();
+
+    /// <summary>A store that answers like the log does for a connection (recorded name or id) and records
+    /// what it was asked.</summary>
+    private sealed class ConnectionStore
+    {
+        public List<QueryLogEntry> Entries { get; } = [];
+        public List<HistoryConnection?> Asked { get; } = [];
+
+        public Task<IReadOnlyList<QueryLogEntry>> Search(HistorySearch search, CancellationToken ct)
+        {
+            Asked.Add(search.Connection);
+            var rows = Entries
+                .Where(e => search.Connection is not { } c
+                            || e.ConnectionName == c.Name || (c.Id is { } id && e.ConnectionId == id))
+                .ToList();
+            return Task.FromResult<IReadOnlyList<QueryLogEntry>>(rows);
+        }
+    }
+
+    private static (HistoryPanelViewModel Vm, ConnectionStore Store) WithConnections(params QueryLogEntry[] entries)
+    {
+        var store = new ConnectionStore();
+        store.Entries.AddRange(entries);
+        var vm = new HistoryPanelViewModel(
+            store.Search,
+            name => name == "prod" ? "#E46876" : null,
+            connections: () => [new HistoryConnection("prod", ProdId), new HistoryConnection("local", LocalId)]);
+        return (vm, store);
+    }
+
+    [Fact]
+    public async Task Grouping_by_connection_puts_the_most_recently_used_first_and_its_rows_newest_first()
+    {
+        var now = new DateTimeOffset(2026, 11, 20, 12, 0, 0, TimeSpan.Zero);
+        var (vm, _) = WithConnections(
+            Entry(now.AddDays(-3), ok: true, conn: "prod", sql: "select old_prod"),
+            Entry(now, ok: true, conn: "local", sql: "select new_local"),
+            Entry(now.AddDays(-1), ok: true, conn: "prod", sql: "select new_prod"));
+        await vm.ReloadAsync(CancellationToken.None);
+
+        vm.Grouping = HistoryGrouping.Connection;
+
+        Assert.Equal(["local", "prod"], vm.Groups.Select(g => g.Caption));
+        Assert.Equal(["select new_prod", "select old_prod"], vm.Groups[1].Rows.Select(r => r.Sql));
+        Assert.Equal("#E46876", vm.Groups[1].Color);
+        Assert.False(vm.Groups[0].HasColor);   // no colour known for it: no dot, rather than an empty one
+        // No day caption above these rows, so each says its own date.
+        var row = vm.Groups[1].Rows[0];
+        Assert.Equal(row.Entry.ExecutedAt.LocalDateTime.ToString("dd.MM HH:mm"), row.Time);
+    }
+
+    [Fact]
+    public async Task Grouping_by_day_is_the_default_and_its_rows_show_the_time_alone()
+    {
+        var now = DateTimeOffset.Now;
+        var (vm, _) = WithConnections(Entry(now, ok: true, conn: "prod"));
+
+        await vm.ReloadAsync(CancellationToken.None);
+
+        Assert.Equal(HistoryGrouping.Day, vm.Grouping);
+        Assert.Equal("TODAY", Assert.Single(vm.Groups).Caption);
+        Assert.Null(vm.Groups[0].Color);
+        Assert.Equal(now.LocalDateTime.ToString("HH:mm"), vm.Groups[0].Rows[0].Time);
+    }
+
+    [Fact]
+    public async Task A_connection_renamed_since_keeps_one_group_under_its_current_name()
+    {
+        var now = DateTimeOffset.Now;
+        var (vm, _) = WithConnections(
+            Entry(now, ok: true, conn: "prod"),
+            Entry(now.AddHours(-1), ok: true, conn: "production (old name)") with { ConnectionId = ProdId });
+        await vm.ReloadAsync(CancellationToken.None);
+
+        vm.Grouping = HistoryGrouping.Connection;
+
+        var group = Assert.Single(vm.Groups);
+        Assert.Equal("prod", group.Caption);
+        Assert.Equal(2, group.Rows.Count);
+    }
+
+    [Fact]
+    public async Task The_pills_still_narrow_a_list_grouped_by_connection()
+    {
+        var now = DateTimeOffset.Now;
+        var (vm, _) = WithConnections(
+            Entry(now, ok: true, conn: "prod"),
+            Entry(now.AddMinutes(-1), ok: false, conn: "local"));
+        await vm.ReloadAsync(CancellationToken.None);
+        vm.Grouping = HistoryGrouping.Connection;
+
+        vm.Filter = HistoryFilter.Error;
+
+        Assert.Equal("local", Assert.Single(vm.Groups).Caption);
+    }
+
+    [Fact]
+    public async Task Changing_the_grouping_keeps_the_selected_row()
+    {
+        var now = DateTimeOffset.Now;
+        var (vm, _) = WithConnections(
+            Entry(now, ok: true, conn: "prod", sql: "select a") with { Id = 1 },
+            Entry(now.AddDays(-1), ok: true, conn: "local", sql: "select b") with { Id = 2 });
+        await vm.ReloadAsync(CancellationToken.None);
+        vm.SelectedRow = vm.Groups[1].Rows[0];
+
+        vm.Grouping = HistoryGrouping.Connection;
+
+        Assert.Equal("select b", vm.SelectedRow?.Sql);
+        Assert.Contains(vm.SelectedRow, vm.Groups.SelectMany(g => g.Rows));
+    }
+
+    [Fact]
+    public async Task The_connection_filter_offers_all_then_the_projects_connections_then_other_logged_names()
+    {
+        var now = DateTimeOffset.Now;
+        var (vm, _) = WithConnections(
+            Entry(now, ok: true, conn: "prod"),
+            Entry(now, ok: true, conn: "deleted since"));
+
+        await vm.ReloadAsync(CancellationToken.None);
+
+        Assert.Equal(["All connections", "local", "prod", "deleted since"], vm.ConnectionOptions.Select(o => o.Label));
+        Assert.Same(HistoryConnectionOption.All, vm.SelectedConnection);
+        Assert.Equal(new HistoryConnection("prod", ProdId), vm.ConnectionOptions[2].Connection);
+        Assert.Null(vm.ConnectionOptions[3].Connection!.Id);   // known by its recorded name only
+
+        // A reload that changes nothing leaves the list alone: no change events for the bound dropdown, whose
+        // selection a rebuilt list would disturb.
+        var changes = 0;
+        vm.ConnectionOptions.CollectionChanged += (_, _) => changes++;
+        await vm.ReloadAsync(CancellationToken.None);
+        Assert.Equal(0, changes);
+    }
+
+    [Fact]
+    public async Task Picking_a_connection_asks_the_log_for_it_rather_than_filtering_the_rows_loaded()
+    {
+        var now = DateTimeOffset.Now;
+        var (vm, store) = WithConnections(
+            Entry(now, ok: true, conn: "prod", sql: "select on_prod"),
+            Entry(now, ok: true, conn: "local", sql: "select on_local"));
+        await vm.ReloadAsync(CancellationToken.None);
+
+        vm.SelectedConnection = vm.ConnectionOptions.Single(o => o.Label == "prod");
+
+        Assert.Equal(new HistoryConnection("prod", ProdId), store.Asked[^1]);
+        Assert.Equal(["select on_prod"], vm.Groups.SelectMany(g => g.Rows).Select(r => r.Sql));
+        Assert.Equal("1 query.", vm.Status);
+
+        vm.SelectedConnection = HistoryConnectionOption.All;
+
+        Assert.Null(store.Asked[^1]);
+        Assert.Equal(2, vm.Groups.SelectMany(g => g.Rows).Count());
+    }
+
+    [Fact]
+    public async Task The_options_survive_a_filter_that_leaves_one_connections_rows_loaded()
+    {
+        // Once "prod" is picked the loaded rows name nothing else, and the list must not shrink to match:
+        // the other names are how the user gets back out.
+        var now = DateTimeOffset.Now;
+        var (vm, _) = WithConnections(
+            Entry(now, ok: true, conn: "prod"),
+            Entry(now, ok: true, conn: "deleted since"));
+        await vm.ReloadAsync(CancellationToken.None);
+        var picked = vm.ConnectionOptions.Single(o => o.Label == "deleted since");
+
+        vm.SelectedConnection = picked;
+        vm.SelectedConnection = vm.ConnectionOptions.Single(o => o.Label == "prod");
+
+        Assert.Equal(["All connections", "local", "prod", "deleted since"], vm.ConnectionOptions.Select(o => o.Label));
+        Assert.Same(picked, vm.ConnectionOptions[3]);   // patched in place: the same options, never rebuilt
+    }
+
+    [Fact]
+    public async Task A_dropdown_writing_null_falls_back_to_all_connections()
+    {
+        var (vm, store) = WithConnections(Entry(DateTimeOffset.Now, ok: true, conn: "prod"));
+        await vm.ReloadAsync(CancellationToken.None);
+        vm.SelectedConnection = vm.ConnectionOptions.Single(o => o.Label == "prod");
+
+        vm.SelectedConnection = null;
+
+        Assert.Same(HistoryConnectionOption.All, vm.SelectedConnection);
+        Assert.Null(store.Asked[^1]);
+    }
+
+    [Fact]
+    public async Task An_answer_for_the_connection_just_left_does_not_land()
+    {
+        var now = DateTimeOffset.Now;
+        var prodRows = new[] { Entry(now, ok: true, conn: "prod", sql: "select on_prod") };
+        var all = new[] { prodRows[0], Entry(now, ok: true, conn: "local", sql: "select on_local") };
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var vm = new HistoryPanelViewModel(
+            async (search, _) =>
+            {
+                if (search.Connection is null) return all;
+                await gate.Task;                                   // the slow search for one connection
+                return prodRows;
+            },
+            _ => null,
+            connections: () => [new HistoryConnection("prod", ProdId)]);
+        await vm.ReloadAsync(CancellationToken.None);
+        vm.SelectedConnection = vm.ConnectionOptions.Single(o => o.Label == "prod");
+        var slow = vm.ReloadAsync(CancellationToken.None);         // the shell's refresh, on its own token
+
+        vm.SelectedConnection = HistoryConnectionOption.All;
+        gate.SetResult();
+        await slow;
+
+        Assert.Equal(2, vm.Groups.SelectMany(g => g.Rows).Count());
     }
 }
