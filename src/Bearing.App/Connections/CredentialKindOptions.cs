@@ -52,12 +52,16 @@ public static class CredentialKindOptions
             options.Add(new(CredentialKind.EntraToken, "Microsoft Entra token (az login)"));
         if (provider.SupportsIntegratedAuth)
             options.Add(new(CredentialKind.Integrated, "Windows / integrated authentication"));
+        if (provider.SupportsDomainPassword)
+            options.Add(new(CredentialKind.DomainPassword, "Domain account (NTLM)"));
         if (provider.SupportsAwsProfile)
             options.Add(new(CredentialKind.AwsProfile, "AWS profile"));
         return options;
     }
 
-    /// <summary>Whether a kind stores a password — the one kind with a password box and, when no keychain
-    /// is reachable, the one kind the dialog warns about.</summary>
-    public static bool KeepsAStoredPassword(CredentialKind kind) => kind == CredentialKind.StoredPassword;
+    /// <summary>Whether a kind stores a password — the kinds with a password box and, when no keychain
+    /// is reachable, the kinds the dialog warns about. A domain account's password is kept exactly as a
+    /// stored password is; only how it is presented to the server differs.</summary>
+    public static bool KeepsAStoredPassword(CredentialKind kind)
+        => kind is CredentialKind.StoredPassword or CredentialKind.DomainPassword;
 }

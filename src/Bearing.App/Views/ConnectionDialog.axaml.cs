@@ -493,6 +493,7 @@ public partial class ConnectionDialog : Window
         // Entra is only offered where the engine supports it, so this also keeps it off engines with no Azure flavour.
         BrowseAzureButton.IsVisible = _azure is not null && kind == CredentialKind.EntraToken;
         IntegratedHint.IsVisible = kind == CredentialKind.Integrated;
+        DomainHint.IsVisible = kind == CredentialKind.DomainPassword;
         AwsProfileHint.IsVisible = kind == CredentialKind.AwsProfile;
         UserFromLoginBox.IsVisible = UserFromLoginOffered();
         if (_userBox is not null)
@@ -901,7 +902,7 @@ public partial class ConnectionDialog : Window
     /// prompt / Entra / integrated (nothing is stored — an empty value deletes any existing secret on
     /// save).</summary>
     private string SecretToStore()
-        => SelectedCredentialKind() == CredentialKind.StoredPassword ? (PasswordBox.Text ?? "") : "";
+        => CredentialKindOptions.KeepsAStoredPassword(SelectedCredentialKind()) ? (PasswordBox.Text ?? "") : "";
 
     private string BuildFallbackName()
     {

@@ -62,6 +62,10 @@ public sealed class SqlServerProvider : IDbProvider
     /// <inheritdoc />
     public bool SupportsAwsProfile => false;
 
+    /// <summary>True: <see cref="SqlServerConnectionFactory"/> answers the login over NTLM with the account
+    /// typed as <c>DOMAIN\user</c> (<see cref="NtlmSspiContextProvider"/>).</summary>
+    public bool SupportsDomainPassword => true;
+
     /// <inheritdoc />
     public bool SupportsManualCommit => true;
 

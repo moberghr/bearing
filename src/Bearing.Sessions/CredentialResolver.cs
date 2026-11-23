@@ -65,7 +65,8 @@ public sealed class CredentialResolver
             // A stored password that didn't change would just fail identically — unless the store can't hold
             // passwords at all (no keyring), where "stored password" really means "there is nothing stored" and
             // the retry is what gets the user prompted for one.
-            CredentialKind.StoredPassword => _secrets() is { CanStore: false },
+            // A domain account's password is kept the same way, so the same answer.
+            CredentialKind.StoredPassword or CredentialKind.DomainPassword => _secrets() is { CanStore: false },
 
             // The OS identity: nothing to re-prompt for and nothing to re-mint, so a retry would send the exact
             // same handshake. Spelled out rather than left to the default arm because the case it must not fall
@@ -100,6 +101,7 @@ public sealed class CredentialResolver
         switch (info.CredentialKind)
         {
             case CredentialKind.StoredPassword:
+            case CredentialKind.DomainPassword:
                 {
                     var store = _secrets();
                     string? pw;
@@ -125,8 +127,15 @@ public sealed class CredentialResolver
                     //
                     // The first attempt deliberately goes out with no password rather than prompting, so a
                     // passwordless connection (trust auth, .pgpass) still connects without being interrogated.
+                    //
+                    // A domain account has no passwordless login, and its factory refuses to open without a
+                    // password (it would otherwise log in as the OS identity), so that kind asks at once
+                    // instead of sending a first attempt that cannot succeed.
                     if (!forceRefresh)
-                        return _cache.TryGetValue(info.Id, out var remembered) ? remembered : new Credential(null, null);
+                    {
+                        if (_cache.TryGetValue(info.Id, out var remembered)) return remembered;
+                        if (info.CredentialKind != CredentialKind.DomainPassword) return new Credential(null, null);
+                    }
 
                     if (_prompt is null) return new Credential(null, null);
                     var typed = await _prompt.RequestPasswordAsync(info, null, ct);

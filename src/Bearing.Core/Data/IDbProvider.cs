@@ -79,6 +79,13 @@ public interface IDbProvider
     bool SupportsAwsProfile { get; }
 
     /// <summary>
+    /// Whether this engine's connection factory can log in as an explicit domain account with a password
+    /// (<see cref="CredentialKind.DomainPassword"/>). Defaulted to false, unlike its neighbours: it is one
+    /// engine's arrangement (SQL Server over NTLM), so an engine that says nothing does not offer it.
+    /// </summary>
+    bool SupportsDomainPassword => false;
+
+    /// <summary>
     /// Whether <see cref="ConnectionInfo.ManualCommit"/> means anything on this engine — that is, whether
     /// <see cref="CreateTransactionScope"/> can hold a transaction open across calls. An engine without
     /// transactions answers false and the dialog does not offer the setting, rather than offering one that

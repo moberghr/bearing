@@ -141,6 +141,9 @@
             <TextBlock x:Name="IntegratedHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,4,0,0"
                        Text="Connects as the Windows account running Bearing. No password is stored, prompted for, or read from the keychain."/>
 
+            <TextBlock x:Name="DomainHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,4,0,0"
+                       Text="Signs in as a domain (Active Directory) account over NTLM, so this machine does not have to be joined to the domain. Type the user as DOMAIN\user or user@domain. The password is kept in the keychain, like a stored password."/>
+
             <TextBlock x:Name="AwsProfileHint" IsVisible="False" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="90,4,0,0"
                        Text="Signs in through the AWS SDK with the profile named above (or its default credential chain when blank). Bearing's own code never reads, stores or asks for an AWS secret — the AWS SDK resolves the profile."/>
 

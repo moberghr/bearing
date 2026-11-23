@@ -31,4 +31,12 @@ public enum CredentialKind
     /// copy and SQL Server branches say so. Offered only where
     /// <see cref="IDbProvider.SupportsAwsProfile"/> says the factory can honour it.</summary>
     AwsProfile = 4,
+
+    /// <summary>A domain (Active Directory) account named in the User box as <c>DOMAIN\user</c> or
+    /// <c>user@domain</c> (<see cref="DomainUser"/>), with a password kept in the secret store like
+    /// <see cref="StoredPassword"/>'s. The login is answered over NTLM with that account instead of the
+    /// identity of the process, which is what lets a machine outside the domain use it. Not
+    /// <see cref="Integrated"/>: that kind resolves no secret and names no user. Offered only where
+    /// <see cref="IDbProvider.SupportsDomainPassword"/> says the factory can honour it.</summary>
+    DomainPassword = 5,
 }
