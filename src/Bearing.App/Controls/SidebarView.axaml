@@ -475,17 +475,16 @@
                       FontSize="{DynamicResource Font.Small}" Foreground="{DynamicResource Text.Dim}"
                       ToolTip.Tip="Export the query history as an audit report"/>
             </Grid>
-            <!-- Search, and the connection the list is narrowed to. The filter is asked of the log, not of
-                 the rows on screen, so a connection with nothing recent is still found. -->
-            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,6">
-              <TextBox Text="{Binding History.SearchText, Mode=TwoWay}"
-                       PlaceholderText="Search history…" KeyDown="OnHistorySearchKeyDown"/>
-              <ComboBox x:Name="HistoryConnectionFilter" Grid.Column="1" Margin="6,0,0,0" MaxWidth="170"
-                        VerticalAlignment="Stretch" FontSize="{DynamicResource Font.Small}"
-                        ItemsSource="{Binding History.ConnectionOptions}"
-                        SelectedItem="{Binding History.SelectedConnection, Mode=TwoWay}"
-                        ToolTip.Tip="Show one connection's history"/>
-            </Grid>
+            <TextBox DockPanel.Dock="Top" Text="{Binding History.SearchText, Mode=TwoWay}"
+                     PlaceholderText="Search history…" KeyDown="OnHistorySearchKeyDown" Margin="0,0,0,6"/>
+            <!-- The connection the list is narrowed to. Asked of the log, not of the rows on screen, so a
+                 connection with nothing recent is still found. A row of its own: beside the search box it
+                 left neither room at the pane's default width. -->
+            <ComboBox x:Name="HistoryConnectionFilter" DockPanel.Dock="Top" Margin="0,0,0,6"
+                      HorizontalAlignment="Stretch" FontSize="{DynamicResource Font.Small}"
+                      ItemsSource="{Binding History.ConnectionOptions}"
+                      SelectedItem="{Binding History.SelectedConnection, Mode=TwoWay}"
+                      ToolTip.Tip="Show one connection's history"/>
             <!-- Wraps: the pane can be narrower than the six pills. -->
             <WrapPanel DockPanel.Dock="Top" Orientation="Horizontal" ItemSpacing="6" LineSpacing="4" Margin="0,0,0,6">
               <RadioButton Theme="{StaticResource PillToggle}" GroupName="histfilter" Content="All"
