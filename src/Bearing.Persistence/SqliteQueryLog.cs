@@ -398,9 +398,17 @@ public sealed class SqliteQueryLog : IQueryLog, IAsyncDisposable
             cmd.Parameters.AddWithValue("$match", match);
             where.Add("q.id IN (SELECT rowid FROM query_log_fts WHERE query_log_fts MATCH $match)");
         }
-        if (!string.IsNullOrWhiteSpace(query.ConnectionName))
+        var byName = !string.IsNullOrWhiteSpace(query.ConnectionName);
+        if (byName) cmd.Parameters.AddWithValue("$conn", query.ConnectionName);
+        if (query.ConnectionId is { } wantedId)
         {
-            cmd.Parameters.AddWithValue("$conn", query.ConnectionName);
+            // Name OR id: a row from before ids were logged has only the name, and one logged under an older
+            // name of the same connection has only the id in common (§1.6).
+            cmd.Parameters.AddWithValue("$connId", wantedId.ToString());
+            where.Add(byName ? "(q.connection = $conn OR q.connection_id = $connId)" : "q.connection_id = $connId");
+        }
+        else if (byName)
+        {
             where.Add("q.connection = $conn");
         }
         if (query.SuccessOnly == true) where.Add("q.success = 1");

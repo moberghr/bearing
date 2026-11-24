@@ -189,4 +189,31 @@ public class QueryLogTests : IDisposable
         var found = await reopened.SearchAsync(new QueryLogQuery { Text = "remembered" }, CancellationToken.None);
         Assert.Single(found);
     }
+
+    [Fact]
+    public async Task A_connection_is_found_by_its_recorded_name_or_its_id()
+    {
+        // The history panel's connection filter (and §1.6's rule): a row from before ids were logged has only
+        // the name, and one logged under an older name of the same connection has only the id in common.
+        var id = Guid.NewGuid();
+        await using var log = new SqliteQueryLog(_dir);
+        var landed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var count = 0;
+        log.Appended += _ => { if (Interlocked.Increment(ref count) == 4) landed.TrySetResult(); };
+        log.Append(Entry("select by_name_only"));                                            // "prod", no id
+        log.Append(Entry("select renamed") with { ConnectionName = "old name", ConnectionId = id });
+        log.Append(Entry("select other") with { ConnectionName = "test", ConnectionId = Guid.NewGuid() });
+        log.Append(Entry("select both") with { ConnectionId = id });
+        await landed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var either = await log.SearchAsync(
+            new QueryLogQuery { ConnectionName = "prod", ConnectionId = id }, CancellationToken.None);
+        var byName = await log.SearchAsync(new QueryLogQuery { ConnectionName = "prod" }, CancellationToken.None);
+        var byId = await log.SearchAsync(new QueryLogQuery { ConnectionId = id }, CancellationToken.None);
+
+        Assert.Equal(
+            ["select both", "select by_name_only", "select renamed"], either.Select(e => e.SqlText).Order());
+        Assert.Equal(["select both", "select by_name_only"], byName.Select(e => e.SqlText).Order());
+        Assert.Equal(["select both", "select renamed"], byId.Select(e => e.SqlText).Order());
+    }
 }

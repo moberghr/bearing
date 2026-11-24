@@ -29,31 +29,50 @@ public enum HistoryFilter
 /// </summary>
 public sealed partial class HistoryPanelViewModel : ObservableObject
 {
-    private readonly Func<string?, bool, CancellationToken, Task<IReadOnlyList<QueryLogEntry>>> _search;
+    private readonly Func<HistorySearch, CancellationToken, Task<IReadOnlyList<QueryLogEntry>>> _search;
     private readonly Func<string, string?> _colorForConnection;
     private readonly Func<long, bool, CancellationToken, Task>? _setStarred;
+    private readonly Func<IReadOnlyList<HistoryConnection>> _connections;
+    // Recorded names met in the log that no connection of the project answers to (deleted or renamed since).
+    // Remembered for the session: once a connection is picked, the loaded rows hold that one name only.
+    private readonly HashSet<string> _otherNames = new(StringComparer.Ordinal);
     private IReadOnlyList<QueryLogEntry> _entries = Array.Empty<QueryLogEntry>();
     private CancellationTokenSource? _filterReload;
 
-    /// <param name="search">The log search: free text (null for none) and whether to return starred rows only.</param>
+    /// <param name="search">The log search — see <see cref="HistorySearch"/>.</param>
     /// <param name="setStarred">Stars or unstars a logged row by id (#111); null leaves the star inert.</param>
+    /// <param name="connections">The project's connections as they are now, for the connection filter and for
+    /// naming a group after a connection renamed since its rows were logged. Null: none.</param>
     public HistoryPanelViewModel(
-        Func<string?, bool, CancellationToken, Task<IReadOnlyList<QueryLogEntry>>> search,
+        Func<HistorySearch, CancellationToken, Task<IReadOnlyList<QueryLogEntry>>> search,
         Func<string, string?> colorForConnection,
-        Func<long, bool, CancellationToken, Task>? setStarred = null)
+        Func<long, bool, CancellationToken, Task>? setStarred = null,
+        Func<IReadOnlyList<HistoryConnection>>? connections = null)
     {
         _search = search;
         _colorForConnection = colorForConnection;
         _setStarred = setStarred;
+        _connections = connections ?? (() => Array.Empty<HistoryConnection>());
     }
 
     [ObservableProperty] private string _searchText = "";
     [ObservableProperty] private HistoryFilter _filter = HistoryFilter.All;
+    [ObservableProperty] private HistoryGrouping _grouping = HistoryGrouping.Day;
+
+    /// <summary>The connection the list is narrowed to; <see cref="HistoryConnectionOption.All"/> for none.
+    /// Neither this nor <see cref="Grouping"/> is saved: both start over with the app.</summary>
+    [ObservableProperty] private HistoryConnectionOption? _selectedConnection = HistoryConnectionOption.All;
+
+    /// <summary>What the connection filter offers: all, the project's connections, then any other name the
+    /// loaded rows were logged under. Patched in place, never cleared — a cleared list makes the bound
+    /// dropdown write its own lost selection back.</summary>
+    public ObservableCollection<HistoryConnectionOption> ConnectionOptions { get; } = [HistoryConnectionOption.All];
     [ObservableProperty] private HistoryRowViewModel? _selectedRow;
     [ObservableProperty] private string _status = "";
 
-    /// <summary>Day-grouped, filtered rows (newest day first).</summary>
-    public ObservableCollection<HistoryDayGroup> Groups { get; } = new();
+    /// <summary>The filtered rows under their captions: a day each (newest first), or a connection each
+    /// (<see cref="Grouping"/>).</summary>
+    public ObservableCollection<HistoryGroup> Groups { get; } = new();
 
     /// <summary>The ok/error pills re-group the cached rows; entering or leaving <see cref="HistoryFilter.Starred"/>
     /// changes what the store is asked for, so that one reloads.</summary>
@@ -64,6 +83,33 @@ public sealed partial class HistoryPanelViewModel : ObservableObject
             Regroup(DateTimeOffset.Now);
             return;
         }
+        StartOwnReload();
+    }
+
+    /// <summary>Asked of the store rather than of the rows already loaded, as the Starred pill is: the panel
+    /// holds the newest screenful, and a quiet connection may have nothing in it.</summary>
+    partial void OnSelectedConnectionChanged(HistoryConnectionOption? value)
+    {
+        // A dropdown can write null while its items move; that is not the user choosing anything.
+        if (value is null)
+        {
+            SelectedConnection = HistoryConnectionOption.All;
+            return;
+        }
+        // The dropdown is in the middle of committing this selection, and a search that answers at once
+        // regroups before it has finished: the options must not move under it (it then reads an index the
+        // list no longer has). The next reload brings them up to date.
+        _pickingConnection = true;
+        try { StartOwnReload(); }
+        finally { _pickingConnection = false; }
+    }
+
+    private bool _pickingConnection;
+
+    partial void OnGroupingChanged(HistoryGrouping value) => Regroup(DateTimeOffset.Now);
+
+    private void StartOwnReload()
+    {
         var superseded = _filterReload;
         _filterReload = new CancellationTokenSource();
         superseded?.Cancel();
@@ -111,9 +157,10 @@ public sealed partial class HistoryPanelViewModel : ObservableObject
     {
         var text = string.IsNullOrWhiteSpace(SearchText) ? null : SearchText;
         var starredOnly = Filter == HistoryFilter.Starred;
+        var connection = SelectedConnection?.Connection;
         try
         {
-            var found = await _search(text, starredOnly, ct);
+            var found = await _search(new HistorySearch(text, starredOnly, connection), ct);
             // A superseded reload must not land: the caller cancels the previous one for each new query in
             // a run, and applying a stale answer after a newer one would leave the panel behind the log.
             ct.ThrowIfCancellationRequested();
@@ -122,6 +169,8 @@ public sealed partial class HistoryPanelViewModel : ObservableObject
             // starred-only rows under "All", or the newest screenful under "Starred" — and the filter change
             // has started a reload of its own.
             if ((Filter == HistoryFilter.Starred) != starredOnly) return;
+            // The same for the connection filter: an answer for the connection just left.
+            if (!Equals(SelectedConnection?.Connection, connection)) return;
             _entries = found;
             Regroup(DateTimeOffset.Now);
             Status = _entries.Count == 0
@@ -142,16 +191,8 @@ public sealed partial class HistoryPanelViewModel : ObservableObject
     /// the day bucketing (TODAY/YESTERDAY/date) is unit-testable.</summary>
     public void Regroup(DateTimeOffset now)
     {
-        var today = DateOnly.FromDateTime(now.LocalDateTime);
-        var rows = _entries
-            .Where(Matches)
-            .Select(e => (entry: e, day: DateOnly.FromDateTime(e.ExecutedAt.LocalDateTime)))
-            .GroupBy(x => x.day)
-            .OrderByDescending(g => g.Key)
-            .Select(g => new HistoryDayGroup(
-                DayCaption(g.Key, today),
-                g.Select(x => new HistoryRowViewModel(x.entry, _colorForConnection(x.entry.ConnectionName))).ToList()))
-            .ToList();
+        RefreshConnectionOptions();
+        var rows = Grouping == HistoryGrouping.Connection ? ByConnection() : ByDay(now);
 
         var selected = SelectedRow?.Entry;
 
@@ -167,6 +208,77 @@ public sealed partial class HistoryPanelViewModel : ObservableObject
         SelectedRow = selected is null
             ? null
             : Groups.SelectMany(g => g.Rows).FirstOrDefault(r => IsSameEntry(r.Entry, selected));
+    }
+
+    private List<HistoryGroup> ByDay(DateTimeOffset now)
+    {
+        var today = DateOnly.FromDateTime(now.LocalDateTime);
+        return _entries
+            .Where(Matches)
+            .Select(e => (entry: e, day: DateOnly.FromDateTime(e.ExecutedAt.LocalDateTime)))
+            .GroupBy(x => x.day)
+            .OrderByDescending(g => g.Key)
+            .Select(g => new HistoryGroup(
+                DayCaption(g.Key, today),
+                g.Select(x => new HistoryRowViewModel(x.entry, _colorForConnection(x.entry.ConnectionName))).ToList()))
+            .ToList();
+    }
+
+    /// <summary>
+    /// One group per connection, the one used most recently first, its rows newest first. A row belongs to
+    /// the project connection it was logged against — by id, so a connection renamed since keeps one group
+    /// under its current name — and otherwise to the name it was logged under. Rows carry their date here:
+    /// there is no day caption above them. Built from the rows loaded, so a connection with nothing in the
+    /// newest screenful has no group until it is picked in the filter.
+    /// </summary>
+    private List<HistoryGroup> ByConnection()
+    {
+        var known = _connections();
+        return _entries
+            .Where(Matches)
+            .Select(e => (entry: e, name: Resolve(known, e)?.Name ?? e.ConnectionName))
+            .GroupBy(x => x.name, StringComparer.Ordinal)
+            .OrderByDescending(g => g.Max(x => x.entry.ExecutedAt))
+            .Select(g => new HistoryGroup(
+                g.Key,
+                g.OrderByDescending(x => x.entry.ExecutedAt)
+                    .Select(x => new HistoryRowViewModel(
+                        x.entry, _colorForConnection(x.entry.ConnectionName), withDate: true))
+                    .ToList(),
+                _colorForConnection(g.Key)))
+            .ToList();
+    }
+
+    /// <summary>The project connection a logged row ran against: by id where the row has one that still
+    /// exists, else by the name it was logged under. Null when the project has no such connection.</summary>
+    private static HistoryConnection? Resolve(IReadOnlyList<HistoryConnection> known, QueryLogEntry entry)
+        => (entry.ConnectionId is { } id ? known.FirstOrDefault(c => c.Id == id) : null)
+           ?? known.FirstOrDefault(c => string.Equals(c.Name, entry.ConnectionName, StringComparison.Ordinal));
+
+    /// <summary>Bring <see cref="ConnectionOptions"/> up to date with the project and the rows loaded. The
+    /// selected option always stays in the list, even when its connection has since gone.</summary>
+    private void RefreshConnectionOptions()
+    {
+        if (_pickingConnection) return;
+        var known = _connections();
+        foreach (var entry in _entries)
+        {
+            if (Resolve(known, entry) is null) _otherNames.Add(entry.ConnectionName);
+        }
+        _otherNames.RemoveWhere(name => known.Any(c => string.Equals(c.Name, name, StringComparison.Ordinal)));
+
+        var desired = new List<HistoryConnectionOption> { HistoryConnectionOption.All };
+        desired.AddRange(known
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(c => new HistoryConnectionOption(c.Name, c)));
+        desired.AddRange(_otherNames
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .Select(name => new HistoryConnectionOption(name, new HistoryConnection(name))));
+        if (SelectedConnection is { } selected && !desired.Contains(selected)) desired.Add(selected);
+        // The sync goes by reference, and these are rebuilt each time: hand it the option already listed
+        // wherever one is equal, so a list that has not changed is not touched at all.
+        var listed = desired.Select(d => ConnectionOptions.FirstOrDefault(o => o.Equals(d)) ?? d).ToList();
+        TabViewSync.Apply(ConnectionOptions, listed);
     }
 
     /// <summary>Whether two projections are of the same logged row. By <see cref="QueryLogEntry.Id"/> where
@@ -194,13 +306,41 @@ public sealed partial class HistoryPanelViewModel : ObservableObject
     }
 }
 
-/// <summary>A day's worth of history rows under a caption.</summary>
-public sealed record HistoryDayGroup(string Caption, IReadOnlyList<HistoryRowViewModel> Rows);
+/// <summary>History rows under a caption — a day's worth, or a connection's, whose environment colour is
+/// then <paramref name="Color"/> (null for a day, and for a connection the project no longer has).</summary>
+public sealed record HistoryGroup(string Caption, IReadOnlyList<HistoryRowViewModel> Rows, string? Color = null)
+{
+    public bool HasColor => Color is not null;
+}
+
+/// <summary>How the history list is captioned.</summary>
+public enum HistoryGrouping
+{
+    Day,
+    Connection,
+}
+
+/// <summary>A connection history can be narrowed to. <paramref name="Id"/> is null for one known only by
+/// the name its rows were logged under.</summary>
+public sealed record HistoryConnection(string Name, Guid? Id = null);
+
+/// <summary>An entry of the connection filter; <see cref="All"/> has no connection.</summary>
+public sealed record HistoryConnectionOption(string Label, HistoryConnection? Connection)
+{
+    public static HistoryConnectionOption All { get; } = new("All connections", null);
+
+    public override string ToString() => Label;
+}
+
+/// <summary>What the panel asks the log for: free text (null for none), starred rows only, and the
+/// connection to narrow to (null for all).</summary>
+public sealed record HistorySearch(string? Text, bool StarredOnly, HistoryConnection? Connection);
 
 /// <summary>Display projection of one logged query for the history panel.</summary>
 public sealed partial class HistoryRowViewModel : ObservableObject
 {
-    public HistoryRowViewModel(QueryLogEntry entry, string? connectionColor)
+    /// <param name="withDate">Show the date beside the time — for a list with no day caption above the row.</param>
+    public HistoryRowViewModel(QueryLogEntry entry, string? connectionColor, bool withDate = false)
     {
         Entry = entry;
         _isStarred = entry.IsStarred;
@@ -210,7 +350,7 @@ public sealed partial class HistoryRowViewModel : ObservableObject
             $"{p.Name} = {ScriptDirectives.FormatValue(p.Value, p.Kind) ?? "(multi-line text)"}"));
         ConnectionColor = connectionColor;
         IsError = !entry.Success;
-        Time = entry.ExecutedAt.LocalDateTime.ToString("HH:mm");
+        Time = entry.ExecutedAt.LocalDateTime.ToString(withDate ? "dd.MM HH:mm" : "HH:mm");
         Query = OneLine(entry.SqlText);
         Detail = $"{entry.ExecutedAt.LocalDateTime:dd.MM.yyyy HH:mm:ss} · {entry.ConnectionName} · {entry.RowCount} row(s) · {(long)entry.Duration.TotalMilliseconds} ms"
                  + (entry.Origin is null ? "" : $" · {entry.Origin}")

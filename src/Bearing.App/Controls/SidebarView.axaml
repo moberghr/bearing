@@ -477,7 +477,16 @@
             </Grid>
             <TextBox DockPanel.Dock="Top" Text="{Binding History.SearchText, Mode=TwoWay}"
                      PlaceholderText="Search history…" KeyDown="OnHistorySearchKeyDown" Margin="0,0,0,6"/>
-            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,6">
+            <!-- The connection the list is narrowed to. Asked of the log, not of the rows on screen, so a
+                 connection with nothing recent is still found. A row of its own: beside the search box it
+                 left neither room at the pane's default width. -->
+            <ComboBox x:Name="HistoryConnectionFilter" DockPanel.Dock="Top" Margin="0,0,0,6"
+                      HorizontalAlignment="Stretch" FontSize="{DynamicResource Font.Small}"
+                      ItemsSource="{Binding History.ConnectionOptions}"
+                      SelectedItem="{Binding History.SelectedConnection, Mode=TwoWay}"
+                      ToolTip.Tip="Show one connection's history"/>
+            <!-- Wraps: the pane can be narrower than the six pills. -->
+            <WrapPanel DockPanel.Dock="Top" Orientation="Horizontal" ItemSpacing="6" LineSpacing="4" Margin="0,0,0,6">
               <RadioButton Theme="{StaticResource PillToggle}" GroupName="histfilter" Content="All"
                            IsChecked="{Binding History.Filter, Converter={StaticResource EnumToBool}, ConverterParameter=All, Mode=TwoWay}"/>
               <RadioButton Theme="{StaticResource PillToggle}" GroupName="histfilter" Content="✓ ok"
@@ -488,7 +497,16 @@
               <RadioButton Theme="{StaticResource PillToggle}" GroupName="histfilter" Content="★ starred"
                            ToolTip.Tip="Starred queries — kept past history retention"
                            IsChecked="{Binding History.Filter, Converter={StaticResource EnumToBool}, ConverterParameter=Starred, Mode=TwoWay}"/>
-            </StackPanel>
+              <!-- How the list is captioned: a day each, or a connection each. -->
+              <TextBlock Text="group" FontSize="{DynamicResource Font.Small}" VerticalAlignment="Center"
+                         Foreground="{DynamicResource Text.Faint}" Margin="6,0,0,0"/>
+              <RadioButton x:Name="HistoryGroupByDay" Theme="{StaticResource PillToggle}" GroupName="histgroup" Content="day"
+                           ToolTip.Tip="Group history by day"
+                           IsChecked="{Binding History.Grouping, Converter={StaticResource EnumToBool}, ConverterParameter=Day, Mode=TwoWay}"/>
+              <RadioButton x:Name="HistoryGroupByConnection" Theme="{StaticResource PillToggle}" GroupName="histgroup" Content="connection"
+                           ToolTip.Tip="Group history by connection"
+                           IsChecked="{Binding History.Grouping, Converter={StaticResource EnumToBool}, ConverterParameter=Connection, Mode=TwoWay}"/>
+            </WrapPanel>
             <TextBlock DockPanel.Dock="Bottom" Text="{Binding History.Status}" FontSize="{DynamicResource Font.Small}"
                        Foreground="{DynamicResource Text.Faint}" Margin="2,4,2,0"/>
             <!-- List (fills) · drag splitter · query preview (resizable, hidden until a row is selected).
@@ -503,10 +521,16 @@
             <ScrollViewer Grid.Row="0">
               <ItemsControl ItemsSource="{Binding History.Groups}">
                 <ItemsControl.ItemTemplate>
-                  <DataTemplate x:DataType="vm:HistoryDayGroup">
+                  <DataTemplate x:DataType="vm:HistoryGroup">
                     <StackPanel Margin="0,0,0,8">
-                      <TextBlock Text="{Binding Caption}" FontSize="{DynamicResource Font.Caption}" FontWeight="Bold"
-                                 Foreground="{DynamicResource Text.Faint}" Margin="2,2,2,3"/>
+                      <!-- A day, or a connection with its environment colour beside the name. -->
+                      <StackPanel Orientation="Horizontal" Margin="2,2,2,3">
+                        <Border Width="8" Height="8" CornerRadius="4" VerticalAlignment="Center" Margin="0,0,6,0"
+                                IsVisible="{Binding HasColor}"
+                                Background="{Binding Color, Converter={StaticResource HexBrush}}"/>
+                        <TextBlock Text="{Binding Caption}" FontSize="{DynamicResource Font.Caption}" FontWeight="Bold"
+                                   Foreground="{DynamicResource Text.Faint}"/>
+                      </StackPanel>
                       <!-- One SelectedRow, one ListBox per day: bound *one-way*, plus an explicit write from
                            the SelectionChanged handler. Two-way made the day-A list write its own
                            deselection back over the row just clicked in day B, collapsing the preview (#43);

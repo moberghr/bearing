@@ -14,6 +14,7 @@ using Avalonia.Headless;
 using Avalonia.VisualTree;
 using Bearing.App.Theming;
 using Bearing.Core.Data;
+using Bearing.Core.Logging;
 using Bearing.Core.Workspace;
 using Bearing.Demo;
 using Bearing.Sql;
@@ -156,6 +157,83 @@ public class LookProbe
             shell.Vm.Activity.Selected = shell.Vm.Activity.Backends.First(b => b.Backend.State == "idle in transaction");
             shell.Pump();
             Write(shell.Window, dir, "activity-panel-selected.png");
+        });
+    }
+
+    /// <summary>The history panel's connection filter and its two groupings: by day, by connection, and
+    /// narrowed to one connection.</summary>
+    [SkippableFact]
+    public Task HistoryPanel()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(async () =>
+        {
+            using var shell = await ShellHarness.ShowAsync(nameof(HistoryPanel));
+            var prod = new ConnectionInfo
+            {
+                Id = Guid.NewGuid(), Name = "orders PROD", ProviderId = "postgres", Database = "orders",
+                Environment = "prod", EnvironmentColor = "#E46876",
+            };
+            var staging = new ConnectionInfo
+            {
+                Id = Guid.NewGuid(), Name = "orders STAGING", ProviderId = "postgres", Database = "orders",
+                Environment = "staging", EnvironmentColor = "#E6C384",
+            };
+            var local = new ConnectionInfo
+            {
+                Id = Guid.NewGuid(), Name = "local", ProviderId = "postgres", Database = "orders",
+                Environment = "local", EnvironmentColor = "#7AA89F",
+            };
+            foreach (var c in new[] { prod, staging, local })
+                await shell.Vm.Connections.AddOrUpdateConnectionAsync(c, null);
+
+            var now = DateTimeOffset.Now;
+            (ConnectionInfo On, double HoursAgo, string Sql, bool Ok)[] ran =
+            [
+                (local, 0.1, "select * from orders where status = 'open' order by created_at desc", true),
+                (local, 0.4, "update orders set status = 'shipped' where id = 4211", true),
+                (staging, 1.5, "select count(*) from order_lines group by order_id", true),
+                (prod, 3, "select id, total from orders where customer_id = 77", true),
+                (staging, 26, "alter table orders add column note text", true),
+                (prod, 27, "select * from order where id = 1", false),
+                (local, 50, "select version()", true),
+                (prod, 75, "select status, count(*) from orders group by status", true),
+            ];
+            var log = shell.Vm.Context.QueryLog;
+            var landed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var count = 0;
+            log.Appended += _ => { if (Interlocked.Increment(ref count) == ran.Length) landed.TrySetResult(); };
+            foreach (var r in ran.Reverse())   // oldest first, as a log fills
+            {
+                log.Append(new QueryLogEntry
+                {
+                    ExecutedAt = now.AddHours(-r.HoursAgo),
+                    ProviderId = "postgres",
+                    ConnectionName = r.On.Name,
+                    ConnectionId = r.On.Id,
+                    Database = "orders",
+                    SqlText = r.Sql,
+                    Duration = TimeSpan.FromMilliseconds(12),
+                    RowCount = r.Ok ? 5 : 0,
+                    Success = r.Ok,
+                    ErrorMessage = r.Ok ? null : "syntax error at or near \"order\"",
+                });
+            }
+            await landed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            shell.Vm.ShowPanel(SidePanel.History);
+            await shell.Vm.History.ReloadAsync(CancellationToken.None);
+            shell.Pump();
+            Write(shell.Window, dir, "history-by-day.png");
+
+            shell.Vm.History.Grouping = HistoryGrouping.Connection;
+            shell.Pump();
+            Write(shell.Window, dir, "history-by-connection.png");
+
+            shell.Vm.History.SelectedConnection = shell.Vm.History.ConnectionOptions.Single(o => o.Label == prod.Name);
+            await shell.Vm.History.ReloadAsync(CancellationToken.None);
+            shell.Pump();
+            Write(shell.Window, dir, "history-one-connection.png");
         });
     }
 

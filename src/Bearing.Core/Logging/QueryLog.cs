@@ -93,6 +93,13 @@ public sealed record QueryLogQuery
     /// <summary>FTS match over the SQL text (null = no text filter).</summary>
     public string? Text { get; init; }
     public string? ConnectionName { get; init; }
+
+    /// <summary>
+    /// The connection's id. With <see cref="ConnectionName"/> also set, a row matches on <b>either</b>: rows
+    /// logged before ids were recorded carry only the name, and a connection renamed since is found by its id
+    /// (§1.6). On its own it matches the id alone.
+    /// </summary>
+    public Guid? ConnectionId { get; init; }
     public bool? SuccessOnly { get; init; }
 
     /// <summary>Earliest execution time to include, inclusive (null = no lower bound). Added for the audit

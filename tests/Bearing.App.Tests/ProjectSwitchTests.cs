@@ -167,9 +167,13 @@ public class ProjectSwitchTests : IDisposable
     {
         var provider = new FakeProvider();
         var vm = NewVm(provider);
-        await SeedAsync(vm, Dir("a"), "a");
+        var conn = await SeedAsync(vm, Dir("a"), "a");
 
         await vm.Execution.ExecuteAsync("select 1");      // lazily opens the session
+        // The database list is read once the server is linked — by the LinkChanged handler, which is posted to
+        // a dispatcher nothing pumps here, so the test runs what it posts.
+        vm.Connections.OnServerLinked(conn.Id);
+        await WaitUntil(() => provider.FactoriesCreated == 2);
         var connectsBefore = provider.FactoriesCreated;   // query session + the schema browser's reader
 
         await vm.OpenProjectAsync(Dir("b"));
