@@ -1,14 +1,17 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Bearing.App.Connections;
 using Bearing.App.Services;
 using Bearing.Core.Data;
@@ -76,6 +79,23 @@ public partial class ConnectionDialog : Window
     /// re-enter the rebuild they are part of.</summary>
     private bool _loading;
 
+    /// <summary>How long "Testing…" stays up at the least. A local server answers in a few milliseconds, and
+    /// a row that flips straight to its result reads as a flicker rather than as a test having run.</summary>
+    private static readonly TimeSpan MinTestingShown = TimeSpan.FromMilliseconds(450);
+
+    /// <summary>The running test's cancellation, or null when none is running — which is also what makes the
+    /// button Stop rather than Test.</summary>
+    private CancellationTokenSource? _testCts;
+
+    /// <summary>Counts tests started and ended, so an answer that arrives after its test was stopped,
+    /// retired by an edit or outlived by the window is recognised as stale and dropped.</summary>
+    private int _testRun;
+
+    /// <summary>The settings the shown (or running) test was made with, or null when the row says "Not
+    /// tested". An edit is compared against these, so the result is retired only when what it describes
+    /// actually changed — switching tabs raises the same events and changes nothing.</summary>
+    private (ConnectionInfo Info, string Password, string SshSecret)? _tested;
+
     // Parameterless ctor for the XAML designer/loader.
     public ConnectionDialog() : this(null, null, (_, _, _, _) => Task.FromResult(false)) { }
 
@@ -90,6 +110,12 @@ public partial class ConnectionDialog : Window
     {
         InitializeComponent();
         Opened += (_, _) => FitToScreen();
+        // A test still running when the window goes is abandoned: its answer has nowhere to land.
+        Closed += (_, _) => EndTest(ConnectionTestStatus.NotTested);
+        // One listener on the tabs for every kind of edit, since the rows are rebuilt per engine.
+        Sections.AddHandler(TextBox.TextChangedEvent, OnFormEdited);
+        Sections.AddHandler(SelectingItemsControl.SelectionChangedEvent, OnFormEdited);
+        Sections.AddHandler(ToggleButton.IsCheckedChangedEvent, OnFormEdited);
         _test = test;
         _existing = existing;
         _id = existing?.Id ?? Guid.NewGuid();
@@ -913,22 +939,95 @@ public partial class ConnectionDialog : Window
         return string.IsNullOrEmpty(db) ? (string.IsNullOrEmpty(host) ? "Connection" : host) : $"{host}/{db}";
     }
 
+    /// <summary>Test, or — while one is running — Stop. The test connects with the settings as typed, saving
+    /// nothing; the row shows what was tried, then what came back and how long it took.</summary>
     private async void OnTestClick(object? sender, RoutedEventArgs e)
     {
-        TestResult.Text = "Testing…";
+        if (_testCts is not null)
+        {
+            EndTest(ConnectionTestStatus.Stopped);
+            return;
+        }
+
+        var info = BuildConnection();
+        var password = PasswordBox.Text ?? "";
+        var sshSecret = SshSecretToStore();
+        var cts = _testCts = new CancellationTokenSource();
+        var run = ++_testRun;
+        _tested = (info, password, sshSecret);
+        TestButton.Content = "Stop";
+        TestStatus.Show(ConnectionTestStatus.Testing(info, TimeSpan.Zero));
+
+        var clock = Stopwatch.StartNew();
+        var tick = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        tick.Tick += (_, _) =>
+        {
+            if (run == _testRun) TestStatus.Show(ConnectionTestStatus.Testing(info, clock.Elapsed));
+        };
+        tick.Start();
+
+        ConnectionTestStatus result;
         try
         {
-            var ok = await _test(BuildConnection(), PasswordBox.Text ?? "", SshSecretToStore(), CancellationToken.None);
-            TestResult.Text = ok ? "✓ Connection succeeded." : "✗ Connection failed.";
+            var ok = await _test(info, password, sshSecret, cts.Token);
+            result = ok
+                ? ConnectionTestStatus.Succeeded(info, clock.Elapsed)
+                : ConnectionTestStatus.Failed(null);
         }
         catch (Exception ex)
         {
             // Redacted, not raw: this dialog holds a user-typed, not-yet-saved password, and a connect-time
             // driver failure can quote the whole connection string back at us. Same helper as the executor
-            // and connect paths — this one was missed.
-            TestResult.Text = "✗ " + SafeErrorText.Of(ex);
+            // and connect paths.
+            result = ConnectionTestStatus.Failed(SafeErrorText.Of(ex));
         }
+
+        // The duration above is the test's own; the hold below is only about what the eye sees.
+        var hold = MinTestingShown - clock.Elapsed;
+        if (run == _testRun && hold > TimeSpan.Zero) await Task.Delay(hold);
+        tick.Stop();
+
+        // Stopped, retired by an edit, or the window closed while this was in flight: a driver slow to
+        // honour the cancellation still answers, and that answer must not overwrite what the row says now.
+        if (run != _testRun) return;
+        EndTest(result);
     }
+
+    /// <summary>Leave the testing state — cancelling a test still in flight — and show
+    /// <paramref name="status"/>. Every way a test ends comes through here.</summary>
+    private void EndTest(ConnectionTestStatus status)
+    {
+        _testRun++;
+        if (_testCts is { } cts)
+        {
+            _testCts = null;
+            cts.Cancel();
+            cts.Dispose();
+        }
+        if (status.Phase == ConnectionTestPhase.NotTested) _tested = null;
+        TestButton.Content = "Test";
+        TestStatus.Show(status);
+    }
+
+    /// <summary>An edit retires the result, and abandons a running test: neither describes the settings on
+    /// screen any more. Compared rather than assumed, because the same events arrive for a tab switch and for
+    /// the rows being rebuilt, which change nothing.</summary>
+    private void OnFormEdited(object? sender, RoutedEventArgs e)
+    {
+        if (_loading || _tested is not { } tested) return;
+        if (SameSettings(BuildConnection(), tested.Info)
+            && (PasswordBox.Text ?? "") == tested.Password
+            && SshSecretToStore() == tested.SshSecret)
+            return;
+        EndTest(ConnectionTestStatus.NotTested);
+    }
+
+    /// <summary>Record equality, with the options bag compared by content — it is a fresh dictionary on every
+    /// <see cref="BuildConnection"/>, so by reference no two builds are ever equal.</summary>
+    private static bool SameSettings(ConnectionInfo a, ConnectionInfo b)
+        => a with { Options = b.Options } == b
+           && a.Options.Count == b.Options.Count
+           && a.Options.All(o => b.Options.TryGetValue(o.Key, out var value) && value == o.Value);
 
     /// <summary>Unlike the Connection tab's advisory hints (<see cref="RefreshValidation"/>), a ticked SSH tab
     /// that can't connect is a gate: no saved connection predates the tab, and a tunnel with no host would be

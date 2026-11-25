@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:Bearing.App.Controls"
         x:Class="Bearing.App.Views.ConnectionDialog"
         Width="500" Height="600" MinWidth="420" MinHeight="360"
         WindowStartupLocation="CenterOwner"
@@ -13,20 +14,17 @@
   <DockPanel Margin="16,12,16,16">
 
     <StackPanel DockPanel.Dock="Bottom" Spacing="8">
-      <!-- Wraps: a failed Test reports a driver message whose useful half (SQLSTATE, host, TLS/auth detail) is
-           past the dialog's right edge and used to be clipped off it. The ScrollViewer caps how much of the
-           footer a paragraph-length message takes, so it can't push the buttons off screen or squeeze the tabs
-           away, and HorizontalScrollBarVisibility must stay Disabled or the content is measured unbounded and
-           never wraps. SelectableTextBlock so the error can be copied. -->
-      <ScrollViewer Margin="0,4,0,0" MaxHeight="110"
-                    HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-        <SelectableTextBlock x:Name="TestResult" Opacity="0.75" TextWrapping="Wrap" Text=" "/>
-      </ScrollViewer>
+      <!-- The Test status row: beacon, headline, the endpoint or the error, and how long it took. Every state
+           but a failure is the same two lines, so the footer keeps its height while a test runs; the row caps
+           and scrolls a long error itself, so it can't push the buttons off screen. -->
+      <controls:ConnectionTestStatusView x:Name="TestStatus" Margin="0,4,0,0"/>
 
       <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" Margin="0,8,0,0">
         <Button Grid.Column="0" x:Name="DeleteButton" Content="Delete" Click="OnDeleteClick"
                 Foreground="{DynamicResource Error.Red}" IsVisible="False"/>
-        <Button Grid.Column="2" x:Name="TestButton" Content="Test" Click="OnTestClick" Margin="0,0,8,0"/>
+        <!-- A fixed minimum width: the label swaps between Test and Stop, and the row must not shift. -->
+        <Button Grid.Column="2" x:Name="TestButton" Content="Test" Click="OnTestClick" Margin="0,0,8,0"
+                MinWidth="58" HorizontalContentAlignment="Center"/>
         <Button Grid.Column="3" Content="Cancel" Click="OnCancelClick" Margin="0,0,8,0" IsCancel="True"/>
         <Button Grid.Column="4" Content="Save" Click="OnSaveClick" IsDefault="True"/>
       </Grid>
