@@ -425,7 +425,7 @@ public sealed partial class ServerNodeViewModel : SchemaNodeViewModel
 
     protected override async Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync()
     {
-        var databases = await _browser.GetDatabasesAsync(Connection, CancellationToken.None);
+        var databases = await _browser.GetDatabasesForUserAsync(Connection, CancellationToken.None);
         var children = databases
             .Select(db => (SchemaNodeViewModel)new DatabaseNodeViewModel(
                 Connection, db, isConnected: string.Equals(db, Connection.Database, StringComparison.Ordinal),
@@ -628,7 +628,7 @@ public sealed class DatabaseNodeViewModel : SchemaNodeViewModel
 
     protected override async Task<IReadOnlyList<SchemaNodeViewModel>> LoadChildrenAsync()
     {
-        var objects = await _browser.GetObjectsAsync(_connection, _database, CancellationToken.None);
+        var objects = await _browser.GetObjectsForUserAsync(_connection, _database, CancellationToken.None);
         _snapshot = objects.Snapshot;
         _snapshotForKinds = objects.Snapshot;
         _routines = objects.Routines;

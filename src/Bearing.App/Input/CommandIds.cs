@@ -89,6 +89,11 @@ public static class CommandIds
     /// (#131). Unbound by default like the pair above; the toolbar pill is its home.</summary>
     public const string TransactionToggleMode = "transaction.toggleMode";
     public const string ConnectionImportDBeaver = "connection.import.dbeaver";
+    /// <summary>Write every connection in the project to a .json file, without passwords — the sidebar
+    /// offers the same per folder and per connection. Unbound by default.</summary>
+    public const string ConnectionExport = "connection.export";
+    /// <summary>Import connections from a file <see cref="ConnectionExport"/> wrote. Unbound by default.</summary>
+    public const string ConnectionImportFile = "connection.import.file";
     /// <summary>Fuzzy-pick a relation from the loaded schema and reveal it in the tree (#117).</summary>
     public const string SchemaGotoTable = "schema.gotoTable";
 

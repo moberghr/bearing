@@ -590,13 +590,17 @@ public sealed partial class ExecutionViewModel : ObservableObject
             var fetchSql = FirstPageLimiter.TryAppendLimit(traits.Dialect, sql, PageSize + 1) ?? sql;
 
             // Prompt / Entra credentials can go stale (expired token, or a wrong password typed once): run,
-            // and on an auth failure refresh the credential and retry exactly once. A stored password that
-            // didn't change can't be helped by a retry, so it surfaces the error on the first pass.
+            // and on an auth failure refresh the credential and retry exactly once. A stored password (or none
+            // stored yet) is retried by asking — the answer is saved to the keychain once it works; with nobody to
+            // ask it can't be helped by a retry, so it surfaces the error on the first pass (CanRefresh).
             var canRefresh = CanRefreshCredential(info);
+            // Read before the attempt, so a failure another caller already refreshed for (the tree, the Connect
+            // button) retries with that answer rather than prompting a second time (AuthRetry).
+            var generation = _ctx.Credentials.Generation(info.Id);
             var outcome = await RunFetchAsync(info, tab, run, fetchSql, opensTransaction, scan.IsFullScan, final: !canRefresh, ct);
             if (outcome == RunOutcome.AuthFailed && canRefresh && !ct.IsCancellationRequested)
             {
-                _ctx.Credentials.Invalidate(info.Id);
+                AuthRetry.Refresh(_ctx.Credentials, info, generation);
                 await _ctx.Sessions.EvictAsync(SessionKey.For(info));
                 RunStatus(tab, "Reauthenticating…");
                 await RunFetchAsync(info, tab, run, fetchSql, opensTransaction, scan.IsFullScan, final: true, ct);

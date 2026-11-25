@@ -51,6 +51,23 @@ public class ProviderClassificationTests
         Assert.Equal(DbErrorKind.Unknown, provider.ClassifyException(new Exception("connection refused")));
     }
 
+    [Theory]
+    [InlineData("No password has been provided but the backend requires one (in SASL/SCRAM-SHA-256)")]
+    [InlineData("No password has been provided but the backend requires one (in MD5)")]
+    public void Postgres_reads_npgsqls_client_side_no_password_refusal_as_authentication(string message)
+    {
+        // Npgsql refuses a passwordless login itself, before the server's 28P01, with no SQLSTATE to read —
+        // the case a connection imported with nothing in the keychain meets first. Text measured on Npgsql
+        // 10.0.3 (LoginClassificationLiveTests pins it against the real server).
+        var provider = new PostgresProvider();
+
+        Assert.Equal(DbErrorKind.Authentication, provider.ClassifyException(new Npgsql.NpgsqlException(message)));
+        Assert.Equal(DbErrorKind.Authentication, provider.ClassifyException(
+            new InvalidOperationException("Could not connect to 'prod'", new Npgsql.NpgsqlException(message))));
+        // Only Npgsql's own refusal: the same words from anything else are not a reason to prompt.
+        Assert.Equal(DbErrorKind.Unknown, provider.ClassifyException(new Exception(message)));
+    }
+
     // ---- SQL Server: numbers, not SQLSTATEs ------------------------------------------------------
 
     [Theory]

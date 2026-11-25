@@ -36,15 +36,49 @@ public sealed class SchemaBrowser : ISchemaBrowser
         // cluster-wide; SQL Server's sys.databases is instance-wide), so the connection's own database can
         // answer it and no second connection is needed. The provider owns the actual query.
         var reader = await GetReaderAsync(connection, connection.Database, ct);
-        return await reader.Metadata.GetDatabasesAsync(ct);
+        var databases = await reader.Metadata.GetDatabasesAsync(ct);
+        await ProvenAsync(connection, reader);
+        return databases;
     }
 
     public async Task<DatabaseObjects> GetObjectsAsync(ConnectionInfo connection, string database, CancellationToken ct)
     {
         var reader = await GetReaderAsync(connection, database, ct);
         var snapshot = await reader.Metadata.LoadSnapshotAsync(database, ct);
+        await ProvenAsync(connection, reader);
         var routines = await reader.Metadata.GetRoutinesAsync(ct);
         return new DatabaseObjects(snapshot, routines);
+    }
+
+    public Task<IReadOnlyList<string>> GetDatabasesForUserAsync(ConnectionInfo connection, CancellationToken ct)
+        => AuthRetry.OnceAsync(_credentials(), _providers, connection,
+            () => GetDatabasesAsync(connection, ct), () => DropAsync(connection.Id, connection.Database), ct);
+
+    public Task<DatabaseObjects> GetObjectsForUserAsync(ConnectionInfo connection, string database, CancellationToken ct)
+        => AuthRetry.OnceAsync(_credentials(), _providers, connection,
+            () => GetObjectsAsync(connection, database, ct), () => DropAsync(connection.Id, database), ct);
+
+    /// <summary>
+    /// A reader only builds a factory — it never tests the login — so the first catalog read that came back is
+    /// what proves the credential works. Only then may a password typed at the prompt be saved
+    /// (<see cref="CredentialResolver.SaveIfWorkedAsync"/>); nothing unproven is.
+    /// </summary>
+    private async Task ProvenAsync(ConnectionInfo connection, Reader reader)
+    {
+        if (_credentials() is { } resolver) await resolver.SaveIfWorkedAsync(connection, reader.Credential);
+    }
+
+    /// <summary>Forget the cached reader for one database, so a retry builds one on the refreshed credential.
+    /// A failed build is already evicted by its continuation; this covers a reader built fine whose first
+    /// read was refused.</summary>
+    private async Task DropAsync(Guid connectionId, string database)
+    {
+        Task<Reader>? stale;
+        lock (_gate)
+        {
+            _readers.Remove((connectionId, database), out stale);
+        }
+        if (stale is not null) await DisposeAllAsync([stale]);
     }
 
     public async Task<IReadOnlyList<RoleInfo>> GetRolesAsync(ConnectionInfo connection, CancellationToken ct)
@@ -160,8 +194,8 @@ public sealed class SchemaBrowser : ISchemaBrowser
         // Eviction of a failed build is the caller's continuation (see GetReaderAsync), so that it can check
         // this task is still the cached one before removing it.
         var clone = connection with { Database = database };
-        var (provider, factory, _, tunnel) = await ConnectionFactoryBuilder.BuildAsync(_providers, _credentials(), clone, forceRefresh: false, ct);
-        var reader = new Reader(factory, provider.CreateMetadataReader(factory), tunnel);
+        var (provider, factory, credential, tunnel) = await ConnectionFactoryBuilder.BuildAsync(_providers, _credentials(), clone, forceRefresh: false, ct);
+        var reader = new Reader(factory, provider.CreateMetadataReader(factory), tunnel, credential);
         tunnel?.WhenLost(() => DropLost((connection.Id, database), reader));
         return reader;
     }
@@ -231,5 +265,6 @@ public sealed class SchemaBrowser : ISchemaBrowser
         }
     }
 
-    private sealed record Reader(IDbConnectionFactory Factory, IMetadataReader Metadata, SshTunnelHandle? Tunnel);
+    private sealed record Reader(
+        IDbConnectionFactory Factory, IMetadataReader Metadata, SshTunnelHandle? Tunnel, Credential Credential);
 }

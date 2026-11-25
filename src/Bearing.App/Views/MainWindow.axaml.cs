@@ -210,6 +210,9 @@ public partial class MainWindow : Window
         };
         Sidebar.ImportConnectionsRequested = () => _ = ImportFromDBeaverAsync();
         Sidebar.ImportFromInstalledRequested = () => _ = ImportFromInstalledAsync();
+        Sidebar.ImportConnectionsFileRequested = () => _ = ImportConnectionsFileAsync();
+        Sidebar.ExportConnectionsRequested = (folder, id) => _ = ExportConnectionsAsync(folder, id);
+        Sidebar.MoveConnectionToProjectRequested = OpenMoveConnectionToProjectPicker;
         Sidebar.EditorSyncRequested = LoadEditorFromSelectedTab;
         Sidebar.RunSelectedTabRequested = () =>
         {

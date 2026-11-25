@@ -23,6 +23,17 @@ public interface ISchemaBrowser : IAsyncDisposable
     /// <summary>Relations + routines of one database (opens/reuses a per-database connection).</summary>
     Task<DatabaseObjects> GetObjectsAsync(ConnectionInfo connection, string database, CancellationToken ct);
 
+    /// <summary><see cref="GetDatabasesAsync"/> for the user expanding a server row: a refused login is retried
+    /// once after refreshing the credential (<see cref="AuthRetry"/> — for a stored password, the prompt).
+    /// Background reads use <see cref="GetDatabasesAsync"/>, which never prompts on a failure.</summary>
+    Task<IReadOnlyList<string>> GetDatabasesForUserAsync(ConnectionInfo connection, CancellationToken ct)
+        => GetDatabasesAsync(connection, ct);
+
+    /// <summary><see cref="GetObjectsAsync"/> for the user expanding a database row; retried as
+    /// <see cref="GetDatabasesForUserAsync"/> is.</summary>
+    Task<DatabaseObjects> GetObjectsForUserAsync(ConnectionInfo connection, string database, CancellationToken ct)
+        => GetObjectsAsync(connection, database, ct);
+
     Task<string> GetViewDefinitionAsync(ConnectionInfo connection, string database, long tableId, CancellationToken ct);
 
     /// <summary>

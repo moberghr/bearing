@@ -178,6 +178,15 @@ public sealed partial class ShellViewModel
             .ToList();
     }
 
+    /// <summary>The recent projects a connection on screen can move to: every one but the project open now.</summary>
+    public IReadOnlyList<RecentProjectItem> ProjectsToMoveConnectionTo()
+    {
+        var own = _project is { } p ? Path.GetFullPath(p.Directory) : null;
+        return RecentProjects
+            .Where(r => !string.Equals(Path.GetFullPath(r.Directory), own, StringComparison.Ordinal))
+            .ToList();
+    }
+
     /// <summary>Move the tab to another project, which comes on screen with it.</summary>
     public Task<bool> MoveTabToProjectAsync(EditorTabViewModel tab, string projectDirectory)
         => _externalScripts.MoveToProjectAsync(tab, projectDirectory);
