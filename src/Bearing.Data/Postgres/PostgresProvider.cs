@@ -67,6 +67,17 @@ public sealed class PostgresProvider : IDbProvider
             // chain is scanned for the authentication SQLSTATEs and text as well. This is the heuristic the
             // App layer carried before classification became the provider's job; it is kept because
             // dropping it would lose the "offer to re-enter the password" path on exactly those failures.
+            // A connect with no password to a server that wants one never reaches the server's 28P01: Npgsql
+            // refuses it on the client with a plain NpgsqlException — no SQLSTATE and no subtype, so the message
+            // is all there is. Measured on Npgsql 10.0.3 against PostgreSQL with SCRAM-SHA-256: "No password has
+            // been provided but the backend requires one (in SASL/SCRAM-SHA-256)"; the parenthesis names the
+            // method, so only the stable prefix is matched. It is the commonest refused login of all — a
+            // connection imported on a new machine with nothing in the keychain — and without this it read as
+            // Unknown and the "ask for the password" retry never ran (pinned by LoginClassificationLiveTests).
+            if (e is NpgsqlException and not PostgresException
+                && e.Message.StartsWith("No password has been provided", StringComparison.Ordinal))
+                return DbErrorKind.Authentication;
+
             var m = e.Message;
             if (m.Contains("28P01", StringComparison.OrdinalIgnoreCase)
                 || m.Contains("28000", StringComparison.OrdinalIgnoreCase)

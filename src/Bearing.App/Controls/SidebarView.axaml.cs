@@ -290,7 +290,8 @@ public partial class SidebarView : UserControl
                 // A dot in the icon column marks a script a tab already holds: picking it goes to that tab.
                 line.Icon = new TextBlock
                 {
-                    Text = "●", FontSize = 8,
+                    Text = "●",
+                    FontSize = 8,
                     HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
                     VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
                 };
@@ -560,6 +561,37 @@ public partial class SidebarView : UserControl
 
     /// <summary>Raised by the dev-only "from the installed Bearing" item; the shell owns the flow.</summary>
     public System.Action? ImportFromInstalledRequested { get; set; }
+
+    private void OnImportConnectionsFileClick(object? sender, RoutedEventArgs e)
+        => ImportConnectionsFileRequested?.Invoke();
+
+    /// <summary>"From a Bearing export file…"; the shell owns the flow.</summary>
+    public System.Action? ImportConnectionsFileRequested { get; set; }
+
+    /// <summary>Export… on the panel (everything: both null), a folder (its path) or a connection (its id);
+    /// the shell owns the save picker and the write.</summary>
+    public System.Action<string?, Guid?>? ExportConnectionsRequested { get; set; }
+
+    private void OnExportAllConnectionsClick(object? sender, RoutedEventArgs e)
+        => ExportConnectionsRequested?.Invoke(null, null);
+
+    private void OnExportConnectionFolderClick(object? sender, RoutedEventArgs e)
+    {
+        if (FolderNodeOf(sender) is { } folder) ExportConnectionsRequested?.Invoke(folder.Path, null);
+    }
+
+    private void OnExportConnectionClick(object? sender, RoutedEventArgs e)
+    {
+        if (NodeOf(sender) is ServerNodeViewModel server) ExportConnectionsRequested?.Invoke(null, server.Connection.Id);
+    }
+
+    /// <summary>Move to project… on a server row; the shell owns the project picker.</summary>
+    public System.Action<Guid>? MoveConnectionToProjectRequested { get; set; }
+
+    private void OnMoveConnectionToProjectClick(object? sender, RoutedEventArgs e)
+    {
+        if (NodeOf(sender) is ServerNodeViewModel server) MoveConnectionToProjectRequested?.Invoke(server.Connection.Id);
+    }
 
     private async void OnPasteConnectionAtRootClick(object? sender, RoutedEventArgs e)
         => await PasteConnectionsAsync(null, overrideFolder: true);

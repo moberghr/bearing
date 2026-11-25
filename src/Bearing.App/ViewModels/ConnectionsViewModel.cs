@@ -67,6 +67,9 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         // Every tunnel is held to the pin saved now, not the copy its caller holds (explorer nodes keep the
         // record they were built from). Called off the UI thread: ToArray copies without an enumerator, so a
         // save landing meanwhile can't throw here.
+        // A password typed at the prompt is saved to the keychain once a connect with it worked (or isn't, and
+        // that is said once) — reported here because the connect that learnt it runs off the UI thread.
+        _ctx.Credentials.PasswordSaveNotice = (_, text) => Dispatcher.UIThread.Post(() => _ctx.SetStatus(text));
         _ctx.Credentials.Ssh.SavedTunnel = id => _ctx.Project?.Manifest.Connections.ToArray().FirstOrDefault(c => c.Id == id)?.SshTunnel;
     }
 
@@ -1159,6 +1162,54 @@ public sealed partial class ConnectionsViewModel : ObservableObject
         return picked.Count == 0 ? null : ConnectionClipboard.Write(picked);
     }
 
+    // ---- export / move to project ------------------------------------------------------------------
+
+    /// <summary>What one export covers — a connection, a folder's subtree, or (neither) every connection —
+    /// or null when no project is open. See <see cref="ConnectionExportFile.Select"/>.</summary>
+    public ConnectionExportFile.Selection? ExportSelection(string? folder = null, Guid? connectionId = null)
+        => _ctx.Project is { } project ? ConnectionExportFile.Select(project.Manifest, folder, connectionId) : null;
+
+    /// <summary>Write an export file and say so. A write that fails is reported, never thrown (§5.2). The
+    /// file holds no password, SSH secret, id or exposure — the format cannot express one.</summary>
+    public async Task<bool> ExportConnectionsAsync(string path, ConnectionExportFile.Selection selection)
+    {
+        if (selection.Connections.Count == 0)
+        {
+            _ctx.SetStatus("Nothing to export — there are no connections there.");
+            return false;
+        }
+        try
+        {
+            await System.IO.File.WriteAllTextAsync(path, ConnectionExportFile.Write(selection, DateTimeOffset.Now));
+        }
+        catch (Exception ex)
+        {
+            _ctx.SetStatus($"Could not write {System.IO.Path.GetFileName(path)}: {SafeErrorText.Of(ex)}");
+            return false;
+        }
+        var count = selection.Connections.Count == 1
+            ? $"'{selection.Connections[0].Name}'"
+            : $"{selection.Connections.Count} connections";
+        _ctx.SetStatus($"Exported {count} to {System.IO.Path.GetFileName(path)} — without passwords.");
+        return true;
+    }
+
+    /// <summary>Move a connection into another project on this machine, secrets and all — see
+    /// <see cref="ConnectionProjectMove"/> for what is kept, what is rolled back and why.</summary>
+    public async Task<bool> MoveConnectionToProjectAsync(Guid id, string projectDirectory)
+    {
+        var outcome = await new ConnectionProjectMove(_ctx).MoveAsync(id, projectDirectory);
+        if (outcome.Moved)
+        {
+            foreach (var tab in outcome.DetachedTabs) ApplyConnectionDisplay(tab);
+            RefreshConnections();
+            OnPropertyChanged(nameof(SelectedTabConnection));
+            OnPropertyChanged(nameof(StatusTip));
+        }
+        _ctx.SetStatus(outcome.Status);
+        return outcome.Moved;
+    }
+
     /// <summary>
     /// Add every connection in a clipboard payload, each with a fresh id, a name that does not collide with
     /// one already in the project, and no password. Returns how many landed; zero means the clipboard did
@@ -1195,15 +1246,8 @@ public sealed partial class ConnectionsViewModel : ObservableObject
     /// pasting into a project that has never seen it should not rename it.
     /// </summary>
     private string UniqueName(string baseName, bool alwaysSuffix = true)
-    {
-        var existing = _ctx.Project?.Manifest.Connections.Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase)
-                       ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (!alwaysSuffix && !existing.Contains(baseName)) return baseName;
-
-        var candidate = $"{baseName} (copy)";
-        for (var n = 2; existing.Contains(candidate); n++) candidate = $"{baseName} (copy {n})";
-        return candidate;
-    }
+        => ConnectionNames.Unique(
+            _ctx.Project?.Manifest.Connections.Select(c => c.Name) ?? [], baseName, alwaysSuffix);
 
     // ---- folders (#80) -------------------------------------------------------------------------
     //
@@ -1575,7 +1619,11 @@ public sealed partial class ConnectionsViewModel : ObservableObject
 
         try
         {
-            var session = await _ctx.Sessions.GetOrConnectAsync(info, cts.Token);
+            // The Connect button may ask for a refused password and retry once (AuthRetry); a warm-up never
+            // does — background work must not raise a prompt on a failure.
+            var session = isExplicit
+                ? await _ctx.Sessions.ConnectForUserAsync(info, cts.Token)
+                : await _ctx.Sessions.GetOrConnectAsync(info, cts.Token);
             if (cts.IsCancellationRequested)
             {
                 // Cancelled during the open, but the attempt still produced a live session (cancel raced

@@ -74,8 +74,21 @@ internal sealed class FakeProvider : IDbProvider, IProviderRegistry
         Interlocked.Increment(ref FactoriesCreated);
         LastPassword = password;
         LastInfo = info;
-        return new FakeFactory { TestResult = TestResult, TestThrows = TestThrows, Gate = ConnectGate };
+        return new FakeFactory
+        {
+            TestResult = TestResult,
+            TestThrows = TestThrows,
+            Gate = ConnectGate,
+            RefusedLogin = AcceptsPassword is { } accepts && !accepts(password)
+                ? new InvalidOperationException("28P01: password authentication failed (fake)")
+                : null,
+        };
     }
+
+    /// <summary>When set, a login with a password this refuses fails as the server would — the connection
+    /// test and every catalog read throw an authentication-classified error — so a test can model "nothing
+    /// saved / the wrong password" and "the right password" on one fake.</summary>
+    public Func<string?, bool>? AcceptsPassword;
 
     /// <summary>When set, every factory's connection test blocks on this gate — lets a test observe an
     /// attempt mid-flight (Connecting) and then cancel or complete it deterministically.</summary>
@@ -178,9 +191,12 @@ internal sealed class FakeFactory : IDbConnectionFactory
     public Exception? TestThrows;
     public TaskCompletionSource<bool>? Gate;
     public int DisposeCount;
+    /// <summary>The login this factory was built with is refused (see FakeProvider.AcceptsPassword).</summary>
+    public Exception? RefusedLogin;
 
     public async Task<bool> TestConnectionAsync(CancellationToken ct)
     {
+        if (RefusedLogin is not null) throw RefusedLogin;
         if (TestThrows is not null) throw TestThrows;
         if (Gate is not null) await Gate.Task.WaitAsync(ct); // blocks until released, throws on cancel
         return TestResult;
@@ -200,7 +216,9 @@ internal sealed class FakeMetadata : IMetadataReader
     public FakeMetadata(FakeFactory factory) => _factory = factory;
 
     public Task<IReadOnlyList<string>> GetDatabasesAsync(CancellationToken ct)
-        => Task.FromResult<IReadOnlyList<string>>(new[] { "app" });
+        => _factory.RefusedLogin is { } refused
+            ? Task.FromException<IReadOnlyList<string>>(refused)
+            : Task.FromResult<IReadOnlyList<string>>(new[] { "app" });
 
     /// <summary>When set, the load waits for the test to release it (see FakeProvider.MetadataGate).</summary>
     public TaskCompletionSource? Gate;
@@ -214,6 +232,7 @@ internal sealed class FakeMetadata : IMetadataReader
     public async Task<ISchemaSnapshot> LoadSnapshotAsync(string database, CancellationToken ct)
     {
         Interlocked.Increment(ref LoadCount);
+        if (_factory.RefusedLogin is { } refused) throw refused;
         if (Gate is not null) await Gate.Task.WaitAsync(ct);
         return Snapshot ?? new FakeSnapshot(database);
     }
@@ -864,6 +883,8 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
     }
     public Task<string?> PickOpenScriptAsync(string? startDir) => Task.FromResult<string?>(null);
     public Task<string?> PickImportFileAsync(string? startDir) => Task.FromResult<string?>(null);
+    public Task<string?> PickConnectionsFileAsync() => Task.FromResult<string?>(null);
+    public Task<string?> PickConnectionsExportFileAsync(string suggestedName) => Task.FromResult<string?>(null);
     public void ShowSqlPreview(string sql, string title = "SQL preview — changes to save") { }
 }
 

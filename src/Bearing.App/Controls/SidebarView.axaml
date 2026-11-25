@@ -79,6 +79,7 @@
                 <Button.Flyout>
                   <MenuFlyout Placement="Bottom">
                     <MenuItem Header="From DBeaver…" Click="OnImportConnectionsClick"/>
+                    <MenuItem Header="From a Bearing export file…" Click="OnImportConnectionsFileClick"/>
                     <!-- Dev builds only, and gated on the same profile check as the tree's context menu.
                          This is where a first run actually stands — the tree is empty, so the blank-space
                          menu that used to be this item's only home is the one thing nobody right-clicks. -->
@@ -107,12 +108,16 @@
                   <Separator/>
                   <MenuItem Header="Import connections">
                     <MenuItem Header="From DBeaver…" Click="OnImportConnectionsClick"/>
+                    <MenuItem Header="From a Bearing export file…" Click="OnImportConnectionsFileClick"/>
                     <!-- Dev builds only: a profile of its own starts with no connections, and this copies the
                          installed app's across so the tree can be driven against real servers. IsVisible is
                          bound to the profile check, so it cannot appear in an installation. -->
                     <MenuItem Header="From the installed Bearing…" Click="OnImportFromInstalledClick"
                               IsVisible="{Binding IsSeparateProfile}"/>
                   </MenuItem>
+                  <!-- Every connection in the project, folders included, without passwords: the way to carry
+                       them to another machine. -->
+                  <MenuItem Header="Export all connections…" Click="OnExportAllConnectionsClick"/>
                 </ContextMenu>
               </TreeView.ContextMenu>
               <TreeView.Styles>
@@ -158,6 +163,7 @@
                         <MenuItem Header="New connection here…" Click="OnAddConnectionInFolderClick"/>
                         <MenuItem Header="New subfolder…" Click="OnNewConnectionSubfolderClick"/>
                         <MenuItem Header="Paste connection here" Click="OnPasteConnectionIntoFolderClick"/>
+                        <MenuItem Header="Export folder…" Click="OnExportConnectionFolderClick"/>
                         <Separator/>
                         <MenuItem Header="Rename" Click="OnRenameConnectionFolderClick"/>
                         <!-- Says what it does: the folder goes, the connections in it do not. Deleting a
@@ -212,6 +218,8 @@
                         <MenuItem Header="Duplicate" Click="OnDuplicateConnectionClick" IsVisible="{Binding IsServer}"/>
                         <MenuItem Header="Copy" Click="OnCopyConnectionClick" IsVisible="{Binding IsServer}"/>
                         <MenuItem Header="Move to root" Click="OnMoveConnectionToRoot" IsVisible="{Binding IsServer}"/>
+                        <MenuItem Header="Move to project…" Click="OnMoveConnectionToProjectClick" IsVisible="{Binding IsServer}"/>
+                        <MenuItem Header="Export…" Click="OnExportConnectionClick" IsVisible="{Binding IsServer}"/>
                         <MenuItem Header="Edit…" Click="OnEditServer" IsVisible="{Binding IsServer}"/>
                         <MenuItem Header="Refresh metadata" Click="OnRefreshServer" IsVisible="{Binding IsServer}"/>
                         <!-- "Which table is eating the disk" is the question a tree sorted by name cannot

@@ -164,6 +164,8 @@ internal sealed class AppMenuBar
             Add(m, CommandIds.FileSaveAs, "Save As…");
             m.Add(new NativeMenuItemSeparator());
             Add(m, CommandIds.ConnectionImportDBeaver, "Import Connections from DBeaver…");
+            Add(m, CommandIds.ConnectionImportFile, "Import Connections from File…");
+            Add(m, CommandIds.ConnectionExport, "Export Connections…");
             Add(m, CommandIds.HistoryExport, "Export Query History…");
             m.Add(new NativeMenuItemSeparator());
             Add(m, CommandIds.TabClose, "Close Tab");

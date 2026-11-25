@@ -195,6 +195,14 @@ public interface IDialogService
     /// a copy a colleague sent will not have kept the filename.</summary>
     Task<string?> PickImportFileAsync(string? startDir);
 
+    /// <summary>Pick a Bearing connections export file to import ("Import connections from a file…").
+    /// Returns the local path, or null if cancelled.</summary>
+    Task<string?> PickConnectionsFileAsync();
+
+    /// <summary>Pick where to write a connections export (.json). Returns the local path, or null if
+    /// cancelled.</summary>
+    Task<string?> PickConnectionsExportFileAsync(string suggestedName);
+
     /// <summary>Pick a destination for an exported result set, filtered to <paramref name="format"/>'s file
     /// type. Returns the local path, or null if cancelled.</summary>
     Task<string?> PickExportFileAsync(string suggestedName, ExportFormat format);

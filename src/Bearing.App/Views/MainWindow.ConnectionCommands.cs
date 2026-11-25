@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Interactivity;
+using Bearing.App.Connections;
 using Bearing.App.Input;
 using Bearing.Core.Data;
 using Bearing.Persistence.Import;
@@ -150,6 +151,70 @@ public partial class MainWindow
                             ? $"Nothing to copy from '{found.Profile}' — every connection is already here."
                             : $"From '{found.Profile}': {outcome.Counts}.")
                       + (passwords is null ? "" : " " + passwords);
+    }
+
+    /// <summary>connection.export (and the sidebar's Export… on a connection, a folder or the panel): write
+    /// the chosen connections to a .json file. What goes in it is <see cref="ConnectionExportFile"/>'s call.</summary>
+    private async Task ExportConnectionsAsync(string? folder = null, Guid? connectionId = null)
+    {
+        if (Vm?.Connections.ExportSelection(folder, connectionId) is not { } selection) return;
+        if (selection.Connections.Count == 0)
+        {
+            Vm.StatusText = "Nothing to export — there are no connections there.";
+            return;
+        }
+        var name = connectionId is not null ? selection.Connections[0].Name
+                   : FolderPath.Name(folder) ?? $"{Vm.CurrentProjectName} connections";
+        if (await _dialogs.PickConnectionsExportFileAsync($"{name}.{ConnectionExportFile.Extension}") is { } path)
+            await Vm.Connections.ExportConnectionsAsync(path, selection);
+    }
+
+    /// <summary>connection.import.file: open an export file and review it in the same dialog every other
+    /// import uses. A file that isn't ours is refused with the reader's sentence.</summary>
+    private async Task ImportConnectionsFileAsync()
+    {
+        if (Vm is null || await _dialogs.PickConnectionsFileAsync() is not { } path) return;
+
+        string text;
+        try { text = await File.ReadAllTextAsync(path); }
+        catch (Exception ex)
+        {
+            Vm.StatusText = $"Could not read {Path.GetFileName(path)}: {SafeErrorText.Of(ex)}";
+            return;
+        }
+
+        var read = ConnectionExportFile.Read(text);
+        if (!read.Ok)
+        {
+            Vm.StatusText = $"{Path.GetFileName(path)}: {read.Refusal}";
+            return;
+        }
+
+        var known = Vm.Connections.Providers.All.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
+        var review = ConnectionExportFile.Review(read, known.Contains);
+        var choice = await new ImportConnectionsDialog(review, path, "Import connections from a file")
+            .ShowDialog<ImportChoice?>(this);
+        if (choice is null || choice.Connections.Count == 0) return;
+
+        await Vm.Connections.ImportConnectionsAsync(
+            choice.Connections, ConnectionExportFile.FoldersFor(read, choice.Connections), choice.UpdateExisting);
+    }
+
+    /// <summary>Move to project… on a server row: pick the target from the recent projects, as the tab's
+    /// Move to project does.</summary>
+    private void OpenMoveConnectionToProjectPicker(Guid connectionId)
+    {
+        if (Vm is not { } vm) return;
+        var targets = vm.ProjectsToMoveConnectionTo();
+        if (targets.Count == 0)
+        {
+            vm.StatusText = "There is no other recent project to move it to — open or create one first.";
+            return;
+        }
+        _palette.ShowQuickPick("Move connection to project…", targets.Select(p =>
+            (p.Name, (Action)(() => CrashReporter.Observe(
+                vm.Connections.MoveConnectionToProjectAsync(connectionId, p.Directory), "connection.moveToProject"))))
+            .ToList());
     }
 
     private async Task BrowseAndImportAsync(string? startDir)

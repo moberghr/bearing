@@ -142,6 +142,10 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
         }
     }
 
+    /// <inheritdoc />
+    public Task<ConnectionSession> ConnectForUserAsync(ConnectionInfo info, CancellationToken ct)
+        => AuthRetry.OnceAsync(_credentials(), _providers, info, () => GetOrConnectAsync(info, ct), null, ct);
+
     public async Task<SessionLease> AcquireAsync(ConnectionInfo info, CancellationToken ct)
     {
         // Connect (or reuse) then lease atomically. If the session got retired in the tiny window
@@ -498,6 +502,10 @@ public sealed class ConnectionSessionManager : IConnectionSessionManager
                 await SafeDisposeTunnelAsync(tunnel);
                 throw new ConnectionFailedException(Describe(info, "connection test failed"));
             }
+
+            // The login worked: a password typed at the prompt for a stored-password connection goes to the
+            // keychain now, and not before — a mistyped one never reaches it. Never throws.
+            if (_credentials() is { } resolver) await resolver.SaveIfWorkedAsync(info, credential);
 
             var session = new ConnectionSession(
                 info, factory, provider.CreateQueryExecutor(factory), provider.CreateMetadataReader(factory),

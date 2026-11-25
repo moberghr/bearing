@@ -55,6 +55,14 @@ public interface IConnectionSessionManager : IAsyncDisposable
     Task<ConnectionSession> GetOrConnectAsync(ConnectionInfo info, CancellationToken ct);
 
     /// <summary>
+    /// <see cref="GetOrConnectAsync"/> for a connect the <b>user</b> asked for (the Connect button): a refused
+    /// login is retried once after refreshing the credential, which for a stored-password connection asks for
+    /// the password and saves it once the retry worked (<see cref="AuthRetry"/>). Background work must call
+    /// <see cref="GetOrConnectAsync"/>, which never retries and so never prompts on a failure.
+    /// </summary>
+    Task<ConnectionSession> ConnectForUserAsync(ConnectionInfo info, CancellationToken ct);
+
+    /// <summary>
     /// Connect (or reuse) as <see cref="GetOrConnectAsync"/> does, and atomically take a lease that keeps
     /// the session from being disposed while the returned lease is held. Dispose the lease when the query
     /// finishes. Use this around any execution so an idle sweep / evict / database switch can't tear the

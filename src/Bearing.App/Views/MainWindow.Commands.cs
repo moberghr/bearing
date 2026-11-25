@@ -106,6 +106,10 @@ public partial class MainWindow
         r.Register(new KeyCommand(CommandIds.ConnectionNew, "New connection…", KeyScope.Global, "Connection", async () => await AddConnectionAsync()));
         r.Register(new KeyCommand(CommandIds.ConnectionImportDBeaver, "Import connections: from DBeaver…",
             KeyScope.Global, "Connection", async () => await ImportFromDBeaverAsync()));
+        r.Register(new KeyCommand(CommandIds.ConnectionImportFile, "Import connections: from a Bearing export file…",
+            KeyScope.Global, "Connection", async () => await ImportConnectionsFileAsync()));
+        r.Register(new KeyCommand(CommandIds.ConnectionExport, "Export connections…",
+            KeyScope.Global, "Connection", async () => await ExportConnectionsAsync()));
         // canRun is what keeps these out of the palette until they mean something — CommandPaletteHost
         // ranks only commands that can run — and what greys the toolbar buttons. Commit also asks whether
         // the transaction is still committable: a statement in it may have failed (#131).

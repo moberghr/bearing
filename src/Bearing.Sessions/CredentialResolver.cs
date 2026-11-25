@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Bearing.Core.Data;
@@ -27,6 +28,19 @@ public sealed class CredentialResolver
     private readonly Func<DateTimeOffset> _now;
     private readonly Func<ConnectionInfo, bool> _takesPassword;
     private readonly ConcurrentDictionary<Guid, Credential> _cache = new();
+    // Ids whose next resolve must re-ask rather than serve what it has (set by Invalidate — the retry after an
+    // authentication failure, or an expiry). One-shot: the resolve that honours it clears it.
+    private readonly ConcurrentDictionary<Guid, bool> _refresh = new();
+    // A password typed at the prompt for a stored-password connection, waiting for proof that it works before
+    // it is written to the keychain (SaveIfWorkedAsync). Never written at prompt time: a mistyped password must
+    // not be stored.
+    private readonly ConcurrentDictionary<Guid, string> _pendingSave = new();
+    // Bumped by every Invalidate: lets a caller that failed with an older credential see that someone else
+    // already refreshed it, rather than refreshing (and prompting) a second time for the same failure.
+    private readonly ConcurrentDictionary<Guid, int> _generation = new();
+    // The password prompt in flight for a connection, so callers resolving at the same time wait for its answer
+    // instead of asking again — one prompt per failure, however many pools or tree reads hit it at once.
+    private readonly ConcurrentDictionary<Guid, Task<Credential>> _prompting = new();
 
     /// <param name="takesPassword">Whether the engine <c>info</c> connects to takes a password at all
     /// (<see cref="IDbProvider.SupportsPasswordCredentials"/>). Null = every engine does — the behaviour before
@@ -62,11 +76,14 @@ public sealed class CredentialResolver
             // Re-asking the user, and re-minting a token, are both things a retry can actually change.
             CredentialKind.Prompt or CredentialKind.EntraToken => true,
 
-            // A stored password that didn't change would just fail identically — unless the store can't hold
-            // passwords at all (no keyring), where "stored password" really means "there is nothing stored" and
-            // the retry is what gets the user prompted for one.
+            // With someone to ask, a retry asks: the saved password (or the passwordless first attempt, when
+            // nothing is saved — a connection just imported on a new machine) was refused, and the answer is
+            // saved to the keychain once it works (SaveIfWorkedAsync), replacing the stale one. Without a prompt
+            // (the CLI) a stored password that didn't change would just fail identically — unless the store
+            // can't hold passwords at all, the arrangement before prompt-and-save existed.
             // A domain account's password is kept the same way, so the same answer.
-            CredentialKind.StoredPassword or CredentialKind.DomainPassword => _secrets() is { CanStore: false },
+            CredentialKind.StoredPassword or CredentialKind.DomainPassword
+                => _prompt is not null || _secrets() is { CanStore: false },
 
             // The OS identity: nothing to re-prompt for and nothing to re-mint, so a retry would send the exact
             // same handshake. Spelled out rather than left to the default arm because the case it must not fall
@@ -98,12 +115,35 @@ public sealed class CredentialResolver
         if (info.CredentialKind is CredentialKind.StoredPassword or CredentialKind.Prompt && !_takesPassword(info))
             return new Credential(null, null);
 
+        // An Invalidate since the last resolve is a forced refresh too: the connect recipe always resolves with
+        // forceRefresh false, so this is how the retry after an authentication failure reaches the prompt. The
+        // password kinds take it under the prompt lock below, together with joining or claiming the prompt.
+        if (info.CredentialKind is not (CredentialKind.StoredPassword or CredentialKind.DomainPassword)
+            && _refresh.TryRemove(info.Id, out _))
+            forceRefresh = true;
+
         switch (info.CredentialKind)
         {
             case CredentialKind.StoredPassword:
             case CredentialKind.DomainPassword:
                 {
+                    // One lock over taking the refresh flag and joining or claiming the prompt, so no resolve can slip
+                    // between them: a caller either waits for the prompt in flight, or is the one asking.
+                    Task<Credential>? asking;
+                    TaskCompletionSource<Credential>? mine;
+                    lock (_promptGate)
+                    {
+                        if (_refresh.TryRemove(info.Id, out _)) forceRefresh = true;
+                        // A forced refresh with someone to ask goes straight to the prompt: whatever the keychain
+                        // holds is what was just refused, and reading it again would fail identically.
+                        asking = JoinOrClaim(info.Id, claim: forceRefresh && _prompt is not null, out mine);
+                    }
+                    // Someone is already being asked for this connection's password: that answer is the one to use.
+                    if (asking is not null) return await asking.WaitAsync(ct);
+
                     var store = _secrets();
+                    if (mine is not null) return await AskAsync(info, store, mine, ct);
+
                     string? pw;
                     try
                     {
@@ -120,13 +160,12 @@ public sealed class CredentialResolver
                     }
                     if (pw is not null) return new Credential(pw, null);
 
-                    // No stored secret: either none was ever set, or this machine has no keyring and the password
-                    // was deliberately not written (see ISecretStore.CanStore). Reuse one typed earlier this
-                    // session if we have it, and on a forced refresh — i.e. the retry after an authentication
-                    // failure — ask for one. Kept in memory only, exactly like CredentialKind.Prompt.
+                    // No stored secret: either none was ever set (a connection imported on a new machine), or
+                    // this machine has no keyring. Reuse one typed earlier this session if we have it.
                     //
                     // The first attempt deliberately goes out with no password rather than prompting, so a
-                    // passwordless connection (trust auth, .pgpass) still connects without being interrogated.
+                    // passwordless connection (trust auth, .pgpass) still connects without being interrogated;
+                    // the retry after it is refused asks (CanRefresh).
                     //
                     // A domain account has no passwordless login, and its factory refuses to open without a
                     // password (it would otherwise log in as the OS identity), so that kind asks at once
@@ -138,12 +177,9 @@ public sealed class CredentialResolver
                     }
 
                     if (_prompt is null) return new Credential(null, null);
-                    var typed = await _prompt.RequestPasswordAsync(info, null, ct);
-                    if (typed is null)
-                        throw new ConnectionFailedException($"Password entry cancelled for '{info.Name}'.");
-                    var prompted = new Credential(typed, null);
-                    _cache[info.Id] = prompted;
-                    return prompted;
+                    lock (_promptGate) asking = JoinOrClaim(info.Id, claim: true, out mine);
+                    if (asking is not null) return await asking.WaitAsync(ct);
+                    return await AskAsync(info, store, mine!, ct);
                 }
 
             case CredentialKind.Prompt:
@@ -198,8 +234,122 @@ public sealed class CredentialResolver
         }
     }
 
-    /// <summary>Drop the cached credential for a connection so the next resolve re-prompts / re-mints.</summary>
-    public void Invalidate(Guid id) => _cache.TryRemove(id, out _);
+    private readonly object _promptGate = new();
+
+    /// <summary>Under <see cref="_promptGate"/>: the prompt already in flight for <paramref name="id"/> (join it),
+    /// or — when <paramref name="claim"/> — a fresh one registered for the caller to answer.</summary>
+    private Task<Credential>? JoinOrClaim(Guid id, bool claim, out TaskCompletionSource<Credential>? mine)
+    {
+        mine = null;
+        if (_prompting.TryGetValue(id, out var inFlight)) return inFlight;
+        if (!claim) return null;
+        mine = new TaskCompletionSource<Credential>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _prompting[id] = mine.Task;
+        // Observed, so a cancelled prompt nobody else waited on is not an unobserved task exception.
+        _ = mine.Task.ContinueWith(t => _ = t.Exception, CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+        return null;
+    }
+
+    /// <summary>Ask for a stored-password connection's password, as the claimant of <paramref name="answer"/>;
+    /// everyone who joined meanwhile gets the same answer (or the same cancellation).</summary>
+    private async Task<Credential> AskAsync(
+        ConnectionInfo info, ISecretStore? store, TaskCompletionSource<Credential> answer, CancellationToken ct)
+    {
+        try
+        {
+            var typed = await _prompt!.RequestPasswordAsync(info, null, ct)
+                        ?? throw new ConnectionFailedException($"Password entry cancelled for '{info.Name}'.");
+            var prompted = new Credential(typed, null);
+            _cache[info.Id] = prompted;
+            // Saved once a connect with it succeeds — never now. A store that can't keep a secret (no keyring,
+            // demo) gets nothing to save: the password stays in memory for the session.
+            if (store is { CanStore: true }) _pendingSave[info.Id] = typed;
+            else _pendingSave.TryRemove(info.Id, out _);
+            answer.SetResult(prompted);
+            return prompted;
+        }
+        catch (Exception ex)
+        {
+            answer.TrySetException(ex);
+            throw;
+        }
+        finally
+        {
+            lock (_promptGate) _prompting.TryRemove(new KeyValuePair<Guid, Task<Credential>>(info.Id, answer.Task));
+        }
+    }
+
+    /// <summary>Drop the cached credential for a connection so the next resolve re-prompts / re-mints — and,
+    /// for a stored-password connection with a prompt, asks rather than re-reading the keychain.</summary>
+    public void Invalidate(Guid id)
+    {
+        _cache.TryRemove(id, out _);
+        _refresh[id] = true;
+        _generation.AddOrUpdate(id, 1, (_, g) => g + 1);
+    }
+
+    /// <summary>How many times this connection's credential has been invalidated. Read before an attempt and
+    /// handed to <see cref="InvalidateIfUnchanged"/> after it failed.</summary>
+    public int Generation(Guid id) => _generation.TryGetValue(id, out var g) ? g : 0;
+
+    /// <summary>
+    /// <see cref="Invalidate"/>, unless another caller already did since <paramref name="generation"/> was read
+    /// — then the credential that failed here has been replaced (or is being asked for) and the retry should
+    /// use that one, not ask again. This is what keeps two failures racing on one connection to one prompt.
+    /// </summary>
+    public bool InvalidateIfUnchanged(Guid id, int generation)
+    {
+        lock (_invalidateGate)
+        {
+            if (Generation(id) != generation) return false;
+            Invalidate(id);
+            return true;
+        }
+    }
+
+    private readonly object _invalidateGate = new();
+
+    /// <summary>Where a password typed at the prompt was or wasn't saved, as a sentence for the status line.
+    /// Called off the UI thread. The sentence never holds the password.</summary>
+    public Action<ConnectionInfo, string>? PasswordSaveNotice { get; set; }
+
+    /// <summary>
+    /// The connect recipe proved <paramref name="used"/> logs in: if it is a password typed at the prompt for a
+    /// stored-password connection, write it to the keychain now (replacing a stale one), so the next session
+    /// doesn't ask. Anything else — a password read from the keychain, an Entra token, the
+    /// <see cref="CredentialKind.Prompt"/> kind, a store that can't keep secrets — has nothing pending and
+    /// returns at once. A store that refuses or fails keeps the password in memory for the session and says so
+    /// once; it never fails the connect that just worked.
+    /// </summary>
+    public async Task SaveIfWorkedAsync(ConnectionInfo info, Credential used)
+    {
+        if (used.Secret is not { } secret) return;
+        // Only the exact password that just worked, and only once: the pair is removed as it is claimed, so two
+        // pools connecting with it at once save it once.
+        if (!_pendingSave.TryRemove(new KeyValuePair<Guid, string>(info.Id, secret))) return;
+        if (_secrets() is not { CanStore: true } store) return;
+
+        try
+        {
+            await store.SetPasswordAsync(info.Id, secret, CancellationToken.None);
+            PasswordSaveNotice?.Invoke(info, $"Saved the password for '{info.Name}' to the keychain.");
+        }
+        catch (SecretStorageRefusedException)
+        {
+            // §1.1: the keychain couldn't be reached — with its own reason, never a guessed cause.
+            var why = store.UnavailableReason is { Length: > 0 } reason ? $" ({reason})" : "";
+            PasswordSaveNotice?.Invoke(info,
+                $"Connected to '{info.Name}', but the keychain couldn't be reached{why}, so the password was not "
+                + "saved — it is kept until Bearing closes.");
+        }
+        catch (Exception ex)
+        {
+            PasswordSaveNotice?.Invoke(info,
+                $"Connected to '{info.Name}', but the password could not be saved to the keychain: "
+                + $"{SafeErrorText.Of(ex)}. It is kept until Bearing closes.");
+        }
+    }
 
     /// <summary>True when an expiry is set and now is at or within <paramref name="skew"/> of it. A null
     /// expiry (fixed / prompted password) never expires. Shared by the resolver's refresh check and the

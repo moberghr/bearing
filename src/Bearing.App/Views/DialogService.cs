@@ -149,6 +149,34 @@ public sealed class DialogService : IDialogService
         return files.Count > 0 ? files[0].TryGetLocalPath() : null;
     }
 
+    private static readonly FilePickerFileType ConnectionsFileType =
+        new("Bearing connections") { Patterns = new[] { "*.json" } };
+
+    public async Task<string?> PickConnectionsFileAsync()
+    {
+        if (Owner is not { } window) return null;
+        var files = await window.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Import connections from a Bearing export",
+            AllowMultiple = false,
+            FileTypeFilter = new[] { ConnectionsFileType },
+        });
+        return files.Count > 0 ? files[0].TryGetLocalPath() : null;
+    }
+
+    public async Task<string?> PickConnectionsExportFileAsync(string suggestedName)
+    {
+        if (Owner is not { } window) return null;
+        var file = await window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Export connections",
+            DefaultExtension = "json",
+            SuggestedFileName = suggestedName,
+            FileTypeChoices = new[] { ConnectionsFileType },
+        });
+        return file?.TryGetLocalPath();
+    }
+
     public async Task<string?> PickSaveScriptAsync(string suggestedName, string? startDir)
     {
         if (Owner is not { } window) return null;
