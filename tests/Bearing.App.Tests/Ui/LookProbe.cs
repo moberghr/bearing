@@ -289,6 +289,56 @@ public class LookProbe
         });
     }
 
+    /// <summary>The connection dialog's Test status row in each state it has: not tested, testing (with Stop),
+    /// connected, and a failure with its wrapped error and Copy.</summary>
+    [SkippableFact]
+    public Task ConnectionTestStatusRow()
+    {
+        var dir = CaptureDir();
+        return _ui.Run(() =>
+        {
+            var existing = new Bearing.Core.Data.ConnectionInfo
+            {
+                Id = Guid.NewGuid(), Name = "orders", ProviderId = "postgres",
+                Host = "db.example", Port = 5432, Database = "orders", User = "app",
+            };
+
+            void Capture(string file, Action<TaskCompletionSource<bool>>? finish)
+            {
+                var answer = new TaskCompletionSource<bool>();
+                var dialog = new ConnectionDialog(existing, "secret", test: (_, _, _, _) => answer.Task);
+                dialog.Show();
+                if (file != "connection-test-not-tested.png")
+                {
+                    dialog.FindControl<Button>("TestButton")!
+                        .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+                    if (finish is not null)
+                    {
+                        finish(answer);
+                        // A result is held back for a moment before it shows; wait that out on real time.
+                        var row = dialog.FindControl<Bearing.App.Controls.ConnectionTestStatusView>("TestStatus")!;
+                        var deadline = DateTime.UtcNow.AddSeconds(5);
+                        while (row.Status.Phase == Bearing.App.Connections.ConnectionTestPhase.Testing
+                               && DateTime.UtcNow < deadline)
+                        {
+                            System.Threading.Thread.Sleep(20);
+                            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+                        }
+                    }
+                }
+                Write(dialog, dir, file);
+                dialog.Close();
+            }
+
+            Capture("connection-test-not-tested.png", null);
+            Capture("connection-test-testing.png", null);
+            Capture("connection-test-connected.png", a => a.SetResult(true));
+            Capture("connection-test-failed.png", a => a.SetException(new InvalidOperationException(
+                "28P01: password authentication failed for user \"app\". Failed to connect to 10.20.4.17:5432 "
+                + "after trying the configured TLS mode; the server closed the connection during startup.")));
+        });
+    }
+
     /// <summary>
     /// The two schema-tree shapes (#132), off the demo's fixed catalog: simple mode with the long tail behind
     /// one bucket, and full mode with the schema level opened.
