@@ -6,6 +6,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Bearing.App.Editing;
@@ -291,6 +292,10 @@ public partial class MainWindow
         MenuToggleSidePane.InputGesture = MenuGesture(CommandIds.ViewToggleSidePane);
         MenuRun.InputGesture = MenuGesture(CommandIds.Run);
         MenuExportRun.InputGesture = MenuGesture(CommandIds.QueryExportRun);
+        foreach (var item in MainMenu.GetLogicalDescendants().OfType<MenuItem>())
+        {
+            if (item.Tag is string id) item.InputGesture = MenuGesture(id);   // OnMenuCommandClick's items
+        }
     }
 
     private KeyGesture? MenuGesture(string commandId) => MenuGestures.For(_dispatcher.Keymap, commandId);

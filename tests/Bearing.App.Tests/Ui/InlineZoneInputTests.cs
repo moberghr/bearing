@@ -240,7 +240,9 @@ public class InlineZoneInputTests
     [Fact]
     public Task Quitting_with_only_a_value_in_a_cell_editor_is_held_to_ask() => _ui.Run(async () =>
     {
-        var (shell, _, _, zone, set) = await ZoneWithEditableGrid(nameof(Quitting_with_only_a_value_in_a_cell_editor_is_held_to_ask));
+        // Answer "keep the edits", so the close stays held and the window is still there to inspect.
+        var dialogs = new FakeDialogs { DiscardEditsAnswer = false };
+        var (shell, _, _, zone, set) = await ZoneWithEditableGrid(nameof(Quitting_with_only_a_value_in_a_cell_editor_is_held_to_ask), dialogs);
         using var _ = shell;
         ClickCell(shell, zone, set.Rows[0], 1);
         Press(shell, Key.Enter, PhysicalKey.Enter);
@@ -252,6 +254,7 @@ public class InlineZoneInputTests
 
         Assert.True(set.HasPendingChanges);
         Assert.True(QuitGuard.NeedsConfirmation(shell.Vm));
+        Assert.Equal("quit", Assert.Single(dialogs.DiscardEditsPrompts).Action);
         Assert.True(shell.Window.IsVisible);
         set.RevertPending();   // let the harness close it
     });

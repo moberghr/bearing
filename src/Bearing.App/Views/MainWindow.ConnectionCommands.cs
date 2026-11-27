@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Bearing.App.Connections;
 using Bearing.App.Input;
@@ -18,7 +19,11 @@ public partial class MainWindow
 
     private async void OnEditKeybindingsClick(object? sender, RoutedEventArgs e) => await EditKeybindingsAsync();
 
-    private async void OnImportDBeaverClick(object? sender, RoutedEventArgs e) => await ImportFromDBeaverAsync();
+    /// <summary>A menu item whose Tag names a command: run that command, as the palette and the macOS bar do.</summary>
+    private void OnMenuCommandClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem { Tag: string id }) _commands.Get(id)?.TryInvoke();
+    }
 
     private async void OnImportFromInstalledClick(object? sender, RoutedEventArgs e)
         => await ImportFromInstalledAsync();

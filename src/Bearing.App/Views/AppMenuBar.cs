@@ -275,7 +275,9 @@ internal sealed class AppMenuBar
         {
             return;
         }
-        var item = new NativeMenuItem(header);
+        // CommandParameter only names the command (no Command is set, so nothing reads it on a click): it is
+        // what MainMenuTests holds the in-window bar's File menu against, so the two can't drift.
+        var item = new NativeMenuItem(header) { CommandParameter = commandId };
         item.Click += (_, _) => Fire(item, () => Click(command, _window.IsActive, () => _editor.TextArea.Focus()));
         _wired.Add((item, command));
         menu.Add(item);
