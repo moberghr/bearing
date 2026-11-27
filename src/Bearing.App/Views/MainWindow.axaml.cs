@@ -43,7 +43,10 @@ public partial class MainWindow : Window
     private bool _keymapWarningsShown;
     private HashSet<string> _navCommands = new();
     private HashSet<string> _navCommandsFromEditor = new();   // _navCommands without focus.editor
-    private readonly Bearing.App.Services.IDialogService _dialogs = new DialogService(); // owns dialog/picker construction
+    // Dialog/picker construction: the view model's service when it has one (App passes the same stateless
+    // DialogService; a headless test passes its fake), else the window's own.
+    private readonly Bearing.App.Services.IDialogService _ownDialogs = new DialogService();
+    private Bearing.App.Services.IDialogService _dialogs => Vm?.Dialogs ?? _ownDialogs;
     private bool _suppressProjectChange;   // guards the project combo during programmatic updates
     private CompletionToastHost? _toasts;  // built once the window is open (its manager needs a top level)
     private bool _closeConfirmed;          // set once the quit-while-running prompt has been answered "yes"

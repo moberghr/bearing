@@ -883,8 +883,23 @@ internal sealed class FakeDialogs : Bearing.App.Services.IDialogService
     }
     public Task<string?> PickOpenScriptAsync(string? startDir) => Task.FromResult<string?>(null);
     public Task<string?> PickImportFileAsync(string? startDir) => Task.FromResult<string?>(null);
-    public Task<string?> PickConnectionsFileAsync() => Task.FromResult<string?>(null);
-    public Task<string?> PickConnectionsExportFileAsync(string suggestedName) => Task.FromResult<string?>(null);
+    /// <summary>How often the connections-import picker was asked (it always answers cancelled).</summary>
+    public int ConnectionsFilePicks { get; private set; }
+
+    public Task<string?> PickConnectionsFileAsync()
+    {
+        ConnectionsFilePicks++;
+        return Task.FromResult<string?>(null);
+    }
+
+    /// <summary>The suggested names the connections-export save picker was asked with (it always cancels).</summary>
+    public List<string> ConnectionsExportPicks { get; } = new();
+
+    public Task<string?> PickConnectionsExportFileAsync(string suggestedName)
+    {
+        ConnectionsExportPicks.Add(suggestedName);
+        return Task.FromResult<string?>(null);
+    }
     public void ShowSqlPreview(string sql, string title = "SQL preview — changes to save") { }
 }
 
